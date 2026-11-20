@@ -49,8 +49,7 @@ def test_bundled_plugin_install_is_idempotent_and_does_not_change_switches(tmp_p
     config.parent.mkdir()
     switches = '{"plugins":{"workspace_defaults":{"entries":[]}}}\n'
     config.write_text(switches)
-    archive.unlink()
-    # 已安装时不再读 ZIP、hash 全包，也不把空模板重新变成启用。
+    # 重复核实同一来源仍幂等，也不把空模板重新变成启用。
     assert install_bundled_plugins(boxteam_home=home, packages=entries) == []
     assert config.read_text() == switches
 
@@ -70,6 +69,21 @@ def test_development_restart_preserves_plugin_choices_and_environment(tmp_path: 
     install_source_development_configuration(project_root=project, config_root=config_root)
     assert (config_root / "gateway.jsonc").read_text() == saved
     assert (config_root / ".env").read_text() == "USER_VALUE=2\n"
+
+
+def test_first_install_uses_bundled_version_without_rewriting_existing_defaults(tmp_path: Path) -> None:
+    config_root = tmp_path / "home/config"
+    bundled = [{"package_id": "boxteam.developer-tools", "package_version": "0.1.0-dev.actual-content"}]
+    install_user_configuration(config_root=config_root, profile="default", bundled_packages=bundled)
+    document = _load_jsonc_object(config_root / "gateway.jsonc")
+    entries = document["plugins"]["workspace_defaults"]["entries"]
+    assert entries and all(entry["package_version"] == bundled[0]["package_version"] for entry in entries)
+    entries[0]["enabled"] = False
+    saved = json.dumps(document)
+    (config_root / "gateway.jsonc").write_text(saved)
+    bundled[0]["package_version"] = "0.1.0-dev.other-content"
+    install_user_configuration(config_root=config_root, profile="default", bundled_packages=bundled)
+    assert (config_root / "gateway.jsonc").read_text() == saved
 
 
 def _default_custom_tool_names(config: dict[str, object]) -> set[str]:
@@ -473,3 +487,30 @@ def test_install_gateway_development_assets_is_idempotent(tmp_path: Path) -> Non
     if os.name != "nt":
         assert private_key.stat().st_mode & 0o777 == 0o600
     assert (home / ".ssh" / SSH_KNOWN_HOSTS_NAME).is_file()
+
+
+def test_bundled_directory_and_zip_keep_original_source_identity(tmp_path: Path) -> None:
+    directory = tmp_path / "package"
+    directory.mkdir()
+    manifest = {"manifest_version": 1, "package_id": "example.sources", "version": "1.0.0",
+                "name": "Sources", "extension_contract_version": 1,
+                "plugins": [{"id": "guide", "name": "Guide", "instance_scope": "workspace",
+                    "requires": [{"extension_point": "skills", "version": 1}],
+                    "contributes": {"skills": [{"id": "guide", "path": "guide"}]}}]}
+    (directory / "plugin.jsonc").write_text(json.dumps(manifest), encoding="utf-8")
+    (directory / "guide").mkdir()
+    (directory / "guide/SKILL.md").write_text("---\nname: guide\ndescription: Guide\n---\nGuide.\n", encoding="utf-8")
+    archive = tmp_path / "package.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for source in directory.rglob("*"):
+            if source.is_file():
+                output.write(source, source.relative_to(directory).as_posix())
+    identity = {"package_id": manifest["package_id"], "package_version": manifest["version"]}
+    for source, other in (({"directory": str(directory)}, {"archive": str(archive)}),
+                          ({"archive": str(archive)}, {"directory": str(directory)})):
+        home = tmp_path / next(iter(source))
+        assert install_bundled_plugins(boxteam_home=home, packages=[identity | source]) == ["example.sources@1.0.0"]
+        assert install_bundled_plugins(boxteam_home=home, packages=[identity | source]) == []
+        with pytest.raises(RuntimeError, match="摘要冲突"):
+            install_bundled_plugins(boxteam_home=home, packages=[identity | other])
+        assert install_bundled_plugins(boxteam_home=home, packages=[identity | source]) == []

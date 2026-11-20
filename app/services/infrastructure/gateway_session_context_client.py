@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from pydantic import BaseModel
 
 from app.abstractions.session_context import (
@@ -13,10 +14,7 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
-from app.core.trace_middleware import (
-    require_current_gateway_id,
-    require_current_request_id,
-)
+from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import (
     FEDERATION_ERROR_CODES,
     FEDERATION_TARGET_OWNER_REJECTED,

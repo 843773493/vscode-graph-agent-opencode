@@ -12,12 +12,12 @@ from typing import NoReturn
 import httpx
 import jsonschema
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from watchfiles import Change
 
 import app.services.infrastructure.config_service.config_reload as config_reload_module
 import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
-from app.core.lifecycle import LifetimeScope
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_workspace_config_path
 from app.core.workspace_identity import load_or_create_workspace_id

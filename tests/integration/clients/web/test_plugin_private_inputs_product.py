@@ -34,8 +34,8 @@ sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
-from app.core.logging_config import configure_application_logging
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.logging import configure_application_logging
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='private-input-product-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
 print('plugin-instance-log ' + identity['plugin_id'] + ' ' + identity['instance_id'], flush=True)

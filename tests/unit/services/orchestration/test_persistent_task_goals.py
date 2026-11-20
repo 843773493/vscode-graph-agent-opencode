@@ -7,16 +7,18 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import HumanMessage
 
 from app.core.exceptions import NotFoundError
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionProgress,

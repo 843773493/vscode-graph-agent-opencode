@@ -11,8 +11,8 @@ from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.records import CanonicalItemRecord

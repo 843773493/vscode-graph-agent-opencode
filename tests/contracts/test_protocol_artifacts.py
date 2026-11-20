@@ -12,17 +12,14 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="故障注入使用 POSI
 
 _GENERATOR = Path.cwd() / "scripts/generate_protocol.mjs"
 _BINDINGS = (
-    "app/protocol/generated/sample_pb2.py",
-    "app/protocol/generated/sample_pb2.pyi",
-    "src/workspace-services/protocol/generated/sample.js",
+    "sdk/python/src/boxteam/sample_pb2.py",
+    "sdk/python/src/boxteam/sample_pb2.pyi",
+    "sdk/node/src/generated/sample.js",
+    "sdk/node/src/generated-json/sample.ts",
     "src/clients/web/src/types/protocol_buf_generated/sample.d.ts",
     "src/clients/web/src/types/protocol_generated/sample.ts",
 )
-_RUNTIME = (
-    "src/clients/web/src/types/protocol_generated/sse_runtime_schemas.json",
-    "src/shared/sseRuntimeValidators.js",
-    "src/shared/sseRuntimeValidators.d.ts",
-)
+
 
 
 @pytest.fixture
@@ -49,30 +46,11 @@ def generator_workspace(tmp_path: Path) -> Path:
         'const file=path.join(output,name);await mkdir(path.dirname(file),{recursive:true});\n'
         'await writeFile(file,"generated binding\\n");}}\n',
     )
-    # CLI 作为脚本交给当前运行时，不依赖可执行位、shebang 或 .bin shim。
-    executable.chmod(0o600)
+    # 纯生成绝不能执行 Python、导入应用或安装 SDK。
     python = tmp_path / ".venv/bin/python"
     python.parent.mkdir(parents=True)
-    python.write_text(
-        '#!/usr/bin/env bun\nimport {readFile} from "node:fs/promises";\n'
-        'const args=process.argv.slice(2);\n'
-        'if(args[0]!=="-m"||args[1]!=="scripts.export_openapi_snapshot"'
-        '||!args.includes("--validate-only"))throw new Error("HTTP校验命令不正确");\n'
-        'if(await readFile(args[args.indexOf("--descriptor-set")+1],"utf8")!=="descriptor")'
-        'throw new Error("必须消费本次编译的descriptor");\n'
-        'if(process.env.PROTOCOL_TEST_FAIL_HTTP)process.exit(25);\n',
-    )
+    python.write_text('#!/bin/sh\necho "unexpected application import" >&2\nexit 99\n')
     python.chmod(0o755)
-    exporter = tmp_path / "scripts/generate_sse_runtime.mjs"
-    exporter.parent.mkdir()
-    exporter.write_text(
-        'import {mkdir,writeFile} from "node:fs/promises";\nimport path from "node:path";\n'
-        'const args=process.argv.slice(2);const output=args[args.indexOf("--output-root")+1];\n'
-        f'for(const name of {list(_RUNTIME)!r}){{\n'
-        'const file=path.join(output,name);await mkdir(path.dirname(file),{recursive:true});\n'
-        'await writeFile(file,"generated runtime\\n");}\n'
-        'if(process.env.PROTOCOL_TEST_FAIL_EXPORT)process.exit(24);\n',
-    )
     return tmp_path
 
 
@@ -91,24 +69,25 @@ def test_check_finds_changed_missing_and_extra_artifacts_without_repairing(gener
     result = _run(workspace)
     assert result.returncode == 0, result.stderr
     shared = workspace / "src/shared/sseRuntime.js"
+    shared.parent.mkdir(parents=True, exist_ok=True)
     shared.write_bytes(b"maintained source\n")
-    original = {name: (workspace / name).read_bytes() for name in (*_BINDINGS, *_RUNTIME)}
+    original = {name: (workspace / name).read_bytes() for name in _BINDINGS}
     result = _run(workspace, "--check")
     assert result.returncode == 0, result.stderr
 
-    changed = (*_BINDINGS[:2], *_RUNTIME)
+    changed = _BINDINGS[:2]
     missing = _BINDINGS[2:]
     for name in changed:
         (workspace / name).write_bytes(b"stale generated output\n")
     for name in missing:
         (workspace / name).unlink()
     orphans = ("src/clients/web/src/types/protocol_generated/orphan.ts",
-               "app/protocol/generated/orphan_pb2.pyi")
+               "sdk/python/src/boxteam/orphan_pb2.pyi")
     for name in orphans:
         (workspace / name).write_bytes(b"orphan\n")
     result = _run(workspace, "--check")
     assert result.returncode != 0 and "协议生成产物不一致" in result.stderr
-    assert all(name in result.stderr for name in (*_BINDINGS, *_RUNTIME, *orphans))
+    assert all(name in result.stderr for name in (*_BINDINGS, *orphans))
     assert all((workspace / name).read_bytes() == b"stale generated output\n" for name in changed)
     assert all(not (workspace / name).exists() for name in missing)
     assert all((workspace / name).read_bytes() == b"orphan\n" for name in orphans)
@@ -121,12 +100,12 @@ def test_check_finds_changed_missing_and_extra_artifacts_without_repairing(gener
     assert tuple((workspace / "artifacts/staging").iterdir()) == ()
 
 
-@pytest.mark.parametrize(("failure", "code"), [("BUF", 23), ("EXPORT", 24), ("HTTP", 25)])
+@pytest.mark.parametrize(("failure", "code"), [("BUF", 23)])
 def test_protocol_validation_failure_never_publishes_partial_bindings(
     generator_workspace: Path, failure: str, code: int,
 ) -> None:
     workspace = generator_workspace
-    for name in (*_BINDINGS, *_RUNTIME):
+    for name in _BINDINGS:
         target = workspace / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"original output\n")
@@ -134,5 +113,5 @@ def test_protocol_validation_failure_never_publishes_partial_bindings(
     assert result.returncode != 0 and f"code={code}" in result.stderr
     if failure == "BUF":
         assert "injected remote generation failure" in result.stderr
-    assert all((workspace / name).read_bytes() == b"original output\n" for name in (*_BINDINGS, *_RUNTIME))
+    assert all((workspace / name).read_bytes() == b"original output\n" for name in _BINDINGS)
     assert tuple((workspace / "artifacts/staging").iterdir()) == ()

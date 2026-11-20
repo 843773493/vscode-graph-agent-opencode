@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
+from boxteam_plugin_sdk.observation import RuntimeObservation
 
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import get_gateway_root
-from app.core.runtime_observation import RuntimeObservation
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id

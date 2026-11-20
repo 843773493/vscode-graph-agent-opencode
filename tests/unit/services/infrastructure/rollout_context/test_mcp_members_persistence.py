@@ -8,6 +8,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import empty_checkpoint
@@ -15,7 +16,6 @@ from langgraph.checkpoint.base import empty_checkpoint
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef

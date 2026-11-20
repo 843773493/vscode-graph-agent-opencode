@@ -12,9 +12,9 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated
 
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 
-from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.endpoint import (

@@ -12,7 +12,7 @@ from pathlib import Path
 from time import monotonic, time
 from typing import BinaryIO, Literal
 
-from app.runtime.log_file_identity import (
+from boxteam_plugin_sdk.logging import (
     runtime_log_file_identity,
     runtime_log_path_identity,
 )

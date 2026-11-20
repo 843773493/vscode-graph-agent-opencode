@@ -9,6 +9,8 @@ from typing import Annotated
 from urllib.parse import unquote
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from fastapi import (
     APIRouter,
     Depends,
@@ -27,7 +29,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from app.core.async_channel import close_channel, run_channel
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.resource_uri import ResourceUriGrammarError
-from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
+from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.federation.errors import FederationError
@@ -50,7 +52,6 @@ from app.gateway.proxy_upstream import (
     parse_target_gateway_id,
     relay_websocket_client_to_upstream,
     relay_websocket_upstream_to_client,
-    run_cleanup_shielded,
     send_upstream_request,
 )
 from app.gateway.registry import (

@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast, overload
 from uuid import UUID
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain.agents.structured_output import ResponseFormat, ToolStrategy
@@ -33,7 +34,6 @@ from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.model_request_context import current_summary_candidate
 from app.core.phase_observer import observe_phase, observe_phase_sync
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import ExecutionAdmission

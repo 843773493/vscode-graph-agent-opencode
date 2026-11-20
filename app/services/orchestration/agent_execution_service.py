@@ -7,6 +7,7 @@ from contextvars import Context
 from pathlib import Path
 from typing import Any, Final, cast
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_mailbox import BackgroundMailboxProtocol
@@ -33,7 +34,6 @@ from app.agents.tools.extension_invocation import (
     create_extension_catalog_resolver_from_tools,
 )
 from app.core.identifier import create_prefixed_id
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import (
     SessionCatalogComponents,
     get_session_path_resolver,
@@ -41,7 +41,6 @@ from app.core.path_utils import (
 )
 from app.core.phase_observer import observe_phase
 from app.core.session_thread_context import session_thread_owner_scope
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.turn_execution_scope import (
     TurnExecutionScopeRegistry,

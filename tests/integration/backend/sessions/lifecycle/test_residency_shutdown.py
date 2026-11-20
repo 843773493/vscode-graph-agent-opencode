@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 
 from app import main
 from app.core.path_utils import workspace_context
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,

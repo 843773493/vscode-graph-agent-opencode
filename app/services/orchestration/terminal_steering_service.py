@@ -5,6 +5,8 @@ import logging
 from contextlib import aclosing
 from urllib.error import URLError
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.terminal.execution_monitor import (
     TerminalExecutionMonitorClientProtocol,
@@ -19,7 +21,6 @@ from app.abstractions.workspace_resources import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.prompting.factory import internal_message_factory
 from app.services.business.workspace_resources.owner import ResourceConflict
 

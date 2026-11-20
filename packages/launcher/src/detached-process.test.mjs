@@ -62,7 +62,7 @@ describe("detached process", () => {
           launcherPath,
           `import { writeFileSync } from "node:fs";\n` +
             `import { spawnDetachedProcess } from ${JSON.stringify(detachedProcessModuleUrl)};\n` +
-            `import { loadRuntimeLogContract } from ${JSON.stringify(new URL("../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href)};\n` +
+            `import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";\n` +
             `const child = await spawnDetachedProcess({contract: loadRuntimeLogContract(), ` +
             `command: process.execPath, args: [${JSON.stringify(workerPath)}], ` +
             `cwd: ${JSON.stringify(caseWorkspacePath)}, environment: process.env, ` +

@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 

@@ -9,6 +9,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import TypeVar
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.abstractions.execution_queue import (
     ExecutionQueueClaimProtocol,
     ExecutionQueueProtocol,
@@ -23,11 +26,8 @@ from app.core.key_lock_pool import KeyLockPool
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.session_subtree_delete import SubtreeDeleteWaitTimeout
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
-from app.core.trace_middleware import (
-    get_current_gateway_id,
-    get_current_request_id,
-)
+from app.core.shielded_cleanup import run_sync_shielded
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     InternalExecutionIntent,

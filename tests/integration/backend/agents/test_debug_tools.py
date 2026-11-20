@@ -10,6 +10,10 @@ from uuid import uuid4
 import commentjson
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
@@ -24,12 +28,7 @@ from app.agents.tools.extension_invocation import (
     create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
 )
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugControlActionRequest,

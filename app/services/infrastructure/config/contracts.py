@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.services.infrastructure.config.snapshot import ConfigSnapshot
 
 # 发布回调只执行同步的内存切换，不能在 SQLite 成功与切换之间再等待 I/O。

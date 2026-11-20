@@ -150,9 +150,11 @@ describe.skipIf(process.platform !== "linux")("Linux bootstrap 的唯一 Workben
       submodules ? [["-C", fixture.repository, "submodule", "update", "--init", "--recursive"]] : [],
     );
     expect(first.commands.filter(call => call.name === "bun").map(call => ({ cwd: call.cwd, args: call.args }))).toEqual([
+      { cwd: fixture.repository, args: ["scripts/plugins/prepare-product-sdk.mjs", "--check", "node", "python"] },
       { cwd: fixture.repository, args: ["install", "--frozen-lockfile"] },
       { cwd: fixture.repository, args: ["install", "--cwd", "src/clients/web", "--frozen-lockfile"] },
       { cwd: fixture.repository, args: ["install", "--cwd", "src/clients/workbench", "--frozen-lockfile"] },
+      { cwd: fixture.repository, args: ["run", "check:protocol:application"] },
     ]);
     const metadataPath = path.join(fixture.repository, ".venv/.boxteam-target-metadata");
     const before = readFileSync(metadataPath, "utf8");

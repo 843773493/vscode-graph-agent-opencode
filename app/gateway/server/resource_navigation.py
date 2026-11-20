@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 
@@ -14,7 +15,6 @@ from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
 )
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,

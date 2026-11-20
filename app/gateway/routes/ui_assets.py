@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,7 +12,6 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_content_access,

@@ -17,6 +17,12 @@ from uuid import UUID
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import FastAPI
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
@@ -48,7 +54,6 @@ from app.api import session_turns as session_turns_api
 from app.api import sessions as sessions_api
 from app.api.deps import (
     get_message_stream_store,
-    get_request_id,
     get_session_orchestrator,
     get_session_service,
     get_session_skill_untrack_service,
@@ -61,7 +66,6 @@ from app.core.execution_admission_context import (
     execution_admission_scope,
     require_current_execution_admission,
 )
-from app.core.lifecycle import LifetimeScope
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
 from app.core.path_utils import get_boxteam_home, workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
@@ -71,12 +75,7 @@ from app.core.session_thread_context import (
     session_thread_owner_scope,
 )
 from app.core.thread_creation import ThreadCreationService
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.background_work import BackgroundTaskDescriptor
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity

@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import pytest
-
-from app.core.resource_uri import parse_attachment_uri
-from app.core.trace_middleware import (
+from boxteam_plugin_sdk.request_context import (
     get_current_request_id,
     reset_current_request_id,
     set_current_request_id,
 )
+
+from app.core.resource_uri import parse_attachment_uri
 from app.schemas.internal_v2.job import JobStatus
 from app.schemas.internal_v2.message import (
     AttachmentRef,

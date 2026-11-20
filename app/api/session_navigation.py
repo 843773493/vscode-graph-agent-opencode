@@ -4,12 +4,12 @@ from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
-    get_request_id,
     get_session_catalog_service,
     get_session_generation_service,
     get_workspace_search_service,

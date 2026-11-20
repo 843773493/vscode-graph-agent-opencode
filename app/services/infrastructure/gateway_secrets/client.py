@@ -3,11 +3,9 @@
 from collections.abc import Iterable
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 
-from app.core.trace_middleware import (
-    require_current_gateway_id,
-    require_current_request_id,
-)
+from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.gateway.secrets import ResolvedSecret, ResolveSecretsRequest
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection

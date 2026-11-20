@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.protocol.generated.boxteam.gateway.v2 import proxy_pb2
+from boxteam.gateway.v2 import proxy_pb2
 
 
 def proxy_target_to_proto(

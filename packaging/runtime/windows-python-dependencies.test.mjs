@@ -93,6 +93,7 @@ async function observeDependencies(moduleUrl, scenario) {
     assert.equal(result, undefined);
   } catch (error) { failure = error; }
   const exportCommand = ["uv", ["export", "--locked", "--no-dev", "--format", "requirements-txt", "--output-file", requirementsPath]];
+  assert.deepEqual(calls.shift(), ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]]);
   const targetCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--python-version",
     PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath]];
   const sourceCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--no-deps",
@@ -141,7 +142,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   fs.writeFileSync(path.join(projectRoot, "package.json"), '{"version":"fixture"}\n');
   fs.writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture");
-  for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/shared", "src/clients/web", "src/clients/workbench",
+  for (const relative of ["app", "configs", "resources", "sdk", "src/shared", "src/clients/shared", "src/clients/web", "src/clients/workbench",
     "src/workspace-services/protocol",
     "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared", "src/workspace-services/terminal/client",

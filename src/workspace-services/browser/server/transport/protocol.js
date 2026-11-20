@@ -2,8 +2,8 @@ import {
   encodeBrowserServerMessage,
   normalizeBrowserClientMessage,
 } from "../../protocol/messages.js";
-import { parseJsonInput } from "../../../../shared/serverJsonRequest.mjs";
-import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
+import { parseJsonInput } from "@boxteam/plugin-sdk/http";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 const logger = createRuntimeLogger("browser", "browser.protocol");
 

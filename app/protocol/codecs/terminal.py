@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from boxteam.terminal.v1 import terminal_pb2
 from google.protobuf.descriptor import FieldDescriptor
 
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
-from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 
 _TERMINAL_STATUS_ALIASES = {
     # Terminal Manager 会在命令完成、隐藏 PTY 释放完成前短暂报告 completed。

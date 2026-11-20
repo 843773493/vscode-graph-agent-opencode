@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Literal
 
+import boxteam_plugin_sdk.commands as _plugin_commands
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from app.schemas.canonical_params import CanonicalWorkspaceId
@@ -63,26 +64,6 @@ class RestartPluginRequest(PluginVersionRequest):
     workspace_id: CanonicalWorkspaceId | None = None
 
 
-class PluginServiceContribution(_PluginValue):
-    """插件导出的具名业务服务，不包含监听地址或进程信息。"""
-
-    service_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    service_type: Literal["mcp", "terminal", "browser", "debug"]
-    protocol: Literal["streamable-http", "http", "websocket", "dap"]
-
-    @model_validator(mode="after")
-    def protocol_matches_service(self) -> PluginServiceContribution:
-        allowed = {
-            "mcp": {"streamable-http"},
-            "terminal": {"http", "websocket"},
-            "browser": {"http", "websocket"},
-            "debug": {"dap"},
-        }
-        if self.protocol not in allowed[self.service_type]:
-            raise ValueError("服务协议与 service_type 不匹配")
-        return self
-
-
 class PluginToolBinding(_PluginValue):
     tool_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     contract_version: int = Field(gt=0)
@@ -109,17 +90,6 @@ class PluginSkillContribution(_PluginValue):
         if len(tool_ids) != len(set(tool_ids)):
             raise ValueError("同一 Skill 的 tool_bindings 不得重复 tool_id")
         return self
-
-
-class PluginCommandContribution(_PluginValue):
-    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    title: str = Field(min_length=1)
-    category: str | None = None
-    handler: str = Field(min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
-    arguments_schema: dict[str, JsonValue]
-    result_schema: dict[str, JsonValue]
-    required_capabilities: list[str] = Field(default_factory=list)
-    enablement: str | None = None
 
 
 class PluginMenuContribution(_PluginValue):
@@ -159,11 +129,11 @@ class PluginDebuggerContribution(_PluginValue):
 class PluginContributions(_PluginValue):
     """首批开放贡献；具体扩展点数据由对应业务 owner 继续校验。"""
 
-    commands: list[PluginCommandContribution] = Field(default_factory=list)
+    commands: list[_plugin_commands.PluginCommandContribution] = Field(default_factory=list)
     menus: list[PluginMenuContribution] = Field(default_factory=list)
     keybindings: list[PluginKeybindingContribution] = Field(default_factory=list)
     configuration: dict[str, JsonValue] | None = None
-    services: list[PluginServiceContribution] = Field(default_factory=list)
+    services: list[_plugin_commands.PluginServiceContribution] = Field(default_factory=list)
     debuggers: list[PluginDebuggerContribution] = Field(default_factory=list)
     skills: list[PluginSkillContribution] = Field(default_factory=list)
 
@@ -296,30 +266,6 @@ class PluginBinding(_PluginValue):
     enabled: bool
 
 
-class PluginInstanceView(_PluginValue):
-    gateway_id: str = Field(min_length=1)
-    package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    package_version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
-    plugin_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    instance_scope: PluginScope
-    workspace_id: CanonicalWorkspaceId | None = None
-    instance_id: str = Field(min_length=1)
-    management_protocol_version: Literal[1]
-    extension_contract_version: Literal[1]
-    status: PluginState
-    process_id: int = Field(gt=0)
-    capabilities: list[str] = Field(default_factory=list)
-    services: list[PluginServiceContribution] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def status_matches_scope(self) -> PluginInstanceView:
-        if (self.instance_scope == "workspace") != (self.workspace_id is not None):
-            raise ValueError("workspace 插件回执必须且只能绑定 workspace_id")
-        if len({service.service_id for service in self.services}) != len(self.services):
-            raise ValueError("插件回执包含重复 service_id")
-        return self
-
-
 class PluginServiceReference(_PluginValue):
     """一次业务连接冻结的服务身份，不含目标监听地址。"""
 
@@ -332,14 +278,12 @@ class PluginServiceReference(_PluginValue):
     workspace_id: CanonicalWorkspaceId | None = None
 
 
-class PluginInstanceStatus(PluginInstanceView):
-    log_sink: dict[str, JsonValue] | None = None
+class PluginInstanceView(_plugin_commands.PluginInstanceView):
+    workspace_id: CanonicalWorkspaceId | None = None
 
 
-class PluginShutdownDTO(_PluginValue):
-    instance_id: str = Field(min_length=1)
-    process_id: int = Field(gt=0)
-    accepted: Literal[True]
+class PluginInstanceStatus(_plugin_commands.PluginInstanceStatus):
+    workspace_id: CanonicalWorkspaceId | None = None
 
 
 class InstalledPluginPackageDTO(_PluginValue):
@@ -382,7 +326,6 @@ __all__ = [
     "ExtensionPoint",
     "InstalledPluginPackageDTO",
     "PluginBinding",
-    "PluginCommandContribution",
     "PluginConfigurationSchemaDTO",
     "PluginConfigurationSchemasDTO",
     "PluginConfigurationSchemasRequest",
@@ -399,9 +342,7 @@ __all__ = [
     "PluginRuntimeStatusDTO",
     "PluginRuntimeTarget",
     "PluginScope",
-    "PluginServiceContribution",
     "PluginServiceReference",
-    "PluginShutdownDTO",
     "PluginSkillContribution",
     "PluginSlotStatusDTO",
     "PluginState",

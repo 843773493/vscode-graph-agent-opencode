@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Annotated, TypeVar
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError
 
 from app.abstractions.state_conflict import ClientStateConflictError
-from app.api.deps import get_persistent_task_service, get_request_id, verify_local_token
+from app.api.deps import get_persistent_task_service, verify_local_token
 from app.api.errors import (
     client_error_message,
     not_found_http_error,

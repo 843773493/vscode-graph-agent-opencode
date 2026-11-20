@@ -17,13 +17,13 @@ from pathlib import Path
 import httpx
 import portalocker
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import jobs, messages, search, session_turns, sessions
 from app.api.deps import (
     get_job_service,
     get_message_service,
-    get_request_id,
     get_session_orchestrator,
     get_session_service,
     get_session_turn_history_service,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from app.protocol.generated.boxteam.common.v1 import service_lifecycle_pb2
-from app.protocol.generated.boxteam.gateway.v2 import health_pb2
+from boxteam.common.v1 import service_lifecycle_pb2
+from boxteam.gateway.v2 import health_pb2
+
 from app.schemas.gateway.diagnostics import GatewayHealthDTO
 
 

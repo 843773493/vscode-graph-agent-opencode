@@ -9,9 +9,6 @@ from starlette.requests import HTTPConnection
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
-from app.core.trace_middleware import (
-    get_request_id,  # noqa: F401
-)
 from app.core.workspace_identity import validate_workspace_id
 from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.service import AgentToolSettingsService

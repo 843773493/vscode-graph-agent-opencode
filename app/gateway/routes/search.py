@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -10,7 +11,6 @@ from app.api.sse_heartbeat import (
     SSE_NO_CACHE_HEADERS,
     stream_sse_with_heartbeat,
 )
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry

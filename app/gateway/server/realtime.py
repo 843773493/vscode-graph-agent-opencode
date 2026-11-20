@@ -9,12 +9,12 @@ import struct
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from starlette.types import Message
 
-from app.core.shielded_cleanup import run_cleanup_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.schemas.gateway.realtime import RealtimeRequest
 

@@ -1,0 +1,23 @@
+{
+  "name": "@boxteam/plugin-sdk",
+  "version": "0.0.2",
+  "type": "module",
+  "files": ["src"],
+  "exports": {
+    ".": { "types": "./src/index.d.mts", "import": "./src/index.mjs" },
+    "./runtime": { "types": "./src/runtime.d.mts", "import": "./src/runtime.mjs" },
+    "./commands": { "types": "./src/commands.d.mts", "import": "./src/commands.mjs" },
+    "./logging": { "types": "./src/logging.d.mts", "import": "./src/logging.mjs" },
+    "./observation": { "types": "./src/observation.d.mts", "import": "./src/observation.mjs" },
+    "./process-lifecycle": { "types": "./src/process-lifecycle.d.mts", "import": "./src/process-lifecycle.mjs" },
+    "./control": { "types": "./src/control.d.mts", "import": "./src/control.mjs" },
+    "./http": { "types": "./src/http.d.mts", "import": "./src/http.mjs" },
+    "./maintenance": { "types": "./src/maintenance.d.mts", "import": "./src/maintenance.mjs" },
+    "./generated/boxteam/*": "./src/generated/boxteam/*",
+    "./generated-json/boxteam/*": "./src/generated-json/boxteam/*"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.14.0",
+    "ajv": "^8.20.0"
+  }
+}

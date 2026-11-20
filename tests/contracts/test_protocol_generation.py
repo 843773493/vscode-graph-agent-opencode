@@ -1,10 +1,9 @@
-from google.protobuf import descriptor_pb2
-
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
+from boxteam.gateway.v2 import public_pb2 as gateway_pb2
+from boxteam.workspace.v2 import (
     job_pb2,
     public_pb2,
 )
+from google.protobuf import descriptor_pb2
 
 
 def test_current_job_and_pending_request_owner_fields_keep_distinct_wire_tags() -> None:

@@ -6,7 +6,7 @@
 
 - 可以维护 Python 协议生成入口、JSON/SSE/WS codec 和边界适配器。
 - `schema.py` 从 descriptor 核对公开 JSON 的字段、嵌套结构和类型；异形消息仅由具名 adapter 投影或明确接管。业务联合的各分支合计必须完整覆盖协议字段，只有具备 presence 的协议字段可因分支而省略。业务取值与字段间约束仍属于内部 Pydantic。
-- `openapi.py` 只登记已迁齐的 HTTP 公开模型；导出与协议生成均在发布产物前递归校验真实 OpenAPI，并可消费本次 Buf 编译的 descriptor。
+- `openapi.py` 只登记已迁齐的 HTTP 公开模型；安装当前 SDK wheel 后的应用合同检查递归校验真实 OpenAPI，并消费本次 Buf 编译的 descriptor。纯协议生成不导入应用。
 - 工作区信息、上下文和索引响应共用该检查；动态元数据仍按原 Struct 合同传递，其位置字段的序列化约束继续归 Pydantic 与原 owner。
 - Agent 目录、详情和默认 Agent／Provider 设置共用该检查，嵌套 Provider 由 descriptor 递归核对；默认值和配置可用性仍归 Pydantic 与原 owner。
 - Workspace 与 Gateway 的 HTTP 根复用同一个递归检查入口；Gateway 目录浏览、原生目录绑定及解析的结构从其 descriptor 核对，原生输入许可、目录 URI 和授权仍由既有 Pydantic／owner 负责。
@@ -43,7 +43,7 @@
 ## 不可修改内容
 
 - 不要把 Agent 业务规则或 Workspace 内部事件总线实现放到这里。
-- 不要手工修改 `generated/` 下的生成文件。
+- 不要手工修改 `sdk/python/src/boxteam/` 下的生成文件；本目录只消费正常安装的 `boxteam.*`，不保留生成副本或模块别名。
 
 ## 规范
 

@@ -1,13 +1,13 @@
 """自有服务插件的跨语言结构由 Gateway descriptor 核对。"""
 
 import pytest
-from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
-from pydantic.json_schema import JsonSchemaValue
-
-from app.protocol.generated.boxteam.gateway.v2 import (
+from boxteam.gateway.v2 import (
     plugin_commands_pb2,
     service_plugin_pb2,
 )
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
+from pydantic.json_schema import JsonSchemaValue
+
 from app.protocol.openapi import assert_gateway_http_schemas
 from app.protocol.schema import descriptor_pool_from_set
 

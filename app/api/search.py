@@ -3,6 +3,7 @@
 import asyncio
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
@@ -13,7 +14,6 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
 )
 from app.api.deps import (
-    get_request_id,
     get_workspace_search_service,
     verify_local_token,
 )

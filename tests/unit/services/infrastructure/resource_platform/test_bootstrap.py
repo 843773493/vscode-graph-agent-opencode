@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.events.event_channel_service import (
     EventChannelService,

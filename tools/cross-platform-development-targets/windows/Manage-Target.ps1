@@ -142,6 +142,9 @@ function Invoke-TargetAction([string[]]$Arguments) {
             }
             Push-Location $Repository
             try {
+                # TODO：此 SDK 自举顺序仍需 Windows 目标验收。
+                bun scripts/plugins/prepare-product-sdk.mjs --check node python
+                Assert-NativeCommand "SDK archive build/check"
                 $env:UV_PROJECT_ENVIRONMENT = Join-Path $Repository ".venv"
                 uv sync --frozen
                 Assert-NativeCommand "uv sync"
@@ -160,6 +163,8 @@ function Invoke-TargetAction([string[]]$Arguments) {
                 # TODO：Workbench 依赖安装仍需真实 Windows 目标验证。
                 bun install --cwd src/clients/workbench --frozen-lockfile
                 Assert-NativeCommand "Workbench bun install"
+                bun run check:protocol:application
+                Assert-NativeCommand "Application protocol check"
                 bun x playwright install chromium
                 Assert-NativeCommand "Playwright Chromium install"
                 $Python = Join-Path $Repository ".venv\Scripts\python.exe"

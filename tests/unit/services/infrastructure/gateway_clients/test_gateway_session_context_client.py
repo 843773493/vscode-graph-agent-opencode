@@ -11,17 +11,16 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import ValidationError
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.identifier import create_uuid_hex
 from app.core.resource_uri import parse_session_thread_uri, thread_resource_uri
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_context import (

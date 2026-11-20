@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from boxteam.workspace.v2 import public_pb2
 from pydantic import ValidationError
 
 from app.main import app
-from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
 from tests.contracts.api.openapi_snapshots import (
     OPENAPI_SNAPSHOTS,

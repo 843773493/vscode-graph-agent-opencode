@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from boxteam_plugin_sdk.logging import runtime_logging_router
 from fastapi import FastAPI
 
-from app.api.runtime_logging import runtime_logging_router
 from app.gateway.auth import verify_gateway_token
 from app.gateway.auxiliary_proxy import router as auxiliary_proxy_router
 from app.gateway.control.router import router as gateway_control_router

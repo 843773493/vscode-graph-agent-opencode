@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import load_runtime_log_contract
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414

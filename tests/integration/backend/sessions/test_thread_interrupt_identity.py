@@ -8,12 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import messages as messages_api
 from app.api import sessions as sessions_api
 from app.api.deps import (
-    get_request_id,
     get_session_orchestrator,
     get_session_stop_service,
     verify_local_token,

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import ToolMessage
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
@@ -22,7 +23,6 @@ from app.agents.tools.extension_invocation import (
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner

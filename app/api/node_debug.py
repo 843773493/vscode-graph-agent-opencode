@@ -4,10 +4,11 @@ import asyncio
 import json
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
+from app.api.deps import get_node_debug_service, verify_local_token
 from app.api.errors import forbidden_http_error, state_conflict_http_error
 from app.core.async_channel import run_channel
 from app.core.exceptions import ForbiddenError

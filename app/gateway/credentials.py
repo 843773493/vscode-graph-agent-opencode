@@ -11,12 +11,13 @@ from pathlib import Path
 from traceback import format_exception
 from typing import Literal
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.core.file_permissions import (
     require_private_file_access,
     restrict_private_path_access,
 )
 from app.core.identifier import create_prefixed_id, validate_gateway_id
-from app.core.trace_middleware import get_current_request_id
 
 logger = logging.getLogger(__name__)
 

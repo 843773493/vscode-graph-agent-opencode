@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.turn_terminal_status import (
     ToolResultCompletion,
     TurnTerminalStatusWriter,
@@ -23,7 +25,7 @@ from app.core.bounded_json import bound_json_value
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
     apply_event,

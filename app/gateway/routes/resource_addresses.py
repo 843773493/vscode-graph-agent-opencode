@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.resource_uri import (
@@ -16,7 +17,6 @@ from app.core.resource_uri import (
     resource_display_uri,
     thread_resource_uri,
 )
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.schemas.gateway.resource_address import (
     GatewayChangeAddressRequest,

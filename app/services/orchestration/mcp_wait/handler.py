@@ -9,6 +9,10 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import JsonValue
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -16,12 +20,7 @@ from app.abstractions.mcp_connection_wait import McpWaitCheckpoint, McpWaitPaylo
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.policy.tool_capability import ToolMetadata
 from app.core.phase_observer import observe_phase
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.background_work import (
     BackgroundMessageDTO,
     BackgroundMessageKind,

@@ -18,8 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, ReleaseCallback
 
-from app.core.lifecycle import LifetimeScope, ReleaseCallback
 from app.core.path_utils import get_session_path_resolver
 from app.core.thread_residency_contracts import ResidencyBlocker
 from app.domain.itemized.execution_admission import ExecutionAdmission

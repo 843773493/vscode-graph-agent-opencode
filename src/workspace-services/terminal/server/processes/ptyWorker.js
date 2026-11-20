@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import {
   readProcessStat,
   terminateProcessTree,
-} from "../../../../shared/serverProcessLifecycle.mjs";
+} from "@boxteam/plugin-sdk/process-lifecycle";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");

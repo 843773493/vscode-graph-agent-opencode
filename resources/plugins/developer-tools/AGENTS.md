@@ -9,7 +9,7 @@
 
 # 不可修改内容
 
-- 不在这里复制运行插件的产品源码；Terminal、Browser、Debug 的唯一源码分别位于 `src/workspace-services/terminal/`、`src/workspace-services/browser/`、`src/workspace-services/debug/`，共享协议和运行时位于 `src/shared/` 与 `src/workspace-services/protocol/`。
+- 不在这里复制运行插件的产品源码；Terminal、Browser、Debug 的唯一源码分别位于 `src/workspace-services/terminal/`、`src/workspace-services/browser/`、`src/workspace-services/debug/`，插件公共协议和运行库由 `sdk/node` 构建为随包归档依赖。
 - 不提交 `node_modules`、已编译原生依赖或 ZIP 构建产物。
 - 不在插件包中实现第二份 Terminal 业务或协议实现。
 

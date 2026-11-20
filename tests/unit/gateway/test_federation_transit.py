@@ -16,9 +16,12 @@ from pathlib import Path
 
 import pytest
 import uvicorn
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import FastAPI
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
 from app.gateway.federation.errors import (

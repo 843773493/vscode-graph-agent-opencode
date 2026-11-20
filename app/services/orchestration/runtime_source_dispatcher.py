@@ -7,6 +7,11 @@ import json
 from contextlib import closing
 from typing import cast
 
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import (
@@ -21,11 +26,8 @@ from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs

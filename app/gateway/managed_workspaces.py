@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.failures import mark_public_failure
 from app.core.identifier import create_uuid_hex
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,

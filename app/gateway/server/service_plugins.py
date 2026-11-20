@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id, verify_local_control_request
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from app.api.runtime_control import verify_local_control_request
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     stream_sse_with_heartbeat,
@@ -22,7 +22,6 @@ from app.api.sse_heartbeat import (
 from app.core.async_channel import run_channel
 from app.core.failures import HTTP_FAILURE_HEADER
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,

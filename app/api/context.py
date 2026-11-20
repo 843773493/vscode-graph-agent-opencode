@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError
@@ -12,7 +13,7 @@ from app.abstractions.session_context import (
     SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
-from app.api.deps import get_request_id, get_session_context_query_service
+from app.api.deps import get_session_context_query_service
 from app.api.errors import (
     not_found_http_error,
     session_context_revision_http_error,

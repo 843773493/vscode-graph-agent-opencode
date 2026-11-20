@@ -4,6 +4,7 @@ import json
 from collections.abc import Awaitable
 from typing import Literal, TypeVar
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,11 +20,7 @@ from app.core.failures import report_failure
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
-from app.core.trace_middleware import (
-    get_current_gateway_id,
-    get_current_request_id,
-    require_current_gateway_id,
-)
+from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
 from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.gateway.search import GatewaySearchScopeRequest
 from app.schemas.internal_v2.search import WorkspaceContextSearchOptionsDTO

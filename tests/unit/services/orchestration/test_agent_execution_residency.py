@@ -8,9 +8,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 
-from app.core.lifecycle import LifetimeScope
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.orchestration.agent_execution_service import AgentExecutionService

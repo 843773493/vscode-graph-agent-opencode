@@ -16,19 +16,19 @@ from uuid import uuid4
 
 import portalocker
 import psutil
-
-from app.core.file_permissions import restrict_private_path_access
-from app.core.logging_contract import (
+from boxteam_plugin_sdk.logging import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
+from boxteam_plugin_sdk.logging_contract import (
     RuntimeLogContract,
     load_runtime_log_contract,
 )
+
+from app.core.file_permissions import restrict_private_path_access
 from app.gateway.runtime.process_groups import (
     _capture_posix_group_leader_start_marker,
     _posix_group_is_alive,
-)
-from app.runtime.log_file_identity import (
-    runtime_log_file_identity,
-    runtime_log_path_identity,
 )
 
 logger = logging.getLogger(__name__)

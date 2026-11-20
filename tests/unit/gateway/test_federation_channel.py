@@ -18,12 +18,15 @@ from typing import Self
 
 import pytest
 import uvicorn
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import FastAPI
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
 from app.gateway.federation.endpoint import (

@@ -121,7 +121,7 @@ PTY自发退出也须经原Worker关闭入口确认宿主退出后才清除句�
 ## 规范
 
 - 使用 Node.js ESM。
-- 产品诊断统一使用 `src/shared/serverRuntimeLogging.mjs`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
+- 产品诊断统一使用 `@boxteam/plugin-sdk/logging`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
 - 失败时返回明确 HTTP 错误或 WebSocket error 消息。
 - detach 只断开客户端，不杀死 PTY；kill/delete 才终止终端。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

@@ -1,9 +1,9 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
-import { readProcessStat } from "../../../shared/serverProcessLifecycle.mjs";
+import { readProcessStat } from "@boxteam/plugin-sdk/process-lifecycle";
 import {
   nowIso,
   resolveShell,

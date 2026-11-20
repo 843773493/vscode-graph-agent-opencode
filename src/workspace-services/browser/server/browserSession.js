@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";

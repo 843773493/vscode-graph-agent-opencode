@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from app.api.deps import (
     get_agent_tool_settings_service,
-    get_request_id,
     get_tool_test_service,
     verify_local_token,
 )

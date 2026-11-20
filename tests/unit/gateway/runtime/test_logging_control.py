@@ -8,15 +8,15 @@ from collections.abc import Callable
 
 import httpx
 import pytest
-from pydantic import ValidationError
-
-from app.core.logging_config import RuntimeLoggingConflictError
-from app.gateway.runtime import logging_control as logging_control_module
-from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
-from app.schemas.runtime_logging import (
+from boxteam_plugin_sdk.logging import (
     RuntimeLoggingApply,
+    RuntimeLoggingConflictError,
     RuntimeLoggingHttpService,
 )
+from pydantic import ValidationError
+
+from app.gateway.runtime import logging_control as logging_control_module
+from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 
 
 @pytest.fixture

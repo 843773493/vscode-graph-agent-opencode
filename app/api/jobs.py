@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
@@ -9,7 +10,6 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
     get_artifact_service,
     get_job_service,
-    get_request_id,
     get_tool_approval_service,
     verify_local_token,
 )

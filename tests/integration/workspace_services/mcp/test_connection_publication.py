@@ -11,10 +11,10 @@ from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
 
-from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,

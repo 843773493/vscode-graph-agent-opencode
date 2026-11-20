@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote_to_bytes
 
 import portalocker
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
@@ -40,7 +41,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes

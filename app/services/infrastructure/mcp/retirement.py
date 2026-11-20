@@ -10,7 +10,8 @@ from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Literal
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.config import McpCleanupDTO
 from app.services.infrastructure.config.state import ConfigConflictError

@@ -9,10 +9,11 @@ from pathlib import Path
 
 import psutil
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.resource_uri import parse_resource_uri
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.harness.python.run_context import TestRunContext

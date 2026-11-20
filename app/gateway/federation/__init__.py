@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import httpx
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 
 from app.core.identifier import create_prefixed_id
 from app.gateway.credentials import FederationCredential
@@ -18,7 +19,7 @@ from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FederationError,
 )
-from app.gateway.proxy_upstream import run_cleanup_shielded, send_upstream_request
+from app.gateway.proxy_upstream import send_upstream_request
 from app.gateway.runtime.process_ports import allocate_ssh_tunnel_port
 from app.gateway.runtime.ssh_process import start_ssh_tunnel_process
 from app.gateway.runtime.workspace import WorkspaceRuntime

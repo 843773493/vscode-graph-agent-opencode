@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
-from app.api.deps import get_agent_service, get_request_id, verify_local_token
+from app.api.deps import get_agent_service, verify_local_token
 from app.api.errors import state_conflict_http_error
 from app.schemas.internal_v2.agent import (
     AgentDTO,

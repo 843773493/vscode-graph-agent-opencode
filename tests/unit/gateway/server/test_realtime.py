@@ -7,10 +7,10 @@ import struct
 import threading
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.proxy_upstream import ProxyStreamingResponse
 from app.gateway.server import realtime as api

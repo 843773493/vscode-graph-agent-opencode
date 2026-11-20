@@ -14,6 +14,7 @@ import httpx
 import psutil
 import pytest
 
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
@@ -33,9 +34,9 @@ import sys, os, asyncio
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI
 import uvicorn
-from app.core.logging_config import configure_application_logging
+from boxteam_plugin_sdk.logging import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='command-proof')
 async def execute(arguments, context):
     await context.progress(1, 2, context.request_id + ':' + context.call.call_id)
@@ -56,8 +57,8 @@ asyncio.run(server.serve())
 
 NODE = '''
 import http from 'node:http';
-import { createPluginRuntimeManagement } from './src/shared/serverPluginRuntime.mjs';
-import { createRuntimeLogger } from './src/shared/serverRuntimeLogging.mjs';
+import { createPluginRuntimeManagement } from '@boxteam/plugin-sdk/runtime';
+import { createRuntimeLogger } from '@boxteam/plugin-sdk/logging';
 const logger = createRuntimeLogger('command-proof');
 const readJson = async req => { let text=''; for await (const part of req) text+=part; return text ? JSON.parse(text) : {}; };
 const management = createPluginRuntimeManagement({service:'command-proof', logger, readJson,
@@ -94,8 +95,15 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
         if "api_key" in provider:
             provider["api_key"] = "command-test-unused-key"
     config_path.write_text(json.dumps(config))
+    boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
+    config_root = boxteam_home / "config"
+    install_user_configuration(config_root=config_root, profile="default", project_root=Path.cwd())
+    gateway_config_path = config_root / "gateway.jsonc"
+    gateway_config = commentjson.loads(gateway_config_path.read_text(encoding="utf-8"))
+    gateway_config["plugins"]["workspace_defaults"]["entries"] = []
+    gateway_config_path.write_text(json.dumps(gateway_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=unused_tcp_port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
+        boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir)
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
                           timeout=30, trust_env=False) as client:
@@ -160,14 +168,10 @@ def _archive(destination: Path, prepared_package_root: Path, *, python_source: s
         archive.writestr("entry.mjs", NODE)
         archive.writestr("package.json", json.dumps(package))
         archive.writestr("bun.lock", json.dumps(lock))
-        for file in sorted((prepared_package_root / "node_modules").rglob("*")):
-            if file.is_file():
-                archive.write(file, file.relative_to(prepared_package_root).as_posix())
-        for file in ("serverPluginRuntime.mjs", "serverPluginCommands.mjs", "serverRuntimeControl.mjs", "serverRuntimeLogging.mjs", "serverRuntimeObservation.mjs"):
-            archive.write(Path("src/shared") / file, f"src/shared/{file}")
-        for file in ("plugin_commands_pb.js", "service_plugin_pb.js", "public_pb.js"):
-            source = Path("src/workspace-services/protocol/generated/boxteam/gateway/v2") / file
-            archive.write(source, source.as_posix())
+        for source_root in (prepared_package_root / "node_modules", prepared_package_root / "vendor"):
+            for file in sorted(source_root.rglob("*")):
+                if file.is_file():
+                    archive.write(file, file.relative_to(prepared_package_root).as_posix())
 
 
 def test_workspace_commands_release_removed_target_without_changing_sibling(

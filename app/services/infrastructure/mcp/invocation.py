@@ -12,10 +12,10 @@ from datetime import timedelta
 from typing import Literal, TypeVar
 
 import anyio
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from mcp import types
 from mcp.client.session import ClientSession

@@ -15,6 +15,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterable
 from urllib.parse import unquote, urlsplit, urlunsplit
 
+import boxteam_plugin_sdk.lifecycle as _sdk_lifecycle
 import httpx
 from fastapi import HTTPException, WebSocket
 from starlette.responses import StreamingResponse
@@ -23,7 +24,6 @@ from websockets.asyncio.client import ClientConnection
 
 from app.core.failures import HTTP_FAILURE_HEADER, mark_http_failure
 from app.core.identifier import validate_gateway_id
-from app.core.shielded_cleanup import run_cleanup_shielded
 
 __all__ = [
     "GATEWAY_PROXY_DROPPED_HEADERS",
@@ -39,7 +39,6 @@ __all__ = [
     "parse_target_gateway_id",
     "relay_websocket_client_to_upstream",
     "relay_websocket_upstream_to_client",
-    "run_cleanup_shielded",
     "send_upstream_request",
 ]
 
@@ -233,7 +232,7 @@ class UpstreamResponseBody:
                 close_upstream_response(self._response, [], self._on_close)
             )
         close_task = self._close_task
-        await run_cleanup_shielded(lambda: close_task)
+        await _sdk_lifecycle.run_cleanup_shielded(lambda: close_task)
 
 
 def build_upstream_url(
@@ -334,4 +333,4 @@ class ProxyStreamingResponse(StreamingResponse):
         try:
             await super().__call__(scope, receive, send)
         finally:
-            await run_cleanup_shielded(self.body_iterator.aclose)
+            await _sdk_lifecycle.run_cleanup_shielded(self.body_iterator.aclose)

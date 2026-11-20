@@ -10,6 +10,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Body,
@@ -22,9 +23,8 @@ from fastapi import (
 from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,

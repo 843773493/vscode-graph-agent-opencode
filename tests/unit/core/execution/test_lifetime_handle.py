@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 
 @pytest.mark.asyncio

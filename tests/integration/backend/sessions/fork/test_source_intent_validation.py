@@ -6,16 +6,15 @@ import json
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import ValidationError
 
 from app.container import AppContainer
 from app.core.resource_uri import thread_resource_uri
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,

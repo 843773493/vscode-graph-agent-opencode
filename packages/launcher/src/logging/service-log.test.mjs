@@ -20,7 +20,7 @@ import {
   SERVICE_LOG_CAPTURED_ENV,
   SERVICE_LOG_PATH_ENV,
 } from "./service-log.mjs";
-import { loadRuntimeLogContract } from "../../../../src/shared/serverRuntimeLogging.mjs";
+import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";
 import { spawnDetachedProcess, terminateDetachedProcess } from "../detached-process.mjs";
 
 const contract = loadRuntimeLogContract();
@@ -50,17 +50,12 @@ describe("service log", async () => {
     }
   });
 
-  test("发行资源按显式 application root 定位，不依赖 Launcher 安装目录", async () => {
-    const applicationRoot = temporaryRoot();
-    const resources = path.join(applicationRoot, "resources/logging");
-    mkdirSync(resources, { recursive: true });
-    const contract = readFileSync(path.resolve("resources/logging/runtime-contract.json"));
-    writeFileSync(path.join(resources, "runtime-contract.json"), contract);
+  test("日志合同从SDK包资源读取，不依赖 cwd 或产品源码目录", async () => {
     const home = temporaryRoot();
-    expect(resolveServiceLogPath(home, {}, loadRuntimeLogContract(applicationRoot))).toBe(
+    expect(resolveServiceLogPath(home, {}, loadRuntimeLogContract())).toBe(
       path.join(home, "state/logs/launcher/services.log"),
     );
-    expect(() => loadRuntimeLogContract(path.join(applicationRoot, "missing"))).toThrow();
+    expect(loadRuntimeLogContract()).toEqual(contract);
   });
 
   test("detached 的 Gateway 输出只写 Gateway 文件，覆盖只作用于 Launcher", async () => {
@@ -68,7 +63,7 @@ describe("service log", async () => {
     const outerPath = path.join(home, "custom-launcher.log");
     const script = `
       import { openServiceLog } from ${JSON.stringify(import.meta.url.replace(".test.mjs", ".mjs"))};
-      import { loadRuntimeLogContract } from ${JSON.stringify(new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href)};
+      import { loadRuntimeLogContract } from '@boxteam/plugin-sdk/logging';
       const options = { contract: loadRuntimeLogContract(), boxteamHome: ${JSON.stringify(home)} };
       const launcher = await openServiceLog(options);
       const gateway = await openServiceLog({ ...options, role: 'gateway' });
@@ -248,7 +243,7 @@ describe("service log", async () => {
     const logPath = path.join(temporaryRoot(), "node-to-python.log");
     const file = await openServiceLogFile(logPath, contract);
     const python = process.env.BOXTEAM_PYTHON_BIN ?? path.resolve(".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-    const script = "from dataclasses import asdict; import json; from app.core.logging_config import configure_application_logging,runtime_logging_state; configure_application_logging(service='backend'); print(json.dumps(asdict(runtime_logging_state())),flush=True)";
+    const script = "from dataclasses import asdict; import json; from boxteam_plugin_sdk.logging import configure_application_logging,runtime_logging_state; configure_application_logging(service='backend'); print(json.dumps(asdict(runtime_logging_state())),flush=True)";
     let result;
     try {
       result = spawnSync(python, ["-c", script], {
@@ -303,7 +298,7 @@ describe("service log", async () => {
     const logPath = resolveServiceLogPath(home, {}, contract);
     const script = `
       import { openServiceLog } from ${JSON.stringify(import.meta.url.replace(".test.mjs", ".mjs"))};
-      import { loadRuntimeLogContract } from ${JSON.stringify(new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href)};
+      import { loadRuntimeLogContract } from '@boxteam/plugin-sdk/logging';
       const sink = JSON.parse(process.env.BOXTEAM_RUNTIME_LOG_SINK); sink.inode = 'changed';
       process.env.BOXTEAM_RUNTIME_LOG_SINK = JSON.stringify(sink);
       await openServiceLog({ contract: loadRuntimeLogContract(), boxteamHome: ${JSON.stringify(home)} });

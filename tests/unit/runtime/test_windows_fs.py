@@ -6,13 +6,13 @@ import os
 from pathlib import Path
 
 import pytest
-
-from app.core.atomic_fs import native_io_path
-from app.runtime import windows_fs
-from app.runtime.log_file_identity import (
+from boxteam_plugin_sdk.logging import (
     runtime_log_file_identity,
     runtime_log_path_identity,
 )
+
+from app.core.atomic_fs import native_io_path
+from app.runtime import windows_fs
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows pywin32")
 

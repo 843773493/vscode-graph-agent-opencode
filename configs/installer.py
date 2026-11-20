@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from collections.abc import Sequence
@@ -84,6 +85,7 @@ def install_user_configuration(
     profile: ConfigProfile,
     project_root: Path | None = None,
     force: bool = False,
+    bundled_packages: Sequence[dict[str, str]] = (),
 ) -> ConfigurationInstallation:
     """从静态资源安装双配置；普通模式只补缺失配置。"""
     resolved_root = config_root.expanduser().resolve()
@@ -123,7 +125,16 @@ def install_user_configuration(
         config_paths.append(config_target)
         schema_paths.append(schema_target)
         if force or not config_target.exists():
-            atomic_write(config_target, config_source.read_bytes(), 0o600)
+            content = config_source.read_bytes()
+            if config_target.name == "gateway.jsonc" and bundled_packages:
+                # 只初始化新来源；已有绑定和新工作区默认项不随普通启动更新。
+                versions = {entry["package_id"]: entry["package_version"] for entry in bundled_packages}
+                config = _read_jsonc_object(config_source)
+                for entry in config.get("plugins", {}).get("workspace_defaults", {}).get("entries", []):
+                    if entry["package_id"] in versions:
+                        entry["package_version"] = versions[entry["package_id"]]
+                content = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            atomic_write(config_target, content, 0o600)
             created_config_paths.append(config_target)
         if schema_content is not None:
             atomic_write(schema_target, schema_content, 0o600)
@@ -141,6 +152,7 @@ def install_source_development_configuration(
     config_root: Path,
     local_only: bool = False,
     force: bool = False,
+    bundled_packages: Sequence[dict[str, str]] = (),
 ) -> ConfigurationInstallation:
     """把源码开发资源安装到 BOXTEAM_HOME，运行期不再读取源码文件。"""
     resolved_project_root = project_root.expanduser().resolve()
@@ -152,6 +164,7 @@ def install_source_development_configuration(
         profile="default" if local_only else "development",
         project_root=resolved_project_root,
         force=force,
+        bundled_packages=bundled_packages,
     )
     env_path = config_root.expanduser().resolve() / ".env"
     if force or not env_path.exists():
@@ -165,16 +178,20 @@ def install_source_development_configuration(
 
 
 def install_bundled_plugins(*, boxteam_home: Path, packages: Sequence[dict[str, str]]) -> list[str]:
-    """只补缺失的内置包；启用状态仍归配置 owner，不在安装时改写。"""
+    """沿原发布入口核实内置包；启用状态仍归配置 owner。"""
     from app.gateway.plugins.packages import PluginPackageStore
 
     store = PluginPackageStore(boxteam_home / "plugins/packages")
     installed = []
     for entry in packages:
         package_id, version = entry["package_id"], entry["package_version"]
+        sources = [key for key in ("directory", "archive") if key in entry]
+        if len(sources) != 1:
+            raise ValueError("内置插件必须且只能提供 directory 或 archive")
         try:
             store.get(package_id, version)
         except FileNotFoundError:
-            store.install_zip(Path(entry["archive"]), expected_package_id=package_id, expected_package_version=version)
             installed.append(f"{package_id}@{version}")
+        install = store.install_directory if sources[0] == "directory" else store.install_zip
+        install(Path(entry[sources[0]]), expected_package_id=package_id, expected_package_version=version)
     return installed

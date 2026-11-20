@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Depends,
@@ -28,9 +29,8 @@ from starlette.types import Receive, Scope, Send
 
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     LOCAL_TOKEN_COOKIE_NAME,
     GatewayAuthContext,

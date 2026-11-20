@@ -1,10 +1,11 @@
-import { createWriteStream, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
-import yazl from "yazl";
 import { parse as parseJsonc } from "jsonc-parser";
+import { createHash } from "node:crypto";
+import { buildPluginSdk } from "./build-sdk.mjs";
+import { archivePluginDirectory } from "./artifact-directory.mjs";
 
 function parseArguments(args) {
   const values = new Map();
@@ -35,28 +36,6 @@ function run(executable, args, cwd, env) {
   return result.stdout.toString("utf8");
 }
 
-function collectFiles(root, directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.name === "AGENTS.md" || entry.name === "__pycache__" || entry.name === ".DS_Store") return [];
-    const absolute = path.join(directory, entry.name);
-    const relative = path.relative(root, absolute).split(path.sep).join("/");
-    if (entry.isSymbolicLink()) throw new Error(`MCP 插件制品不能包含符号链接: ${relative}`);
-    return entry.isDirectory()
-      ? collectFiles(root, absolute)
-      : [[absolute, relative]];
-  });
-}
-
-async function writeArchive(output, files) {
-  const archive = new yazl.ZipFile();
-  for (const [source, archivePath] of files) archive.addFile(source, archivePath, { compress: true });
-  const stream = createWriteStream(output, { flags: "wx" });
-  const closed = finished(stream);
-  archive.outputStream.pipe(stream);
-  archive.end();
-  await closed;
-}
-
 function validateTarget(target, pythonExecutable) {
   const hostOs = { linux: "linux", win32: "windows", darwin: "macos" }[process.platform];
   const hostArchitecture = { x64: "x64", arm64: "arm64" }[process.arch];
@@ -75,54 +54,70 @@ function validateTarget(target, pythonExecutable) {
   return manifestTarget;
 }
 
-export async function packMcpStdio({ projectRoot, output, target, uvExecutable, pythonExecutable }) {
-  projectRoot = path.resolve(projectRoot);
-  output = path.resolve(output);
-  if (!path.isAbsolute(output) || !output.toLowerCase().endsWith(".zip")) throw new Error("MCP 插件包输出必须是明确的 ZIP 绝对路径");
-  if (existsSync(output)) throw new Error(`拒绝覆盖已有插件包: ${output}`);
+export async function buildMcpStdioDirectory(options) {
+  const { projectRoot, output, target, uvExecutable, pythonExecutable } = options;
+  if (!path.isAbsolute(output) || existsSync(output)) throw new Error(`MCP 插件目录必须是未使用的绝对路径: ${output}`);
   const packageRoot = path.join(projectRoot, "resources/plugins/mcp-stdio");
-  for (const required of ["plugin.jsonc", "bridge.py", "pyproject.toml", "uv.lock"]) {
-    if (!existsSync(path.join(packageRoot, required))) throw new Error(`MCP stdio 插件缺少 ${required}`);
-  }
-  const manifestErrors = [];
-  const manifest = parseJsonc(readFileSync(path.join(packageRoot, "plugin.jsonc"), "utf8"), manifestErrors);
-  if (manifestErrors.length || manifest.package_id !== "boxteam.mcp-stdio" || manifest.plugins.length !== 1) {
-    throw new Error("MCP stdio 插件 manifest 无效");
-  }
+  const manifest = parseJsonc(readFileSync(path.join(packageRoot, "plugin.jsonc"), "utf8"));
   const targetManifest = validateTarget(target, pythonExecutable);
-  const stage = mkdtempSync(path.join(os.tmpdir(), "boxteam-mcp-stdio-"));
-  const credentialHome = path.join(stage, "home");
-  const requirementsFile = path.join(stage, "requirements.txt");
-  const sitePackages = path.join(stage, "python/site-packages");
-  mkdirSync(credentialHome);
-  mkdirSync(sitePackages, { recursive: true });
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !/^(UV_|PIP_|PYTHON)/i.test(key)));
-  environment.HOME = credentialHome;
-  environment.USERPROFILE = credentialHome;
-  environment.UV_CACHE_DIR = process.env.UV_CACHE_DIR ?? (process.platform === "win32"
-    ? path.join(process.env.LOCALAPPDATA ?? os.homedir(), "uv/cache")
-    : path.join(os.homedir(), ".cache/uv"));
-  const manifestPath = path.join(stage, "plugin.jsonc");
-  try {
-    await Bun.write(manifestPath, `${JSON.stringify({ ...manifest, target: targetManifest }, null, 2)}\n`);
-    run(uvExecutable, ["--no-config", "export", "--locked", "--no-dev", "--no-emit-project", "--format", "requirements-txt",
-      "--project", packageRoot, "--output-file", requirementsFile], packageRoot, environment);
-    run(uvExecutable, ["--no-config", "pip", "install", "--python", pythonExecutable, "--target", sitePackages,
-      "--require-hashes", "--no-deps", "--no-build", "--requirements", requirementsFile], packageRoot, environment);
-    const files = collectFiles(packageRoot, packageRoot).filter(([, relative]) => relative !== "plugin.jsonc");
-    files.push(...collectFiles(stage, sitePackages));
-    files.push([manifestPath, "plugin.jsonc"]);
-    for (const source of ["app/__init__.py", "app/core/__init__.py", "app/core/runtime_observation.py",
-      "app/schemas/__init__.py", "app/schemas/runtime_observation.py",
-      "app/runtime/log_file_identity.py", "app/runtime/plugin_observation.py",
-      "app/runtime/windows_fs.py"]) {
-      files.push([path.join(projectRoot, source), source]);
-    }
-    await writeArchive(output, files);
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
+  const sdk = options.sdk ?? buildPluginSdk({ projectRoot, language: "python", uvExecutable });
+  const hash = createHash("sha256").update(JSON.stringify({ target, sdk: sdk.digest, uvExecutable, pythonExecutable }));
+  hash.update(run(uvExecutable, ["--version"], projectRoot, process.env));
+  for (const file of ["resources/plugins/mcp-stdio/pyproject.toml", "resources/plugins/mcp-stdio/uv.lock", "scripts/plugins/pack-mcp-stdio.mjs"]) {
+    hash.update(readFileSync(path.join(projectRoot, file)));
   }
+  const cache = path.join(projectRoot, "out/plugin-dependencies/mcp-stdio", hash.digest("hex"));
+  mkdirSync(path.dirname(cache), { recursive: true });
+  if (!existsSync(cache)) {
+    const stage = mkdtempSync(path.join(path.dirname(cache), ".prepare-"));
+    try {
+      const source = path.join(stage, "package");
+      mkdirSync(source);
+      const sdkPath = `vendor/sdk/${sdk.digest}/${path.basename(sdk.archive)}`;
+      mkdirSync(path.dirname(path.join(source, sdkPath)), { recursive: true });
+      cpSync(sdk.archive, path.join(source, sdkPath));
+      const project = readFileSync(path.join(packageRoot, "pyproject.toml"), "utf8")
+        .replace("dependencies = [", `dependencies = [\n    "boxteam-plugin-sdk==${sdk.version}",`)
+        + `\n[tool.uv.sources]\nboxteam-plugin-sdk = { path = "${sdkPath}" }\n`;
+      await Bun.write(path.join(source, "pyproject.toml"), project);
+      cpSync(path.join(packageRoot, "uv.lock"), path.join(source, "uv.lock"));
+      const home = path.join(stage, "home");
+      mkdirSync(home);
+      const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(UV_|PIP_|PYTHON)/i.test(key)));
+      environment.HOME = home;
+      environment.USERPROFILE = home;
+      environment.UV_CACHE_DIR = process.env.UV_CACHE_DIR ?? (process.platform === "win32"
+        ? path.join(process.env.LOCALAPPDATA ?? os.homedir(), "uv/cache") : path.join(os.homedir(), ".cache/uv"));
+      const requirements = path.join(stage, "requirements.txt");
+      run(uvExecutable, ["--no-config", "lock", "--project", source, "--python", pythonExecutable], source, environment);
+      run(uvExecutable, ["--no-config", "export", "--locked", "--no-dev", "--no-emit-project", "--format", "requirements-txt",
+        "--project", source, "--output-file", requirements], source, environment);
+      run(uvExecutable, ["--no-config", "pip", "install", "--python", pythonExecutable, "--target", path.join(source, "python/site-packages"),
+        "--require-hashes", "--no-deps", "--no-build", "--requirements", requirements], source, environment);
+      renameSync(source, cache);
+    } finally { rmSync(stage, { recursive: true, force: true }); }
+  }
+  mkdirSync(path.dirname(output), { recursive: true });
+  const stage = mkdtempSync(path.join(path.dirname(output), ".mcp-stdio-"));
+  try {
+    const directory = path.join(stage, "package");
+    cpSync(cache, directory, { recursive: true });
+    cpSync(path.join(packageRoot, "bridge.py"), path.join(directory, "bridge.py"));
+    await Bun.write(path.join(directory, "plugin.jsonc"), JSON.stringify({ ...manifest, target: targetManifest }, null, 2) + "\n");
+    renameSync(directory, output);
+    return output;
+  } finally { rmSync(stage, { recursive: true, force: true }); }
+}
+
+export async function packMcpStdio(options) {
+  const { output } = options;
+  if (!path.isAbsolute(output) || !output.endsWith(".zip") || existsSync(output)) throw new Error(`MCP 插件包输出必须是未使用的 ZIP 绝对路径: ${output}`);
+  mkdirSync(path.dirname(output), { recursive: true });
+  const stage = mkdtempSync(path.join(path.dirname(output), ".mcp-stdio-zip-"));
+  try {
+    const directory = await buildMcpStdioDirectory({ ...options, output: path.join(stage, "package") });
+    await archivePluginDirectory(directory, output);
+  } finally { rmSync(stage, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -7,11 +7,13 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.atomic_fs import fsync_directory
 from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.services.infrastructure.attachment_blob_catalog.directories import (
     copy_directory_files,

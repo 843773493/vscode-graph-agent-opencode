@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
@@ -13,7 +14,6 @@ from app.agents.skill_catalog import (
 from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
-from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,

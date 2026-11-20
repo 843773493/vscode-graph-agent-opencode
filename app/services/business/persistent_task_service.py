@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.core.resource_uri import parse_session_thread_uri, thread_resource_uri
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskChangedDTO,

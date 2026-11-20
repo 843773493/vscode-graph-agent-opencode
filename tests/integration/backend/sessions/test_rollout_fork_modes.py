@@ -25,6 +25,11 @@ from xml.etree.ElementTree import fromstring
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -76,11 +81,8 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.domain.itemized.enums import (

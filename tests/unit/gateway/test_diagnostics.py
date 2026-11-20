@@ -8,10 +8,10 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.gateway.control import router as control_router
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.diagnostics import (

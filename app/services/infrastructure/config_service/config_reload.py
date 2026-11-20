@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import httpx
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.core.failures import failure_detail
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
-from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.gateway.plugin_private_inputs import WorkspacePluginSchemas

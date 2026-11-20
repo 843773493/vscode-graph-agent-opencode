@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 from urllib.error import URLError
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -19,7 +20,6 @@ from app.api.deps import (
     get_browser_resource_owner,
     get_configured_skill_sources,
     get_gateway_skill_sources,
-    get_request_id,
     get_resource_navigation,
     get_terminal_resource_owner,
     get_text_mutations,

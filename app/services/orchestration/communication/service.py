@@ -12,6 +12,11 @@ from datetime import datetime
 from functools import partial
 from typing import cast
 
+from boxteam_plugin_sdk.request_context import (
+    require_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import ValidationError
 
 from app.core.key_lock_pool import KeyLockPool
@@ -24,11 +29,8 @@ from app.core.session_control_store import (
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.trace_middleware import (
     require_current_gateway_id,
-    require_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.communication import (

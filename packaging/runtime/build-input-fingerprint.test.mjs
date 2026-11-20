@@ -54,6 +54,7 @@ function sourceFixture(targetPlatform, scenario) {
   mkdirSync(path.join(root, "src/clients/workbench"), { recursive: true });
   mkdirSync(path.join(root, "src/clients/shared"), { recursive: true });
   mkdirSync(path.join(root, "scripts/plugins"), { recursive: true });
+  mkdirSync(path.join(root, "sdk"), { recursive: true });
   return root;
 }
 

@@ -27,7 +27,7 @@ async function fingerprint(root) {
     if (result.exitCode !== 0) throw new Error(`Git 指纹失败: ${new TextDecoder().decode(result.stderr)}`);
     return result.stdout;
   };
-  const scope = ["app", "src", "tests", "configs", "scripts", "packages", "package.json", "pyproject.toml", "uv.lock", "bun.lock"];
+  const scope = ["app", "src", "sdk", "proto", "packaging", "resources", "tests", "configs", "scripts", "packages", "package.json", "pyproject.toml", "uv.lock", "bun.lock"];
   const head = new TextDecoder().decode(git("rev-parse", "HEAD")).trim();
   const diff = git("diff", "HEAD", "--binary", "--", ...scope);
   const untracked = new TextDecoder().decode(git("ls-files", "--others", "--exclude-standard", "-z", "--", ...scope)).split("\0").filter(Boolean).sort();

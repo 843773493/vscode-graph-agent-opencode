@@ -182,6 +182,7 @@ case "$action" in
     fi
     (
       cd "$repository"
+      bun scripts/plugins/prepare-product-sdk.mjs --check node python
       UV_PROJECT_ENVIRONMENT="$repository/.venv" uv sync --frozen
       bun install --frozen-lockfile
       if ! node -e 'require("node-pty")' >/dev/null 2>&1; then
@@ -190,6 +191,7 @@ case "$action" in
       node -e 'require("node-pty")' >/dev/null
       bun install --cwd src/clients/web --frozen-lockfile
       bun install --cwd src/clients/workbench --frozen-lockfile
+      bun run check:protocol:application
       lock_hash=$(sha256sum uv.lock bun.lock src/clients/web/bun.lock src/clients/workbench/bun.lock | sha256sum | awk '{print $1}')
       printf 'platform=linux\npython=%s\nlocks=%s\n' "$system_version" "$lock_hash" > .venv/.boxteam-target-metadata
     )

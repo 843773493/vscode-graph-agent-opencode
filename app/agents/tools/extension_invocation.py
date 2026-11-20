@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, ToolException
@@ -19,7 +20,6 @@ from app.agents.model_tool_schema import (
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.core.failures import failure_detail
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,

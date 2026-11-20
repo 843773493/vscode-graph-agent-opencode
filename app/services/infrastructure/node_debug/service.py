@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 
-from app.core.trace_middleware import GATEWAY_ID_HEADER, require_current_request_id
+from app.core.trace_middleware import GATEWAY_ID_HEADER
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.internal_v2.node_debug import (
     NodeDebugDebuggerContributionsDTO,

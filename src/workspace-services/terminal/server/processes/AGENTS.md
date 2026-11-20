@@ -11,7 +11,7 @@ processes/
 └── ptyWorker.js                      隔离进程内的node-pty及逐包读取背压
 ```
 
-按资源边界理解调用链：Manager和Session决定终端业务状态，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，共享 `src/shared/serverProcessLifecycle.mjs` 核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
+按资源边界理解调用链：Manager和Session决定终端业务状态，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，`@boxteam/plugin-sdk/process-lifecycle` 核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
 
 共享 `ProcessStat`统一说明PID、进程组、操作系统SID/Darwin sess与`processStartTime`。启动标记只用于同平台身份联合核验：Linux为启动后的时钟滴答数，其他POSIX为ps原文；不是业务Session ID或UTC时间。Linux僵尸进程已停止执行，等待父进程回收不属于终端停止职责。真实信号与身份检查位于`tests/integration/workspace_services/terminal/test_process_release.py`。
 

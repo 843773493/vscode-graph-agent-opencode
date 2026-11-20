@@ -13,17 +13,14 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import httpx
-
-from app.core.logging_config import (
-    RuntimeLoggingConflictError,
-    apply_runtime_logging,
-    runtime_logging_state,
-)
-from app.schemas.runtime_logging import (
+from boxteam_plugin_sdk.logging import (
     RuntimeLoggingApply,
+    RuntimeLoggingConflictError,
     RuntimeLoggingHttpService,
     RuntimeLoggingService,
     RuntimeLoggingStatus,
+    apply_runtime_logging,
+    runtime_logging_state,
 )
 
 if TYPE_CHECKING:

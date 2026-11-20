@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from starlette.websockets import WebSocket, WebSocketState
-
-from app.core.shielded_cleanup import run_cleanup_shielded
 
 
 async def close_channel(websocket: WebSocket, *, code: int = 1000, reason: str = "") -> None:

@@ -9,6 +9,12 @@ from dataclasses import replace
 from typing import Annotated, cast
 
 import httpx
+from boxteam_plugin_sdk.commands import (
+    PluginCommandCancelDTO,
+    PluginCommandEventDTO,
+    PluginCommandRegistrationsDTO,
+)
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from jsonschema import Draft202012Validator
@@ -19,7 +25,6 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.core.async_channel import run_channel
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.federation.policy import (
     Capability,
@@ -41,11 +46,8 @@ from app.gateway.server.service_plugin_proxy import (
 )
 from app.schemas.gateway.plugin_commands import (
     PluginCommandCallRequest,
-    PluginCommandCancelDTO,
     PluginCommandCancelRequest,
-    PluginCommandEventDTO,
     PluginCommandInstanceRequest,
-    PluginCommandRegistrationsDTO,
     PluginCommandSnapshotDTO,
     PluginContributionTarget,
 )

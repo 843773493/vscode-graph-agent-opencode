@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -28,7 +29,6 @@ from app.agents.skill_context import (
 )
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
 from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import (

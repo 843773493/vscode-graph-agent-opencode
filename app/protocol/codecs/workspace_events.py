@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from boxteam.workspace.v2 import file_events_pb2, trace_pb2
 from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 
 from app.core.identifier import validate_session_id, validate_thread_id
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
-from app.protocol.generated.boxteam.workspace.v2 import file_events_pb2, trace_pb2
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
 
 # 字符串的必填、presence 与数组映射直接取自 descriptor，WKT 保留具名转换。

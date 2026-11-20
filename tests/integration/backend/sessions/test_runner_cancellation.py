@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.graph.message import add_messages
@@ -35,7 +36,7 @@ from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,

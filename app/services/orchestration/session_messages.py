@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.abstractions.internal_message import (
     PreparedInternalMessage,
     RuntimeContextMode,
@@ -12,7 +14,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     UserExecutionIdentity,

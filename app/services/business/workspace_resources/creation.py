@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.workspace_resources import (
     ResourceRequestError,
     ResourceSnapshot,
@@ -13,7 +15,7 @@ from app.abstractions.workspace_resources import (
 )
 from app.core.failures import report_failure
 from app.core.identifier import create_uuid_hex
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.facts import (
     observe_resource,
     resource_projection,

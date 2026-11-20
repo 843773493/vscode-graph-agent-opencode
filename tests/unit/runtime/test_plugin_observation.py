@@ -3,14 +3,13 @@
 import json
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from app.api.runtime_control import (
+from boxteam_plugin_sdk.http import (
     verify_local_control_request,
     verify_runtime_control_token,
 )
-from app.runtime.plugin_observation import plugin_observation_router
+from boxteam_plugin_sdk.observation import plugin_observation_router
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

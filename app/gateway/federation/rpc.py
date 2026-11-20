@@ -29,13 +29,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from app.core.trace_middleware import (
+from boxteam_plugin_sdk.request_context import (
     require_current_request_id,
-    reset_current_gateway_id,
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.channel import (
     FederationChannelSession,

@@ -9,14 +9,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-from app.core.resource_uri import resource_display_uri
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.core.resource_uri import resource_display_uri
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.text_mutation import (
     CreateText,
     EditText,

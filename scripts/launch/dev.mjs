@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { once } from "node:events";
-import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
+import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";
 
 import {
   spawnDetachedProcess,
@@ -41,7 +41,7 @@ const {
   portOffset,
   ports,
 } = developmentLayout;
-const logContract = loadRuntimeLogContract(projectRoot);
+const logContract = loadRuntimeLogContract();
 const webRoot = path.join(frontendRoot, "src", "clients", "workbench");
 const workbenchArguments = ["run", "dev",
   "--outdir", path.join(boxteamHome, "state", "workbench-assets", "dist"),
@@ -124,13 +124,15 @@ function spawnProcess(command, args, cwd, environment) {
   });
 }
 
-function installDevelopmentConfiguration(environment) {
+function installDevelopmentConfiguration(environment, bundledPlugins) {
   const result = Bun.spawnSync(
     [
       pythonBin,
       "-m",
       "configs.boxteam",
       "install-source-development",
+      "--bundled-plugins",
+      JSON.stringify(bundledPlugins),
       "--project-root",
       projectRoot,
     ],
@@ -426,7 +428,7 @@ async function main() {
       `frontend_root=${frontendRoot} backend_root=${projectRoot} ` +
       `boxteam_home=${boxteamHome}\n`,
   );
-  installDevelopmentConfiguration(environment);
+  installDevelopmentConfiguration(environment, bundledPlugins);
   const backendWorkspaceId =
     serviceMode === "backend" || serviceMode === "all"
       ? resolveBackendWorkspaceId({

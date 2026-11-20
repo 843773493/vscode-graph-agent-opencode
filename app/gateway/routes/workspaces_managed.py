@@ -6,6 +6,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Body,
@@ -17,8 +18,7 @@ from fastapi import (
 
 from app.core.env import get_project_root
 from app.core.failures import failure_detail, public_failure_message
-from app.core.logging_contract import get_runtime_log_root
-from app.core.trace_middleware import get_request_id
+from app.core.logging_layout import get_runtime_log_root
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import (
     FederationCredential,

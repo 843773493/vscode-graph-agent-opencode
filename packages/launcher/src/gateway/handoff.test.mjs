@@ -5,7 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
-async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, loggingUrl, applicationRoot) {
+async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, loggingUrl, runtimeControlUrl, applicationRoot) {
   const { default: assert } = await import("node:assert/strict");
   const { EventEmitter, once } = await import("node:events");
   const { createServer } = await import("node:http");
@@ -15,8 +15,8 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const { createGatewaySupervisorControl, gatewaySupervisorControlAddress, requestGatewaySupervisorControl } = await import(controlUrl);
   const { listenServer, closeServer } = await import(lifetimeUrl);
   const { createRuntimeLogger, loadRuntimeLogContract } = await import(loggingUrl);
-  const { runtimeLoggingControl } = await import(new URL("./serverRuntimeControl.mjs", loggingUrl));
-  const contract = loadRuntimeLogContract(applicationRoot);
+  const { runtimeLoggingControl } = await import(runtimeControlUrl);
+  const contract = loadRuntimeLogContract();
   const logger = createRuntimeLogger("launcher", "test", { write() {} }, contract);
   const boxteamHome = process.cwd();
   const controlAddress = gatewaySupervisorControlAddress(boxteamHome);
@@ -281,7 +281,7 @@ function runHandoff(scenario) {
       await observeHandoff(...JSON.parse(process.argv[1]));
     `, JSON.stringify([scenario, ...["supervisor", "control-channel", "server-lifetime"].map(
       (name) => new URL("./" + name + ".mjs", import.meta.url).href,
-    ), new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href, process.cwd()])], {
+    ), "@boxteam/plugin-sdk/logging", "@boxteam/plugin-sdk/control", process.cwd()])], {
       encoding: "utf8", timeout: 5000, cwd: fixtureRoot,
       env: { ...process.env, TMPDIR: tmpdir(), TMP: tmpdir(), TEMP: tmpdir() },
     });

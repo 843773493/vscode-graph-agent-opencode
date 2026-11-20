@@ -13,11 +13,11 @@ from pathlib import Path
 import httpx
 import portalocker
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import sessions
 from app.api.deps import (
-    get_request_id,
     get_rollout_checkpoint_saver,
     get_session_service,
     get_team_service,

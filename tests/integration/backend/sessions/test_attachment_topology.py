@@ -14,11 +14,11 @@ from pathlib import Path
 import httpx
 import portalocker
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import sessions
 from app.api.deps import (
-    get_request_id,
     get_session_context_fork_service,
     verify_local_token,
 )

@@ -8,13 +8,13 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from boxteam.workspace.v2 import (
+    public_pb2,
+)
 from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError, validate
 
-from app.protocol.generated.boxteam.workspace.v2 import (
-    public_pb2,
-)
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2.persistent_task import TaskConditionDTO

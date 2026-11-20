@@ -12,6 +12,8 @@ from pathlib import Path
 from threading import Event
 from typing import Literal
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.workspace_resources import (
     ResourceChanges,
     ResourceKind,
@@ -25,7 +27,7 @@ from app.abstractions.workspace_resources import (
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.creation import cancel_pending_creation
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,

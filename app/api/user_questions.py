@@ -2,10 +2,11 @@
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_request_id, get_user_question_service, verify_local_token
+from app.api.deps import get_user_question_service, verify_local_token
 from app.api.errors import (
     client_error_message,
     not_found_http_error,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_artifact_service, get_request_id, verify_local_token
+from app.api.deps import get_artifact_service, verify_local_token
 from app.api.errors import unimplemented_http_error
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse

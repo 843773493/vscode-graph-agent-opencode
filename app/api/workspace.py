@@ -6,12 +6,12 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.api.deps import (
-    get_request_id,
     get_workspace_file_watch_service,
     get_workspace_service,
     verify_local_token,

@@ -253,3 +253,6 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 `integration-extension-language-features` 独立进程运行原 MainThread 的33类文档 Provider 注册、原 registry／wordHighlighter 与 typed RPC，核目标 scheme／glob／RelativePattern、exclusive／缓存、次要文档及取消／关闭，固定90秒／4GiB；目标平台与 Windows renderer 仅为评分模拟，不代替真实 Gateway／Node／文档同步或 Windows 实机。与原宿主状态 suite 分开，保留组合运行时 HTTP 监听句柄失效的 TODO 与原始证据，不放宽行为断言。
 
 `integration-extension-workspace-symbols` 沿相同90秒／4GiB保护运行原符号注册表、MainThread、CommandService／DI与RPC，核完整view准入、发起host、解析、取消及cache释放；认证binding与字节输送为具名装具，不代替真实Gateway／Node或页面操作。
+
+- `integration-maintenance-pagination` 在真实 Gateway／Backend 上固定运行三批清理与60次分页采集；外层780秒包含集成名额等待，采集子进程仍硬限60秒。保留内容、大小、request_id及全部延迟／重叠样本；不自动调参、补批或用屏障制造性能竞争。源码指纹包含 SDK、proto、packaging 和只读资源。
+- `contract-sdk-protocol-bootstrap` 用独立旧 SDK 环境验证纯生成、正常构建安装及原应用合同门，固定500秒／4GiB。`integration-python-sdk-offline` 验完整包内 MCP、独立 SDK 插件的维护／日志热应用，以及正式 application 清单与锁定依赖组成的 Backend 初始化和会话 API；固定780秒／4GiB并沿集成闸门，不代替固定运行时的正式 release 或 Windows 验收。

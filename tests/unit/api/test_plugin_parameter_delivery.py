@@ -8,12 +8,12 @@ from threading import RLock
 from types import SimpleNamespace
 
 import pytest
+from boxteam_plugin_sdk.http import verify_local_control_request
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import JsonValue
 
 from app.api.deps import get_workspace_container
-from app.api.runtime_control import verify_local_control_request
 from app.api.service_plugins import router
 from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler

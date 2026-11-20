@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
@@ -21,7 +22,6 @@ from app.api.deps import (
     get_context_compaction_service,
     get_goal_service,
     get_persistent_task_runtime,
-    get_request_id,
     get_session_service,
     verify_local_token,
 )

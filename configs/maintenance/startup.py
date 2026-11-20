@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import cast
 
 import psutil
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.core.sqlite_state import sqlite_file_uri
 from app.gateway.control.gateway_registry.snapshot import read_workspace_registry
 from app.gateway.control.gateway_state import _GATEWAY_MIGRATIONS
@@ -175,7 +175,7 @@ def prepare_startup_migrations(
         ))
         identity = asyncio.run(verify_remote_workspace_identities(
             identity, gateway_root=gateway_root,
-            log_dir=load_runtime_log_contract(project_root).root_for(boxteam_home),
+            log_dir=load_runtime_log_contract().root_for(boxteam_home),
         ))
         if identity.blockers or not all(item.verified for item in identity.mappings):
             raise ValueError("身份迁移存在冲突或未结算来源，原件未改写: " + ", ".join(item.code for item in identity.blockers))

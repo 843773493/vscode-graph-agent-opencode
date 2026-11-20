@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
+from boxteam.workspace.v2 import skill_sources_pb2
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.generated.boxteam.gateway.v2 import (
-    skill_sources_pb2 as gateway_skill_sources_pb2,
-)
-from app.protocol.generated.boxteam.workspace.v2 import skill_sources_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
 from tests.contracts.api.openapi_snapshots import (
     OPENAPI_SNAPSHOTS,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import secrets
 import signal
 import subprocess
 import sys
@@ -22,6 +21,15 @@ import uvicorn
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, Process, TaskStatus
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from anyio.streams.text import TextReceiveStream
+from boxteam_plugin_sdk.http import (
+    verify_local_control_request,
+    verify_runtime_control_token,
+)
+from boxteam_plugin_sdk.logging import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
+from boxteam_plugin_sdk.observation import plugin_observation_router
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from mcp import StdioServerParameters, types
@@ -31,12 +39,6 @@ from mcp.server.streamable_http import StreamableHTTPServerTransport
 from mcp.shared.message import ServerMessageMetadata, SessionMessage
 from mcp.types import CONNECTION_CLOSED, METHOD_NOT_FOUND
 from pydantic import ValidationError
-
-from app.runtime.log_file_identity import (
-    runtime_log_file_identity,
-    runtime_log_path_identity,
-)
-from app.runtime.plugin_observation import plugin_observation_router
 
 
 class OwnedChildProcess:
@@ -135,21 +137,6 @@ async def mcp_stdio_transport(parameters: StdioServerParameters, process: OwnedC
         outgoing.close()
 
 
-def verify_local_control_request(request: Request) -> None:
-    if (request.client is None or request.client.host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
-        or "origin" in request.headers or "sec-fetch-site" in request.headers):
-        raise HTTPException(403, "运行时控制只接受本机管理通道")
-
-
-def verify_runtime_control_token(request: Request) -> None:
-    expected = os.environ.get("BOXTEAM_RUNTIME_CONTROL_TOKEN")
-    actual = request.headers.get("x-local-token")
-    if not expected:
-        raise HTTPException(503, "此入口未配置本机运行时控制凭据")
-    if actual is None or not secrets.compare_digest(actual.encode(), expected.encode()):
-        raise HTTPException(401, "invalid runtime control token")
-
-
 @dataclass(slots=True)
 class _RequestRoute:
     client_id: str | int
@@ -240,7 +227,7 @@ class _Bridge:
     async def route(self, scope, receive, send) -> None:
         request = Request(scope, receive)
         verify_local_control_request(request)
-        verify_runtime_control_token(request)
+        verify_runtime_control_token(request.headers.get("x-local-token"))
         session_id = request.headers.get("mcp-session-id")
         async with self._lock:
             if request.method == "POST" and session_id is None:

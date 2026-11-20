@@ -10,15 +10,15 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI
-
-import app.services.infrastructure.resource_platform.sources.gateway_skill_sources as gateway_sources
-from app.core.lifecycle import LifetimeScope
-from app.core.trace_middleware import (
-    TraceMiddleware,
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
     set_current_request_id,
 )
+from fastapi import FastAPI
+
+import app.services.infrastructure.resource_platform.sources.gateway_skill_sources as gateway_sources
+from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes.skill_sources import router

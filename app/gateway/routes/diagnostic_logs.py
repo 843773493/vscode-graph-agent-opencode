@@ -3,10 +3,10 @@
 from typing import Annotated
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.core.failures import failure_detail
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_federation_token, verify_gateway_token
 from app.gateway.control.diagnostic_log_transport import read_diagnostic_log_target
 from app.gateway.control.diagnostic_logs import (

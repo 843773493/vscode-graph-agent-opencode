@@ -12,6 +12,12 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
+from boxteam.workspace.v2.message_pb2 import (
+    AttachmentRef as ProtocolAttachmentRef,
+)
+from boxteam.workspace.v2.public_pb2 import (
+    TurnAttachmentDTO as ProtocolTurnAttachment,
+)
 from google.protobuf.json_format import ParseDict
 from PIL import Image
 
@@ -29,12 +35,6 @@ from app.core.trace_middleware import (
     get_current_gateway_id,
     reset_current_gateway_id,
     set_current_gateway_id,
-)
-from app.protocol.generated.boxteam.workspace.v2.message_pb2 import (
-    AttachmentRef as ProtocolAttachmentRef,
-)
-from app.protocol.generated.boxteam.workspace.v2.public_pb2 import (
-    TurnAttachmentDTO as ProtocolTurnAttachment,
 )
 from app.schemas.internal_v2.job import JobStatus
 from app.schemas.internal_v2.message import (

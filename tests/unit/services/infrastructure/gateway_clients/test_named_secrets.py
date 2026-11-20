@@ -4,13 +4,12 @@ import copy
 
 import httpx
 import pytest
-
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.gateway_secrets.client import GatewaySecretsClient
 

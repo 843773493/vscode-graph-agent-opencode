@@ -270,6 +270,7 @@ wheels = [
 name = "boxteam"
 source = { virtual = "." }
 dependencies = [
+    { name = "boxteam-plugin-sdk" },
     { name = "cachetools" },
     { name = "cdifflib" },
     { name = "commentjson" },
@@ -327,6 +328,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boxteam-plugin-sdk", path = "out/sdk/python/3e2612fef84e76c09afe3c15fa0def6d18ad5551eec4dddb21a232f6c93a86f7/boxteam_plugin_sdk-0.0.2-py3-none-any.whl" },
     { name = "cachetools", specifier = ">=5.3.0" },
     { name = "cdifflib", specifier = ">=1.2.9,<2" },
     { name = "commentjson", specifier = ">=0.9.0" },
@@ -377,6 +379,33 @@ requires-dist = [
     { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "boxteam-plugin-sdk"
+version = "0.0.2"
+source = { path = "out/sdk/python/3e2612fef84e76c09afe3c15fa0def6d18ad5551eec4dddb21a232f6c93a86f7/boxteam_plugin_sdk-0.0.2-py3-none-any.whl" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "jsonschema" },
+    { name = "protobuf" },
+    { name = "psutil" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "pydantic", version = "2.14.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { filename = "boxteam_plugin_sdk-0.0.2-py3-none-any.whl", hash = "sha256:3e2612fef84e76c09afe3c15fa0def6d18ad5551eec4dddb21a232f6c93a86f7" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.109.0" },
+    { name = "jsonschema", specifier = ">=4.21.0" },
+    { name = "protobuf", specifier = ">=7.36.2,<8" },
+    { name = "psutil", specifier = ">=5.9.0" },
+    { name = "pydantic", specifier = ">=2.6.0" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=312" },
+]
 
 [[package]]
 name = "bracex"

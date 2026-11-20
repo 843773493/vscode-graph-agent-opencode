@@ -6,12 +6,12 @@ from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlsplit
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.schemas.internal_v2.common import APIResponse

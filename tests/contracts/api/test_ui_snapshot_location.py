@@ -106,10 +106,10 @@ def test_snapshot_corrupt_metadata_is_explicit_server_failure(snapshot_endpoint,
 
 
 def test_snapshot_wire_roundtrip_and_http_contract_reserve_removed_location() -> None:
+    from boxteam.workspace.v2 import public_pb2
     from google.protobuf import descriptor_pb2
 
     from app.main import app
-    from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 
     workspace_id = "00000000-0000-4000-8000-000000000001"
     value = public_pb2.UiSnapshotResultDTO(

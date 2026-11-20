@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.runtime.log_file_identity import (
+from boxteam_plugin_sdk.logging import (
     runtime_log_file_identity,
     runtime_log_path_identity,
 )

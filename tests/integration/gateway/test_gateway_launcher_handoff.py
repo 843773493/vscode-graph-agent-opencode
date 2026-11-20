@@ -14,8 +14,8 @@ from urllib.request import Request, urlopen
 
 import commentjson
 import httpx
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import load_runtime_log_contract
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
@@ -109,7 +109,7 @@ def _wait_for_json(
 
 def test_launcher_rejects_shared_log_sink_before_rotation(tmp_path: Path) -> None:
     project_root = Path.cwd()
-    contract = load_runtime_log_contract(project_root)
+    contract = load_runtime_log_contract()
     boxteam_home = tmp_path / "home"
     log_path = contract.path_for(contract.root_for(boxteam_home), "gateway")
     log_path.parent.mkdir(parents=True)
@@ -525,7 +525,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         gateway_event_cursor = gateway_event_data["cursor"]
         assert isinstance(gateway_event_cursor, int)
 
-        log_contract = load_runtime_log_contract(project_root)
+        log_contract = load_runtime_log_contract()
         log_root = log_contract.root_for(boxteam_home)
         gateway_log = log_contract.path_for(log_root, "gateway")
         launcher_log = log_contract.path_for(log_root, "launcher")

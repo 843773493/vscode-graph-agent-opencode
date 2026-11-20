@@ -43,7 +43,7 @@ export function createWorktree(context, role, ref, name, settings, { setup = tru
   git(context.root, ["worktree", "add", ...(role === "release" ? ["--detach"] : ["-b", `codex/${role}-${name || role}-${randomUUID().slice(0, 8)}`]), target, sha]);
   atomicJson(metadataPath(target), { schema_version: 1, role, primary_root: context.root, base_commit: sha, created_at: created, port_offset: role === "release" ? null : offset });
   const copied = role === "release" ? [] : copyLocalConfiguration(context, target, settings);
-  if (setup) setupWorktree(target, scopes);
+  if (setup) setupWorktree(target, scopes, undefined, { frozen: role === "release" });
   return { target, role, commit: sha, port_offset: role === "release" ? null : offset, copied, setup };
 }
 

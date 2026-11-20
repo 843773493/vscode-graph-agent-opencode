@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
     get_html_snapshot_store,
-    get_request_id,
     get_runtime_service,
     verify_local_token,
 )

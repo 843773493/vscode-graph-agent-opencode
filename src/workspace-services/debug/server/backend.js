@@ -4,12 +4,12 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
-import { readProcessStat, terminateProcessTree } from "../../../shared/serverProcessLifecycle.mjs";
-import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
-import { createPluginRuntimeManagement } from "../../../shared/serverPluginRuntime.mjs";
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { verifyRuntimeControlToken } from "../../../shared/serverRuntimeControl.mjs";
+import { closeHttpServer } from "@boxteam/plugin-sdk/http";
+import { readProcessStat, terminateProcessTree } from "@boxteam/plugin-sdk/process-lifecycle";
+import { createJsonRequestReader } from "@boxteam/plugin-sdk/http";
+import { createPluginRuntimeManagement } from "@boxteam/plugin-sdk/runtime";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
+import { verifyRuntimeControlToken } from "@boxteam/plugin-sdk/control";
 
 const logger = createRuntimeLogger("debug", "debug.backend");
 const INSPECTOR_METHODS = new Set([

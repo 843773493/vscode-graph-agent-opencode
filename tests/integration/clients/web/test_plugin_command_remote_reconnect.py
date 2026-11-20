@@ -88,9 +88,9 @@ import sys, os, asyncio, json
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI
 import uvicorn
-from app.core.logging_config import configure_application_logging
+from boxteam_plugin_sdk.logging import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='remote-command-reconnect-proof')
 calls = 0
 async def execute(arguments, context):

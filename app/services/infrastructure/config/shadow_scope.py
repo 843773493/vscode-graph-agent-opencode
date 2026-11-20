@@ -13,7 +13,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.config.contracts import ConfigPublication
 

@@ -3,12 +3,12 @@
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.tools import StructuredTool
 
 from app.agents.policy.tool_capability import ToolPolicyResolver
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.tool_discovery import create_search_tools_tool
-from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,

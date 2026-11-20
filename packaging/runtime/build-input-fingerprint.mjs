@@ -19,6 +19,7 @@ const FIXED_BUILD_INPUTS = Object.freeze([
   "configs",
   "resources",
   "src/shared",
+  "sdk",
   "src/clients/shared",
   "src/clients/web",
   "src/clients/workbench",

@@ -60,13 +60,16 @@ export function copyLocalConfiguration(context, target, settings) {
   return selected.map(({ file }) => file);
 }
 
-export function setupWorktree(target, scopes, run = spawnSync) {
+export function setupWorktree(target, scopes, run = spawnSync, { frozen = false } = {}) {
   const commands = [];
   if (scopes.includes("workbench")) commands.push(["git", ["submodule", "update", "--init", "--recursive"]]);
-  if (scopes.includes("python")) commands.push(["uv", ["sync", "--frozen"]]);
+  const languages = [scopes.includes("root") ? "node" : null, scopes.includes("python") ? "python" : null].filter(Boolean);
+  if (languages.length) commands.push(["bun", ["scripts/plugins/prepare-product-sdk.mjs", ...(frozen ? ["--check"] : []), ...languages]]);
+  if (scopes.includes("python")) commands.push(["uv", ["sync", ...(frozen ? ["--frozen"] : [])]]);
   for (const [scope, directory] of [["root", "."], ["web", "src/clients/web"], ["workbench", "src/clients/workbench"]]) {
-    if (scopes.includes(scope)) commands.push(["bun", ["install", "--cwd", directory, "--frozen-lockfile"]]);
+    if (scopes.includes(scope)) commands.push(["bun", ["install", "--cwd", directory, ...(scope === "root" && !frozen ? [] : ["--frozen-lockfile"])]]);
   }
+  if (scopes.includes("python") && scopes.includes("root")) commands.push(["bun", ["run", "check:protocol:application"]]);
   for (const [command, args] of commands) {
     const result = run(command, args, { cwd: target, stdio: "inherit", windowsHide: true });
     if (result.error) throw result.error;

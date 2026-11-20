@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated, Literal
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -19,7 +20,6 @@ from app.api.deps import (
     get_goal_service,
     get_llm_request_log_reader,
     get_persistent_task_runtime,
-    get_request_id,
     get_rollout_checkpoint_saver,
     get_session_changes_service,
     get_session_context_fork_service,

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id, verify_local_control_request
 from fastapi import (
     APIRouter,
     Depends,
@@ -27,10 +28,8 @@ from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from app.api.runtime_control import verify_local_control_request
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.core.async_channel import close_channel, run_channel
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.federation.policy import (
     Capability,

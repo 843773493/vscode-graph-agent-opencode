@@ -58,6 +58,17 @@ describe("runtime manifest", () => {
     expect(manifest.bundledPlugins[0].archive).toBe(path.resolve(runtimeDirectory, "plugins/developer-tools.zip"));
   });
 
+  test("目录交付显式解析，拒绝目录与 ZIP 同时声明", () => {
+    const entry = { package_id: "boxteam.developer-tools", package_version: "0.1.0", directory: "plugins/developer-tools" };
+    const input = { ...baseManifest, bundled_plugins: [entry] };
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, input);
+    expect(manifest.bundledPlugins[0]).toEqual({ ...entry, directory: path.resolve(runtimeDirectory, entry.directory) });
+    expect(() => validateRuntimeManifest({ ...input, bundled_plugins: [{ ...entry, archive: "plugin.zip" }] })).toThrow();
+    const validate = new Ajv2020().compile(JSON.parse(readFileSync(new URL("../../runtime-manifest.schema.json", import.meta.url), "utf8")));
+    expect(validate(input)).toBe(true);
+    expect(validate({ ...input, bundled_plugins: [{ ...entry, archive: "plugin.zip" }] })).toBe(false);
+  });
+
   test("拒绝未知 schema", () => {
     expect(() =>
       validateRuntimeManifest({ ...baseManifest, schema_version: 2 }),

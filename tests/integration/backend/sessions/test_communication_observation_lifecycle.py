@@ -16,6 +16,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_control_communication_ledger.observations import (
@@ -23,12 +27,7 @@ from app.core.session_control_communication_ledger.observations import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from app.schemas.internal_v2.communication import (
     CommunicationAcceptanceRequest,

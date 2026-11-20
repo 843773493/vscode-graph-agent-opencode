@@ -102,7 +102,13 @@ test("创建互斥、失败初始化可重试、setup 顺序及未知范围拒�
   expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   const calls = [];
   setupWorktree(root, ["python", "root", "web", "workbench"], (command, args) => { calls.push([command, args]); return { status: 0 }; });
-  expect(calls.map(([command]) => command)).toEqual(["git", "uv", "bun", "bun", "bun"]);
+  expect(calls.map(([command]) => command)).toEqual(["git", "bun", "uv", "bun", "bun", "bun", "bun"]);
+  const releaseCalls = setupWorktree(root, ["python", "root"], () => ({ status: 0 }), { frozen: true });
+  expect(releaseCalls.slice(0, 3)).toEqual([
+    ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "node", "python"]],
+    ["uv", ["sync", "--frozen"]],
+    ["bun", ["install", "--cwd", ".", "--frozen-lockfile"]],
+  ]);
   expect(() => setupWorktree(root, ["python"], () => ({ status: 7 }))).toThrow("可重跑 setup");
   await main(["setup", "dev", "--scopes="], root);
   await expect(main(["setup", "dev", "--scopes=unknown"], root)).rejects.toThrow("未知依赖范围");

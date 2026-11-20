@@ -167,8 +167,8 @@ sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
-from app.core.logging_config import configure_application_logging
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.logging import configure_application_logging
+from boxteam_plugin_sdk.commands import plugin_command_router
 import uvicorn
 configure_application_logging(service='remote-lifecycle-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
@@ -209,12 +209,9 @@ server.run()
 '''
     node_source = '''
 import http from 'node:http';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
-const source = name => pathToFileURL(path.join(process.env.BOXTEAM_PROJECT_ROOT, 'src/shared', name)).href;
-const { createPluginRuntimeManagement } = await import(source('serverPluginRuntime.mjs'));
-const { createRuntimeLogger } = await import(source('serverRuntimeLogging.mjs'));
+const { createPluginRuntimeManagement } = await import('@boxteam/plugin-sdk/runtime');
+const { createRuntimeLogger } = await import('@boxteam/plugin-sdk/logging');
 const logger = createRuntimeLogger('remote-lifecycle-probe');
 const parameters = JSON.parse(process.env.BOXTEAM_PLUGIN_PARAMETERS);
 const effects = [];

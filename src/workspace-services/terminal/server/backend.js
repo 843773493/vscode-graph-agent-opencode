@@ -1,8 +1,8 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { verifyRuntimeControlToken } from "../../../shared/serverRuntimeControl.mjs";
-import { createPluginRuntimeManagement } from "../../../shared/serverPluginRuntime.mjs";
-import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
-import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
+import { verifyRuntimeControlToken } from "@boxteam/plugin-sdk/control";
+import { createPluginRuntimeManagement } from "@boxteam/plugin-sdk/runtime";
+import { createJsonRequestReader } from "@boxteam/plugin-sdk/http";
+import { closeHttpServer } from "@boxteam/plugin-sdk/http";
 
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";

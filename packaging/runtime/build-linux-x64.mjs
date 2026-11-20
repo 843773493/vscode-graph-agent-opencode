@@ -25,7 +25,7 @@ import {
   writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
 import { downloadPinnedLinuxPython, downloadPinnedLinuxNode } from "./pinned-archive-download.mjs";
-import { copyApplicationSources } from "./application-sources.mjs";
+import { copyApplicationSources, writeApplicationNodeManifest } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
@@ -62,6 +62,7 @@ function run(command, args, options = {}) {
 }
 
 function installPythonDependencies(pythonExecutable) {
+  run("bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]);
   const requirementsPath = path.join(outputRoot, "requirements.locked.txt");
   run("uv", [
     "export",
@@ -83,15 +84,12 @@ function installPythonDependencies(pythonExecutable) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  cpSync(
-    path.join(projectRoot, "packaging", "runtime", "node-package.json"),
-    path.join(applicationRoot, "package.json"),
-  );
+  writeApplicationNodeManifest(projectRoot, applicationRoot);
   run("bun", ["install", "--production", "--exact", "--ignore-scripts"], {
     cwd: applicationRoot,
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
   });
-  run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+  run(nodeExecutable, ["--input-type=module", "--eval", "await import('@boxteam/plugin-sdk/runtime');"], {
     cwd: applicationRoot,
   });
 }

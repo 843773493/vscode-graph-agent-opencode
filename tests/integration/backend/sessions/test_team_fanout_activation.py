@@ -16,10 +16,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import (
     get_session_creation_service,
     get_session_path_resolver,

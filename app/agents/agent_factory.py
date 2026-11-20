@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
@@ -84,7 +85,6 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.failures import (
     mark_public_failure,
 )
-from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope

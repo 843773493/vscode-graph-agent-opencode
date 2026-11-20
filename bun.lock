@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "vscode-graph-agent",
+      "dependencies": {
+        "@boxteam/plugin-sdk": "file:out/sdk/node/582e40b0540b3427a1981db688a6504fbb677bc02a94b4a4ab80321c334fe09b/boxteam-plugin-sdk-0.0.2.tgz",
+      },
       "devDependencies": {
         "@bufbuild/buf": "^1.72.0",
         "@bufbuild/protobuf": "^2.14.0",
@@ -41,6 +44,8 @@
     "@babel/code-frame": ["@babel/code-frame@7.29.0", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.28.5", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.28.5", "", {}, "sha512-qSs4ifwzKJSV39ucNjsvc6WVHs6b7S03sOh2OcHF9UHfVPqWWALUsNUVzhSBiItjRZoLHx7nIarVjqKVusUZ1Q=="],
+
+    "@boxteam/plugin-sdk": ["@boxteam/plugin-sdk@out/sdk/node/582e40b0540b3427a1981db688a6504fbb677bc02a94b4a4ab80321c334fe09b/boxteam-plugin-sdk-0.0.2.tgz", { "dependencies": { "@bufbuild/protobuf": "^2.14.0", "ajv": "^8.20.0" } }, "sha512-dEGguY+27FDYlf6qanOsbIRK0zdaci4FGUjtzVcapvR8lE92+YClK7cxLzgNAn7M8C2b88SJBF8gNMBKAZKLYQ=="],
 
     "@bufbuild/buf": ["@bufbuild/buf@1.72.0", "", { "optionalDependencies": { "@bufbuild/buf-darwin-arm64": "1.72.0", "@bufbuild/buf-darwin-x64": "1.72.0", "@bufbuild/buf-linux-aarch64": "1.72.0", "@bufbuild/buf-linux-armv7": "1.72.0", "@bufbuild/buf-linux-x64": "1.72.0", "@bufbuild/buf-win32-arm64": "1.72.0", "@bufbuild/buf-win32-x64": "1.72.0" }, "bin": { "buf": "bin/buf", "protoc-gen-buf-lint": "bin/protoc-gen-buf-lint", "protoc-gen-buf-breaking": "bin/protoc-gen-buf-breaking" } }, "sha512-BwBKTX/WXkhAhqWJGrEKnqU03/4tK1O0OozSlwUMBCOEo8pLL3xu3M24RT3+umExEeM0wjlANO6axqGWMqtt4Q=="],
 

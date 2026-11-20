@@ -2,37 +2,43 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from google.protobuf.descriptor import Descriptor
-from google.protobuf.descriptor_pool import Default, DescriptorPool
-from pydantic.json_schema import JsonSchemaValue
-
-from app.protocol.generated.boxteam.gateway.v2 import (
+from boxteam.gateway.v2 import (
     plugin_commands_pb2,
     secrets_pb2,
     service_plugin_pb2,
 )
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
-from app.protocol.generated.boxteam.gateway.v2 import (
+from boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from boxteam.gateway.v2 import (
     skill_sources_pb2 as gateway_skill_sources_pb2,
 )
-from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
-from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
+from boxteam.search.v1 import public_pb2 as search_public_pb2
+from boxteam.workspace.message.v1 import message_stream_pb2
+from boxteam.workspace.v2 import (
     file_events_pb2,
     public_pb2,
     skill_sources_pb2,
     trace_pb2,
 )
+from boxteam_plugin_sdk.commands import (
+    PluginCommandCancelDTO,
+    PluginCommandContribution,
+    PluginCommandEventDTO,
+    PluginCommandRegistration,
+    PluginCommandRegistrationsDTO,
+    PluginInstanceStatus,
+    PluginServiceContribution,
+    PluginShutdownDTO,
+)
+from google.protobuf.descriptor import Descriptor
+from google.protobuf.descriptor_pool import Default, DescriptorPool
+from pydantic.json_schema import JsonSchemaValue
+
 from app.protocol.schema import assert_public_schema
 from app.schemas.gateway.plugin_commands import (
     PluginCommandCallRequest,
-    PluginCommandCancelDTO,
     PluginCommandCancelRequest,
-    PluginCommandEventDTO,
     PluginCommandInstanceRequest,
     PluginCommandPublication,
-    PluginCommandRegistration,
-    PluginCommandRegistrationsDTO,
     PluginCommandSnapshotDTO,
     PluginContributionTarget,
 )
@@ -55,21 +61,17 @@ from app.schemas.gateway.plugin_private_inputs import (
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     PluginBinding,
-    PluginCommandContribution,
     PluginConfigurationSchemaDTO,
     PluginConfigurationSchemasDTO,
     PluginConfigurationSchemasRequest,
     PluginContributions,
     PluginDebuggerContribution,
     PluginExtensionRequirement,
-    PluginInstanceStatus,
     PluginInstanceView,
     PluginKeybindingContribution,
     PluginMenuContribution,
     PluginPackageManifest,
     PluginRuntimeStatusDTO,
-    PluginServiceContribution,
-    PluginShutdownDTO,
     PluginSkillContribution,
     PluginSlotStatusDTO,
     PluginTarget,

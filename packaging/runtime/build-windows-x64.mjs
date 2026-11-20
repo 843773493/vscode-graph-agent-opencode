@@ -32,7 +32,7 @@ import {
   downloadPinnedWindowsPython,
   downloadPinnedWindowsNode,
 } from "./pinned-archive-download.mjs";
-import { copyApplicationSources } from "./application-sources.mjs";
+import { copyApplicationSources, writeApplicationNodeManifest } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
@@ -106,10 +106,7 @@ function precompilePythonBytecode(pythonExecutable, applicationRoot) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  cpSync(
-    path.join(projectRoot, "packaging", "runtime", "node-package.json"),
-    path.join(applicationRoot, "package.json"),
-  );
+  writeApplicationNodeManifest(projectRoot, applicationRoot);
   const installArguments = ["install", "--production", "--exact", "--ignore-scripts"];
   if (crossBuild) {
     // 这里只准备目标依赖；完整插件原生制品仍由 packer 校验，不能用 Linux 构建代替。
@@ -123,7 +120,7 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
     },
   });
   if (!crossBuild) {
-    run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+    run(nodeExecutable, ["--input-type=module", "--eval", "await import('@boxteam/plugin-sdk/runtime');"], {
       cwd: applicationRoot,
     });
   }

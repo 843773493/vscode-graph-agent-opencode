@@ -3,11 +3,10 @@
 from typing import Annotated
 from urllib.parse import urlencode
 
+from boxteam_plugin_sdk.http import get_request_id, verify_local_control_request
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.api.runtime_control import verify_local_control_request
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,

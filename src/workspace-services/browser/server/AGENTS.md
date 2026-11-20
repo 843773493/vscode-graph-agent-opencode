@@ -72,7 +72,7 @@ Session资源保护使用Node的Unix毫秒时钟：`lastNetworkActivityAtUnixMs`
 
 Manager关闭时，先同步关闭当前整批运行资源（含已冷回收资源）的操作准入，再通过队列唯一的`drain()`等待各资源完整已接纳集合；本批共用默认5秒的单调截止，后续资源只使用剩余预算，不为每个资源重新计时，覆盖串行排队及并发准备/执行；不能由`discarded`或在途计数为零跳过。单次定时预算覆盖整份集合，不随操作阶段重置，也不受系统校时影响；它不是资源租约或持久时刻。Session排空超时在清理连接、解锁与检查点转换之前明确报错，原操作仍由队列持有；排空后仍为冷状态的资源保留原检查点。Manager收集排空超时后继续处理其它资源，但不将超时资源改成lost、不删除其检查点，也不关闭共享运行时池；汇总原错误后明确失败，原操作结束后可沿同一入口重试。检查点失败后的收尾若再次失败，Manager按资源保留原采集错误与收尾错误，继续其它资源，但不关闭共享池。Session只在context释放、检查点删除和状态保存完成后落为lost；失败保持原status与unknown，保留原句柄供同入口重试，unknown保存也失败时保留两份异常。整个关闭期限、其它失败收尾和挂起操作终止核实仍由后续合同推进。
 
-生产信号关闭复用原Manager.shutdown；失败记录完整原错误并保留HTTP管理入口与原运行时，关闭准入保持。信号监听允许核实后再次关闭，在途重复信号不重复发起；成功后才关闭HTTP/WebSocket并按信号退出。HTTP收尾复用`src/shared/serverHttpShutdown.mjs`，5秒后明确失败、关闭原连接并退出1；正常SIGTERM保持143。未捕获致命错误仍按原规则退出，在途关闭也先记录致命事实并升级最终退出码；完整shutdown期限、上层启动器强杀协调继续TODO。
+生产信号关闭复用原Manager.shutdown；失败记录完整原错误并保留HTTP管理入口与原运行时，关闭准入保持。信号监听允许核实后再次关闭，在途重复信号不重复发起；成功后才关闭HTTP/WebSocket并按信号退出。HTTP收尾复用`@boxteam/plugin-sdk/http`，5秒后明确失败、关闭原连接并退出1；正常SIGTERM保持143。未捕获致命错误仍按原规则退出，在途关闭也先记录致命事实并升级最终退出码；完整shutdown期限、上层启动器强杀协调继续TODO。
 
 ## 恢复记录与落盘
 
@@ -82,7 +82,7 @@ Manager 的状态文件保存只有一个写入者：同轮请求合并，写入
 
 下载沿现有最近50条列表保留：先保存权威列表，再按淘汰记录删除真实文件，删除失败仍沿原下载错误出口报告。Manager启动完成状态核验和保存后、接纳下载前，逐资源清理未被其权威下载列表引用的受管下载文件；不扫描未知资源、不删除其它文件，不在运行期间用目录差集删除在途下载。
 
-截图按文件mtime保留30天，HTTP在打开目标文件并stat后核对过期时间，过期沿原产物不存在合同返回404。生产入口启动Manager独占的截图清理任务，首次及以后每小时流式列举受管截图并删除过期文件，不读取图片正文；失败记录原异常并停止该任务，关闭先中止定时等待并结清在途删除，再关闭其它存储和资源。截图清理不删除下载或页面检查点。
+截图按文件mtime保留30天，HTTP在打开目标文件并stat后核对过期时间，过期沿原产物不存在合同返回404。生产入口用 Node SDK 维护调度启动 Manager 独占的截图清理任务，首次及以后每小时流式列举受管截图并删除过期文件，不读取图片正文；单次失败记录原异常，下一周期继续重试；关闭先停止调度并结算在途删除，再关闭其它存储和资源。截图清理不删除下载或页面检查点。
 
 Manager先沿该writer发布created/unknown，再调用原Session.start；首次导航完成后才标verified并完成原最终保存。意图保存失败时，原调用尚未派发start，沿原failStartup/close链保存failed/verified后才签not_created；收尾失败保留unknown、原错误链与无回执。created状态的close/delete在设置closingRequested前明确409，不能用空context伪报停止或关闭后续交互准入；原创建继续由原Promise持有，原失败仍通过failStartup收尾。冷创建的无身份接管继续按5.2保留TODO，不新增另一套恢复账本。
 
@@ -139,7 +139,7 @@ Manager启动先完整核验检查点目录和配额，并清理崩溃临时文�
 # 规范
 
 - 使用 Node.js ESM。
-- 产品诊断统一使用 `src/shared/serverRuntimeLogging.mjs`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
+- 产品诊断统一使用 `@boxteam/plugin-sdk/logging`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
 - 导航先识别显式协议，再由同一白名单校验；不支持的协议明确拒绝，不补成另一个 HTTP(S) 目标。只有裸主机地址补缺省协议，主机后的数字端口与协议段分开识别。
 - 失败时返回明确 HTTP 错误或 WebSocket error 消息。
 - `browserRuntimeFailure`及`BrowserToolTimeoutError.recordRecoveryFailure`的日志次错只补入原cause，按发生顺序保留两份原异常，不替换原阶段、错误码、创建回执或可重试超时；同步timer及异步恢复catch都必须继续结算原失败。`browserRuntimeErrors.test.js`验证这两个出口，不把它当作全部状态存储和生命周期的日志故障闭包。

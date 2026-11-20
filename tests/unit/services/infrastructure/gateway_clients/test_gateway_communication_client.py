@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.services.infrastructure import gateway_communication_client as client_module
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,

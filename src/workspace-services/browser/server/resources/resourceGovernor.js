@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import { BrowserMemoryPressureMonitor } from "./memoryPressure.js";
 import { chooseResourcePlan, DEFAULT_RESOURCE_POLICY } from "./resourcePolicy.js";

@@ -30,7 +30,8 @@
     "gen:openapi": "uv run python -m scripts.export_openapi_snapshot",
     "dev:electron": "bun run --cwd src/clients/electron start",
     "build:electron": "bun run --cwd src/clients/electron build",
-    "package:electron": "bun scripts/release/package-electron.mjs"
+    "package:electron": "bun scripts/release/package-electron.mjs",
+    "check:protocol:application": "bun scripts/check_protocol_application.mjs"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.72.0",
@@ -60,5 +61,8 @@
     "tar": "7.5.22",
     "ws": "^8.18.0",
     "yazl": "3.3.1"
+  },
+  "dependencies": {
+    "@boxteam/plugin-sdk": "file:out/sdk/node/582e40b0540b3427a1981db688a6504fbb677bc02a94b4a4ab80321c334fe09b/boxteam-plugin-sdk-0.0.2.tgz"
   }
 }

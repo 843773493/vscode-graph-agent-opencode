@@ -11,8 +11,9 @@ from pathlib import Path
 from stat import S_ISREG
 from typing import Any
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.core.failures import report_failure
-from app.core.trace_middleware import get_current_request_id
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.tool_testing.definitions import tool_test_failure_detail
 

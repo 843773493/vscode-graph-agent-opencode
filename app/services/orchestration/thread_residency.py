@@ -16,9 +16,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TypeAlias, TypeVar, cast
 from uuid import uuid4
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
+
 from app.core.phase_observer import observe_phase_sync
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker, ResidencyBlockerSource
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner

@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Awaitable, Callable
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
 from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     GENERAL_PURPOSE_SUBAGENT,
@@ -22,7 +24,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session import SessionTaskContext, SessionTaskEmptyContext
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBinder,

@@ -22,7 +22,7 @@ workspace_services/
 
 同一测试的`shutdown_environment`只临时改写本次隔离工作区配置，并用目录fd提供Unix socket所需的短临时路径：写入前登记原字节恢复，打开fd后立即登记关闭，短路径核验也在释放范围内。准备失败、测试失败或fd关闭失败仍尝试恢复配置，异常沿标准退出栈保留；不改用户服务环境或持久配置。
 
-`test_resource_orphan_sweep.py`复用现有双辅助服务fixture，经正式Session、Terminal/Browser创建/detach、原孤儿回收与显式管理核实，验证同批peer在首项回执等待中完成真实删除，原30秒预算跨撤权和删除回执保持唯一；删除已落盘但Python未收到回执时保留unknown/原lease，核实只对账且不重发删除。通过 `bun run test:matrix -- --suite=integration-resource-orphan-sweep` 运行，固定120秒/4GiB；真实Node、PTY/Chromium与HTTP不替代Gateway/Web、Windows、不合作操作终止或完整shutdown验收。
+`test_resource_orphan_sweep.py`复用原插件Gateway装具并冷建正式Workspace服务图，经正式Session、Terminal/Browser创建/detach、原孤儿回收与显式管理核实，验证同批peer在首项回执等待中完成真实删除，原30秒预算跨撤权和删除回执保持唯一；删除已落盘但Python未收到回执时保留unknown/原lease，核实只对账且不重发删除，无Thread关联的Workspace资源保持存活。冷图不启动周期worker，避免抢先回收候选；完整Workspace生命周期另行验证。通过 `bun run test:matrix -- --suite=integration-resource-orphan-sweep` 运行，固定120秒/4GiB；真实Node、PTY/Chromium、Gateway插件路由与HTTP不替代完整Gateway/Web、Windows、不合作操作终止或完整shutdown验收。
 
 `test_resource_orphan_errors.py`复用原双服务/ASGI fixture，经正式创建、detach、原孤儿回收和显式delete生成并核实真实删除。失败与回执等待同批时覆盖到期/取消，核原错误/cause、精确lease冷读、健康项终态及管理核实不重发；ContextVar仅推进本次回收及子任务的业务时刻，不推进既有周期worker。定向pytest带进程外180秒/4GiB并走原独占闸门，通用`integration-python`会发现此文件；不修改Web测试、原suite期限或共享debug，不代表真实等待30秒、Backend重启、Gateway/Web、Windows或不合作终止验收。
 

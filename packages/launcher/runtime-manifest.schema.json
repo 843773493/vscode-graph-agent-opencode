@@ -19,13 +19,52 @@
     "bundled_plugins": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["package_id", "package_version", "archive"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package_id",
+          "package_version"
+        ],
         "properties": {
-          "package_id": {"type": "string", "minLength": 1},
-          "package_version": {"type": "string", "minLength": 1},
-          "archive": {"type": "string", "minLength": 1}
-        }
+          "package_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "package_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "archive": {
+            "type": "string",
+            "minLength": 1
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "directory"
+            ],
+            "not": {
+              "required": [
+                "archive"
+              ]
+            }
+          },
+          {
+            "required": [
+              "archive"
+            ],
+            "not": {
+              "required": [
+                "directory"
+              ]
+            }
+          }
+        ]
       }
     },
     "schema_version": {
@@ -61,10 +100,22 @@
         "workspace_schema"
       ],
       "properties": {
-        "gateway_inline": {"type": "string", "minLength": 1},
-        "gateway_schema": {"type": "string", "minLength": 1},
-        "workspace_inline": {"type": "string", "minLength": 1},
-        "workspace_schema": {"type": "string", "minLength": 1}
+        "gateway_inline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gateway_schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspace_inline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspace_schema": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "skill_resources": {
@@ -110,17 +161,30 @@
     {
       "if": {
         "properties": {
-          "distribution": { "enum": ["npm", "standalone"] }
+          "distribution": {
+            "enum": [
+              "npm",
+              "standalone"
+            ]
+          }
         },
-        "required": ["distribution"]
+        "required": [
+          "distribution"
+        ]
       },
       "then": {
         "properties": {
           "node": {
             "type": "object",
             "properties": {
-              "source": { "const": "bundled" },
-              "executable": { "type": "string", "minLength": 1, "pattern": "\\S" }
+              "source": {
+                "const": "bundled"
+              },
+              "executable": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
             }
           }
         }

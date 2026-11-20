@@ -4,9 +4,9 @@ import asyncio
 import logging
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry

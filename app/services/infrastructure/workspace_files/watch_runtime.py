@@ -12,10 +12,11 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Literal, cast
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from watchfiles import Change, watch
 from watchfiles._rust_notify import WatchfilesRustInternalError
 
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 
 _Changes = set[tuple[Change, str]]
 _Message = tuple[Literal["batch", "error", "stopped"], int, _Changes | BaseException | None]

@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
@@ -22,7 +23,6 @@ from app.agents.skill_context import (
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_boxteam_home
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id

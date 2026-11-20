@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
     get_llm_request_log_reader,
-    get_request_id,
     get_session_turn_history_service,
     get_workspace_search_service,
     verify_local_token,

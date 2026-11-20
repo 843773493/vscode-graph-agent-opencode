@@ -7,6 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from urllib.parse import quote
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from httpx import AsyncClient, HTTPStatusError, RequestError, Timeout, TimeoutException
 from httpx_sse import EventSource
 
@@ -16,7 +17,6 @@ from app.abstractions.terminal.resources import (
 )
 from app.abstractions.workspace_resources import ResourceChanges
 from app.core.failures import mark_public_failure
-from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.protocol.codecs.terminal import (

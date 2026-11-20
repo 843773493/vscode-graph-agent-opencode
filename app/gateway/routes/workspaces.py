@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Depends,
@@ -14,7 +15,6 @@ from fastapi import (
 
 from app.core.path_utils import get_gateway_root
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (

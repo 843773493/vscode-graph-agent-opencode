@@ -7,13 +7,13 @@ import json
 from dataclasses import replace
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.policy import ToolPolicyResolver
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.source_protocol import (
     parse_source_blocks,

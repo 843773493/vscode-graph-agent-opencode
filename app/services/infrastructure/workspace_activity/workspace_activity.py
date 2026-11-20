@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.shielded_cleanup import run_cleanup_shielded
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.sqlite_state import SQLiteDiagnostics, utc_now_text
 
 __all__ = [

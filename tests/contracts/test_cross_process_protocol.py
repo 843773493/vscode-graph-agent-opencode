@@ -3,6 +3,14 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from boxteam.browser.v1 import browser_pb2
+from boxteam.gateway.v2 import proxy_pb2
+from boxteam.terminal.v1 import terminal_pb2
+from boxteam.workspace.v2 import (
+    file_events_pb2,
+    message_pb2,
+    public_pb2,
+)
 from google.protobuf import descriptor_pb2
 from google.protobuf.json_format import MessageToDict, ParseDict
 
@@ -15,14 +23,6 @@ from app.protocol.codecs.terminal import (
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
-)
-from app.protocol.generated.boxteam.browser.v1 import browser_pb2
-from app.protocol.generated.boxteam.gateway.v2 import proxy_pb2
-from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
-    file_events_pb2,
-    message_pb2,
-    public_pb2,
 )
 from app.schemas.internal_v2.attachment import AttachmentRef
 from app.schemas.internal_v2.resource_navigation import (

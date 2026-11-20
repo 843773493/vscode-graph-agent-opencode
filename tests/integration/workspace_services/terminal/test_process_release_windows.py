@@ -109,20 +109,16 @@ def windows_process_tree(tmp_path: Path) -> Iterator[WindowsProcessTree]:
 def release_process_tree() -> Callable[[int], dict[str, object]]:
     node = shutil.which("node")
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
-    module = (
-        Path.cwd()
-        / "src/shared/serverProcessLifecycle.mjs"
-    ).as_uri()
-    script = f"""
-import {{ readProcessStat, terminateProcessTree }} from {json.dumps(module)};
+    script = """
+import { readProcessStat, terminateProcessTree } from '@boxteam/plugin-sdk/process-lifecycle';
 const pid = Number(process.argv[1]);
 const before = await readProcessStat(pid);
-const result = await terminateProcessTree({{
+const result = await terminateProcessTree({
   pid,
   processSessionId: before?.processSessionId ?? null,
   processStartTime: before?.processStartTime ?? null,
-}});
-console.log(JSON.stringify({{ result, before }}));
+});
+console.log(JSON.stringify({ result, before }));
 """
 
     def release(pid: int) -> dict[str, object]:

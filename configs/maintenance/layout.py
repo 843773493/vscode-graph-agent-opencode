@@ -8,9 +8,9 @@ from typing import cast
 
 import commentjson
 import jsonschema
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
-from app.core.logging_contract import load_runtime_log_contract
 from configs.installer import atomic_write
 from configs.maintenance.runtime_logging_migration import without_retired_defaults
 from configs.migrations.legacy import migrate_config

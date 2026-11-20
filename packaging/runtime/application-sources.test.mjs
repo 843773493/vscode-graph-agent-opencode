@@ -59,7 +59,7 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["configs/__pycache__/cached.pyc", Buffer.from("ignored config cache")],
     ["resources/模板目录/资源 文件.json", Buffer.from("资源 bytes")],
     ["resources/cache.pyc", Buffer.from("ignored resource bytecode")],
-    ["src/shared/serverRuntimeLogging.mjs", Buffer.from("shared logging")],
+    ["src/shared/realtime.js", Buffer.from("shared transport")],
     ["src/workspace-services/terminal/client/index.html", Buffer.from("terminal attach")],
     ["src/workspace-services/terminal/server/终端 server.js", Buffer.from("terminal")],
     ["src/workspace-services/terminal/server/__pycache__/cached.pyc", Buffer.from("ignored")],
@@ -100,7 +100,8 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
   const expected = files
     .filter(([relative]) =>
       !relative.split("/").includes("__pycache__") && !relative.endsWith(".pyc") &&
-      !/^src\/workspace-services\/(terminal|browser)\/server\//.test(relative),
+      !/^src\/workspace-services\/(terminal|browser)\/server\//.test(relative) &&
+      !relative.startsWith("src/workspace-services/protocol/"),
     )
     .map(([relative, contents]) => ({
       path: relative,

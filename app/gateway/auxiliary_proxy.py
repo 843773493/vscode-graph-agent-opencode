@@ -35,7 +35,7 @@ def _terminal_asset(path: str) -> FileResponse:
     target = fixed.get(path)
     if target is None:
         if path.startswith("protocol/generated/"):
-            source = root / "src/workspace-services/protocol/generated"
+            source = root / "node_modules/@boxteam/plugin-sdk/src/generated"
             relative = path.removeprefix("protocol/generated/")
         elif path.startswith("@bufbuild/protobuf/"):
             source = root / "node_modules/@bufbuild/protobuf/dist/esm"
@@ -83,7 +83,7 @@ def _browser_asset(path: str) -> FileResponse:
     target = fixed.get(path)
     if target is None:
         if path.startswith("protocol/generated/"):
-            source = root / "src/workspace-services/protocol/generated"
+            source = root / "node_modules/@boxteam/plugin-sdk/src/generated"
             relative = path.removeprefix("protocol/generated/")
         elif path.startswith("@bufbuild/protobuf/"):
             source = root / "node_modules/@bufbuild/protobuf/dist/esm"

@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parse } from "jsonc-parser";
-import { PACKAGE_FILES, packDeveloperTools } from "../plugins/pack-developer-tools.mjs";
+import { buildPluginSdk } from "../plugins/build-sdk.mjs";
+import { pluginDirectoryDigest } from "../plugins/artifact-directory.mjs";
+import { PACKAGE_FILES, buildDeveloperToolsDirectory } from "../plugins/pack-developer-tools.mjs";
 
-/** 发布准备归开发启动器；Gateway 只安装已构建的标准 ZIP。 */
+/** 开发与发行共用完整目录构建；Gateway 安装不补装依赖。 */
 export async function prepareDevelopmentPlugins({ projectRoot, pythonExecutable, nodeExecutable, bunExecutable }) {
   if (!nodeExecutable) throw new Error("构建内置插件需要可用的 Node 可执行文件");
   const probe = Bun.spawnSync([nodeExecutable, "-p", "JSON.stringify({version:process.versions.node,abi:process.versions.modules,glibc:process.report.getReport().header.glibcVersionRuntime})"], { stdout: "pipe", stderr: "pipe" });
@@ -15,20 +17,31 @@ export async function prepareDevelopmentPlugins({ projectRoot, pythonExecutable,
   const target = { os: { linux: "linux", darwin: "macos", win32: "windows" }[process.platform],
     architecture: process.arch, system_baseline: JSON.parse(baseline.stdout.toString()),
     node: { version: runtime.version, abi: runtime.abi } };
-  const hash = createHash("sha256").update(JSON.stringify(target));
-  for (const file of [...PACKAGE_FILES.map(([source]) => source), "scripts/plugins/pack-developer-tools.mjs"]) {
+  const sdk = buildPluginSdk({ projectRoot, language: "node", bunExecutable });
+  const hash = createHash("sha256").update(JSON.stringify({ target, sdk: sdk.digest }));
+  const bunVersion = Bun.spawnSync([bunExecutable, "--version"], { stdout: "pipe", stderr: "pipe" });
+  if (bunVersion.exitCode !== 0) throw new Error(`内置插件 Bun 探测失败: ${bunVersion.stderr.toString()}`);
+  hash.update(bunVersion.stdout);
+  for (const file of [...PACKAGE_FILES.map(([source]) => source), "node_modules/node-gyp/package.json", "scripts/plugins/pack-developer-tools.mjs", "scripts/plugins/build-sdk.mjs", "scripts/plugins/artifact-directory.mjs", "scripts/launch/dev-bundled-plugins.mjs"]) {
     hash.update(file).update(readFileSync(path.join(projectRoot, file)));
   }
   const directory = path.join(projectRoot, "out/development-runtime/bundled-plugins", hash.digest("hex"));
-  const archive = path.join(directory, "developer-tools.zip");
-  if (!existsSync(archive)) {
+  const packageDirectory = path.join(directory, "developer-tools");
+  if (!existsSync(packageDirectory)) {
     mkdirSync(directory, { recursive: true });
-    const temporary = path.join(directory, `developer-tools-${process.pid}.zip`);
-    console.log("[dev] 构建内置开发工具插件包（后续启动复用未变化的制品）");
-    await packDeveloperTools({ projectRoot, output: temporary, target, bunExecutable, nodeExecutable,
-      pythonExecutable, nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js") });
-    renameSync(temporary, archive);
+    const temporary = path.join(directory, `developer-tools-${process.pid}`);
+    console.log("[dev] 构建内置开发工具完整目录（未变依赖复用）");
+    try {
+      await buildDeveloperToolsDirectory({ projectRoot, output: temporary, target, sdk, bunExecutable, nodeExecutable,
+        pythonExecutable, nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js") });
+      const manifestPath = path.join(temporary, "plugin.jsonc");
+      const manifest = parse(readFileSync(manifestPath, "utf8"));
+      const digest = pluginDirectoryDigest(temporary);
+      manifest.version = `${manifest.version}-dev.${digest}`;
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+      renameSync(temporary, packageDirectory);
+    } finally { rmSync(temporary, { recursive: true, force: true }); }
   }
-  const manifest = parse(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
-  return [{ package_id: manifest.package_id, package_version: manifest.version, archive }];
+  const manifest = parse(readFileSync(path.join(packageDirectory, "plugin.jsonc"), "utf8"));
+  return [{ package_id: manifest.package_id, package_version: manifest.version, directory: packageDirectory }];
 }

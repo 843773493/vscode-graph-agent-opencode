@@ -6,7 +6,7 @@ import {
   parseLinuxProcStat,
   parsePosixPsStat,
   parsePosixSessionProcesses,
-} from "../../../../shared/serverProcessLifecycle.mjs";
+} from "@boxteam/plugin-sdk/process-lifecycle";
 
 test("Linux stat 保留退出状态与身份，命令名中的空格和右括号不改变字段位置", () => {
   const fields = ["Z", "1", "4312", "4312", ...Array(15).fill("0"), "1000"];
@@ -109,10 +109,11 @@ function observeNativeFailure(scenario, failSink = false) {
       const sid = currentPid === process.pid ? 40001 : pid;
       return currentPid + " (test) " + ["S", "1", sid, sid, ...Array(15).fill("0"), "1000"].join(" ");
     };
-    fs.readdir = async directory => {
+    fs.readdir = async (directory, options) => {
       assert.equal(directory, "/proc");
+      assert.equal(options, undefined, "扫描必须避免对快速消失的 /proc PID 目录执行 lstat");
       if (scenario === "scan") throw primary;
-      return [{ name: String(pid), isDirectory: () => true }];
+      return [String(pid)];
     };
     process.kill = (target, signal) => {
       if (signal === 0) {
@@ -185,7 +186,7 @@ function observeNativeFailure(scenario, failSink = false) {
     console.log(JSON.stringify({ signals, result, failed: Boolean(failure) }));
   `;
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", source,
-    JSON.stringify([new URL("../../../../shared/serverProcessLifecycle.mjs", import.meta.url).href, scenario, failSink])],
+    JSON.stringify([new URL("../../../../../sdk/node/src/process-lifecycle.mjs", import.meta.url).href, scenario, failSink])],
   { encoding: "utf8", timeout: 5000 }));
 }
 
@@ -231,9 +232,10 @@ function observeForkDuringTermination(signal, explicitIdentity) {
       const fields = [states.get(pid) ?? "S", "1", sid, sid, ...Array(15).fill("0"), "1000"];
       return pid + " (test) " + fields.join(" ");
     };
-    fs.readdir = async directory => {
+    fs.readdir = async (directory, options) => {
       assert.equal(directory, "/proc");
-      return [...states.keys()].map(pid => ({ name: String(pid), isDirectory: () => true }));
+      assert.equal(options, undefined, "扫描必须避免对快速消失的 /proc PID 目录执行 lstat");
+      return [...states.keys()].map(String);
     };
     process.kill = (pid, signal) => {
       assert(states.has(pid));
@@ -258,7 +260,7 @@ function observeForkDuringTermination(signal, explicitIdentity) {
   `;
   const stdout = execFileSync(process.execPath, [
     "--input-type=module", "--eval", source,
-    JSON.stringify([new URL("../../../../shared/serverProcessLifecycle.mjs", import.meta.url).href, signal, explicitIdentity]),
+    JSON.stringify([new URL("../../../../../sdk/node/src/process-lifecycle.mjs", import.meta.url).href, signal, explicitIdentity]),
   ], { encoding: "utf8", timeout: 5000 });
   return JSON.parse(stdout);
 }

@@ -9,10 +9,11 @@ from _thread import RLock
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.exceptions import NotFoundError
 from app.core.key_lock_pool import KeyLockPool
-from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase, observe_phase_sync
 from app.core.session_control_store import SessionControlStore
 from app.core.session_control_store.collaboration_fanout import (

@@ -10,16 +10,18 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog import store as store_module

@@ -10,9 +10,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
-from app.core.logging_config import (
+from boxteam_plugin_sdk.logging import (
     APPLICATION_LOG_HANDLER_NAME,
+    RuntimeLoggingApply,
     RuntimeLoggingConflictError,
     RuntimeLogRecord,
     apply_runtime_logging,
@@ -20,9 +20,11 @@ from app.core.logging_config import (
     format_runtime_log_record,
     runtime_logging_state,
 )
-from app.core.logging_contract import load_runtime_log_contract
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
-from app.schemas.runtime_logging import RuntimeLoggingApply
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 
 @pytest.fixture
@@ -253,11 +255,11 @@ def test_revision_cas_and_idempotence_control_actual_handler(
 async def test_internal_http_control_requires_private_token_and_loopback(
     isolated_root_logger: logging.Logger, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from boxteam_plugin_sdk.http import verify_runtime_control_token
+    from boxteam_plugin_sdk.logging import runtime_logging_router
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
-    from app.api.runtime_control import verify_runtime_control_token
-    from app.api.runtime_logging import runtime_logging_router
     from app.core.trace_middleware import TraceMiddleware
 
     configure_application_logging(service="backend", stream=io.StringIO())

@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 from time import monotonic, time
 from typing import Literal
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.resource_uri import parse_resource_uri
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.search.scope import SearchScopeError
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogQueryRequest,

@@ -7,10 +7,11 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from app.core.failures import HTTP_FAILURE_HEADER
-from app.core.trace_middleware import TraceMiddleware, get_request_id
+from app.core.trace_middleware import TraceMiddleware
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.proxy_upstream import filter_hop_by_hop_headers, send_upstream_request
 

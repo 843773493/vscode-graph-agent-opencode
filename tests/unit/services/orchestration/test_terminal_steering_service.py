@@ -6,10 +6,10 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 
 from app.abstractions.workspace_resources import ResourceAssociationMissing
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.orchestration import terminal_steering_service as steering_module
 from app.services.orchestration.terminal_steering_service import (
     TerminalSteeringService,

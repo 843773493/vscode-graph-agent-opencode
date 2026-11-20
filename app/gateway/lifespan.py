@@ -12,20 +12,26 @@ from contextlib import asynccontextmanager
 from typing import cast
 
 import httpx
+from boxteam_plugin_sdk.logging import (
+    configure_application_logging,
+    runtime_logging_state,
+)
+from boxteam_plugin_sdk.observation import (
+    RuntimeObservation,
+    RuntimeObservationSettings,
+)
 from fastapi import FastAPI
 
 from app.core.env import (
     get_project_root,
     load_boxteam_env,
 )
-from app.core.logging_config import configure_application_logging, runtime_logging_state
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import (
     get_boxteam_home,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
 )
-from app.core.runtime_observation import RuntimeObservation
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import (
@@ -94,7 +100,6 @@ from app.gateway.server.bootstrap import (
     create_registry,
 )
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
-from app.schemas.runtime_observation import RuntimeObservationSettings
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)

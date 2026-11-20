@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam.gateway.v2 import public_pb2
 from fastapi import FastAPI
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from google.protobuf.json_format import ParseDict
@@ -26,7 +27,6 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import federation, workspaces
 from app.gateway.routes._shared import get_registry
 from app.protocol import openapi
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import descriptor_pool_from_set
 from app.schemas.gateway.federation import FederationProtocolManifestDTO
 from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest

@@ -4,12 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 
 from app.core.resource_uri import parse_resource_uri
-from app.core.trace_middleware import (
-    require_current_gateway_id,
-    require_current_request_id,
-)
+from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import (
     FEDERATION_ERROR_CODES,
     FEDERATION_MALFORMED_FRAME,

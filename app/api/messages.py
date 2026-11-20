@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -14,7 +15,6 @@ from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
     get_message_service,
-    get_request_id,
     get_session_communication_service,
     get_session_orchestrator,
     get_session_service,

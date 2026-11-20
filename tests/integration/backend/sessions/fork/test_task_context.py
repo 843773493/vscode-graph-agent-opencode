@@ -8,18 +8,17 @@ from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import TypeAdapter
 
 from app.core import thread_creation
 from app.core.resource_uri import thread_resource_uri
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import (
     SessionForkRequest,
     SessionTaskCompletedContext,

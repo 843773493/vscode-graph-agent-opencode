@@ -28,14 +28,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.config import McpCleanupDTO

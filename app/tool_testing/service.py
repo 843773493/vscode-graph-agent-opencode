@@ -10,12 +10,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_current_request_id
 from app.runtime.provider_model import build_model_from_provider
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.tool_test import (

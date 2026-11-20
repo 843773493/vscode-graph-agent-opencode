@@ -7,9 +7,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation.workspace_port import WorkspaceCatalogPort
 from app.gateway.registry import GatewayWorkspaceRegistry

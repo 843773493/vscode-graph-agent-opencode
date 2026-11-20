@@ -10,9 +10,9 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
 
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 from dotenv import load_dotenv
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.core.path_utils import resolve_boxteam_home
 from app.core.user_storage_migration import migrate_user_storage_layout
 from configs.diagnostics import diagnose_configuration, diagnostic_error
@@ -386,7 +386,7 @@ def main() -> None:
                 if args.verify_remote and not args.restore and (not journal.exists() or json.loads(journal.read_text())["state"] == "restored"):
                     verified = asyncio.run(verify_remote_workspace_identities(
                         preview_workspace_identity_migration(gateway_root=gateway_root, project_root=project_root or Path.cwd()),
-                        gateway_root=gateway_root, log_dir=load_runtime_log_contract(project_root).root_for(boxteam_home),
+                        gateway_root=gateway_root, log_dir=load_runtime_log_contract().root_for(boxteam_home),
                     ))
                 report = commit_workspace_identity_migration(
                     gateway_root=gateway_root, project_root=project_root or Path.cwd(), restore=args.restore,
@@ -398,7 +398,7 @@ def main() -> None:
                 gateway_root=gateway_root, project_root=project_root or Path.cwd(),
             )
             if args.verify_remote:
-                log_dir = load_runtime_log_contract(project_root).root_for(boxteam_home)
+                log_dir = load_runtime_log_contract().root_for(boxteam_home)
                 preview = asyncio.run(verify_remote_workspace_identities(
                     preview, gateway_root=gateway_root, log_dir=log_dir,
                 ))
@@ -473,6 +473,7 @@ def main() -> None:
             config_root=config_root,
             local_only=local_only,
             force=args.force,
+            bundled_packages=args.bundled_plugins,
         )
         gateway_development_assets = _environment_flag(
             GATEWAY_DEVELOPMENT_ASSETS_ENV
@@ -505,6 +506,7 @@ def main() -> None:
             profile="default",
             project_root=project_root,
             force=args.force,
+            bundled_packages=args.bundled_plugins,
         )
         print(
             json.dumps(

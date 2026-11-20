@@ -5,12 +5,12 @@ from contextlib import suppress
 from typing import Annotated
 from uuid import uuid4
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_config_service,
-    get_request_id,
     get_workspace_container,
     verify_local_token,
 )

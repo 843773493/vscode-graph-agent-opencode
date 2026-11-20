@@ -13,6 +13,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
+
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
@@ -24,11 +30,8 @@ from app.core.phase_observer import observe_phase
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event

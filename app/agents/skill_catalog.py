@@ -12,6 +12,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.agents.agents_md_publication import (
     publish_agents_md_chain,
     register_workspace_agents_md_file,
@@ -19,7 +21,6 @@ from app.agents.agents_md_publication import (
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_workspace_root
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id

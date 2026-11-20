@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.core.resource_uri import ParsedResourceUri, parse_resource_uri
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.plugins.packages import PluginPackageStore

@@ -16,7 +16,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationSubscription,

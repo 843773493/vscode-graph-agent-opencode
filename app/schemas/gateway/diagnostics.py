@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
+from boxteam_plugin_sdk.logging import RuntimeLoggingService
+from boxteam_plugin_sdk.observation import RuntimeObservationStatus
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -15,8 +17,6 @@ from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceI
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.service_plugin import PluginInstanceView
 from app.schemas.gateway.workspaces import GatewayConnectionKind, GatewayWorkspaceStatus
-from app.schemas.runtime_logging import RuntimeLoggingService
-from app.schemas.runtime_observation import RuntimeObservationStatus
 
 GatewayDiagnosticStatus = Literal["ready", "degraded", "offline"]
 

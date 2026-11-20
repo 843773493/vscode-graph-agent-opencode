@@ -11,10 +11,10 @@ from uuid import UUID
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import verify_local_control_request
 from fastapi import FastAPI, Request
 from pydantic import SecretStr, ValidationError
 
-from app.api.runtime_control import verify_local_control_request
 from app.core.failures import failure_detail
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id

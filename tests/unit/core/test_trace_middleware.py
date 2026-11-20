@@ -4,25 +4,31 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID
 
 import pytest
+from boxteam_plugin_sdk.commands import PluginCommandEventDTO
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.logging import RuntimeLogRecord, format_runtime_log_record
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    require_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
-from app.api.deps import get_request_id
 from app.core import failures
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
     get_current_gateway_id,
     get_current_navigation_actor,
-    get_current_request_id,
     require_current_gateway_id,
-    require_current_request_id,
-    reset_current_request_id,
-    set_current_request_id,
 )
 from app.schemas.internal_v2.common import APIResponse
 
@@ -126,6 +132,42 @@ def test_request_scope_contextvar_is_reset_after_dispatch(
     assert get_current_request_id() is None
 
 
+def test_concurrent_trace_requests_share_authoritative_id_with_logging_and_commands(
+    trace_client: TestClient,
+) -> None:
+    barrier = asyncio.Barrier(2)
+
+    async def context_endpoint(request_id: str = Depends(get_request_id)) -> APIResponse[dict[str, str]]:
+        await barrier.wait()
+        observed = require_current_request_id("test-command")
+        log = format_runtime_log_record(RuntimeLogRecord(
+            timestamp="2026-11-20T00:00:00Z", level="info", service="plugin", pid=1,
+            runtime_instance_id="instance", logger="test", message="ok", context={"request_id": observed},
+        ), pretty=False, contract=load_runtime_log_contract())
+        event = PluginCommandEventDTO(
+            instance_id="instance", registration_id="registration", command_id="command", call_id="call",
+            request_id=observed, sequence=1, kind="started",
+        )
+        return APIResponse(data={"request_id": observed, "log": log, "event": event.request_id},
+                           request_id=request_id)
+
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.add_api_route("/context", context_endpoint)
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(client.get, "/context", headers={"X-Request-ID": request_id})
+                   for request_id in ("req-concurrent-a", "req-concurrent-b")]
+        responses = [future.result() for future in futures]
+    assert {response.json()["data"]["request_id"] for response in responses} == {
+        "req-concurrent-a", "req-concurrent-b",
+    }
+    for response in responses:
+        expected = response.headers["X-Request-ID"]
+        assert response.json()["request_id"] == expected
+        assert f'request_id="{expected}"' in response.json()["data"]["log"]
+        assert response.json()["data"]["event"] == expected
+
+
 def test_require_current_request_id_fails_closed_without_binding() -> None:
     """无请求绑定即 fail-closed 抛错，且消息带消费者名；MUST NOT 回退虚假默认值。"""
     assert get_current_request_id() is None
@@ -160,6 +202,20 @@ def test_require_current_request_id_rejects_blank_binding() -> None:
             require_current_request_id("测试消费方")
     finally:
         reset_current_request_id(token)
+
+
+def test_nested_request_context_resets_to_parent_binding() -> None:
+    outer = set_current_request_id("req-outer")
+    try:
+        inner = set_current_request_id("req-inner")
+        try:
+            assert require_current_request_id("inner") == "req-inner"
+        finally:
+            reset_current_request_id(inner)
+        assert require_current_request_id("outer") == "req-outer"
+    finally:
+        reset_current_request_id(outer)
+    assert get_current_request_id() is None
 
 
 def test_successful_request_trace_is_emitted_at_debug_level(

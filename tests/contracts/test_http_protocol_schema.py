@@ -10,6 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from boxteam.workspace.v2 import public_pb2
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError as SchemaValidationError
 from jsonschema import validate
@@ -17,7 +18,6 @@ from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
 from app.core.identifier import create_prefixed_id
-from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
 from app.schemas.internal_v2.goal import SessionGoalSetRequest
 from app.schemas.internal_v2.job import JobControlRequest, JobDispatchSnapshotDTO

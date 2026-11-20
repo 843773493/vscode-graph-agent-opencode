@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
+
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
 from app.core.job_event_bus import EventType
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.event import JobFailedEvent
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,

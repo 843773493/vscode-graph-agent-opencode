@@ -10,8 +10,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.logging import runtime_log_path_identity
 
-from app.runtime.log_file_identity import runtime_log_path_identity
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (

@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from copy import copy
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from pydantic import ValidationError
 
 from app.abstractions.session_context import (
@@ -17,10 +18,7 @@ from app.abstractions.session_context import (
     SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
-from app.core.trace_middleware import (
-    require_current_gateway_id,
-    require_current_request_id,
-)
+from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,

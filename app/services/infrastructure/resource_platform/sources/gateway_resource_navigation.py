@@ -9,6 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from pydantic import ValidationError
 
 from app.core.failures import (
@@ -21,7 +22,6 @@ from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
 )
-from app.core.trace_middleware import require_current_request_id
 from app.gateway.federation.errors import (
     FEDERATION_ERROR_CODES,
     FEDERATION_MALFORMED_FRAME,

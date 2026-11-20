@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.abstractions.resource_file_content import ResourceFileReader
-from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )

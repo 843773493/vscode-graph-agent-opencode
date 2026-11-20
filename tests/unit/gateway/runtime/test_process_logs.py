@@ -14,9 +14,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
 from app.core import file_permissions
-from app.core.logging_contract import load_runtime_log_contract
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     LoggedProcessCleanupError,
@@ -635,7 +635,7 @@ def test_process_state_verifies_inherited_descriptors(
         command = [sys.executable, "-c", """
 from dataclasses import asdict
 import json
-from app.core.logging_config import configure_application_logging, runtime_logging_state
+from boxteam_plugin_sdk.logging import configure_application_logging, runtime_logging_state
 configure_application_logging(service='backend')
 print(json.dumps(asdict(runtime_logging_state())), flush=True)
 """]
@@ -643,7 +643,7 @@ print(json.dumps(asdict(runtime_logging_state())), flush=True)
         node = shutil.which("node")
         assert node is not None
         command = [node, "--input-type=module", "--eval", """
-import { runtimeLoggingState } from './src/shared/serverRuntimeLogging.mjs';
+import { runtimeLoggingState } from '@boxteam/plugin-sdk/logging';
 console.log(JSON.stringify(runtimeLoggingState('terminal')));
 """]
     store = ProcessLogStore(tmp_path)

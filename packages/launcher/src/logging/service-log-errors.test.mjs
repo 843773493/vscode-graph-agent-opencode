@@ -277,7 +277,7 @@ function runServiceLogIo(scenario, platform = process.platform) {
     scenario, fixtureRoot,
     new URL("./service-log.mjs", import.meta.url).href,
     new URL("../detached-process.mjs", import.meta.url).href,
-    new URL("../../../../src/shared/serverRuntimeLogging.mjs", import.meta.url).href,
+    "@boxteam/plugin-sdk/logging",
     platform,
   ])}\n`, { flag: "wx" });
   const args = [observerPath, inputPath];

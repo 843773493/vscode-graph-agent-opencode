@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain_core.messages import HumanMessage
 
 from app.agents.checkpoint_recovery import (
@@ -44,7 +45,7 @@ from app.core.model_delta_context import (
 from app.core.phase_observer import observe_phase
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,

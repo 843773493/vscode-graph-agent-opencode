@@ -11,8 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from boxteam_plugin_sdk.logging_contract import (
+    RuntimeLogContract,
+    load_runtime_log_contract,
+)
+
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
-from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
 from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
 from app.services.infrastructure.config.recovery import plan_stopped_config_recovery
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
@@ -294,7 +298,7 @@ def preview_runtime_logging_migration(
     planned_files: Mapping[Path, bytes] | None = None,
 ) -> RuntimeLoggingMigrationPlan:
     """读取显式输入；不扫描工作区、不打开可写 store、不改变 active/pending。"""
-    contract = load_runtime_log_contract(project_root)
+    contract = load_runtime_log_contract()
     choices = _validated_settings(
         {**({"level": level} if level is not None else {}), **({"pretty": pretty} if pretty is not None else {})},
         contract=contract, source="迁移命令显式选择",

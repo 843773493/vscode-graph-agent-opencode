@@ -12,7 +12,7 @@ from uuid import uuid4
 from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.config import (

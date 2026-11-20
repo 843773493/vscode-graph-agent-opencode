@@ -9,6 +9,7 @@ from typing import Any, NoReturn
 from unittest.mock import AsyncMock
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
 from langchain_core.tools import BaseTool, tool
@@ -21,7 +22,6 @@ from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
-from app.core.lifecycle import LifetimeScope
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
     model_tool_invocation_scope,
