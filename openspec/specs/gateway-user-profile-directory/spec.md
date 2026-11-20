@@ -1,7 +1,7 @@
 # gateway-user-profile-directory Specification
 
 ## Purpose
-明确旧 Gateway 用户档案退出后的数据边界，保留历史原件，避免重新引入按账户维护的配置链路。
+明确旧 Gateway 用户档案退出后的数据边界，保留历史原件；区分图片资源、浏览器展示偏好和控制面配置的现有归属，避免重新引入按账户维护的配置或同步链路。
 
 ## Requirements
 ### Requirement: 退出用户档案运行期管理

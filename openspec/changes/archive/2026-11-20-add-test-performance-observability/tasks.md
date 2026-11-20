@@ -74,3 +74,5 @@
 - 最小充分实现复审完成：沿用现有runner/run_context/保护，删除旧专用计时器、参数链与重复解析，SQLite定制factory保留原语义并报告观察缺口；无额外监控服务、数据库、兼容层或指标注册框架。原业务预算未调整、SQL/内部调用次数不作为硬契约。受影响Python Ruff与6个JS入口解析通过；未改产品前端源码，实际Workbench构建证据复用两次真实产品测试，不重复无关构建。
 
 - `openspec validate add-test-performance-observability --strict --no-interactive`：通过；本变更33/33任务完成。Windows/macOS原生验收、真实Provider外网及未建立事件关联的SSE渲染延迟仍明确未验证，不由任务勾选替代。
+
+- 2026-11-20 归档前经正式矩阵复验：`unit-test-performance` 19 passed／1 strict xfailed，`unit-test-performance-js` 16 passed，`integration-test-performance` 2 passed。原始命令、指纹、实际退出码与资源记录分别位于 runner 的 `run-7027a7b707a5`、`run-9eeedab14dd7`、`run-00dd44691620` 产物目录。仅证明对应定向行为，未重跑已有真实浏览器、开销配对或其他平台；不作为新性能比较基线。

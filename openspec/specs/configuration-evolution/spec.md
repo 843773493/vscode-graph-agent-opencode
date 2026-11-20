@@ -242,3 +242,17 @@ SQLite 升级 SHALL 在锁内核版本，备份包含已提交 WAL；有序链�
 #### Scenario: 格式未知且没有版本归属
 - **WHEN** 旧文件没有可核验的数据合同版本
 - **THEN** 保留原件并明确来源缺口，不擅自认定 v1，不因存在通用命名约定就自动纳入支持或创建转换文件
+
+### Requirement: 固定实验来源历史按明确取舍升级
+
+系统 SHALL 支持固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 的已结算普通会话 main Thread：将 catalog v11、control v18、rollout v26 和 Trace v1 JSONL 提交合同分别升到 v12、v20、v28 和 Trace SQLite schema 3。未登记的 fork／child／未结算意图和非空旧后台账本 SHALL 在首写前明确拒绝。转换 SHALL 保留完整原件及来源 SHA，正常链路只使用目标格式。
+
+经用户明确授权，无法补齐必需新事实的旧 job_started／goal_cleared SHALL 从当前 Trace 中丢弃并按类型报告数量，不伪造历史队列水位或 Goal revision，不增加旧运行时兼容协议。其它事件转换到当前 envelope，逻辑偏移重算；现行新事件 SHALL 写入独立的 format_version，未来不兼容变更 SHALL 递增该版本。
+
+#### Scenario: 真实旧历史恢复
+- **WHEN** 固定旧源码经真实产品入口生成非空会话和模型请求，当前软件初始化并启动两次
+- **THEN** 原 Session／Thread 身份、canonical 正文、item 与请求 hash 保持，旧 Trace 原件可核验，明确返回丢弃计数，重复初始化不重写或重复备份
+
+#### Scenario: 旧创建意图字段转换
+- **WHEN** v11 冻结创建 metadata 使用 current_provider_id，原 preimage 校验正确
+- **THEN** 转为同 Provider 的 default 模型引用并重算目标创建 preimage；完整原库保留原意图及原 hash，不改写 canonical 消息或请求正文
