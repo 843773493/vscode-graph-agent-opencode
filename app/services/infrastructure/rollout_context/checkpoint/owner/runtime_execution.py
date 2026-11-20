@@ -40,6 +40,7 @@ from app.domain.itemized.runtime_wakeup import (
     RuntimeInputConsumption,
 )
 from app.prompting import internal_message_factory
+from app.prompting.validation import validate_internal_message
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     source_lifecycle_item,
 )
@@ -317,6 +318,7 @@ class RuntimeExecutionOwnerMixin:
                 )
             if not isinstance(created_at, str) or not created_at:
                 raise ValueError("internal execution notice 缺少稳定 created_at")
+            validate_internal_message(message.content, response_metadata)
             notice_items = self._storage.storage._codec().items_for_message(
                 message,
                 item_sequence=1,

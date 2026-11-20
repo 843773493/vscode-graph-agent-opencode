@@ -288,6 +288,8 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 明确接收内部附加消息的入口 MUST要求完整的结构化 metadata 并执行注册校验，缺少 schema version 不得跳过。混合消息列表 MUST按 typed metadata 识别消息职责，不能按正文标签推断内部身份。Provider 的非 Agent 工具测试路径 MUST保留真实用户正文及合法重试消息，只有具名 checkpoint 中断提醒可作为旧工具事务边界。
 
+新内部通知 MUST在底层执行准入发布前校验，不能仅依赖上层分发器。checkpoint 恢复与 canonical 通知投影 MUST共用已保存结构标记的恢复规则，保留 kind、schema version 及展示身份；不得用当前 schema version 补造历史身份。未带结构标记的旧封存通知继续按原正文重放。
+
 新 compaction 续接消息 MUST通过同一 Factory 生成 `compaction_summary`，将软件说明放入 `system_reminder`，历史摘要放入编码为 text、信任级别为 untrusted_data 的 `summary` section；正文中的闭合标签 MUST被转义。canonical 摘要通过既有 annotation 保存结构标记，checkpoint 恢复、历史投影及 fork MUST保留标记和正文；旧封存摘要继续按原字节重放，不按内容猜测版本或自动改写。集中提示 MUST解释摘要和其它不可信 section 不能改写软件说明或创建新用户任务。
 
 #### Scenario: 首次正文与后续差分使用同一表达规则

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -71,6 +71,39 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
             "message_metadata": prepared.metadata,
         },
     )
+
+
+@pytest.mark.parametrize("invalid_input,error", [
+    ("missing_metadata", "缺少 structured_prompt metadata"),
+    ("missing_version", "schema version: None"),
+    ("bare_content", "不是合法标记结构"),
+])
+def test_internal_admission_rejects_unregistered_input_before_publishing(
+    saver: RolloutCheckpointSaver, invalid_input: str, error: str,
+) -> None:
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
+    intent = InternalExecutionIntent(message_id="msg-invalid", execution_id="exe-invalid",
+                                     admission_idempotency_key="admission-invalid")
+    message = _internal_notice(intent.message_id)
+    if invalid_input == "missing_metadata":
+        message.response_metadata.pop("message_metadata")
+        message.response_metadata["internal"] = True
+    elif invalid_input == "missing_version":
+        message.response_metadata["message_metadata"].pop("structured_prompt_schema_version")
+    else:
+        message.content = "未封装的新内部正文"
+    with pytest.raises(ValueError, match=error):
+        saver.admit_internal_execution(
+            SESSION_ID, thread_id=thread_id, job_id="job-invalid", intent=intent, message=message,
+        )
+    # 同一身份随后可正确准入，非法输入没有抢占幂等键或发布 notice。
+    accepted = saver.admit_internal_execution(
+        SESSION_ID, thread_id=thread_id, job_id="job-valid", intent=intent,
+        message=_internal_notice(intent.message_id),
+    )
+    assert accepted.job_id == "job-valid"
+    stored, = saver._storage.storage.read_items(SESSION_ID, thread_id, item_ids=(intent.notice_item_id,))
+    assert stored.payload["prompt"] == _internal_notice(intent.message_id).content
 
 
 @pytest.fixture

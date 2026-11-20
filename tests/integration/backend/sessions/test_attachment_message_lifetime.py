@@ -18,6 +18,9 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from PIL import Image
 
 from app.agents.providers.wire_finalize import finalize_provider_wire
+from app.agents.structured_prompt_validation_middleware import (
+    StructuredPromptValidationMiddleware,
+)
 from app.api import messages as messages_api
 from app.api.deps import get_session_orchestrator, verify_local_token
 from app.core.checkpoint_config import build_checkpoint_config
@@ -195,6 +198,10 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
                 **frozen_provider_activation(cold, plan_creation_idempotency_key=key),
             )
         selected = [entry for entry in result["snapshot"].selection if entry.included and entry.ref.ref_id == notice.item_id]
+        StructuredPromptValidationMiddleware._validate(SimpleNamespace(messages=result["messages"]))
+        for carrier in result["messages"]:
+            if carrier.response_metadata.get("attachments"):
+                assert "attachment_blocks" not in carrier.response_metadata
         assert len(selected) == 1 and selected[0].content_hash == notice.content_hash
         if target_format == "responses":
             wire = result["native_projection"]["request"]["input"]

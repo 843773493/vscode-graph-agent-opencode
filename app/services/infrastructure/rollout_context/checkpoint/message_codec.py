@@ -43,7 +43,6 @@ from app.domain.itemized.records import (
     RuntimeNoticePayload,
     user_input_payload,
 )
-from app.prompting.factory import INTERNAL_PROMPT_SCHEMA_VERSION
 from app.prompting.registry import (
     InternalDisplayPolicy,
     structured_prompt_registry,
@@ -67,6 +66,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.mapping.itemized.canonical_langchain import (
     project_compaction_summary,
+    project_runtime_notice,
     project_tool_result,
 )
 from app.services.mapping.itemized.provider_history import (
@@ -598,40 +598,7 @@ class LangChainMessageCodec:
         elif item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
             message = project_compaction_summary(item)
         elif item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
-            # runtime notice 仍沿用 checkpoint 的 HumanMessage wire projection，
-            # 但通过 canonical semantic kind 恢复 internal 标记，避免它被
-            # 历史读取误当成真实用户 Turn。
-            if (
-                item.payload_kind == PayloadKind.STRUCTURED_CONTENT
-                and isinstance(item.payload, Mapping)
-                and set(item.payload) & {"prompt", "display_part"}
-            ):
-                notice_payload = RuntimeNoticePayload.from_dict(item.payload)
-                display = notice_payload.display_part
-                response_metadata: dict[str, object] = {
-                    "internal": True,
-                    "structured_prompt_kind": display.kind if display is not None else project_annotations(item).get("structured_prompt_kind"),
-                    "structured_prompt_schema_version": INTERNAL_PROMPT_SCHEMA_VERSION,
-                }
-                if display is not None:
-                    response_metadata.update(
-                        internal_display_kind=display.kind, display_content=display.text,
-                        internal_display_provenance=display.provenance.to_dict(),
-                    )
-                if notice_payload.attachments:
-                    response_metadata["attachment_blocks"] = [dict(block) for block in notice_payload.attachment_blocks]
-                validate_internal_message(notice_payload.prompt, response_metadata)
-                message = HumanMessage(
-                    content=notice_payload.prompt,
-                    id=message_id,
-                    response_metadata=response_metadata,
-                )
-            else:
-                message = HumanMessage(
-                    content=_message_content_value(item.payload),
-                    id=message_id,
-                    response_metadata={"internal": True},
-                )
+            message = project_runtime_notice(item).model_copy(update={"id": message_id})
         elif item.semantic_kind == SemanticKind.TOOL_RESULT:
             message = project_tool_result(item).model_copy(update={"id": message_id})
         elif item.semantic_kind == SemanticKind.TOOL_CALL:

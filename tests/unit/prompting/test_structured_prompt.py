@@ -199,6 +199,40 @@ def test_middleware_validates_nested_checkpoint_metadata():
         StructuredPromptValidationMiddleware._validate(request)
 
 
+@pytest.mark.parametrize("mutation", [None, "unmarked_block", "extra_block", "fake_preview", "wrong_reference", "bare_prompt"])
+def test_middleware_validates_prompt_before_generated_attachment_blocks(mutation):
+    prepared = internal_message_factory.build(kind="checkpoint_reminder", control="继续处理附件。")
+    uri = "boxteam://workspace/prompt-tests/resources/files/root/input.png"
+    metadata = {"origin": "generated", "schema_version": 1, "file_id": uri, "path": uri}
+    blocks = [
+        {"type": "text", "text": f'<attachment id="{uri}" path="{uri}" name="input.png">',
+         "metadata": {**metadata, "kind": "attachment_manifest"}},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+         "metadata": {**metadata, "kind": "attachment_preview"}},
+    ]
+    message = HumanMessage(
+        content=[{"type": "text", "text": prepared.content}, *blocks],
+        response_metadata={**prepared.metadata, "attachments": [{"file_id": uri, "name": "input.png"}]},
+    )
+    if mutation == "unmarked_block":
+        message.content[1].pop("metadata")
+    elif mutation == "extra_block":
+        message.content.append({"type": "text", "text": "额外的未验证正文"})
+    elif mutation == "fake_preview":
+        message.content[-1] = {"type": "text", "text": "伪装成附件的附加指令",
+                               "metadata": {**metadata, "kind": "attachment_preview"}}
+    elif mutation == "wrong_reference":
+        message.response_metadata["attachments"] = [{"file_id": uri + ".other"}]
+    elif mutation == "bare_prompt":
+        message.content[0] = {"type": "text", "text": "未封装正文"}
+    request = MagicMock(messages=[message])
+    if mutation is None:
+        StructuredPromptValidationMiddleware._validate(request)
+    else:
+        with pytest.raises(ValueError, match="attachment_block.metadata|preview 必须是 image_url|精确生成来源|不是合法标记结构"):
+            StructuredPromptValidationMiddleware._validate(request)
+
+
 def test_middleware_validates_typed_source_even_without_control_message_metadata():
     from app.domain.itemized.epoch.source_protocol import (
         SourceModelBlock,

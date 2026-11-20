@@ -18,6 +18,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.prompting.factory import internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -134,11 +135,12 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     saver = context_saver
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(content="读取配置", id="user-1")
+    prompt = internal_message_factory.build(kind="checkpoint_reminder", control="工具返回后重新检查")
     internal_steering = HumanMessage(
-        content="控制：工具返回后重新检查",
+        content=prompt.content,
         id="steering-1",
         response_metadata={
-            "internal": True,
+            "message_metadata": prompt.metadata,
             "source": "terminal_steering",
             "message_id": "steering-1",
             "created_at": "2026-10-05T00:00:00+00:00",

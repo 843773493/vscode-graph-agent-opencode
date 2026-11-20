@@ -2237,16 +2237,17 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
             "turn_id": "turn-legacy-reminder",
         },
     )
-    admission = saver.admit_internal_execution(
+    # 仅为历史查询准备旧封存记录；新产品准入不再接受缺 schema 的输入。
+    notice, = LangChainMessageCodec().items_for_message(
+        legacy_reminder, item_sequence=1, message_id="legacy-reminder", turn_id=None,
+        execution_id="execution-legacy-reminder", timestamp=legacy_reminder.response_metadata["created_at"],
+    )
+    admission = saver._storage.executions.admit_internal_execution(
         SESSION_ID,
         thread_id=thread_id,
         job_id="job-legacy-reminder",
-        intent=InternalExecutionIntent(
-            message_id="legacy-reminder",
-            execution_id="execution-legacy-reminder",
-            admission_idempotency_key="admission-legacy-reminder",
-        ),
-        message=legacy_reminder,
+        execution_id="execution-legacy-reminder", admission_idempotency_key="admission-legacy-reminder",
+        runtime_notice_item=notice, request_input={"kind": "runtime_notice", "payload": notice.payload},
     )
     with _execution_scope(admission):
         saver.put(
