@@ -46,6 +46,8 @@
 
   本轮证据位于 `out/tests/temp/2026/11/20/background_maintenance/artifacts/` 与 `out/tests/temp/2026/11/20/unify_background_maintenance_python/artifacts/`。SDK 运行时测试集中在 `tests/sdk/node/`，通过已安装包公开 exports 验证，避免包内测试的自引用解析绕过制品。
 
+  Gateway 维护在途读取的确定性补验见 `gateway-maintenance-concurrency-final.log`（1 passed，84.93 秒），完整响应及原 worker 结算状态位于 `out/tests/integration/gateway/test_maintenance_concurrency/`。该屏障仅用于正确性，不进入性能采集；原 60 请求性能样本保持不变。
+
   扩大验证仍有既存装具阻塞：fork scope 的两项在准备用户消息时未领取队列；frozen-prefix 的四项在启动时缺少 backend generation；Terminal SIGTERM 在冷重启前把带 `/services/http` 的 URL 当作端口解析。原件分别见 `fork-scope-contract-final.log`、`fork-frozen-prefix-integrity-final.log` 与 `sdk-test-consumer-terminal-signals.log`，未放宽断言或将其计为通过。真实 fork 启动恢复五项通过；本轮未重新进行 Windows／macOS 及正式发行包验收。
 - [x] 6.8 在无插件环境／运行中事件循环的子进程验证轻量入口无启动副作用及重依赖加载，实际初始化仍报告非法配置；两种导入顺序核 Python wire 唯一及真实序列化。隔离装具保留旧 SDK 并新增由应用消费的协议类型，验纯生成→当前 wheel 构建／正常安装→原应用合同检查；check 不改源码／环境且拒绝过期产物。经真实中间件并发请求核命令／日志上下文同源、嵌套恢复、缺失 ID 拒绝，无第二 ContextVar、随机 ID 或旧入口。
 - [x] 6.9 从构建制品换 cwd 验证日志包资源及源一致性，经原管理入口验日志热应用、去向、revision 和 request_id；不借源码资源补缺。

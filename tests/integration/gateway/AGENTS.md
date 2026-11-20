@@ -15,6 +15,7 @@
 ## 规范
 
 - `test_maintenance_performance.py` 运行真实 Gateway 与 Backend；`maintenance_app.py` 仅在测试组合中暴露原活动 owner 的一次清理，复用真实数据库与锁，不建立第二个 owner。采集子进程固定三批各 10000 条过期／100 条有效记录、20 个并发分页请求和一次清理，硬超时 60 秒；保留全部响应、request_id、大小、延迟和实际重叠样本，不用屏障或 sleep 制造性能竞争。该测量不替代维护在途读取保护的正确性测试。
+- `test_maintenance_concurrency.py` 使用独立测试组合缩短活动维护周期，在原存储 worker 入口设置屏障；经真实 Gateway 读取同一活动表，再释放原 SQL 并核有效记录保留。它不提供性能样本，不修改生产周期、SQL 或引用资格；引用保护由原 owner 场景验证。
 
 - Gateway 本身必须作为真实独立进程启动。
 - 下游替身必须作为独立本地 HTTP 服务启动并显式清理。
