@@ -1,6 +1,5 @@
 """显式 Skill 刷新、互斥模式和失败原子性；applied 由真实 seal 推进。"""
 
-import json
 from dataclasses import replace
 
 import pytest
@@ -9,6 +8,7 @@ from app.agents.skill_context import install_frozen_skill_catalog
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.serde.epoch import context_seal_binding_to_dict
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     SkillCatalogActivationSnapshot,
@@ -82,7 +82,7 @@ def test_explicit_frozen_revision_replaces_automatic_pending(source_seal_case, s
     assert refreshed.prefix.state.frames[-1].item_refs[0].source_revision == receipt.revision
     assert "explicit-v2" in refreshed.prefix.state.frames[-1].content
     assert "automatic-v3" not in refreshed.prefix.state.frames[-1].content
-    source = json.loads(refreshed.prefix.state.frames[-1].content)["sources"][0]
+    source = parse_root_section(refreshed.prefix.state.frames[-1].content, tag="context_sources")["sources"][0]
     assert (source["operation"], source["representation"], source["body"]) == (
         "replace", "full", explicit.entries["demo"].body,
     )
@@ -194,7 +194,7 @@ def test_last_explicit_selection_wins_before_seal_and_after_cold_restore(source_
     _, selected = case.seal(manager, tool_set=tools)
     frames = selected.prefix.state.frames if rebase else selected.prefix.state.frames[len(first.prefix.state.frames):]
     blocks = [block for frame in frames if frame.source_protocol is not None
-              for block in json.loads(frame.content)["sources"]]
+              for block in parse_root_section(frame.content, tag="context_sources")["sources"]]
     assert [(block["source_identity"], block["revision"], block["body"]) for block in blocks] == [
         ("skill:demo", a.activation_revision, a.body),
     ]
@@ -217,7 +217,7 @@ def test_catalog_rebind_keeps_pending_tracked_update_sealable(source_seal_case):
     manager.observe("skill:demo", "v2\n").require_tracked()
     manager.register_skill_catalog(replace(catalog, catalog_revision="catalog:metadata-only"))
     _, sealed = case.seal(manager)
-    block = json.loads(sealed.prefix.state.frames[-1].content)["sources"][0]
+    block = parse_root_section(sealed.prefix.state.frames[-1].content, tag="context_sources")["sources"][0]
     assert block["revision"] == _revision("v2\n")
     assert block["base_revision"] == catalog.entries["demo"].activation_revision
     assert block["representation"] == "unified_diff"
@@ -249,7 +249,7 @@ def test_pending_selection_uses_original_call_catalog(source_seal_case, cold, cu
     assert controls[0].selection_sequence == accepted[0].selection_sequence
     assert controls[0].latest_visible_committed_revision is None
     _, sealed = case.seal(manager)
-    block, = json.loads(sealed.prefix.state.frames[-1].content)["sources"]
+    block, = parse_root_section(sealed.prefix.state.frames[-1].content, tag="context_sources")["sources"]
     assert block["body"] == original.entries["demo"].body
     assert block["revision"] == receipt.revision
 

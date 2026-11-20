@@ -10,6 +10,7 @@ import pytest
 from app.api.deps import get_llm_request_log_reader
 from app.core.path_utils import workspace_context
 from app.domain.itemized.hashing import contribution_content_hash_and_length
+from app.prompting.validation import parse_root_section
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.runtime_reminder import submit_runtime_reminder
@@ -149,8 +150,8 @@ async def test_inspect_frozen_contribution_from_real_dispatched_request(
         assert result["contents"][0]["language"] == "plaintext"
         assert contribution_content_hash_and_length(source.contribution_kind, body) == (source.content_hash, source.content_length)
         # 同时核对真正发送的 wire，不仅验证读取 helper 消费了手工 manifest。
-        envelopes = [json.loads(message["content"]) for message in snapshot.request_hash_preimage["messages"]
-                     if isinstance(message["content"], str) and message["content"].startswith('{"protocol":"boxteam-context-sources:v2"')]
+        envelopes = [parse_root_section(message["content"], tag="context_sources") for message in snapshot.request_hash_preimage["messages"]
+                     if isinstance(message["content"], str) and message["content"].startswith('<context_sources ')]
         assert any(value["body"] == body for envelope in envelopes for value in envelope["sources"])
         assert "CONTEXT_SOURCE_BEFORE_REMOVAL" in body
         guidance.write_text("当前来源已更改，不得替代历史正文。\n", encoding="utf-8")

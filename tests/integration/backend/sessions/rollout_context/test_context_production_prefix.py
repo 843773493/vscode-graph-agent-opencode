@@ -32,6 +32,7 @@ from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.assembly import (
     reader as assembly_reader,
 )
@@ -1027,7 +1028,7 @@ def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
         "Summarize the provided conversation. Return only a concise factual plain-text summary. Do not call tools."
         if minimal_system else "尚未确认的摘要指引"
     )
-    assert json.loads(result["messages"][0].content)["sources"][0]["body"] == expected_system
+    assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == expected_system
     assert manager.prepare_pending() == pending
     assert connection.execute(
         "SELECT latest_visible_committed_revision FROM context_source_control_states"
@@ -1106,7 +1107,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     saver, session, thread, connection, manager, prepare = production_context
     first = prepare("first")
     assert [type(message) for message in first["messages"]] == [SystemMessage, HumanMessage]
-    assert json.loads(first["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(first["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert first["tools"] == []
     first_snapshot = saver._storage.assemblies.get_context_assembly(
         session, thread, assembly_id=first["assembly_id"],
@@ -1122,7 +1123,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     )
     assert second_snapshot.seal_binding.root == first_snapshot.seal_binding.root
     assert second_snapshot.seal_binding.prefix.state.frames[:2] == first_snapshot.seal_binding.prefix.state.frames
-    assert json.loads(second["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(second["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert isinstance(second["messages"][-1], HumanMessage)
     assert "基础规则第二版" in second["messages"][-1].content
     assert manager.prepare_pending() is None
@@ -1198,7 +1199,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
         assert tuple(selection_ref_identity(ref) for ref in snapshot.refs if ref.ref_type == "canonical_item") == (
             ("canonical_item", owner_item.item_id, thread),
         )
-        assert json.loads(result["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+        assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
         assert result["messages"][1].content == owner_item.payload
         assert connection.execute(
             "SELECT visible,source_kind FROM context_view_items WHERE view_id=? AND item_id=?",
@@ -1257,9 +1258,9 @@ def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_
         selection = tuple(entry for entry in result["snapshot"].selection if entry.ref.ref_id == item.item_id)
         assert tuple(selection_ref_identity(entry.ref) for entry in selection) == expected_keys
         assert all(entry.included for entry in selection)
-        assert json.loads(result["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+        assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
         assert result["messages"][1].content == item.payload
-        assert json.loads(result["messages"][2].content)["sources"][0]["body"] == overlay_body
+        assert parse_root_section(result["messages"][2].content, tag="context_sources")["sources"][0]["body"] == overlay_body
     assert second["snapshot"].seal_binding.prefix.state.frames == first["snapshot"].seal_binding.prefix.state.frames
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
@@ -1320,7 +1321,7 @@ def test_late_desired_after_seal_is_preserved_and_next_call_applies_exact_base(
 
     monkeypatch.setattr(preparation, "seal_registered_plan", seal_then_observe)
     first = prepare("late-first", target_format=target_format)
-    assert json.loads(first["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(first["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     pending = manager.prepare_pending()
     assert pending.deltas[0].previous_revision == "instructions:1"
     assert pending.deltas[0].revision == "instructions:2"
@@ -1341,7 +1342,7 @@ def test_same_body_new_semantic_revision_is_not_discarded(production_context):
     pending = manager.prepare_pending()
     assert pending.deltas[0].revision == "instructions:2"
     second = prepare("same-body-second")
-    assert json.loads(second["messages"][-1].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(second["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert connection.execute(
         "SELECT latest_visible_committed_revision, latest_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:2", "instructions:2")

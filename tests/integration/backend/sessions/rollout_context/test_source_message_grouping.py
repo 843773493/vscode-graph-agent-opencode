@@ -138,7 +138,7 @@ async def test_product_tools_freeze_mixed_tracking_and_fork(
             assert selected.source_revision == ref.source_revision
             occurrence, = [index for index, message in enumerate(wire)
                            if isinstance(message.get("content"), str)
-                           and message["content"].startswith('{"protocol":"boxteam-context-sources:')
+                           and message["content"].startswith('<context_sources ')
                            and any(candidate.body == block.body for candidate in parse_source_blocks(message["content"]))]
             assert occurrence > call_index + 2
         if previous is not None:

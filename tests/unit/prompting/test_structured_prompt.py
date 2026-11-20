@@ -177,3 +177,25 @@ def test_middleware_validates_nested_checkpoint_metadata():
     request.messages[0].content = "<system_reminder><broken></system_reminder>"
     with pytest.raises(ValueError, match="不是合法标记结构"):
         StructuredPromptValidationMiddleware._validate(request)
+
+
+def test_middleware_validates_typed_source_even_without_control_message_metadata():
+    from app.domain.itemized.epoch.source_protocol import (
+        SourceModelBlock,
+        render_source_blocks,
+    )
+
+    content = render_source_blocks((SourceModelBlock(
+        source_identity="external:guide", name="工具指引", source_kind="tool_guide",
+        operation="activate", revision="r1", base_revision=None, representation="full",
+        source_tracking_at_seal="untracked", root_placement="tail_only", body="背景说明",
+    ),))
+    request = MagicMock()
+    request.messages = [HumanMessage(content=content, response_metadata={"context_source_protocol": 3})]
+    StructuredPromptValidationMiddleware._validate(request)
+    request.messages[0].content = content.replace('trust="source_defined"', 'trust="control"')
+    with pytest.raises(ValueError, match="trust"):
+        StructuredPromptValidationMiddleware._validate(request)
+    # 相同文本由真实用户输入时不因标签形似内部结构而改判身份。
+    request.messages = [HumanMessage(content=request.messages[0].content)]
+    StructuredPromptValidationMiddleware._validate(request)

@@ -26,6 +26,7 @@ from app.domain.itemized.epoch.seal_binding import (
     ContextSealPreparation,
 )
 from app.domain.itemized.epoch.source_protocol import (
+    CURRENT_SOURCE_PROTOCOL_VERSION,
     SourceModelBlock,
     SourceReplacementIndex,
     SourceVersionRef,
@@ -401,7 +402,7 @@ def compile_prefix_context(
                 "source_item", ref_id, source.descriptor.source_id, source.revision,
                 "tracked" if source.tracked else "untracked",
             ),),
-            source_protocol=2,
+            source_protocol=CURRENT_SOURCE_PROTOCOL_VERSION,
         ))
     # 持久 overlay 是独立的 post-user 来源；沿已有 typed ref 的 base/delta 顺序追加。
     inherited = set(selected_identities)
@@ -435,7 +436,7 @@ def compile_prefix_context(
                 "source_item", ref.ref_id, contribution.source_binding.source_ref,
                 contribution.source_revision, "tracked",
             ),),
-            source_protocol=2,
+            source_protocol=CURRENT_SOURCE_PROTOCOL_VERSION,
         ))
     # 仅合并本次新增的来源；继承或携带的封存 frame 保持自己的消息边界。
     if source_message_grouping not in {"aggregate", "separate"}:

@@ -32,6 +32,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.prompting.validation import parse_root_section
 from app.runtime.agent_runtime import prepare_agent_model
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
@@ -421,7 +422,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         assert original_body not in json.dumps(receipt, ensure_ascii=False)
         outbound = dispatch("skill-body-selected")
         texts = [message.content for message in outbound.messages if isinstance(message.content, str)]
-        loaded = json.loads(outbound.messages[-1].content)["sources"][0]
+        loaded = parse_root_section(outbound.messages[-1].content, tag="context_sources")["sources"][0]
         assert loaded["source_identity"] == "skill:" + frozen.entries["example"].entry_identity
         assert loaded["body"] == original_body
         assert all("新的 live 正文" not in text for text in texts)

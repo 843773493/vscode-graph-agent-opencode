@@ -345,6 +345,8 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     assert body["tools"] == projection["request"]["tools"]
     # compiled root 独立记录 provenance；其余 wire source 忠实消费同一 selection。
     root = restored.seal_binding.root
+    assert root.source_protocol == 3
+    assert root.content.startswith('<context_sources encoding="json" trust="source_defined">\n')
     assert [(block.source_identity, block.body) for block in parse_source_blocks(root.content)] == [("instruction:native-contract", "HTTP system prompt")]
     root_sources = tuple(
         source.source_binding.source_ref
@@ -370,6 +372,8 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     }
     assert sum(item.get("role") == "system" for item in body["input"]) == 1
     overlay_frame = restored.seal_binding.prefix.state.frames[-1]
+    assert overlay_frame.source_protocol == 3
+    assert overlay_frame.content.startswith('<context_sources encoding="json" trust="source_defined">\n')
     assert body["input"][-1] == {"role": "user", "content": [{"type": "input_text", "text": overlay_frame.content}]}
     assert [(ref.ref_id, block.body) for ref, block in zip(overlay_frame.item_refs, parse_source_blocks(overlay_frame.content), strict=True)] == [
         ("z-base", [{"type": "text", "text": "HTTP overlay base"}]),

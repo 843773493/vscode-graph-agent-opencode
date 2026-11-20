@@ -18,6 +18,12 @@ class SourceDeltaMixin:
         def _queue_source(self, state: SourceState) -> None:
             if state.latest_revision is None or state.latest_content is None:
                 raise RuntimeError("Context source 缺少 latest revision/content")
+            # 从未向模型发布过的空来源没有需要激活或撤销的正文。
+            if state.latest_visible_committed_revision is None and not state.latest_content:
+                state.pending_kind = None
+                state.observed_revisions.clear()
+                self._pending.pop(state.source_id, None)
+                return
             if (
                 state.pending_kind not in {"activation", "rebuild"}
                 and state.latest_revision == state.latest_visible_committed_revision

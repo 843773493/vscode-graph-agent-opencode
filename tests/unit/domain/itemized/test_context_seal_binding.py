@@ -163,7 +163,7 @@ def test_grouped_seal_keeps_order_and_independent_tracking(binding):
         ))
     content = render_source_blocks(tuple(blocks))
     state = binding.prefix.state
-    frame = ProviderProfileItemFrame(2, state.provider_profile, "user", "text", content, members, source_protocol=2)
+    frame = ProviderProfileItemFrame(2, state.provider_profile, "user", "text", content, members, source_protocol=3)
     state = append_items(state, (frame,), desired_provider_profile=state.provider_profile,
                          desired_tool_compatibility_key=state.tool_compatibility_key)
     grouped = replace(binding, prefix=seal_assembly(state, assembly_id="grouped"), previous_assembly_id=binding.prefix.assembly_id)

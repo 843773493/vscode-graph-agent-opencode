@@ -97,6 +97,12 @@ def _validate_activation_guidance(
     previous_selected = previous_frames.get(source_id)
     if not rows and previous_selected is None and selected is None:
         return
+    # 首次空来源不发送通知；后续清空仍须保留精确撤销帧和 applied 回执。
+    if (selected is None and previous_selected is None and len(rows) == 1
+            and rows[0][1] == sha256_jcs({"content": ""}) and rows[0][2] == "available"):
+        if any(source.source_id == source_id for source in binding.source_revisions):
+            raise ItemSchemaError("context-source-seal-conflict: 空来源不得伪造 applied revision")
+        return
     if selected is None:
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
     frame, ref = selected

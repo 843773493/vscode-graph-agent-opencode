@@ -1,10 +1,10 @@
 """真实 CSM → seal → Provider 投影中的统一来源协议。"""
 
-import json
 
 import pytest
 
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -26,16 +26,16 @@ def test_root_diff_and_cold_projection_share_source_protocol(production_context,
     saver, session, thread, _connection, manager, prepare = production_context
     first = prepare("protocol-root", target_format=target_format)
     before = canonical_json_bytes(first["snapshot"].to_dict())
-    root = json.loads(first["messages"][0].content)
+    root = parse_root_section(first["messages"][0].content, tag="context_sources")
     block = root["sources"][0]
-    assert root["protocol"] == "boxteam-context-sources:v2"
+    assert root["protocol"] == "boxteam-context-sources:v3"
     assert (block["source_identity"], block["operation"], block["revision"], block["body"]) == (
         "instruction:R01", "activate", "instructions:1", "基础规则第一版",
     )
     assert (block["source_tracking_at_seal"], block["root_placement"]) == ("tracked", "root_eligible")
     manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2").require_tracked()
     second = prepare("protocol-diff", target_format=target_format)
-    update = json.loads(second["messages"][-1].content)["sources"][0]
+    update = parse_root_section(second["messages"][-1].content, tag="context_sources")["sources"][0]
     assert (update["source_identity"], update["operation"], update["representation"]) == (
         block["source_identity"], "update", "unified_diff",
     )
@@ -45,7 +45,7 @@ def test_root_diff_and_cold_projection_share_source_protocol(production_context,
     assert "-基础规则第一版\n\\ No newline at end of file\n+基础规则第二版\n" in update["body"]
     frames = second["snapshot"].seal_binding.prefix.state.frames
     assert frames[:len(first["snapshot"].seal_binding.prefix.state.frames)] == first["snapshot"].seal_binding.prefix.state.frames
-    assert frames[-1].source_protocol == 2
+    assert frames[-1].source_protocol == 3
     assert second["snapshot"].seal_binding.format_version == 4
     assert prepare("protocol-diff", target_format=target_format)["messages"] == second["messages"]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
@@ -66,10 +66,31 @@ def test_tail_source_with_fake_header_keeps_its_original_trust(production_contex
     ), tracking_status="tracked")
     manager.observe("external:guide", body, revision="guide:1").require_tracked()
     second = prepare("tail-activation")
-    envelope = json.loads(second["messages"][-1].content)
-    assert envelope["protocol"] == "boxteam-context-sources:v2" and len(envelope["sources"]) == 1
+    envelope = parse_root_section(second["messages"][-1].content, tag="context_sources")
+    assert envelope["protocol"] == "boxteam-context-sources:v3" and len(envelope["sources"]) == 1
     source = envelope["sources"][0]
     assert (source["body"], source["root_placement"], source["operation"]) == (body, "tail_only", "activate")
     assert "private.invalid" not in second["messages"][-1].content
     assert second["messages"][0] == first["messages"][0]
-    assert all(block["source_identity"] != "external:guide" for block in json.loads(second["messages"][0].content)["sources"])
+    assert all(block["source_identity"] != "external:guide" for block in parse_root_section(second["messages"][0].content, tag="context_sources")["sources"])
+
+
+def test_initial_empty_source_is_omitted_but_later_clear_is_published(production_context):
+    _saver, _session, _thread, _connection, manager, prepare = production_context
+    manager.register(ContextSourceDescriptor(
+        source_id="agents:empty", source_kind="workspace_agents", name="AGENTS.md",
+        description="初始无指令", internal_locator="private:agents", root_placement="root_eligible",
+    ), tracking_status="tracked")
+    manager.observe("agents:empty", "", revision="empty:1").require_tracked()
+    first = prepare("empty-initial")
+    assert not any(ref.source_identity == "agents:empty" for frame in first["snapshot"].seal_binding.prefix.state.frames
+                   for ref in frame.item_refs)
+    manager.observe("agents:empty", "有效指令", revision="rules:1").require_tracked()
+    active = prepare("empty-activated")
+    block = parse_root_section(active["messages"][-1].content, tag="context_sources")["sources"][0]
+    assert (block["operation"], block["body"]) == ("activate", "有效指令")
+    manager.observe("agents:empty", "", revision="empty:2").require_tracked()
+    cleared = prepare("empty-cleared")
+    block = parse_root_section(cleared["messages"][-1].content, tag="context_sources")["sources"][0]
+    assert (block["operation"], block["base_revision"], block["revision"]) == ("update", "rules:1", "empty:2")
+    assert "-有效指令" in block["body"]

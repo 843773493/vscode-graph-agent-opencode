@@ -26,6 +26,10 @@ from enum import StrEnum
 from typing import Literal
 
 from app.domain.itemized.enums import PayloadKind
+from app.domain.itemized.epoch.source_protocol import (
+    SOURCE_PROTOCOLS,
+    SourceProtocolVersion,
+)
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     _ensure_json_value,
@@ -271,7 +275,7 @@ class ProviderProfileItemFrame:
     payload_kind: str
     content: object
     item_refs: tuple[AppendedItemRef, ...]
-    source_protocol: Literal[1, 2] | None = None
+    source_protocol: SourceProtocolVersion | None = None
     _canonical_bytes: bytes = field(init=False, repr=False, compare=False)
 
     def __getattribute__(self, name: str) -> object:
@@ -297,7 +301,7 @@ class ProviderProfileItemFrame:
         ):
             raise ItemSchemaError("只有封装后的 user 来源 frame 可以包含多个 item")
         if self.source_protocol is not None and (
-            type(self.source_protocol) is not int or self.source_protocol not in {1, 2}
+            type(self.source_protocol) is not int or self.source_protocol not in SOURCE_PROTOCOLS
             or any(ref.ref_type != "source_item" for ref in self.item_refs)
         ):
             raise ItemSchemaError("ProviderProfileItemFrame.source_protocol 非法")

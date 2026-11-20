@@ -27,6 +27,7 @@ from app.domain.itemized.epoch.root_compilation import (
     RootPlacement,
     SourcePolicyKey,
 )
+from app.domain.itemized.epoch.source_protocol import SOURCE_PROTOCOL
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -282,7 +283,7 @@ def runtime_instruction_producers(
         },
     }).decode("utf-8")
     config_binding = InstructionUpdateBinding("workspace_config", config_revision, "next_job")
-    protocol_revision = sha256_jcs({"protocol": "boxteam-context-sources:v2", "content": CSM_PROTOCOL_PROMPT})
+    protocol_revision = sha256_jcs({"protocol": SOURCE_PROTOCOL, "content": CSM_PROTOCOL_PROMPT})
     return (
         InstructionProducerSpec(
             producer_id="R10", source_id="instruction:csm-protocol",

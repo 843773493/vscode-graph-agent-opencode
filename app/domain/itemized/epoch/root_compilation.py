@@ -27,7 +27,10 @@ from app.domain.itemized.epoch.prefix_epoch import (
     PrefixEpochState,
 )
 from app.domain.itemized.epoch.source_protocol import (
+    CURRENT_SOURCE_PROTOCOL_VERSION,
+    SOURCE_PROTOCOLS,
     SourceModelBlock,
+    SourceProtocolVersion,
     render_source_blocks,
 )
 from app.domain.itemized.errors import ItemSchemaError
@@ -178,11 +181,11 @@ class CompiledRootItem:
     tool_compatibility_key: str
     content: str
     sources: tuple[CompiledRootSourceProvenance, ...]
-    source_protocol: Literal[1, 2] | None = None
+    source_protocol: SourceProtocolVersion | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
-        if self.source_protocol is not None and (type(self.source_protocol) is not int or self.source_protocol not in {1, 2}):
+        if self.source_protocol is not None and (type(self.source_protocol) is not int or self.source_protocol not in SOURCE_PROTOCOLS):
             raise ItemSchemaError("CompiledRootItem.source_protocol 非法")
         if not isinstance(self.epoch, PrefixEpoch):
             raise RootCompileBoundaryError("CompiledRootItem.epoch 必须是 PrefixEpoch")
@@ -307,7 +310,7 @@ def compile_root_item(
             source_tracking_at_seal=candidate.source_tracking_at_seal,
             root_placement=candidate.root_placement, body=candidate.content,
         ) for candidate in eligible)),
-        source_protocol=2,
+        source_protocol=CURRENT_SOURCE_PROTOCOL_VERSION,
         sources=tuple(
             CompiledRootSourceProvenance(
                 source_identity=candidate.source_identity,

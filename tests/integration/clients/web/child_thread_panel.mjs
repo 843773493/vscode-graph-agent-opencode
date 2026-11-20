@@ -5,6 +5,7 @@ import process from "node:process";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { parseTaggedContextSources } from "../../../support/context_sources.mjs";
 import { openSessionThreads } from "../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
@@ -429,8 +430,8 @@ try {
   }
   const childMessages = childLogs[0].upstream.attempts[0].request.messages;
   assert.deepEqual(childMessages.map(message => message.role), ["system", "user"]);
-  const childSources = JSON.parse(childMessages[1].content);
-  assert.equal(childSources.protocol, "boxteam-context-sources:v2");
+  const childSources = parseTaggedContextSources(childMessages[1].content);
+  assert.equal(childSources.protocol, "boxteam-context-sources:v3");
   const seeds = childSources.sources.filter(source => source.source_kind === "thread_task_seed");
   assert.equal(seeds.length, 1, "子线程模型请求必须包含唯一冻结任务来源");
   assert.equal(seeds[0].root_placement, "tail_only");

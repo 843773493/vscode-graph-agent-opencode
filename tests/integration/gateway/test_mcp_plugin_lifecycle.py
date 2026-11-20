@@ -20,6 +20,7 @@ import psutil
 import pytest
 
 from app.gateway.runtime.process_logs import ProcessLogStore
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -310,9 +311,9 @@ async def _agent_call(case: McpPluginCase, *, phase: str, load_skill: bool = Fal
             if message.get("role") == "tool" and message.get("tool_call_id") == f"mcp-plugin-{phase}-skill")
         result = json.loads(loaded["content"])
         assert result["status"] == "loaded" and result["name"] == SKILL_NAME and result["error"] is None
-        sources = [json.loads(message["content"]) for message in records[1]["request"]["messages"]
+        sources = [parse_root_section(message["content"], tag="context_sources") for message in records[1]["request"]["messages"]
             if message.get("role") == "user" and isinstance(message.get("content"), str)
-            and message["content"].startswith('{"protocol":"boxteam-context-sources:v2"')]
+            and message["content"].startswith('<context_sources ')]
         assert any(source["name"] == SKILL_NAME and source["body"].strip() == "Frozen probe instructions."
             for envelope in sources for source in envelope["sources"])
     messages = records[-1]["request"]["messages"]

@@ -124,6 +124,8 @@ def _activation_guidance_batch(
         if not parents and previous_revision is None:
             continue
         content = read_content(read_payload(activation, parents[0])) if parents else ""
+        if previous_revision is None and not content:
+            continue
         revision = parents[0].revision if parents else sha256_jcs({"content": ""})
         sources.append(ContextSourceSnapshot(
             descriptor=ContextSourceDescriptor(source_id=source_id, source_kind=source_kind, name=name,

@@ -14,6 +14,7 @@ class PromptTrustLevel(StrEnum):
     control = "control"
     workspace_instruction = "workspace_instruction"
     untrusted_data = "untrusted_data"
+    source_defined = "source_defined"
 
 
 class PromptContentCodec(StrEnum):
@@ -24,7 +25,7 @@ class PromptContentCodec(StrEnum):
 
 class PromptPlacement(StrEnum):
     internal_human = "internal_human"
-    system_prompt = "system_prompt"
+    standalone = "standalone"
 
 
 class InternalDisplayPolicy(StrEnum):
@@ -109,7 +110,7 @@ class StructuredPromptRegistry:
                             f"内部消息标签 {tag.name} 必须直属 system_reminder"
                         )
                 elif tag.allowed_parent is not None:
-                    raise ValueError(f"system prompt 标签 {tag.name} 必须注册为根标签")
+                    raise ValueError(f"独立提示标签 {tag.name} 必须注册为根标签")
             reserved_attributes = {"encoding", "trust"} & tag.allowed_attributes
             if reserved_attributes:
                 raise ValueError(
@@ -163,6 +164,13 @@ class StructuredPromptRegistry:
 
 
 TAG_SPECS = (
+    PromptTagSpec(
+        "context_sources",
+        PromptTrustLevel.source_defined,
+        PromptContentCodec.json,
+        PromptPlacement.standalone,
+        None,
+    ),
     PromptTagSpec(
         "system_reminder",
         PromptTrustLevel.control,

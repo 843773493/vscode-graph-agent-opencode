@@ -282,7 +282,9 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 系统 SHALL 提供集中且版本化的CSM模型使用提示，说明这些消息来自应用上下文管理器、与真实用户任务的区别、来源与版本的对应关系，以及unified diff上下文行、删除行和新增行的含义。提示 MUST说明新版替代同来源旧版、删除行对应的旧规则不再生效、完整替换的适用范围，以及untrack只停止未来更新而不撤销正文。跨来源显式切换 MUST说明旧、新来源的替代关系，不能把它解释为对其它来源的普遍撤销。包装、提示和wire role MUST NOT提升来源的信任资格或改变既有指令优先级。该提示自身 MUST经过已登记instruction来源和同一seal链路，不得由Provider adapter临时拼入。
 
-新来源协议 SHALL使用显式`boxteam-context-sources:v2`及frame标记`source_protocol=2`，以`replaces`列出被替代的`source_identity`与`revision`。同来源更新 MUST列出精确基准；跨来源替代仅允许显式切换同名Skill。软件 MUST按有序封存内容核对可见目标的名称与类型，不能替代canonical用户或工具事实。历史v1来源块 MUST按原协议解析、重编码和重放，不能补写替代字段或改变原sealed bytes；新旧帧可在同一继承前缀中共存。
+新来源协议 SHALL使用显式`boxteam-context-sources:v3`及frame标记`source_protocol=3`，由已有结构化提示注册表、Factory和校验入口统一生成与检查`<context_sources encoding="json" trust="source_defined">…</context_sources>`，不得另建一套标签拼装规则。标签内的JSON以`replaces`列出被替代的`source_identity`与`revision`；`source_defined`沿用各来源的原有信任资格，不将正文提升为控制指令。同来源更新 MUST列出精确基准；跨来源替代仅允许显式切换同名Skill。软件 MUST按有序封存内容核对可见目标的名称与类型，不能替代canonical用户或工具事实。历史v1/v2来源块 MUST按原协议解析、重编码和重放，不能补写字段、标签或改变原sealed bytes；新旧帧可在同一继承前缀中共存。本项不改变数据库schema。
+
+从未发布过且正文为空的来源 SHALL不产生模型可见激活消息；已发布来源后来清空时 MUST保留相应更新或撤销，不能因空正文丢掉已生效规则的删除。来源标签是背景上下文边界，集中提示 MUST说明模型应继续处理真实用户任务，无需确认收到或复述元数据。普通用户正文出现同名标签 MUST NOT据此被识别为内部来源；内部来源校验由typed frame身份触发。
 
 #### Scenario: 首次正文与后续差分使用同一表达规则
 
@@ -306,8 +308,13 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 #### Scenario: 旧来源协议续写与fork保持原形
 
-- **WHEN** 历史前缀含v1来源块，当前版本继续执行并产生v2来源块，再fork与冷恢复
-- **THEN** 原v1块、request hash与历史owner保持不变，新增块使用v2，恢复不依赖当前文件或把旧块重编码成v2
+- **WHEN** 历史前缀含v1/v2来源块，当前版本继续执行并产生v3来源块，再fork与冷恢复
+- **THEN** 原历史块、request hash与历史owner保持不变，新增块使用注册的v3标签，恢复不依赖当前文件或把旧块重编码成v3
+
+#### Scenario: 首次空来源与已加载后的清空
+
+- **WHEN** 来源初次观察为空，之后发布有效指令，再清空
+- **THEN** 首次空观察不产生模型可见通知；有效指令正常激活；后续清空携带已发布基准和删除内容，撤销原指令
 
 ### Requirement: CSM 来源消息默认聚合但保留逐来源投影配置
 

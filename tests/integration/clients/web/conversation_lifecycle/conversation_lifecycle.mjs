@@ -15,6 +15,7 @@ import { readDiagnosticResponseBody, runDiagnosticResponseLifetimeSelfTest } fro
 import { WORKBENCH_LIFECYCLE_MARKER, classifyNativeShutdownLogs, observeNativeShutdown, originalConsoleLocation,
   runNativeShutdownClassifierSelfTest } from "./native_shutdown.mjs";
 import { canonicalizeJcsJson, digestJcsJson } from "../../../../fixtures/itemized/verify_hash_vectors.mjs";
+import { isTaggedContextSources, parseTaggedContextSources } from "../../../../support/context_sources.mjs";
 import { openSessionThreads } from "../../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
@@ -2036,29 +2037,21 @@ async function runBasicChat(surface) {
   assert.equal(contexts.length, 4);
   assert.deepEqual(contexts[0].sources.map(source => [source.source_kind, source.source_identity, source.name,
     source.root_placement, source.source_tracking_at_seal]), [
-    ["workspace_agents", "agents:workspace", "AGENTS.md", "root_eligible", "tracked"],
     ["mcp_tool_catalog", "mcp-tool-guidance:v1", "MCP 工具指引", "tail_only", "untracked"],
-    ["team_state", "team-source:membership:v1", "团队membership", "tail_only", "untracked"],
-    ["team_state", "team-source:tasks:v1", "团队tasks", "tail_only", "untracked"],
   ]);
   for (const context of contexts) {
-    assert.equal(context.protocol, "boxteam-context-sources:v2");
+    assert.equal(context.protocol, "boxteam-context-sources:v3");
     assert.deepEqual(context, contexts[0], "工具循环与续轮必须保留完整冻结上下文来源");
-    // 本工作区没有 AGENTS 文件或团队；空来源仍须携带准确身份与正文版本。
-    for (const index of [0, 2, 3]) {
-      assert.equal(context.sources[index].body, "");
-      assert.equal(context.sources[index].revision, `sha256:jcs:v1:${identityPreimageHash({ content: "" })}`);
-    }
-    assert.ok(context.sources[1].body.length > 0, "实际 MCP 导航指引不得丢失");
-    assert.deepEqual(JSON.parse(context.sources[1].body).navigation.map(group => group.group),
+    // 初次为空的 AGENTS 与 team 来源不进入 Provider 输入。
+    const [mcpGuidance] = context.sources;
+    assert.ok(mcpGuidance.body.length > 0, "实际 MCP 导航指引不得丢失");
+    assert.deepEqual(JSON.parse(mcpGuidance.body).navigation.map(group => group.group),
       ["agent-collaboration", "debugging", "extension:browser", "extension:resource_search", "extension:testing", "extension:web"]);
-    for (const source of context.sources) {
-      assert.equal(source.operation, "activate");
-      assert.equal(source.representation, "full");
-      assert.equal(source.base_revision, null);
-      assert.deepEqual(source.replaces, []);
-      assert.match(source.revision, /^sha256:jcs:v1:[a-f0-9]{64}$/);
-    }
+    assert.equal(mcpGuidance.operation, "activate");
+    assert.equal(mcpGuidance.representation, "full");
+    assert.equal(mcpGuidance.base_revision, null);
+    assert.deepEqual(mcpGuidance.replaces, []);
+    assert.match(mcpGuidance.revision, /^sha256:jcs:v1:[a-f0-9]{64}$/);
   }
   assert.deepEqual(result.persisted.upstreamUserInputs,
     [[firstPrompt], [firstPrompt], [firstPrompt, secondPrompt], [firstPrompt, secondPrompt]],
@@ -2126,7 +2119,7 @@ async function loadPersistedEvidence(owner) {
     llmRequestCount: logItems.length,
     upstreamMessageRoles: upstreamAttempts.map((attempt) =>
       (attempt.request?.messages ?? []).map((message) => message.role)),
-    upstreamContexts: upstreamAttempts.map(attempt => JSON.parse(attempt.request.messages[2].content)),
+    upstreamContexts: upstreamAttempts.map(attempt => parseTaggedContextSources(attempt.request.messages[2].content)),
     upstreamUserInputs: upstreamAttempts.map(attempt => attempt.request.messages
       .filter((message, index) => message.role === "user" && index !== 2).map(message => message.content)),
     agentStateJsonl: agentState?.data?.jsonl ?? "",
@@ -9858,8 +9851,8 @@ async function runInitialAdmissionRecovery(surfaces) {
   const childRequest = await modelRequest(childCalls[0]);
   const childInputs = childRequest.request.messages.filter(message => message.role === "user");
   assert.equal(childInputs.length, 1, "恢复后的首个 Provider 请求必须只包含一份上下文来源消息");
-  const childSources = JSON.parse(childInputs[0].content);
-  assert.equal(childSources.protocol, "boxteam-context-sources:v2");
+  const childSources = parseTaggedContextSources(childInputs[0].content);
+  assert.equal(childSources.protocol, "boxteam-context-sources:v3");
   const seedSources = childSources.sources.filter(source => source.source_kind === "thread_task_seed");
   assert.equal(seedSources.length, 1, "恢复后的真实 Provider request 必须包含唯一冻结 seed 来源");
   assert.deepEqual(seedSources[0], {
@@ -10902,9 +10895,12 @@ async function runMcpActivation(surface, boundary) {
     }
     const recoveredRequest = await modelRequest(recovered.calls[0]);
     const recoveredSources = recoveredRequest.request.messages
-      .filter(message => message.role === "user" && typeof message.content === "string"
-        && message.content.startsWith('{"protocol":"boxteam-context-sources:v2"'))
-      .flatMap(message => JSON.parse(message.content).sources)
+      .filter(message => message.role === "user" && isTaggedContextSources(message.content))
+      .flatMap(message => {
+        const context = parseTaggedContextSources(message.content);
+        assert.equal(context.protocol, "boxteam-context-sources:v3");
+        return context.sources;
+      })
       .filter(source => source.source_identity === "mcp-tool-guidance:v1" && source.revision === recoveredBinding.revision);
     assert.equal(recoveredSources.length, 1, "原 Provider 请求必须包含本次完整发布的唯一冻结指引");
     const recoveredSource = recoveredSources[0];

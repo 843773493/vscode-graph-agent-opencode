@@ -48,6 +48,8 @@ from app.domain.itemized.mutation_intents import (
     RebuildContextEpochIntent,
 )
 from app.domain.itemized.plans.contributions import SourceBinding
+from app.prompting import PromptSection, internal_message_factory
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
@@ -496,10 +498,11 @@ def test_rewind_reconciles_only_from_frozen_control_state(
     assert case.active_view() == target_view
     assert rebuilt["messages"][0] == SystemMessage(
         content=snapshot.seal_binding.root.content, id="root:" + snapshot.seal_binding.prefix.state.epoch.token,
+        response_metadata={"context_source_protocol": 3},
     )
-    assert json.loads(rebuilt["messages"][0].content)["sources"][0]["body"] == "基础规则第二版"
+    assert parse_root_section(rebuilt["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第二版"
     assert isinstance(rebuilt["messages"][-1], HumanMessage)
-    assert json.loads(rebuilt["messages"][-1].content)["sources"][0]["body"] == "v2\n"
+    assert parse_root_section(rebuilt["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "v2\n"
     assert len([message for message in rebuilt["messages"] if isinstance(message, SystemMessage)]) == 1
     assert all(row[2] == row[3] and row[2].endswith(":2") for row in case.source_rows())
     assert case.publisher.reads == [RULES_URI, SKILL_URI]
@@ -973,7 +976,7 @@ def test_snapshot_activation_after_cutoff_is_not_restored_or_refrozen(epoch_case
     case = epoch_case
     binding = case.load_snapshot()
     visible = case.prepare("snapshot-after-cutoff")
-    assert json.loads(visible["messages"][-1].content)["sources"][0]["body"] == binding.body
+    assert parse_root_section(visible["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == binding.body
     old_bytes = canonical_json_bytes(case.snapshot(visible).to_dict())
     case.rewind("checkpoint-first")
     rebuilt = case.prepare("without-post-cutoff-snapshot")
@@ -990,7 +993,7 @@ def test_same_checkpoint_earlier_user_anchor_removes_snapshot_after_restart(epoc
     binding = case.load_snapshot()
     visible = case.prepare("snapshot-before-same-checkpoint-cut")
     original = case.snapshot(visible)
-    assert json.loads(visible["messages"][-1].content)["sources"][0]["body"] == binding.body
+    assert parse_root_section(visible["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == binding.body
     (original_ref, original_block), = (
         (ref, block) for frame in original.seal_binding.prefix.state.frames if frame.role == "user" and frame.source_protocol is not None
         for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
@@ -1082,7 +1085,7 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
     promoted_snapshot = case.snapshot(promoted)
     assert promoted_snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.TOOLSET_CHANGED
     assert promoted_snapshot.seal_binding.prefix.state.epoch.ordinal == activated.seal_binding.prefix.state.epoch.ordinal + 1
-    assert [block["body"] for block in json.loads(promoted["messages"][0].content)["sources"]
+    assert [block["body"] for block in parse_root_section(promoted["messages"][0].content, tag="context_sources")["sources"]
             if block["source_identity"] == "skill:one-shot"] == [binding.body]
     assert all(ref.source_identity != "skill:one-shot"
                for frame in promoted_snapshot.seal_binding.prefix.state.frames if frame.role == "user"
@@ -1130,7 +1133,7 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
     assert ("skill:one-shot" in sources) == (cut == "complete")
     if cut == "complete":
         assert sources["skill:one-shot"] == binding.activation_revision
-        assert [block["body"] for block in json.loads(rebuilt["messages"][0].content)["sources"]
+        assert [block["body"] for block in parse_root_section(rebuilt["messages"][0].content, tag="context_sources")["sources"]
                 if block["source_identity"] == "skill:one-shot"] == [binding.body]
     else:
         assert all(binding.body not in message.content for message in rebuilt["messages"])
@@ -1253,9 +1256,9 @@ def test_earlier_anchor_retains_only_first_untracked_revision_and_visible_contro
         for frame in snapshot.seal_binding.prefix.state.frames for ref in frame.item_refs
         if ref.source_identity == "skill:debugging"
     )
-    expected = json.loads(first_frame.content)
+    expected = parse_root_section(first_frame.content, tag="context_sources")
     expected["sources"][0]["source_tracking_at_seal"] = "untracked"
-    assert retained == ((first_ref.ref_id, "skill:1", canonical_json_bytes(expected).decode()),)
+    assert retained == ((first_ref.ref_id, "skill:1", internal_message_factory.render_root_section(PromptSection("context_sources", expected))),)
     assert all(ref.ref_id != second_ref.ref_id for frame in snapshot.seal_binding.prefix.state.frames for ref in frame.item_refs)
     assert {source.source_id: source.revision for source in snapshot.seal_binding.source_revisions} == {
         "workspace:rules": "rules:2",
@@ -1288,7 +1291,7 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     case.rewind("checkpoint-tracked")
     assert {row[0]: row[1] for row in case.source_rows()}["skill:debugging"] == "tracked"
     restored = case.prepare("tracked-again")
-    assert json.loads(restored["messages"][-1].content)["sources"][0]["body"] == "v2\n"
+    assert parse_root_section(restored["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "v2\n"
     case.rewind("checkpoint-untracked")
     assert {row[0]: row[1] for row in case.source_rows()}["skill:debugging"] == "untracked"
     case.publisher.reads.clear()
@@ -1327,8 +1330,8 @@ def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources
     assert snapshot.seal_binding.prefix.state.epoch.reason == EpochReason.COMPACTION
     assert snapshot.seal_binding.prefix.state.epoch.ordinal == 2
     assert snapshot.seal_binding.prefix.consumed_transition.transition_id == pending[0]
-    assert json.loads(rebuilt["messages"][0].content)["sources"][0]["body"] == "基础规则第二版"
-    assert json.loads(rebuilt["messages"][-1].content)["sources"][0]["body"] == "v2\n"
+    assert parse_root_section(rebuilt["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第二版"
+    assert parse_root_section(rebuilt["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "v2\n"
     assert case.pending_rows()[0][3] == "consumed"
     assert canonical_json_bytes(case.snapshot(second).to_dict()) == old_snapshot
 
@@ -1509,7 +1512,7 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     assert rebuilt.seal_binding.prefix.state.epoch.ordinal == original.seal_binding.prefix.state.epoch.ordinal + 1
     assert rebuilt.seal_binding.prefix.consumed_transition.transition_id == pending[0]
     assert rebuilt.seal_binding.prefix.consumed_transition.consumed
-    assert json.loads(rebuilt.seal_binding.root.content)["sources"][0]["body"] == "重放时已发布的基础规则"
+    assert parse_root_section(rebuilt.seal_binding.root.content, tag="context_sources")["sources"][0]["body"] == "重放时已发布的基础规则"
     selected = {entry.ref.ref_id for entry in rebuilt.selection
                 if entry.included and entry.ref.ref_type == "canonical_item"}
     assert replay["root_input_item_id"] in selected and source_root not in selected

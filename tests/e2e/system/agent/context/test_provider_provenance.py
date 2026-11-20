@@ -607,7 +607,7 @@ def _audit_agents_versions(
                         if source.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
         assert root_source.revision == revisions[0]
         assert root_source.content_hash == contribution_content_hash("root_source", _AGENTS_VERSIONS[0])
-        assert binding.root.source_protocol == 2
+        assert binding.root.source_protocol == 3
         root_block, = [block for block in parse_source_blocks(
             binding.root.content, expected_version=binding.root.source_protocol,
         ) if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
@@ -628,7 +628,7 @@ def _audit_agents_versions(
             (revisions[index + 1], "user", deltas[index]) for index in range(ordinal - 1)
         ]
         for index, (frame, ref, block) in enumerate(members):
-            assert frame.source_protocol == 2
+            assert frame.source_protocol == 3
             assert (block.revision, block.base_revision, block.operation, block.representation,
                     block.replaces) == (
                 revisions[index + 1], revisions[index], "update", "unified_diff",

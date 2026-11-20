@@ -39,7 +39,9 @@ def _validate_runtime_workspace_scope(content: object) -> None:
     if not isinstance(content, str):
         return
     # 最终 wire 已有显式协议标识；仅展开这一层软件包头，不递归解释 body。
-    if any(content.startswith('{"protocol":"' + protocol + '","sources":') for protocol in SOURCE_PROTOCOLS.values()):
+    if content.startswith("<context_sources") or any(
+        content.startswith('{"protocol":"' + protocol + '","sources":') for protocol in SOURCE_PROTOCOLS.values()
+    ):
         for source in parse_source_blocks(content):
             _validate_scope_text(source.body)
         return

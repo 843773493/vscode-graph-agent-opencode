@@ -13,6 +13,7 @@ from pathlib import Path
 import commentjson
 import pytest
 
+from app.prompting.validation import parse_root_section
 from app.schemas.internal_v2.turn_search import ThreadItemInspectionRequest
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -92,10 +93,10 @@ async def test_interrupt_continue_and_reopen_context_markers(
     capture = json.loads((replay.artifacts / f"{first_call}.json").read_text())
     injected = {}
     for message in capture["request"]["messages"]:
-        if not isinstance(message.get("content"), str) or not message["content"].startswith('{"protocol":'):
+        if not isinstance(message.get("content"), str) or not message["content"].startswith('<context_sources '):
             continue
-        packet = json.loads(message["content"])
-        assert packet["protocol"] == "boxteam-context-sources:v2"
+        packet = parse_root_section(message["content"], tag="context_sources")
+        assert packet["protocol"] == "boxteam-context-sources:v3"
         injected.update({source["source_identity"]: (message["role"], source["body"]) for source in packet["sources"]})
     assert injected["instruction:agent-instructions"] == ("system", "CONTEXT_MARKER_SYSTEM：完整保留系统来源。")
     assert injected["mcp-tool-guidance:v1"][0] == "user"

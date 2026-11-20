@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from app.core.workspace_identity import read_workspace_id
+from app.prompting.validation import parse_root_section
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -364,9 +365,9 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 assistant, tool_result,
                 {"role": "assistant", "content": [{"text": "浏览器 SSE 工具调用已完成。", "type": "text"}]},
             ]
-            context_frames = [json.loads(message["content"]) for message in messages
+            context_frames = [parse_root_section(message["content"], tag="context_sources") for message in messages
                 if message["role"] == "user" and isinstance(message["content"], str)
-                and message["content"].startswith('{"protocol":"boxteam-context-sources:v2"')]
+                and message["content"].startswith('<context_sources ')]
             assert len(context_frames) == 1
             assert context_frames[0]["sources"]
         file = result["file"]

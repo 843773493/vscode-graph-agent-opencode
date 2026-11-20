@@ -248,6 +248,8 @@ class SourceLifecycleMixin:
                     raise RuntimeError("tracked-source-unavailable: 已发布快照缺少 tracked source: " + state.source_id)
                 if not isinstance(frozen, PublishedContextSourceRevision) or frozen.source_id != state.source_id:
                     raise RuntimeError("context-source-rebuild-conflict: published snapshot source identity 不一致")
+                if state.latest_visible_committed_revision is None and not frozen.content:
+                    continue
                 sources.append(ContextSourceSnapshot(
                     descriptor=descriptor, revision=frozen.revision, content=frozen.content,
                     applied_revision=state.latest_visible_committed_revision, tracked=True,
@@ -290,6 +292,8 @@ class SourceLifecycleMixin:
                     # 重建只能携带已经封存的正文，不能重新激活被显式替换的更新。
                     revision, content = state.latest_visible_committed_revision, state.latest_visible_committed_content
                 if revision is None or content is None:
+                    continue
+                if state.latest_visible_committed_revision is None and not content:
                     continue
                 if state.descriptor is None:
                     raise RuntimeError(
