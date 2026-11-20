@@ -51,6 +51,7 @@ def v10_catalog(store, capture, captured_point, external_catalog_connection, req
         store.mark_fork_source_captured(capture, snapshot_sha256="1" * 64, marker_sha256="2" * 64, source_point=captured_point)
     if state in {"materialized", "aborted"}:
         store.finish_fork_source_capture(capture.copy_operation_id, state=state)
+    capture = store.get_fork_source_capture(copy_operation_id=capture.copy_operation_id)
     path = store.database_path
     store.close()
     # 旧结构只在迁移测试装具中重建；执行/fork 的关键状态由产品验收另行生成。
