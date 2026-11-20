@@ -1,6 +1,6 @@
 # 目录用途
 
-工作区附件目录的唯一存储链路。`catalog.py` 只读写 schema 5；`ingest.py` 编排独立上传目录的事务发布；`store.py` 和 `working_copies.py` 负责原件、预览、文件与 Shell 准入、初始基线、释放及按需重建；`recovery.py` 按原消息接受事实结算 pin、对账运行时代次及释放关联。`fork_store.py`、`fork_claims.py` 和 `fork_import.py` 共同完成目录冻结、精确 alias、保活与目标发布。`directory_schema.py` 原子转换已知 schema 4，`migration/` 只提供显式 schema 3 离线迁移。
+工作区附件目录的唯一存储链路。`catalog.py` 只读写 schema 5；`ingest.py` 编排独立上传目录的事务发布；`store.py` 和 `working_copies.py` 负责原件、预览、文件与 Shell 准入、初始基线、释放及按需重建；`recovery.py` 按原消息接受事实结算 pin、对账运行时代次及释放关联。`fork_store.py`、`fork_claims.py` 和 `fork_import.py` 共同完成目录冻结、精确 alias、保活与目标发布。`directory_schema.py` 定义和核验现行结构，已知 schema 4 的原子转换归 `migrations/v4_sqlite_to_v5_sqlite.py`，`migration/` 保留显式 schema 3 的跨资源离线维护流程。
 
 # 可修改内容
 

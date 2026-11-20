@@ -20,7 +20,6 @@ from app.services.infrastructure.attachment_blob_catalog.directory_schema import
     DIRECTORY_SCHEMA_VERSION,
     initialize_directory_schema,
     require_directory_schema,
-    upgrade_directory_schema_4,
 )
 from app.services.infrastructure.attachment_blob_catalog.fork_claims import (
     ForkAttachmentClaimsMixin,
@@ -31,6 +30,9 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
 )
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
+)
+from app.services.infrastructure.attachment_blob_catalog.migrations.v4_sqlite_to_v5_sqlite import (
+    upgrade_directory_schema_4,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     AttachmentDirectoryRecord,

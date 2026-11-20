@@ -172,7 +172,20 @@ from pathlib import Path
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
     initialize_directory_schema, require_directory_schema,
 )
+from app.services.infrastructure.attachment_blob_catalog.migrations.v4_sqlite_to_v5_sqlite import (
+    upgrade_directory_schema_4,
+)
+from app.services.infrastructure.attachment_blob_catalog.schema import (
+    _REQUIRED_TABLES, _SCHEMA_STATEMENTS,
+)
 assert Path(__import__("app").__file__).is_relative_to(Path.cwd())
+assert upgrade_directory_schema_4.__module__.endswith("migrations.v4_sqlite_to_v5_sqlite")
+with sqlite3.connect(":memory:") as connection:
+    for statement in _SCHEMA_STATEMENTS:
+        connection.execute(statement)
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert set(_REQUIRED_TABLES) <= tables
+    assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 with sqlite3.connect(":memory:") as connection:
     initialize_directory_schema(connection)
     require_directory_schema(connection)
