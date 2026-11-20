@@ -41,6 +41,35 @@ configs/
 - 只有实际数据库结构变化才提升 schema 版本。抽离 SQL、搬文件或向现有结构导入数据，不单独构成提升理由。配置的不兼容结构或语义变化沿本域版本规则登记。
 - 已发布迁移原则上冻结；清理历史步骤前核对支持基线、初始化和升级依赖。两个发布基线不意味着版本只能相邻，不能截断必要链路。
 
+### 旧文件格式迁入现有存储
+
+JSONL、JSON 等旧业务文件转换为当前存储时，转换代码放在原数据 owner 内；不能因为使用 Python 就放进 `configs/migrations/`，也不能把非 SQL 的格式导入混进只负责 SQL 结构升级的目录。沿用原建库、事务和发布原语，不为一种旧格式建立通用导入框架。
+
+以 Session Trace JSONL 迁入现有 SQLite 为例，采用下面的落点方案；这是待支持来源确认后的实现示例，不表示当前已支持 JSONL 导入：
+
+```text
+app/services/infrastructure/session_trace/
+├── import_<source>_to_sqlite.py    旧格式识别、正文转换及导入校验
+├── trace_database.py              原 SQLite owner：建库、事务和索引
+├── trace_stream.py                原历史读取与恢复消费者
+├── store.py                       正常运行仍只访问 SQLite
+└── migrations/                   既有 SQL；仅结构变化才新增有序步骤
+
+configs/maintenance/
+└── startup.py                    仅接入原停写、备份、发布及恢复协调
+
+tests/
+├── unit/services/infrastructure/session_trace/
+│   └── test_import_<source>_to_sqlite.py
+└── integration/gateway/
+    └── test_workspace_identity_migration_restart.py
+                                  复用完整旧历史升级与重启验收
+```
+
+- `<source>` 是命名占位，须替换为已核实的来源格式及版本标识。无内置版本号时，明确登记固定旧源码及格式特征，再选可追溯的来源标识；不虚构 `v1`，不以文件存在或字段近似作为支持依据。少量转换直接在 owner 内落为模块，不预造层级；已有按域和版本组织的转换目录时优先复用。
+- 目标数据仍是 catalog 定位的原会话节点 `logs/traces/trace.sqlite`；备份沿既有 owner 机制，不新增另一套会话树或历史正文库。普通恢复消费者只读取迁移后的权威存储。
+- 当前 Trace owner 明确禁止开发中间 JSONL 自动导入。若用户确认支持某个额外来源，须同步修订对应 OpenSpec 和 owner 约束，再接入该来源；编写本方案不代表撤销原有延期裁定。
+
 ## 唯一升级与恢复链路
 
 - 识别支持来源后，沿既有生命周期只读预检、停止原 writer、取得原 owner 锁、备份、迁移及校验，成功才恢复服务。预检能确定的未知来源和取舍冲突应在停旧及首次写入前暴露。
