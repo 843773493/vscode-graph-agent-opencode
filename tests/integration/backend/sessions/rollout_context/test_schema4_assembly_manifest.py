@@ -78,6 +78,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     bind_captured_namespace,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    ASSEMBLY_CONTENT_SCHEMA_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
@@ -86,9 +87,6 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
-)
-from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
-    ASSEMBLY_CONTENT_SCHEMA_SQL,
 )
 from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
     ASSEMBLY_REF_SCHEMA_SQL,

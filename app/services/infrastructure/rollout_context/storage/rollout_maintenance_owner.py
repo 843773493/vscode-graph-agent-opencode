@@ -14,17 +14,23 @@ from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import load_sql
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
-from app.services.infrastructure.rollout_context.checkpoint.durable.source_activation import (
-    migrate_team_source_observations,
-)
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
-    migrate_members,
-)
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
+)
+from app.services.infrastructure.rollout_context.storage.migrations.v19_sqlite_to_v20_sqlite import (
+    validate_legacy_channel_values,
+)
+from app.services.infrastructure.rollout_context.storage.migrations.v21_sqlite_to_v22_sqlite import (
+    migrate_assembly_content,
+)
+from app.services.infrastructure.rollout_context.storage.migrations.v22_sqlite_to_v23_sqlite import (
+    migrate_members,
+)
+from app.services.infrastructure.rollout_context.storage.migrations.v27_sqlite_to_v28_sqlite import (
+    migrate_team_source_observations,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutManifest,
@@ -41,6 +47,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
     RolloutSchemaIntrospectionMixin,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    ASSEMBLY_CONTENT_SCHEMA_SQL,
     COMMIT_IDEMPOTENCY_INDEX_SQL,
     CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL,
     CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL,
@@ -58,13 +65,8 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     VIEW_MEMBERSHIP_MIGRATION_SQL,
     initialize_rollout_schema,
 )
-from app.services.infrastructure.rollout_context.storage.schema_assembly_content import (
-    ASSEMBLY_CONTENT_SCHEMA_SQL,
-    migrate_assembly_content,
-)
 from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
     CHANNEL_VALUES_MIGRATION_SQL,
-    validate_legacy_channel_values,
 )
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     execute_atomic_schema_sql,

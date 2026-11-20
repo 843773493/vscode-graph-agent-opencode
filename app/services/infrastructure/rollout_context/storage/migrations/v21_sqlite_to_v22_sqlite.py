@@ -14,9 +14,6 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     persisted_runtime_seal_hash,
 )
-from app.services.infrastructure.rollout_context.storage.schema import (
-    ASSEMBLY_CONTENT_SCHEMA_SQL,
-)
 
 
 def migrate_assembly_content(connection: sqlite3.Connection) -> None:
@@ -36,5 +33,3 @@ def migrate_assembly_content(connection: sqlite3.Connection) -> None:
         if rebuilt != raw:
             raise ValueError(f"source-mismatch: assembly migration 历史JCS改变: {assembly_id}")
         connection.execute("UPDATE context_assemblies SET snapshot_json=? WHERE assembly_id=?", (encoded, assembly_id))
-
-__all__ = ["ASSEMBLY_CONTENT_SCHEMA_SQL", "migrate_assembly_content"]

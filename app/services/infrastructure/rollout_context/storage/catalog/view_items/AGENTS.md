@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 成员块发布、克隆、追加、过滤及显式旧结构升级。
+- 成员块发布、克隆、追加、过滤；旧结构转换归 `storage/migrations/v22_sqlite_to_v23_sqlite.py`，复用此处原语。
 
 # 不可修改内容
 
@@ -13,4 +13,4 @@
 # 规范
 
 - 修改引用必须处于原 SQLite 事务；块不可改写，同 hash 异内容明确失败。
-- 历史 view 的引用独立冻结，不依赖可变父 view；SQL 结构只在 storage/sql 中定义。
+- 历史 view 的引用独立冻结，不依赖可变父 view；SQL 结构只在 `storage/migrations/` 中定义。
