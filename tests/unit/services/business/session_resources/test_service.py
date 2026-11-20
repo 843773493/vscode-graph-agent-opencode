@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import portalocker
 import pytest
@@ -32,6 +34,7 @@ from app.services.mapping.session_resource_mapper import (
     browser_to_session_resource,
     terminal_to_session_resource,
 )
+from app.services.orchestration.session_stop import SessionStopService
 from tests.support.background_work import build_background_registry, spawn_waiting_task
 from tests.support.message_service import build_message_service
 from tests.support.resource_owners.browser import build_browser_owner_fixture
@@ -95,7 +98,7 @@ class FakeTerminalResourceOwner:
         self.killed_terminal_ids.append(resource_id)
         return {**await self.get_resource(resource_id), "status": "terminated"}
 
-    async def cleanup_session(self, session_id: str) -> int:
+    async def cleanup_session(self, session_id: str, *, action, thread_id=None) -> int:
         self.cleaned_session_ids.append(session_id)
         self.deleted_terminal_ids.extend(str(record["terminal_id"]) for record in self.terminals)
         return len(self.terminals)
@@ -124,7 +127,7 @@ class FakeBrowserResourceOwner:
         return {"browser": {**await self.get_resource(resource_id), "status": "running",
                 "resource_state": "active", "title": "Restored page", "url": "https://example.com/restored"}}
 
-    async def cleanup_session(self, session_id: str) -> int:
+    async def cleanup_session(self, session_id: str, *, action, thread_id=None) -> int:
         resources = await self.list_resources(session_id=session_id)
         self.deleted_browser_ids.extend(browser["browser_id"] for browser in resources)
         return len(resources)
@@ -144,7 +147,7 @@ class FakeJobService:
         self.count = count
         self.deleted_session_id: str | None = None
 
-    async def delete_session_jobs(self, session_id: str) -> int:
+    async def stop_session_jobs(self, session_id: str) -> int:
         self.deleted_session_id = session_id
         return self.count
 
@@ -208,7 +211,7 @@ async def test_resource_list_holds_read_admission_until_providers_finish(catalog
 
     monkeypatch.setattr(registry, "list_resources", held_list)
     monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
-    resources = SessionResourceService(session_service=sessions, job_service=FakeJobService(0), provider_registry=registry)
+    resources = SessionResourceService(session_service=sessions, provider_registry=registry)
     catalog = SessionCatalogService(session_service=sessions)
     reading = asyncio.create_task(resources.list(session_id))
     deletion = None
@@ -252,7 +255,7 @@ async def test_resource_list_api_rejects_deleting_session_before_provider_reads(
 
     monkeypatch.setattr(registry, "list_resources", observed_list)
     monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
-    resources = SessionResourceService(session_service=sessions, job_service=FakeJobService(0), provider_registry=registry)
+    resources = SessionResourceService(session_service=sessions, provider_registry=registry)
     catalog = SessionCatalogService(session_service=sessions)
     intent = create_catalog_intent(catalog, "delete_session", target_node_id=session.session_id)
     deletion = asyncio.create_task(submit_catalog_intent(catalog, intent))
@@ -595,7 +598,6 @@ async def test_browser_provider_excludes_deleted_records(
     )
     service = SessionResourceService(
         session_service=FakeSessionService(),
-        job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=empty_background_task_registry,
             terminal_owner=FakeTerminalResourceOwner(),
@@ -622,7 +624,6 @@ async def test_list_includes_closed_background_task_history(
     await registry.cancel(session_id, handle.task_id)
     service = SessionResourceService(
         session_service=FakeSessionService(),
-        job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_owner=FakeTerminalResourceOwner(),
@@ -652,7 +653,6 @@ async def test_list_excludes_deleted_background_task_history(
     await registry.delete(session_id, handle.task_id)
     service = SessionResourceService(
         session_service=FakeSessionService(),
-        job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_owner=FakeTerminalResourceOwner(),
@@ -696,17 +696,15 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         ],
     )
     job_service = FakeJobService(count=2)
-    service = SessionResourceService(
-        session_service=FakeSessionService(),
-        job_service=job_service,
-        provider_registry=_provider_registry(
-            task_registry=registry,
-            terminal_owner=terminal_owner,
-            browser_owner=browser_owner,
-        ),
+    service = SessionStopService(
+        sessions=FakeSessionService(), jobs=job_service, interrupt=None,
+        resources=_provider_registry(
+            task_registry=registry, terminal_owner=terminal_owner, browser_owner=browser_owner,
+        ), debug=SimpleNamespace(drain_session=AsyncMock()), policy=None,
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
     )
 
-    assert await service.cleanup_session(session_id) is None
+    assert await service.drain_for_deletion(session_id) is None
     assert job_service.deleted_session_id == session_id
     assert registry.list_handles(session_id) == []
     assert terminal_owner.deleted_terminal_ids == ["term_cleanup"]
@@ -740,7 +738,6 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
     message_service = build_message_service(sessions_dir, checkpointer=saver)
     service = SessionResourceService(
         session_service=FakeSessionService(),
-        job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_owner=FakeTerminalResourceOwner(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from app.domain.session_stop import ResourceStopAction
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -34,4 +35,7 @@ class SessionResourceProviderProtocol(Protocol):
         operation_id: str,
     ) -> SessionResourceControlResultDTO: ...
 
-    async def cleanup_session(self, session_id: str) -> int: ...
+    async def cleanup_session(
+        self, session_id: str, *, action: ResourceStopAction,
+        thread_id: str | None = None,
+    ) -> int: ...

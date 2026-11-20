@@ -129,7 +129,7 @@ class _DeleteJobService:
     def __init__(self) -> None:
         self.deleted_session_ids: list[str] = []
 
-    async def run_sessions_delete_operation(
+    async def run_sessions_control_operation(
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],

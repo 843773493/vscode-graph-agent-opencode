@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.abstractions.job_service import JobServiceProtocol
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -21,11 +20,9 @@ class SessionResourceService:
         self,
         *,
         session_service: SessionService,
-        job_service: JobServiceProtocol,
         provider_registry: SessionResourceProviderRegistry,
     ) -> None:
         self._session_service = session_service
-        self._job_service = job_service
         self._provider_registry = provider_registry
 
     async def list(
@@ -65,8 +62,3 @@ class SessionResourceService:
         async with self._session_service.session_read_admission(session_id):
             await self._session_service.get(session_id)
             return await self._provider_registry.get(kind).get_resource(session_id, resource_id)
-
-    async def cleanup_session(self, session_id: str) -> None:
-        await self._session_service.get(session_id)
-        await self._job_service.delete_session_jobs(session_id)
-        await self._provider_registry.cleanup_session(session_id)

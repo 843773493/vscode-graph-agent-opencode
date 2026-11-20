@@ -29,7 +29,6 @@ from app.services.business.session_context_query.workspace import (
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
-from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
@@ -81,6 +80,7 @@ from app.services.orchestration.communication.service import SessionCommunicatio
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from app.services.orchestration.session_stop import SessionStopService
 from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
@@ -108,7 +108,7 @@ class _AppContainerProtocol(Protocol):
     goal_service: SessionGoalService
     persistent_task_runtime: PersistentTaskRuntime
     persistent_task_service: PersistentTaskService
-    session_interrupt_service: SessionInterruptService
+    session_stop_service: SessionStopService
     session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
@@ -307,8 +307,8 @@ def get_persistent_task_runtime(request: Request) -> PersistentTaskRuntime:
     return _require_service(request, "persistent_task_runtime", PersistentTaskRuntime, "PersistentTaskRuntime 尚未在应用启动阶段初始化")
 
 
-def get_session_interrupt_service(request: Request) -> SessionInterruptService:
-    return _require_service(request, "session_interrupt_service", SessionInterruptService, "SessionInterruptService 尚未在应用启动阶段初始化")
+def get_session_stop_service(request: Request) -> SessionStopService:
+    return _require_service(request, "session_stop_service", SessionStopService, "SessionStopService 尚未在应用启动阶段初始化")
 
 
 def get_session_skill_untrack_service(request: Request) -> SessionSkillUntrackService:

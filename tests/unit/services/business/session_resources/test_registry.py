@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.domain.session_stop import DELETE_SESSION_POLICY
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -66,7 +67,7 @@ class FakeResourceProvider:
             status="cancelled",
         )
 
-    async def cleanup_session(self, session_id: str) -> int:
+    async def cleanup_session(self, session_id: str, *, action, thread_id=None) -> int:
         self.cleanup_calls.append(session_id)
         return 1
 
@@ -94,7 +95,7 @@ async def test_registry_dispatches_registered_providers(
         action="cancel",
         operation_id="request-registry",
     )
-    cleaned = await registry.cleanup_session("ses_registry")
+    cleaned = await registry.cleanup_session("ses_registry", policy=DELETE_SESSION_POLICY)
 
     assert [resource.kind for resource in resources] == ["background_task", "terminal"]
     assert control_result.kind == "terminal"

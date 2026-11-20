@@ -54,7 +54,7 @@ class ResourceOwnerSessionsFake:
         )
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+    async def session_write_admission(self, session_id: str, *, new_operation: bool = False) -> AsyncIterator[None]:
         if session_id in self.closed:
             raise ValueError("Session 准入已关闭")
         if session_id not in self.thread_ids_by_session:

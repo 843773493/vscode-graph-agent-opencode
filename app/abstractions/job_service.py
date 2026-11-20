@@ -64,7 +64,7 @@ class JobServiceProtocol(Protocol):
         require_open_admission: bool = True,
     ) -> T: ...
 
-    async def run_session_delete_operation(
+    async def run_session_control_operation(
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
@@ -72,7 +72,9 @@ class JobServiceProtocol(Protocol):
         deadline: float,
     ) -> T: ...
 
-    async def run_sessions_delete_operation(
+    def assert_session_control_open(self, session_id: str) -> None: ...
+
+    async def run_sessions_control_operation(
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
@@ -88,7 +90,12 @@ class JobServiceProtocol(Protocol):
         control_request: JobControlRequest,
     ) -> JobControlResponseDTO: ...
 
-    async def delete_session_jobs(self, session_id: str) -> int: ...
+    async def stop_session_jobs(
+        self, session_id: str, *, thread_id: str | None = None,
+        delete_records: bool = True, discard_pending: bool = True,
+    ) -> int: ...
+
+    async def settle_jobs(self, job_ids: list[str]) -> None: ...
 
     async def list_pending(
         self, session_id: str, *, thread_id: str | None = None,

@@ -439,7 +439,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
     try:
         await asyncio.wait_for(write_admitted.wait(), timeout=3)
         delete_task = asyncio.create_task(
-            harness.job_service.run_session_delete_operation(
+            harness.job_service.run_session_control_operation(
                 session_id,
                 lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
                 deadline=asyncio.get_running_loop().time() + 30,
@@ -516,7 +516,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
 
     harness.workspace.delete_service.set_session_drain_callback(fail_drain)
     with pytest.raises(RuntimeError, match="injected drain failure"):
-        await harness.job_service.run_session_delete_operation(
+        await harness.job_service.run_session_control_operation(
             session_id,
             lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
             deadline=asyncio.get_running_loop().time() + 30,
@@ -711,9 +711,11 @@ async def test_cross_session_configuration_copy_releases_source_gate_after_snaps
     paused_source_once = False
 
     @asynccontextmanager
-    async def track_session_gate(current_session_id: str) -> AsyncIterator[None]:
+    async def track_session_gate(
+        current_session_id: str, *, new_operation: bool = False,
+    ) -> AsyncIterator[None]:
         nonlocal max_active_sessions, paused_source_once
-        async with original_admission(current_session_id):
+        async with original_admission(current_session_id, new_operation=new_operation):
             active_sessions.add(current_session_id)
             admitted_sessions.append(current_session_id)
             max_active_sessions = max(max_active_sessions, len(active_sessions))
@@ -883,11 +885,11 @@ async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
 
     @asynccontextmanager
     async def observe_start_admission(
-        current_session_id: str,
+        current_session_id: str, *, new_operation: bool = False,
     ) -> AsyncIterator[None]:
         if current_session_id == session_id:
             admission_attempted.set()
-        async with original_admission(current_session_id):
+        async with original_admission(current_session_id, new_operation=new_operation):
             yield
 
     monkeypatch.setattr(

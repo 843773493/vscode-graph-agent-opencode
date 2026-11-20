@@ -9,6 +9,7 @@ import logging
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime
+from functools import partial
 from typing import cast
 
 from pydantic import ValidationError
@@ -100,7 +101,7 @@ class SessionCommunicationService:
 
     def _ledger(self, session_id: str, store: SessionControlStore) -> CommunicationLedgerService:
         return CommunicationLedgerService(
-            session_id=session_id, store=store, write_admission=self._sessions.session_write_admission,
+            session_id=session_id, store=store, write_admission=partial(self._sessions.session_write_admission, new_operation=True),
             lease_settlement=self._sessions.session_lease_settlement,
         )
 

@@ -46,7 +46,9 @@ class SessionInterruptService:
         self._session_service = session_service
         self._execution_scope_registry = execution_scope_registry
 
-    async def interrupt(self, session_id: str, *, thread_id: str | None = None) -> SessionInterruptResultDTO:
+    async def interrupt(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> SessionInterruptResultDTO:
         # 仅在解析身份时持有读准入；JobService 自有准入不可嵌套同一 Session gate。
         async with self._session_service.session_read_admission(session_id):
             target_thread = (
@@ -56,8 +58,11 @@ class SessionInterruptService:
             )
         return await self._interrupt_thread(session_id, target_thread)
 
-    async def _interrupt_thread(self, session_id: str, thread_id: str) -> SessionInterruptResultDTO:
-        jobs = await self._job_service.list(session_id=session_id)
+    async def _interrupt_thread(
+        self, session_id: str, thread_id: str,
+    ) -> SessionInterruptResultDTO:
+        # 活动执行已在 Job owner 内；停止准入内不能恢复队列或申请新的 preparation。
+        jobs = await self._job_service.list()
         active_job = next(
             (
                 job
@@ -233,13 +238,6 @@ class SessionInterruptService:
                     active_job.job_id,
                     JobControlRequest(action=ControlAction.cancel),
                 )
-
-        await self._job_service.notify_boundary(
-            session_id,
-            "after_interrupt",
-            thread_id=active_job.thread_id,
-            tool_result_available=False,
-        )
 
         if self._job_event_bus is not None:
             await self._job_event_bus.publish(

@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_session_interrupt_service, verify_local_token
+from app.api.deps import get_session_stop_service, verify_local_token
 from app.api.sessions import router
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
@@ -31,7 +31,7 @@ def interrupt_client(interrupt_service):
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(router, prefix="/api/v1")
-    application.dependency_overrides[get_session_interrupt_service] = lambda: interrupt_service
+    application.dependency_overrides[get_session_stop_service] = lambda: interrupt_service
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     with TestClient(application) as client:
         yield client

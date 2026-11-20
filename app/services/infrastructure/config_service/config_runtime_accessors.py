@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any, Literal
 
+from app.domain.session_stop import SessionStopPolicy
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
@@ -73,6 +74,12 @@ class ConfigRuntimeAccessorsMixin:
                 "runtime.agent.run.timeout_seconds 必须大于 0"
             )
         return float(value)
+
+    def get_session_stop_policy(self, profile: Literal["interrupt", "stop"]) -> SessionStopPolicy:
+        policy = SessionStopPolicy.model_validate(self._read_runtime_value(("session_stop", profile)))
+        if profile == "stop" and policy.jobs == "interrupt":
+            raise ValueError("stop 策略的 jobs 必须是 cancel 或 delete")
+        return policy
 
     def get_agent_run_mode(self) -> str:
         """返回 Agent 运行模式，决定是否向模型暴露团队面板工具。"""

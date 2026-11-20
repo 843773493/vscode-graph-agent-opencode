@@ -24,6 +24,12 @@
   "x-boxteam-config-domain": "workspace",
   "x-boxteam-policy-manifest": [
     {
+      "pattern": "/runtime/session_stop/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
       "pattern": "/ui/**",
       "policy": "next_session",
       "activation_scope": "next_session",
@@ -452,6 +458,55 @@
       "default": []
     },
 
+    "sessionStopPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "jobs", "pending_messages", "debug", "background_task", "terminal", "browser", "collaboration", "goal", "thread_runtime"],
+      "properties": {
+        "scope": { "enum": ["thread", "session"] },
+        "jobs": { "enum": ["interrupt", "cancel", "delete"] },
+        "pending_messages": { "enum": ["continue", "keep", "discard"] },
+        "debug": { "enum": ["keep", "stop"] },
+        "background_task": { "enum": ["keep", "stop", "delete"] },
+        "terminal": { "enum": ["keep", "stop", "delete", "release"] },
+        "browser": { "enum": ["keep", "stop", "delete", "release"] },
+        "collaboration": { "enum": ["keep", "stop"] },
+        "goal": { "enum": ["keep", "pause"] },
+        "thread_runtime": { "enum": ["keep", "close"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "thread_runtime": { "const": "close" } } },
+          "then": { "properties": { "terminal": { "enum": ["release", "delete"] }, "browser": { "enum": ["release", "delete"] } } }
+        },
+        {
+          "if": { "properties": { "scope": { "const": "thread" } } },
+          "then": { "properties": { "collaboration": { "const": "keep" } } }
+        },
+        {
+          "if": { "properties": { "jobs": { "const": "delete" } } },
+          "then": { "properties": { "pending_messages": { "const": "discard" } } }
+        },
+        {
+          "if": { "properties": { "pending_messages": { "const": "continue" } } },
+          "then": { "properties": { "jobs": { "const": "interrupt" } } }
+        }
+      ]
+    },
+    "sessionStopConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interrupt", "stop"],
+      "properties": {
+        "interrupt": { "$ref": "#/$defs/sessionStopPolicy" },
+        "stop": {
+          "allOf": [
+            { "$ref": "#/$defs/sessionStopPolicy" },
+            { "properties": { "jobs": { "enum": ["cancel", "delete"] } } }
+          ]
+        }
+      }
+    },
     "runtimeConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -460,6 +515,7 @@
         "gateway": { "$ref": "#/$defs/gatewayRuntimeConfig" },
         "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
         "events": { "$ref": "#/$defs/eventsRuntimeConfig" },
+        "session_stop": { "$ref": "#/$defs/sessionStopConfig" },
         "debug": { "$ref": "#/$defs/debugRuntimeConfig" }
       }
     },

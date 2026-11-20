@@ -749,6 +749,33 @@
     "servers": {} // McpRuntimeManager 使用；默认不启动外部 MCP Server。
   },
   "runtime": {
+    "session_stop": {
+      // 每次操作读取一次策略。scope 按 Thread 或整个 Session 选择资源；不扩展到导航后代。
+      "interrupt": {
+        "scope": "thread",
+        "jobs": "interrupt",
+        "pending_messages": "continue", // keep 停住但保留旧队列；discard 停止并丢弃。
+        "debug": "keep",
+        "background_task": "keep",
+        "terminal": "keep", // stop 停止并保留；delete 删除独占资源；release 沿保留范围释放关联。
+        "browser": "keep",
+        "collaboration": "keep", // 协作排空仅允许 session scope。
+        "goal": "keep",
+        "thread_runtime": "keep"
+      },
+      "stop": {
+        "scope": "session",
+        "jobs": "cancel", // delete 额外删除 Job 内存记录；会话历史始终保留。
+        "pending_messages": "discard",
+        "debug": "stop",
+        "background_task": "stop",
+        "terminal": "stop",
+        "browser": "stop",
+        "collaboration": "stop",
+        "goal": "pause", // 使用已有 Goal 暂停状态，避免停止后自动续跑。
+        "thread_runtime": "keep" // close 会卸载图并释放 Thread 保留资源；配合 terminal/browser 的 release 或 delete 使用。
+      }
+    },
     "agent": {
       "run": {
         "mode": "single_agent", // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。

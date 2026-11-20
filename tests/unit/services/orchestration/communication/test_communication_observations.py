@@ -130,7 +130,7 @@ class _Sessions:
         assert session_id in {SOURCE_SESSION, TARGET_SESSION}
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+    async def session_write_admission(self, session_id: str, *, new_operation: bool = False) -> AsyncIterator[None]:
         async with self.gate.exclusive(session_id):
             if session_id == TARGET_SESSION:
                 self.target_writes += 1

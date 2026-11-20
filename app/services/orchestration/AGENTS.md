@@ -39,6 +39,7 @@ orchestration/
 ├── session_turn_replay_service.py         按 Message/Turn 定位、回退上下文并重新派发
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
 ├── workspace_runtime_lifecycle.py         工作区执行启动恢复、Job 准入排空和强制中断
+├── session_stop.py                        interrupt/stop/删除的统一资源排空，数据删除仍归原 owner
 ├── communication/                         Session 间 Inbox admission 与冷观察
 ├── resource_activation/                    Execution/ModelCall 资源快照冻结
 └── team/                                   团队 fanout、恢复与 team_state 发布
@@ -63,6 +64,7 @@ orchestration/
 ## 规范
 
 - 以流程控制为中心，不承担数据持久化职责。
+- 会话停止在 Job owner 关闭准入期间结算执行，再按原 holder→Session gate 顺序排空资源；每次冻结一份 `runtime.session_stop` 策略。普通停止完成后允许显式新操作，旧队列保留或丢弃；删除前必要排空不可由配置禁用，资源未核实停止时禁止继续数据删除。
 - `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
 - `AgentExecutionService.list_tool_definitions` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。

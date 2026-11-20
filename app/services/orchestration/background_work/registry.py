@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextvars import Context
 
 from app.abstractions.background_task_registry import BackgroundTaskHandler
@@ -31,8 +32,10 @@ class BackgroundTaskRegistry:
         self, *, store: BackgroundWorkStore,
         residency_tracker: BackgroundResidencyPort,
         handlers: tuple[BackgroundTaskHandler, ...],
+        admission_guard: Callable[[str], None] | None = None,
     ) -> None:
         self._store = store
+        self._admission_guard = admission_guard
         self._residency = residency_tracker
         self._handlers = {(handler.kind, handler.version): handler for handler in handlers}
         if len(self._handlers) != len(handlers):
@@ -65,6 +68,8 @@ class BackgroundTaskRegistry:
             "descriptor": descriptor.model_dump(mode="json"),
         }).split(":")[-1]
         async with self._store.admission(session_id):
+            if self._admission_guard is not None:
+                self._admission_guard(session_id)
             self._store.resolve_thread(session_id, thread_id)
             self._residency.assert_blocker_admission(session_id, thread_id)
             with self._store.control(session_id) as control:

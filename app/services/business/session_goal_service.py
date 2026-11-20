@@ -252,25 +252,32 @@ class SessionGoalService:
                 current = self._store.goal_read(session_id)
                 if current is None or current.status != GoalStatus.active:
                     raise ValueError("当前没有进行中的 Goal 可以暂停")
-                paused = current.model_copy(
-                    update={
-                        "status": GoalStatus.paused,
-                        "revision": current.revision + 1,
-                        "control_revision": current.control_revision + 1,
-                        "sync_version": self._store.goal_sync_version(session_id) + 1,
-                        "updated_at": datetime.now(UTC),
-                    }
-                )
-                if paused.thread_id != thread_id:
+                if current.thread_id != thread_id:
                     raise ValueError("Goal 只能更新权威 main Thread")
-                self._store.goal_write(
-                    paused, expected_control_revision=current.control_revision
-                )
-                await self._publish_updated(paused)
-                return paused
+                return await self._pause_locked(current)
         if status not in {GoalStatus.complete, GoalStatus.blocked}:
             raise ValueError("Agent 只能将 Goal 更新为 paused、complete 或 blocked")
         return await self.set(session_id, status=status)
+
+    async def pause_for_stop(self, session_id: str, thread_id: str | None) -> None:
+        """停止调度前冻结已有 Goal，避免取消 Job 后再次派生执行；不创建 Goal。"""
+        async with self.lock_for(session_id):
+            current = self._store.goal_read(session_id)
+            if current is not None and current.status == GoalStatus.active and (
+                thread_id is None or current.thread_id == thread_id
+            ):
+                await self._pause_locked(current)
+
+    async def _pause_locked(self, current: SessionGoalStateDTO) -> SessionGoalStateDTO:
+        paused = current.model_copy(update={
+            "status": GoalStatus.paused, "revision": current.revision + 1,
+            "control_revision": current.control_revision + 1,
+            "sync_version": self._store.goal_sync_version(current.session_id) + 1,
+            "updated_at": datetime.now(UTC),
+        })
+        self._store.goal_write(paused, expected_control_revision=current.control_revision)
+        await self._publish_updated(paused)
+        return paused
 
     async def clear(
         self, session_id: str, *, operation_id: str = "", expected_control_revision: int | None = None,

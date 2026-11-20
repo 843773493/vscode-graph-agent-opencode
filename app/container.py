@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
@@ -200,6 +201,7 @@ from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRu
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from app.services.orchestration.session_stop import SessionStopService
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
@@ -380,7 +382,7 @@ class AppContainer:
     external_resource_leases: ExternalResourceLeaseLedger
     runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
-    session_interrupt_service: SessionInterruptService
+    session_stop_service: SessionStopService
     session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
@@ -780,6 +782,7 @@ def _build_app_container(
     background_task_registry = BackgroundTaskRegistry(
         store=background_work_store, residency_tracker=thread_residency_tracker,
         handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler),
+        admission_guard=lambda session_id: job_service.assert_session_control_open(session_id),
     )
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
         artifact = parse_resource_uri(uri)
@@ -918,10 +921,7 @@ def _build_app_container(
             session_id, thread_id, registry, scope,
         ),
     )
-    session_catalog_service = SessionCatalogService(
-        session_service=session_service,
-        background_task_registry=background_task_registry,
-    )
+    session_catalog_service = SessionCatalogService(session_service=session_service)
     workspace_search_service = WorkspaceSearchService(workspace_id)
     register_context_search(workspace_search_service, session_context_query_service)
     register_file_search(workspace_search_service, resource_navigation)
@@ -1013,7 +1013,7 @@ def _build_app_container(
         dispatcher=runtime_source_dispatcher, publication_lock=mcp_catalog_owner.publication_lock,
     )
     team_service = TeamCoordinationService(
-        store=TeamStore(factory=thread_creation_factory, write_admission=session_service.session_write_admission),
+        store=TeamStore(factory=thread_creation_factory, write_admission=partial(session_service.session_write_admission, new_operation=True)),
         session_service=session_service,
         fanout=team_fanout_service,
         session_subagent_service=session_subagent_service,
@@ -1064,26 +1064,35 @@ def _build_app_container(
     )
     session_resource_service = SessionResourceService(
         session_service=session_service,
-        job_service=job_service,
         provider_registry=session_resource_provider_registry,
     )
+
+    async def drain_session_collaboration(session_id: str) -> None:
+        await session_communication_service.observations.drain_session(session_id)
+        await team_fanout_service.drain_session(session_id)
+
+    async def close_session_runtime(session_id: str, thread_id: str | None) -> None:
+        await thread_residency_tracker.close(session_id=session_id, thread_id=thread_id)
+        background_mailbox.close_session(session_id, thread_id=thread_id)
+
+    stop_holders = (session_communication_service.deletion_holder, team_fanout_service.deletion_holder,
+                    attachment_blob_store.deletion_holder, terminal_resource_owner.deletion_holder)
+    session_stop_service = SessionStopService(
+        sessions=session_service, jobs=job_service, interrupt=session_interrupt_service,
+        resources=session_resource_provider_registry, debug=node_debug_service,
+        policy=config_service.get_session_stop_policy,
+        drain_collaboration=drain_session_collaboration, pause_goal=goal_service.pause_for_stop,
+        close_runtime=close_session_runtime, holders=stop_holders,
+    )
     if isinstance(session_path_resolver, SessionCatalogPathResolver):
-        # 子树删除的单一 drain 回调按固定顺序收敛所有运行时 owner：先
-        # NodeDebug，再清理终端、浏览器和后台任务资源。该回调在每个
+        # 子树删除沿统一停止入口依次结算 Job、调试和资源 owner。该回调在每个
         # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
         # drain 进度记录，保证部分失败可按 record 定点重试。
         async def drain_session_resources(session_id: str) -> None:
             session_service.settle_abandoned_context_controls(session_id)
             runtime_source_dispatcher.recover_context_publications(session_id)
-            await node_debug_service.drain_session(session_id)
-            await session_resource_service.cleanup_session(session_id)
+            await session_stop_service.drain_for_deletion(session_id)
             persistent_task_store.goal_clear(session_id)
-            await session_communication_service.observations.drain_session(session_id)
-            await team_fanout_service.drain_session(session_id)
-            # 所有领域资源排空后关闭本 Session 的真实 graph scope；旧
-            # residency 记账不能越过 fence/rename 后再查询已删除控制库。
-            await thread_residency_tracker.close(session_id=session_id)
-            background_mailbox.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
@@ -1097,9 +1106,7 @@ def _build_app_container(
         session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)
         session_path_resolver.bind_fork_child_abort_callback(checkpointer.forks.abort_prepared_child_fork)
         session_path_resolver.bind_session_drain_callback(
-            drain_session_resources, holders=(session_communication_service.deletion_holder, team_fanout_service.deletion_holder,
-                                             attachment_blob_store.deletion_holder,
-                                             terminal_resource_owner.deletion_holder),
+            drain_session_resources, holders=stop_holders,
         )
     session_information_service = SessionInformationService(
         session_service=session_service,
@@ -1165,7 +1172,7 @@ def _build_app_container(
         external_resource_leases=external_resource_leases,
         runtime_service=runtime_service,
         goal_service=goal_service,
-        session_interrupt_service=session_interrupt_service,
+        session_stop_service=session_stop_service,
         session_skill_untrack_service=session_skill_untrack_service,
         session_context_fork_service=session_context_fork_service,
         session_turn_replay_service=session_turn_replay_service,

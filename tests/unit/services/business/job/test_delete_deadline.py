@@ -64,14 +64,14 @@ async def test_delete_deadline_and_cancel_do_not_wait_for_dispatch_lock_or_cance
         async with AsyncExitStack() as locks:
             if stage == "dispatch":
                 await locks.enter_async_context(jobs._dispatch_lock)
-            deleting = asyncio.create_task(jobs.run_session_delete_operation(
+            deleting = asyncio.create_task(jobs.run_session_control_operation(
                 "ses_owner", operation, deadline=asyncio.get_running_loop().time() + 30,
             ))
             try:
                 await asyncio.sleep(0)
                 if stage != "dispatch":
                     async with asyncio.timeout(1):
-                        while "ses_owner" not in jobs._deleting_sessions:
+                        while "ses_owner" not in jobs._closed_sessions:
                             await asyncio.sleep(0)
                     if stage == "preparation-lock":
                         await locks.enter_async_context(jobs._dispatch_lock)
@@ -85,7 +85,7 @@ async def test_delete_deadline_and_cancel_do_not_wait_for_dispatch_lock_or_cance
                     phase = "job-dispatch" if stage == "dispatch" else "job-preparation"
                     with pytest.raises(SubtreeDeleteWaitTimeout, match=f"session_ids=ses_owner, phase={phase}"):
                         await asyncio.wait_for(asyncio.shield(deleting), 1)
-                assert "ses_owner" not in jobs._deleting_sessions
+                assert "ses_owner" not in jobs._closed_sessions
                 assert jobs._session_preparations == {"ses_owner": 1}
                 assert not preparation.done() and calls == []
             finally:
@@ -96,7 +96,7 @@ async def test_delete_deadline_and_cancel_do_not_wait_for_dispatch_lock_or_cance
         release.set()
         await preparation
         assert jobs._session_preparations == {}
-        assert await jobs.run_session_delete_operation(
+        assert await jobs.run_session_control_operation(
             "ses_owner", operation, deadline=asyncio.get_running_loop().time() + 30,
         ) == "deleted"
         assert calls == ["delete"]
@@ -122,19 +122,19 @@ async def test_overlapping_delete_rejection_keeps_original_owner_and_event_wakes
 
     preparations = [asyncio.create_task(jobs.run_session_preparation(sid, lambda sid=sid: prepare(sid))) for sid in releases]
     await asyncio.gather(*(event.wait() for event in entered.values()))
-    deletions = [asyncio.create_task(jobs.run_session_delete_operation(
+    deletions = [asyncio.create_task(jobs.run_session_control_operation(
         sid, lambda sid=sid: remove(sid), deadline=asyncio.get_running_loop().time() + 30,
     )) for sid in releases]
     try:
         async with asyncio.timeout(1):
-            while jobs._deleting_sessions != set(releases):
+            while jobs._closed_sessions != set(releases):
                 await asyncio.sleep(0)
         with pytest.raises(RuntimeError, match="会话删除已在进行"):
-            await jobs.run_sessions_delete_operation(
+            await jobs.run_sessions_control_operation(
                 ["ses_new", "ses_first"], lambda: remove("unexpected"),
                 deadline=asyncio.get_running_loop().time() + 30,
             )
-        assert jobs._deleting_sessions == set(releases)
+        assert jobs._closed_sessions == set(releases)
         releases["ses_peer"].set()
         await asyncio.wait_for(asyncio.shield(deletions[1]), 1)
         assert deleted == ["ses_peer"] and not deletions[0].done()
@@ -159,10 +159,10 @@ async def test_delete_rejects_expired_budget_before_any_admission_or_side_effect
 
     for sessions in [[], ["ses_owner"]]:
         with pytest.raises(SubtreeDeleteWaitTimeout, match="phase=job-dispatch"):
-            await deletion_jobs.run_sessions_delete_operation(
+            await deletion_jobs.run_sessions_control_operation(
                 sessions, operation, deadline=asyncio.get_running_loop().time() - 1,
             )
-    assert calls == [] and deletion_jobs._deleting_sessions == set()
+    assert calls == [] and deletion_jobs._closed_sessions == set()
 
 
 async def test_delete_preserves_callback_timeout_identity(deletion_jobs: JobService) -> None:
@@ -172,7 +172,7 @@ async def test_delete_preserves_callback_timeout_identity(deletion_jobs: JobServ
         raise original
 
     with pytest.raises(TimeoutError) as caught:
-        await deletion_jobs.run_session_delete_operation(
+        await deletion_jobs.run_session_control_operation(
             "ses_owner", operation, deadline=asyncio.get_running_loop().time() + 30,
         )
-    assert caught.value is original and deletion_jobs._deleting_sessions == set()
+    assert caught.value is original and deletion_jobs._closed_sessions == set()

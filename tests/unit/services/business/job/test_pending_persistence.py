@@ -92,10 +92,10 @@ async def _assert_delete_waits_for_preparation(service: JobService, session_id: 
     async def delete_storage() -> None:
         entered.set()
 
-    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, delete_storage, deadline=asyncio.get_running_loop().time() + 30))
+    deletion = asyncio.create_task(service.run_session_control_operation(session_id, delete_storage, deadline=asyncio.get_running_loop().time() + 30))
     try:
         async def closed() -> None:
-            while session_id not in service._deleting_sessions:
+            while session_id not in service._closed_sessions:
                 if deletion.done():
                     await deletion
                 await asyncio.sleep(0)
@@ -107,7 +107,7 @@ async def _assert_delete_waits_for_preparation(service: JobService, session_id: 
     finally:
         deletion.cancel()
         await asyncio.gather(deletion, return_exceptions=True)
-    assert session_id not in service._deleting_sessions
+    assert session_id not in service._closed_sessions
 
 
 def _request(
@@ -251,7 +251,7 @@ async def test_cancelled_pending_restore_settles_worker_before_session_delete(
     restored = await service.list_pending(session_id)
     assert [item.job_id for item in restored.requests] == ["job_restore"]
     assert [item.job_id for item in (await service.list_pending(session_id)).requests] == ["job_restore"]
-    assert await service.run_session_delete_operation(session_id, lambda: asyncio.sleep(0, result="deleted"), deadline=asyncio.get_running_loop().time() + 30) == "deleted"
+    assert await service.run_session_control_operation(session_id, lambda: asyncio.sleep(0, result="deleted"), deadline=asyncio.get_running_loop().time() + 30) == "deleted"
 
 
 @pytest.mark.asyncio

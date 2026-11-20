@@ -643,6 +643,18 @@
     }
   },
   "runtime": {
+    "session_stop": {
+      "interrupt": {
+        "scope": "thread", "jobs": "interrupt", "pending_messages": "continue",
+        "debug": "keep", "background_task": "keep", "terminal": "keep", "browser": "keep", "collaboration": "keep",
+        "goal": "keep", "thread_runtime": "keep"
+      },
+      "stop": {
+        "scope": "session", "jobs": "cancel", "pending_messages": "discard",
+        "debug": "stop", "background_task": "stop", "terminal": "stop", "browser": "stop", "collaboration": "stop",
+        "goal": "pause", "thread_runtime": "keep"
+      }
+    },
     "debug": {
       "enabled": true,
       "default_adapter": "node_inspector",

@@ -40,8 +40,9 @@ class BackgroundMailbox:
         self._consumers = OperationHolderGate(store.sessions_dir, namespace="background_consumers")
         self._waiters: dict[tuple[str, str, str], set[asyncio.Event]] = {}
 
-    def close_session(self, session_id: str) -> None:
-        active = [key for key, events in self._waiters.items() if key[0] == session_id and events]
+    def close_session(self, session_id: str, *, thread_id: str | None = None) -> None:
+        active = [key for key, events in self._waiters.items() if key[0] == session_id
+                  and (thread_id is None or key[1] == thread_id) and events]
         if active:
             raise RuntimeError(f"后台消息收集尚未排空: session_id={session_id}, owners={active}")
         # durable 邮箱随整个 Session 物理节点删除；关闭连接不丢弃冷历史。

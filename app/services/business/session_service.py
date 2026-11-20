@@ -194,10 +194,14 @@ class SessionService:
             yield node
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
-        """准入单会话短写，并让删除 drain 等待已准入写入完成。"""
+    async def session_write_admission(
+        self, session_id: str, *, new_operation: bool = False,
+    ) -> AsyncIterator[None]:
+        """短写核定生命周期；新操作还须检查停止准入，原操作结算继续放行。"""
         async with self._session_write_scope(session_id) as node:
             self._assert_session_node_active(node)
+            if new_operation and self._job_service is not None:
+                self._job_service.assert_session_control_open(session_id)
             yield
 
     @asynccontextmanager

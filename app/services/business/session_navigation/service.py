@@ -4,14 +4,12 @@ import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
-from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core import session_subtree_delete
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store.contracts import CatalogTransactionHook
 from app.core.session_subtree_delete import SubtreeDeleteResult
-from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     AutoSessionTitleCommand,
@@ -86,12 +84,10 @@ class SessionCatalogService(SessionCatalogReadService):
         *,
         session_service: SessionService,
         job_service: JobServiceProtocol | None = None,
-        background_task_registry: BackgroundTaskRegistryProtocol | None = None,
         operations_service: SessionCatalogOperationsService | None = None,
     ) -> None:
         super().__init__(session_service=session_service)
         self._job_service = job_service
-        self._background_task_registry = background_task_registry
         # 未显式注入时按容器装配的同一 resolver/store 构造导航 operation 栈。
         self._operations_service = operations_service or self._build_operations()
         self._session_service.register_change_listener(self._on_session_changed)
@@ -143,20 +139,6 @@ class SessionCatalogService(SessionCatalogReadService):
             include_self=True,
         )
 
-        registry = self._background_task_registry
-        if registry is not None:
-            blockers = await run_sync_shielded(lambda: [
-                handle for session_id in frozen_session_ids
-                for handle in registry.list_handles(session_id)
-            ])
-            if blockers:
-                raise RuntimeError(
-                    "会话存在运行中后台任务，拒绝递归删除: "
-                    + ",".join(
-                        f"{handle.session_id}:{handle.task_id}" for handle in blockers
-                    )
-                )
-
         async def run() -> SubtreeDeleteResult:
             return await self._path_resolver.delete_subtree(
                 idempotency_key=idempotency_key,
@@ -168,7 +150,7 @@ class SessionCatalogService(SessionCatalogReadService):
 
         if self._job_service is None:
             return await run()
-        return await self._job_service.run_sessions_delete_operation(
+        return await self._job_service.run_sessions_control_operation(
             frozen_session_ids,
             run,
             deadline=deadline,

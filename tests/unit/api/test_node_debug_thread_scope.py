@@ -88,7 +88,7 @@ class _ResolverSessionLifecycle:
         self._lifecycle_gate = SessionLifecycleGate(resolver.sessions_root)
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+    async def session_write_admission(self, session_id: str, *, new_operation: bool = False) -> AsyncIterator[None]:
         async with AsyncExitStack() as session_gate:
             async with self._topology_gate.shared():
                 await session_gate.enter_async_context(

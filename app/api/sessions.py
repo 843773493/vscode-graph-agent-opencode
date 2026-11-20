@@ -24,10 +24,10 @@ from app.api.deps import (
     get_session_changes_service,
     get_session_context_fork_service,
     get_session_information_service,
-    get_session_interrupt_service,
     get_session_resource_service,
     get_session_service,
     get_session_skill_untrack_service,
+    get_session_stop_service,
     get_team_service,
     get_thread_residency_tracker,
     get_trace_event_store,
@@ -67,6 +67,7 @@ from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
     ChildThreadRuntimeDTO,
     SessionCompactResultDTO,
+    SessionControlResultDTO,
     SessionCreateRequest,
     SessionDTO,
     SessionForkMode,
@@ -113,7 +114,6 @@ from app.services.business.session_goal_service import (
     SessionGoalService,
 )
 from app.services.business.session_information_service import SessionInformationService
-from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.business.session_skill_untrack import (
@@ -144,6 +144,7 @@ from app.services.infrastructure.session_trace.trace_page import (
 from app.services.infrastructure.session_trace.trace_search import TraceSearchError
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
+from app.services.orchestration.session_stop import SessionStopService
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -1130,21 +1131,39 @@ async def compact_session_context(
 
 
 @router.post(
+    "/{session_id}/stop",
+    response_model=APIResponse[SessionControlResultDTO],
+    summary="按停止策略排空会话资源，保留会话数据",
+)
+async def stop_session(
+    session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_stop_service: Annotated[SessionStopService, Depends(get_session_stop_service)],
+):
+    try:
+        result = await session_stop_service.stop(session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
     "/{session_id}/interrupt",
     response_model=APIResponse[SessionInterruptResultDTO],
     summary="打断会话正在执行的任务",
 )
 async def interrupt_session(
     session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_stop_service: Annotated[SessionStopService, Depends(get_session_stop_service)],
     thread_id: CanonicalThreadId | None = None,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_interrupt_service: SessionInterruptService = Depends(
-        get_session_interrupt_service
-    ),
 ):
     try:
-        result = await session_interrupt_service.interrupt(session_id=session_id, thread_id=thread_id)
+        result = await session_stop_service.interrupt(session_id=session_id, thread_id=thread_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:

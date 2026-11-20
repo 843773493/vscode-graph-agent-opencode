@@ -259,7 +259,7 @@ class CommunicationObservationService:
                         previous = page.result
             else:
                 try:
-                    async with service._sessions.session_write_admission(session_id):
+                    async with service._sessions.session_write_admission(session_id, new_operation=True):
                         with closing(service._store(session_id)) as store:
                             store.admit_remote_observation(observation_id, side="source", request={"input": input_value, "envelope": envelope.model_dump(mode="json")}, expires_at=envelope.expires_at.isoformat())
                             root_lease = _get_or_takeover_observation_lease(store, "source-observation|" + observation_id, input_value)
@@ -483,7 +483,7 @@ class CommunicationObservationService:
         root_request = self._root_request(request)
         root_lease = page_lease = None
         try:
-            async with service._sessions.session_write_admission(target.session_id):
+            async with service._sessions.session_write_admission(target.session_id, new_operation=not recovery):
                 if not recovery and await service._sessions.resolve_main_thread(target.session_id) != target.thread_id:
                     raise RemoteObservationError("read-snapshot-mismatch")
                 with closing(service._store(target.session_id)) as store:

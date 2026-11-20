@@ -219,7 +219,7 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
             scope,
         )
         await asyncio.wait_for(drain_started.wait(), timeout=3)
-        assert session_id in harness.job_service._deleting_sessions
+        assert session_id in harness.job_service._closed_sessions
 
         compact = await harness.client.post(
             f"/api/v1/sessions/{session_id}/compact"

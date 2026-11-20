@@ -55,6 +55,28 @@ def resource_api():
 
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_session_stop_preserves_resource_and_thread_association(
+    browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
+    owner_mount: MountedWorkspace, kind: str,
+) -> None:
+    _client, root, _run = browser_client
+    async with workspace_tool_runtime(root, startup_mount=owner_mount) as (container, session_id, _context):
+        owner = container.terminal_resource_owner if kind == "terminal" else container.browser_resource_owner
+        arguments = {"session_id": session_id, "retention_scope": "thread",
+                     "holder_id": "request:stop-create", "operation_id": "stop-create"}
+        resource = await (owner.create_terminal(**arguments) if kind == "terminal"
+                          else owner.create_browser(**arguments, url="about:blank"))
+        resource_id = resource["resource_id"]
+        result = await container.session_stop_service.stop(session_id)
+        assert result.status == "stopped"
+        stopped = await owner.get_resource(resource_id)
+        assert stopped["status"] in {"terminated", "closed", "stopped", "exited"}
+        assert stopped["reconciliation_status"] == "verified"
+        assert stopped["thread_associations"] == resource["thread_associations"]
+        assert (await container.session_service.get(session_id)).session_id == session_id
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
 async def test_real_release_preflights_then_unlocks_peer_and_reconciles_original_delete(
     browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
     owner_mount: MountedWorkspace, monkeypatch: pytest.MonkeyPatch, kind: str,

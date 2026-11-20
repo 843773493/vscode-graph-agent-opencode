@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Iterable
 
 from app.abstractions.session_resources import SessionResourceProviderProtocol
+from app.domain.session_stop import SessionStopPolicy
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -80,8 +81,16 @@ class SessionResourceProviderRegistry:
             operation_id=operation_id,
         )
 
-    async def cleanup_session(self, session_id: str) -> dict[SessionResourceKind, int]:
+    async def cleanup_session(
+        self, session_id: str, *, policy: SessionStopPolicy,
+        thread_id: str | None = None,
+    ) -> dict[SessionResourceKind, int]:
         cleaned: dict[SessionResourceKind, int] = {}
+        actions = {"background_task": policy.background_task, "terminal": policy.terminal, "browser": policy.browser}
         for provider in self.providers():
-            cleaned[provider.kind] = await provider.cleanup_session(session_id)
+            action = actions[provider.kind]
+            if action != "keep":
+                cleaned[provider.kind] = await provider.cleanup_session(
+                    session_id, action=action, thread_id=thread_id,
+                )
         return cleaned

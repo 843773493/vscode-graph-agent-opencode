@@ -10,6 +10,7 @@ from app.domain.background_work import (
     BackgroundTaskHandle,
     BackgroundTaskSummary,
 )
+from app.domain.session_stop import ResourceStopAction
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -85,8 +86,21 @@ class BackgroundTaskResourceProvider:
             )
         raise ValueError(f"background_task 资源不支持操作: {action}")
 
-    async def cleanup_session(self, session_id: str) -> int:
-        return await self._task_registry.delete_session(session_id)
+    async def cleanup_session(
+        self, session_id: str, *, action: ResourceStopAction,
+        thread_id: str | None = None,
+    ) -> int:
+        if action not in {"stop", "delete"}:
+            raise ValueError(f"后台任务不支持清理动作: {action}")
+        handles = await run_sync_shielded(self._task_registry.list_summaries, session_id, include_history=True)
+        affected = [handle for handle in handles
+                    if (thread_id is None or handle.thread_id == thread_id) and handle.status != "deleted"]
+        for handle in affected:
+            result = await (self._task_registry.delete(session_id, handle.task_id) if action == "delete"
+                            else self._task_registry.cancel(session_id, handle.task_id))
+            if result.status == "reconcile_required":
+                raise RuntimeError(f"后台任务外部效果未确认，停止未完成: {session_id}/{handle.task_id}")
+        return len(affected)
 
     def _to_resource(self, handle: BackgroundTaskHandle | BackgroundTaskSummary) -> SessionResourceDTO:
         actions: list[SessionResourceAction]
@@ -176,8 +190,13 @@ class TerminalResourceProvider:
             resource=session_resource,
         )
 
-    async def cleanup_session(self, session_id: str) -> int:
-        return await self._owner.cleanup_session(session_id)
+    async def cleanup_session(
+        self, session_id: str, *, action: ResourceStopAction,
+        thread_id: str | None = None,
+    ) -> int:
+        if action == "keep":
+            raise ValueError("keep 不应派发到资源清理 owner")
+        return await self._owner.cleanup_session(session_id, action=action, thread_id=thread_id)
 
     def _to_resource(
         self,
@@ -283,8 +302,13 @@ class BrowserResourceProvider:
             resource=session_resource,
         )
 
-    async def cleanup_session(self, session_id: str) -> int:
-        return await self._owner.cleanup_session(session_id)
+    async def cleanup_session(
+        self, session_id: str, *, action: ResourceStopAction,
+        thread_id: str | None = None,
+    ) -> int:
+        if action == "keep":
+            raise ValueError("keep 不应派发到资源清理 owner")
+        return await self._owner.cleanup_session(session_id, action=action, thread_id=thread_id)
 
     def _to_resource(
         self,

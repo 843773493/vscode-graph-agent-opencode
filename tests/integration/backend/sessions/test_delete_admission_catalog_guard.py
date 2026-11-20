@@ -310,11 +310,11 @@ async def test_delete_drains_existing_preparation_before_catalog_mark(
 
     preparation = asyncio.create_task(service.run_session_preparation(session_id, preparing))
     await asyncio.wait_for(entered.wait(), timeout=3)
-    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, deleting, deadline=asyncio.get_running_loop().time() + 30))
+    deletion = asyncio.create_task(service.run_session_control_operation(session_id, deleting, deadline=asyncio.get_running_loop().time() + 30))
     try:
         # 经过同一调度锁确认删除已经关闭新准入，不能以 sleep 猜测执行顺序。
         async def admission_closed() -> None:
-            while session_id not in service._deleting_sessions:
+            while session_id not in service._closed_sessions:
                 if deletion.done():
                     await deletion
                 await asyncio.sleep(0)
@@ -333,7 +333,7 @@ async def test_delete_drains_existing_preparation_before_catalog_mark(
             deletion.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await deletion
-            assert session_id not in service._deleting_sessions
+            assert session_id not in service._closed_sessions
             assert not delete_entered.is_set()
             assert await service.run_session_preparation(session_id, sibling_preparation) == "sibling-open"
         release.set()
@@ -404,7 +404,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         assert workspace.node(session_id).state == "deleting"
         drain_started.set()
         await release_drain.wait()
-        await service.delete_session_jobs(session_id)
+        await service.stop_session_jobs(session_id)
         assert database.is_file(), "canonical 终态必须先于物理隔离"
         with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
             terminal_rows.update(connection.execute(
@@ -414,7 +414,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
             assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (3,)
 
     workspace.delete_service.set_session_drain_callback(cleanup)
-    deletion = asyncio.create_task(service.run_sessions_delete_operation(
+    deletion = asyncio.create_task(service.run_sessions_control_operation(
         [session_id],
         lambda: workspace.resolver.delete_subtree(
             idempotency_key="delete-active-and-queued", root_node_id=session_id,
@@ -483,7 +483,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     delete_key = "delete-admission-after-bus-close"
 
     with pytest.raises(RuntimeError, match="injected failure after close_session"):
-        await job_service.run_sessions_delete_operation(
+        await job_service.run_sessions_control_operation(
             [target_session_id],
             lambda: workspace.resolver.delete_subtree(
                 idempotency_key=delete_key,
@@ -495,7 +495,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     assert cleanup_reads == [target_session_id]
     assert workspace.store.get_node(target_session_id).state == "deleting"
     assert workspace.session_dir(target_session_id).is_dir()
-    assert target_session_id not in job_service._deleting_sessions
+    assert target_session_id not in job_service._closed_sessions
     assert workspace.store.get_node(active_session_id).state == "active"
     with pytest.raises(SessionDeletionPendingError):
         await message_bus.list_messages(target_session_id, target_thread_id, "default")

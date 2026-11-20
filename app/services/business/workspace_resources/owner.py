@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from typing import Literal
 
 from app.abstractions.workspace_resources import (
     ResourceChanges,
@@ -137,7 +138,7 @@ class WorkspaceResourceOwner:
                 async with budget:
                     # 锁序与删除一致：先holder，后Session；禁止网络等待长期持Session独占锁。
                     await lifetime.enter_async_context(self.deletion_holder.lock_for(session_id, exclusive=False))
-                    async with self._sessions.session_write_admission(session_id):
+                    async with self._sessions.session_write_admission(session_id, new_operation=True):
                         session = await self._sessions.get(session_id)
                         if session.workspace_id != self.workspace_id:
                             raise ValueError("外部资源 来源 Session 不属于当前工作区")
@@ -634,14 +635,19 @@ class WorkspaceResourceOwner:
             operation_id=f"unload:{generation}",
         )
 
-    async def cleanup_session(self, session_id: str) -> int:
-        """由关闭准入后的 Session 删除 drain 调用，不重新进入其生命周期 gate。"""
+    async def cleanup_session(
+        self, session_id: str, *,
+        action: Literal["release", "stop", "delete"] = "release",
+        thread_id: str | None = None,
+    ) -> int:
+        """准入关闭后按策略停止或释放资源，不重入调用方的 Session gate。"""
         if not self._store.ids():
             return 0
         return await self._release_refs(
-            lambda ref: ref.session_id == session_id,
-            holder_id=f"session-delete:{session_id}",
-            operation_id=f"delete:{session_id}",
+            lambda ref: ref.session_id == session_id and (thread_id is None or ref.thread_id == thread_id),
+            holder_id=f"session-{action}:{session_id}",
+            operation_id=f"{action}:{session_id}:{thread_id or 'all'}",
+            action=action,
         )
 
     async def _release_refs(
@@ -650,6 +656,7 @@ class WorkspaceResourceOwner:
         *,
         holder_id: str,
         operation_id: str,
+        action: Literal["release", "stop", "delete"] = "release",
     ) -> int:
         locked: dict[str, asyncio.Lock] = {}
         tasks: list[asyncio.Task[None]] = []
@@ -660,9 +667,11 @@ class WorkspaceResourceOwner:
                 if record.status == "deleted":
                     return
                 async with self._management_lease(record, None, holder_id, operation_id) as lease_id:
-                    if record.retention_scope == "thread":
-                        record.thread_associations = []
-                        await self._stop_or_delete(record, delete=True, lease_id=lease_id)
+                    if action != "release" or record.retention_scope == "thread":
+                        delete = action == "delete" or (action == "release" and record.retention_scope == "thread")
+                        if delete:
+                            record.thread_associations = []
+                        await self._stop_or_delete(record, delete=delete, lease_id=lease_id)
                     else:
                         async with resource_operation_dispatch(self, record, lease_id, operation=None):
                             await self._advance_revision(record)
@@ -707,6 +716,8 @@ class WorkspaceResourceOwner:
                 # 从全量preflight到任务接管之间不让出事件循环，避免新lease插入。
                 for record in affected:
                     self._verified(record)
+                    if action == "delete" and any(not matches(ref) for ref in record.thread_associations):
+                        raise ResourceConflict(f"资源仍被其它 Thread 关联，不能随当前目标删除: {record.resource_id}")
                     if any(
                         lease.holder_session_id is None
                         or matches(ThreadRef(lease.holder_session_id, lease.holder_thread_id))

@@ -34,7 +34,7 @@ class SessionLifecycleReader(Protocol):
     """NodeDebug mutation 共享的 Session 生命周期准入。"""
 
     def session_write_admission(
-        self, session_id: str
+        self, session_id: str, *, new_operation: bool = False,
     ) -> AbstractAsyncContextManager[None]: ...
 
     async def get(self, session_id: str) -> SessionDTO: ...
