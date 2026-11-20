@@ -33,3 +33,21 @@ SQLite 升级 SHALL 在锁内核版本，备份包含已提交 WAL；有序链�
 #### Scenario: 当前版本重复启动
 - **WHEN** 当前数据已处于目标结构
 - **THEN** 原正文及备份数量不变，启动不重复执行全库校验
+
+### Requirement: 持久化格式转换按业务域和两端版本命名
+
+新增持久化格式转换源码 MUST 位于 `<业务域 owner>/migrations/`；配置域 SHALL 沿用 `configs/migrations/<domain>/`。文件名 MUST 使用 `v<来源版本>_<来源格式>_to_v<目标版本>_<目标格式>.<实现语言后缀>`，明确两端版本和实际格式；格式名使用小写，版本中的点在 Python 模块名中以下划线表达。系统 MUST NOT 将目标固定为某种存储，也不因格式转换另建平行的 imports／recovery 目录或散落顶层模块。
+
+两端版本 SHALL 来自已明确登记的本域数据格式／结构合同，不混同软件发布版本或数据库 schema 版本；无版本旧数据 MUST 先核实来源和版本归属，不能为命名虚构版本。执行顺序 MUST 由原 owner 清单显式登记，不扫描文件名推导。既有有序 SQL 名称和已登记顺序 MUST 保持；只有实际数据库结构变化才提升 schema 版本，不为命名整理新增迁移、框架或版本映射账本。
+
+#### Scenario: 后续发布版换回先前格式
+- **WHEN** 某业务域先从 JSONL 合同 v1 迁到 SQLite 合同 v2，后续发布版决定采用 JSONL 合同 v3
+- **THEN** 两个转换分别命名为 `v1_jsonl_to_v2_sqlite.py` 和 `v2_sqlite_to_v3_jsonl.py`，位于该域 `migrations/`；第二步属于新的正向迁移，不复用 v1 或当成显式回退
+
+#### Scenario: 同格式升级与既有 SQL 共存
+- **WHEN** 某业务域新增 JSONL 合同 v3 到 v4 的转换，目录已有登记的 `001.sql`
+- **THEN** 新转换命名为 `v3_jsonl_to_v4_jsonl.py`，既有 SQL 不重命名、不重编号，执行仍由原 owner 显式登记
+
+#### Scenario: 格式未知且没有版本归属
+- **WHEN** 旧文件没有可核验的数据合同版本
+- **THEN** 保留原件并明确来源缺口，不擅自认定 v1，不因存在通用命名约定就自动纳入支持或创建转换文件
