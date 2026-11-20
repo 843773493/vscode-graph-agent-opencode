@@ -19,7 +19,7 @@ from tests.integration.backend.sessions.rollout_context.test_execution_history_s
     test_same_workload_tools_restart_and_storage_measurements as test_same_workload_tools_restart_and_storage_measurements,  # noqa: PLC0414 — 原20次请求、工具配对、hash及历史断言完整复用。
 )
 
-_LEGACY = "app.services.infrastructure.rollout_context.migration"
+_LEGACY = "app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl"
 _BACKEND = "tests.integration.backend.sessions.rollout_context._history_storage_app"
 _OWNERS = {
     "app.services.infrastructure.rollout_context.checkpoint.saver",

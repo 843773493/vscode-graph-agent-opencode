@@ -15,14 +15,14 @@ import pytest
 
 from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.services.infrastructure.rollout_context.migration import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import (
     importer as migration_importer,
 )
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
     write_private,
 )
-from app.services.infrastructure.rollout_context.migration.importer import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import (
     LegacyRolloutImporter,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
@@ -173,8 +173,8 @@ def test_process_exit_preserves_originals_and_recovers_only_audit(
 import os
 import sys
 from unittest.mock import patch
-from app.services.infrastructure.rollout_context.migration import importer
-from app.services.infrastructure.rollout_context.migration.importer import LegacyRolloutImporter
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import importer
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import LegacyRolloutImporter
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.integration.backend.sessions.itemized_migration_helpers import _storage
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_projections import RolloutMessageProjectionMixin
@@ -289,8 +289,8 @@ def test_initial_audit_process_exit_does_not_block_fresh_import(
 import os
 import sys
 from unittest.mock import patch
-from app.services.infrastructure.rollout_context.migration import artifacts, importer
-from app.services.infrastructure.rollout_context.migration.importer import LegacyRolloutImporter
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import artifacts, importer
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import LegacyRolloutImporter
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.integration.backend.sessions.itemized_migration_helpers import _storage
 def crash(*args, **kwargs):
@@ -382,9 +382,9 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
-from app.services.infrastructure.rollout_context.migration import importer
-from app.services.infrastructure.rollout_context.migration.artifacts import artifact_manifest
-from app.services.infrastructure.rollout_context.migration.importer import LegacyRolloutImporter
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import importer
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import artifact_manifest
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import LegacyRolloutImporter
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.integration.backend.sessions.itemized_migration_helpers import _storage
 with fixture_catalog_scope():

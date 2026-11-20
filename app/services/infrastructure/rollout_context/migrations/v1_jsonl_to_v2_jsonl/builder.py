@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.migration.semantics import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.semantics import (
     candidate_audit,
     terminal_evidence,
 )
@@ -34,7 +34,7 @@ class LegacyImportBuilder:
         checkpoint_ns: str,
     ) -> dict[str, object]:
         """将 v1 source 安装到全新的 v2 target，保留 source 只读原件。"""
-        from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
+        from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.legacy_adapter import (
             LegacyRolloutAdapter,
         )
 

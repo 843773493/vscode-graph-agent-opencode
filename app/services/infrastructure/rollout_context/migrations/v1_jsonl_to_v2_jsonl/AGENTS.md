@@ -1,11 +1,12 @@
 # 目录用途
 
-`migration/` 只承载一次性 `legacy_import_v1_to_v2` 的 staging、report、quarantine 和 rollback audit。
+`v1_jsonl_to_v2_jsonl/` 只承载已登记 JSONL 消息格式 v1 到 canonical item 格式 v2 的一次性转换；SQLite 索引由现行 storage owner 创建，不在这里复制结构。历史 audit 的 `legacy_import_v1_to_v2` 标识保持。
 
 ## 职责树
 
 ```text
-migration/
+v1_jsonl_to_v2_jsonl/
+├── __main__.py      显式 CLI 入口
 ├── importer.py       一次性导入、审计状态和恢复入口
 ├── source.py         严格只读扫描 v1 manifest 与正文，生成候选报告
 ├── artifacts.py      普通文件校验、哈希清单、原件快照、审计和原子安装

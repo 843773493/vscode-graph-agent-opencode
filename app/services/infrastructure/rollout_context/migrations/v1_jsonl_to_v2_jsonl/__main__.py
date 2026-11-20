@@ -12,15 +12,13 @@ import json
 import sys
 from pathlib import Path
 
-# 该文件既作为 ``python -m scripts...`` 模块运行，也作为 workspace root
-# 下的一次性运维命令直接运行。直接运行时 Python 会把 scripts/ 放在
-# sys.path[0]；按项目约定从当前工作目录取得显式仓库根，禁止通过文件
-# 位置向上猜测根目录。
+# 支持版本化包的 -m 入口和仓库根下的直接文件入口。直接运行时按当前
+# 工作目录取得显式仓库根，不根据本文件位置向上猜测。
 if __package__ in {None, ""}:
     _project_root = Path.cwd()
     if not (_project_root / "app").is_dir():
         raise RuntimeError(
-            "legacy_import_v1_to_v2 必须从项目根目录运行，且当前目录缺少 app/"
+            "v1_jsonl_to_v2_jsonl 必须从项目根目录运行，且当前目录缺少 app/"
         )
     sys.path.insert(0, str(_project_root))
 
@@ -37,10 +35,10 @@ from app.core.workspace_identity import (
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     require_safe_path,
 )
-from app.services.infrastructure.rollout_context.migration.importer import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import (
     LegacyRolloutImporter,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
@@ -48,7 +46,7 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="显式执行一次性 legacy_import_v1_to_v2 rollout migration"
+        description="显式执行 rollout JSONL v1 到 JSONL v2 的一次性迁移"
     )
     parser.add_argument(
         "--sessions-dir",

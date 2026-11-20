@@ -98,7 +98,7 @@ class RolloutExecutionsMixin:
         checkpoint_ns: str,
     ) -> int:
         """仅在显式 importer 的私有 staging 安装已校验的历史终态事实。"""
-        from app.services.infrastructure.rollout_context.migration.staging import (
+        from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.staging import (
             ImportStagingStorage,
         )
 

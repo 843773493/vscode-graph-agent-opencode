@@ -12,21 +12,21 @@ from pathlib import Path
 from app.core.sqlite_state import sqlite_file_uri
 from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import sha256_jcs
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
     open_regular_artifact,
 )
-from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.legacy_adapter import (
     LegacyRolloutAdapter,
     validate_envelope,
 )
-from app.services.infrastructure.rollout_context.migration.manifest import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.manifest import (
     apply_final_pointers,
     final_pointers,
     message_checks,
     validate_message_checks,
 )
-from app.services.infrastructure.rollout_context.migration.semantics import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.semantics import (
     candidate_audit,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (

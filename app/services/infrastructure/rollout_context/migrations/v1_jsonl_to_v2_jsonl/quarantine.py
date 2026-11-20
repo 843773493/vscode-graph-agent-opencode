@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     require_safe_path,
     write_private,
 )

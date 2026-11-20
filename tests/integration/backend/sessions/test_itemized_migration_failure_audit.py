@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from app.services.infrastructure.rollout_context.migration import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import (
     importer as migration_importer,
 )
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
 )
-from app.services.infrastructure.rollout_context.migration.importer import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import (
     LegacyRolloutImporter,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore

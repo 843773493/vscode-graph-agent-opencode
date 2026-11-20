@@ -35,7 +35,7 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.legacy_adapter import (
     LegacyRolloutAdapter,
 )
 from app.services.infrastructure.rollout_context.provider.native_request import (

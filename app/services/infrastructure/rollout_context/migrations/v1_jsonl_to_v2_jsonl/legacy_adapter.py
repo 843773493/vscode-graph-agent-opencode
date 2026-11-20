@@ -19,7 +19,7 @@ from app.domain.itemized.hashing import _ensure_json_value, sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.validation import _non_empty_string
-from app.services.infrastructure.rollout_context.migration.semantics import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.semantics import (
     final_marker,
     legacy_hashes,
     payload_supported,

@@ -14,7 +14,7 @@ from app.core.atomic_fs import fsync_directory
 from app.core.failures import failure_detail
 from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import sqlite_file_uri, utc_now_text
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
     copy_source,
     empty_target_identity,
@@ -24,16 +24,16 @@ from app.services.infrastructure.rollout_context.migration.artifacts import (
     write_audit,
     write_private,
 )
-from app.services.infrastructure.rollout_context.migration.builder import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.builder import (
     LegacyImportBuilder,
 )
-from app.services.infrastructure.rollout_context.migration.quarantine import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.quarantine import (
     write_quarantine,
 )
-from app.services.infrastructure.rollout_context.migration.source import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.source import (
     read_source_report,
 )
-from app.services.infrastructure.rollout_context.migration.staging import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.staging import (
     ImportStagingStorage,
     validate_staging,
 )

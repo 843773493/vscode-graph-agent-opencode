@@ -11,10 +11,10 @@ from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
 )
-from app.services.infrastructure.rollout_context.migration.importer import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import (
     LegacyRolloutImporter,
 )
 from tests.integration.backend.sessions.itemized_migration_helpers import (
