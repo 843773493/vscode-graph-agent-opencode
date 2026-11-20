@@ -76,6 +76,11 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 from app.services.infrastructure.attachment_blob_catalog.recovery import (
     AttachmentIngestRecoveryMixin,
 )
+from app.services.infrastructure.attachment_blob_catalog.uploads import (
+    MAX_ATTACHMENT_BYTES,
+    AttachmentUploadsMixin,
+    is_draft_upload,
+)
 from app.services.infrastructure.attachment_blob_catalog.working_copies import (
     AttachmentDirectoryHolderGate,
     WorkingCopiesMixin,
@@ -88,7 +93,6 @@ from app.services.infrastructure.workspace_files.mutation_lock import (
 )
 
 ATTACHMENT_ROOT_DIRECTORY_NAME = "attachments"
-MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
 
 if TYPE_CHECKING:
     from app.services.infrastructure.workspace_files.operations import (
@@ -96,7 +100,7 @@ if TYPE_CHECKING:
     )
 
 
-class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
+class AttachmentBlobStore(AttachmentUploadsMixin, WorkingCopiesMixin, ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
     """原附件服务的目录实现；不再写入或读取旧 blob 表。"""
 
     def __init__(self, workspace_root: Path, *, path_resolver: SessionCatalogPathResolver | None = None,
@@ -247,6 +251,10 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
         mime_type, data = _parse_data_url(attachment.data_url or "")
         if attachment.content_type is not None and attachment.content_type != mime_type:
             raise ValueError("附件 content_type 与 data_url MIME 不一致")
+        return await self._persist_content(session_id, thread_id, message_id, ordinal, attachment, data, mime_type)
+
+    async def _persist_content(self, session_id: str, thread_id: str, message_id: str, ordinal: int,
+                               attachment: AttachmentRef, data: bytes, mime_type: str) -> AttachmentRef:
         if len(data) > MAX_ATTACHMENT_BYTES:
             raise ValueError(f"附件超过 {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB 限制")
         digest = "sha256:" + hashlib.sha256(data).hexdigest()
@@ -286,6 +294,8 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
                 # writer 已退出才清理本 intent 的目录，不能碰其它上传的正文。
                 remove_directory(resolve_staging_path(self._attachments_root, record.staging_relative_locator))
                 remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
+                if is_draft_upload(message_id):
+                    await run_sync_shielded(self._remove_unused_upload_versions, (record.digest,))
                 if control.verify_lease_token(lease_id=pin.lease_id, fencing_token=pin.fencing_token):
                     self._settle_pin(control, pin, outcome="failed")
                 raise

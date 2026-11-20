@@ -5,7 +5,7 @@ import sqlite3
 from typing import Annotated
 
 from boxteam_plugin_sdk.http import get_request_id
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -15,6 +15,7 @@ from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
     get_message_service,
+    get_rollout_checkpoint_saver,
     get_session_communication_service,
     get_session_orchestrator,
     get_session_service,
@@ -37,6 +38,7 @@ from app.schemas.internal_v2.communication import (
 )
 from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
+    AttachmentRef,
     MessageDTO,
     MessageReplayAccepted,
     MessageReplayRequest,
@@ -54,6 +56,9 @@ from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.session_messages import SessionMessageOrchestrator
@@ -386,6 +391,52 @@ async def list_messages(
     except ValueError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[AttachmentRef],
+             summary="预上传附件；完整接收后返回引用，不创建用户消息")
+async def upload_thread_attachment(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    request: Request,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    name: str = Query(min_length=1, max_length=255),
+) -> APIResponse[AttachmentRef]:
+    content_type = request.headers.get("content-type", "application/octet-stream").split(";", 1)[0].strip()
+    try:
+        result = await attachment_store.upload_attachment(session_id, thread_id, name=name,
+            content_type=content_type, chunks=request.stream())
+    except FileNotFoundError as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.delete("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[None],
+               summary="移除未发送的预上传；已接受消息的附件不受影响")
+async def discard_thread_attachment(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    messages: Annotated[RolloutCheckpointSaver, Depends(get_rollout_checkpoint_saver)],
+    file_id: str = Query(min_length=1),
+) -> APIResponse[None]:
+    try:
+        await attachment_store.discard_upload(session_id, thread_id, file_id, messages=messages)
+    except FileNotFoundError as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=None, request_id=request_id)
 
 
 @router.get("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[ThreadAttachmentListDTO],

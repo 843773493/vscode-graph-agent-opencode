@@ -191,6 +191,9 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             "JOIN attachment_directories d ON d.attachment_id=a.attachment_id "
             "JOIN attachment_directory_files f ON f.attachment_id=a.attachment_id AND f.role='original' "
             "WHERE a.session_id=? AND a.thread_id=? AND a.attachment_id>? "
+            "AND NOT EXISTS (SELECT 1 FROM attachment_directory_ingests i WHERE i.attachment_id=a.attachment_id "
+            "AND substr(i.message_id,1,6)='draft_' "
+            "AND (a.binding_token='upload:'||i.ingest_idempotency_key OR d.availability='tombstoned')) "
             "ORDER BY a.attachment_id LIMIT ?", (session_id, thread_id, after, limit),
         )
         originals = []
@@ -264,7 +267,11 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
         with self.write_transaction() as connection:
             connection.execute(
                 "UPDATE attachment_directory_associations SET binding_token=?,updated_at=? "
-                "WHERE session_id=? AND thread_id=? AND state='active'",
+                "WHERE session_id=? AND thread_id=? AND state='active' "
+                "AND NOT EXISTS (SELECT 1 FROM attachment_directory_ingests i "
+                "WHERE i.attachment_id=attachment_directory_associations.attachment_id "
+                "AND substr(i.message_id,1,6)='draft_' "
+                "AND attachment_directory_associations.binding_token='upload:'||i.ingest_idempotency_key)",
                 (binding_token, now.astimezone(UTC).isoformat(), session_id, thread_id),
             )
 
