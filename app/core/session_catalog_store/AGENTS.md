@@ -48,7 +48,7 @@ creation record journal（`creation_journal.py`）、fork source capture journal
   顺序（8.1-F 缓存失效与 10.3b 的 `current_generation()` 正确性依赖此不变量）。
 - 不得在 `_initialize` 内把权威表当空表重建；缺表/版本未知必须 fail-closed。
 - 当前v11将实际capture坐标及其journal绑定hash保存在原`fork_source_captures.source_point_json`；
-  创建请求preimage仍不可变。`upgrade_v10.py`只显式转换一份完整v10库的一致副本，
+  创建请求preimage仍不可变。`migrations/v10_sqlite_to_v11_sqlite.py`只显式转换一份完整v10库的一致副本，
   依据原请求的精确view/revision/anchor恢复旧坐标，不安装副本、不扫描业务文件，
   不支持无法还原精确冻结点的旧capture。缺队列结构的开发半库不能自动补建。
 
