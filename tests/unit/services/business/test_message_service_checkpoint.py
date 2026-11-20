@@ -31,6 +31,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.message_content import is_user_visible_message
 from tests.support.message_service import build_message_service
+from tests.support.messages import compaction_summary_message
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 
@@ -703,7 +704,7 @@ async def test_agent_context_state_applies_summarization_event(
             ],
             "_summarization_event": {
                 "cutoff_index": 2,
-                "summary_message": HumanMessage(
+                "summary_message": compaction_summary_message(
                     content="旧上下文摘要",
                     id="summary-old-context",
                     additional_kwargs={"lc_source": "summarization"},
@@ -743,7 +744,7 @@ async def test_agent_context_state_applies_summarization_event(
     assert state["compaction_cutoff"] == 2
     assert "history_file_path" not in state
     assert [record["content"] for record in state["records"]] == [
-        "旧上下文摘要",
+        checkpoint["channel_values"]["_summarization_event"]["summary_message"].content,
         "保留问题",
         "保留回答",
     ]
@@ -780,7 +781,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
                 "strategy": "cache_preserving",
                 "cutoff_index": 4,
                 "cache_prefix_messages": prefix,
-                "summary_message": HumanMessage(
+                "summary_message": compaction_summary_message(
                     content="中段上下文摘要",
                     id="summary-cache-preserving-context",
                     additional_kwargs={"lc_source": "summarization"},
@@ -819,7 +820,7 @@ async def test_agent_context_state_applies_cache_preserving_event(
     assert [record["content"] for record in state["records"]] == [
         "稳定问题",
         "稳定回答",
-        "中段上下文摘要",
+        checkpoint["channel_values"]["_summarization_event"]["summary_message"].content,
         "近期问题",
     ]
 

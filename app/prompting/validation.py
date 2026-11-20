@@ -60,10 +60,11 @@ def internal_prompt_metadata(
 ) -> Mapping[str, object] | None:
     if not metadata:
         return None
-    if INTERNAL_PROMPT_VERSION_METADATA_KEY in metadata:
+    markers = (INTERNAL_PROMPT_VERSION_METADATA_KEY, INTERNAL_PROMPT_KIND_METADATA_KEY)
+    if any(key in metadata for key in markers):
         return metadata
     nested = metadata.get("message_metadata")
-    if isinstance(nested, Mapping) and INTERNAL_PROMPT_VERSION_METADATA_KEY in nested:
+    if isinstance(nested, Mapping) and any(key in nested for key in markers):
         merged = dict(nested)
         for key in ("display_content", "internal_display_kind"):
             if key in metadata:
@@ -80,7 +81,7 @@ def validate_internal_message(
 ) -> None:
     structured_metadata = internal_prompt_metadata(metadata)
     if structured_metadata is None:
-        return
+        raise ValueError("内部结构消息缺少 structured_prompt metadata")
     if not isinstance(content, str):
         raise TypeError("内部结构消息内容必须是字符串")
     version = structured_metadata.get(INTERNAL_PROMPT_VERSION_METADATA_KEY)

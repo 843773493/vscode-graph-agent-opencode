@@ -52,6 +52,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.support.messages import compaction_summary_message
 
 SESSION_ID = "ses_019c0fd1773c7b198a60f53aeeee17eb"
 POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call"}})
@@ -442,7 +443,7 @@ def _apply_checkpoint_boundary(saver: RolloutCheckpointSaver, execution_id: str,
             checkpoint = _checkpoint("cp-compacted", messages)
             checkpoint["channel_values"]["_summarization_event"] = {
                 "cutoff_index": len(messages), "cutoff_message_id": messages[-1].id,
-                "summary_message": HumanMessage(content="压缩摘要", id="activation-summary"),
+                "summary_message": compaction_summary_message(content="压缩摘要", id="activation-summary"),
             }
             checkpoint["channel_versions"] = {name: "2" for name in checkpoint["channel_values"]}
             checkpoint["updated_channels"] = list(checkpoint["channel_values"])

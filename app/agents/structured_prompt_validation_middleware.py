@@ -8,7 +8,7 @@ from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain_core.messages import AIMessage
 
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
-from app.prompting.validation import validate_internal_message
+from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 
 
 class StructuredPromptValidationMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -20,10 +20,8 @@ class StructuredPromptValidationMiddleware(AgentMiddleware[Any, Any, Any]):
             version = message.response_metadata.get("context_source_protocol")
             if version is not None:
                 parse_source_blocks(message.content, expected_version=version)
-            validate_internal_message(
-                getattr(message, "content", None),
-                getattr(message, "response_metadata", None),
-            )
+            if internal_prompt_metadata(message.response_metadata) is not None:
+                validate_internal_message(message.content, message.response_metadata)
 
     def wrap_model_call(
         self,

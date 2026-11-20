@@ -41,6 +41,26 @@ def test_factory_builds_registered_internal_message_and_escapes_data():
     validate_internal_message(message.content, message.metadata)
 
 
+@pytest.mark.parametrize("metadata", [{}, {"internal": True}, {"structured_prompt_kind": "checkpoint_reminder"}])
+def test_internal_validator_requires_schema_metadata(metadata):
+    with pytest.raises(ValueError, match="metadata|schema version"):
+        validate_internal_message("裸附加正文", metadata)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_middleware_rejects_partial_internal_metadata_but_preserves_user_text(nested):
+    metadata = {"internal": True, "structured_prompt_kind": "checkpoint_reminder"}
+    request = MagicMock()
+    request.messages = [HumanMessage(
+        content="裸附加正文",
+        response_metadata={"message_metadata": metadata} if nested else metadata,
+    )]
+    with pytest.raises(ValueError, match="schema version"):
+        StructuredPromptValidationMiddleware._validate(request)
+    request.messages = [HumanMessage(content="<system_reminder>用户讨论标签</system_reminder>")]
+    StructuredPromptValidationMiddleware._validate(request)
+
+
 def test_factory_rejects_unregistered_kind_and_illegal_section():
     with pytest.raises(ValueError, match="未注册的内部结构消息 kind"):
         internal_message_factory.build(kind="unknown", control="x")

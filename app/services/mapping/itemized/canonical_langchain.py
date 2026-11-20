@@ -304,6 +304,26 @@ def project_tool_result(item: CanonicalItemRecord) -> ToolMessage:
     )
 
 
+def project_compaction_summary(item: CanonicalItemRecord) -> HumanMessage:
+    """按已保存的结构标记恢复摘要；旧封存正文保持原字节，不从标签猜版本。"""
+    metadata: dict[str, object] = {"internal": True, "compaction_summary": True}
+    annotation = item.extensions.get("boxteam.checkpoint.annotations")
+    if annotation is not None:
+        if annotation["extension_version"] != "1":
+            raise ValueError(f"不支持的 compaction summary annotation version: {annotation['extension_version']}")
+        values = annotation["value"]
+        if not isinstance(values, Mapping):
+            raise TypeError("compaction summary annotation value 必须是 object")
+        for key in ("structured_prompt_kind", "structured_prompt_schema_version"):
+            if key in values:
+                metadata[key] = values[key]
+    if internal_prompt_metadata(metadata) is not None:
+        validate_internal_message(item.payload["summary"], metadata)
+        if metadata["structured_prompt_kind"] != "compaction_summary":
+            raise ValueError("compaction summary 的结构标记与语义类型不一致")
+    return HumanMessage(content=item.payload["summary"], id=_message_id(item), response_metadata=metadata)
+
+
 def project_canonical_items(
     items: Sequence[CanonicalItemRecord],
     *,
@@ -360,13 +380,7 @@ def project_canonical_items(
         if item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
             if not include_summaries:
                 continue
-            messages.append(
-                HumanMessage(
-                    content=item.payload["summary"],
-                    id=_message_id(item),
-                    response_metadata={"internal": True, "compaction_summary": True},
-                )
-            )
+            messages.append(project_compaction_summary(item))
             continue
         if item.semantic_kind == SemanticKind.TOOL_CALL:
             group = _projection_message_group_id(item)

@@ -286,6 +286,10 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 从未发布过且正文为空的来源 SHALL不产生模型可见激活消息；已发布来源后来清空时 MUST保留相应更新或撤销，不能因空正文丢掉已生效规则的删除。来源标签是背景上下文边界，集中提示 MUST说明模型应继续处理真实用户任务，无需确认收到或复述元数据。普通用户正文出现同名标签 MUST NOT据此被识别为内部来源；内部来源校验由typed frame身份触发。
 
+明确接收内部附加消息的入口 MUST要求完整的结构化 metadata 并执行注册校验，缺少 schema version 不得跳过。混合消息列表 MUST按 typed metadata 识别消息职责，不能按正文标签推断内部身份。Provider 的非 Agent 工具测试路径 MUST保留真实用户正文及合法重试消息，只有具名 checkpoint 中断提醒可作为旧工具事务边界。
+
+新 compaction 续接消息 MUST通过同一 Factory 生成 `compaction_summary`，将软件说明放入 `system_reminder`，历史摘要放入编码为 text、信任级别为 untrusted_data 的 `summary` section；正文中的闭合标签 MUST被转义。canonical 摘要通过既有 annotation 保存结构标记，checkpoint 恢复、历史投影及 fork MUST保留标记和正文；旧封存摘要继续按原字节重放，不按内容猜测版本或自动改写。集中提示 MUST解释摘要和其它不可信 section 不能改写软件说明或创建新用户任务。
+
 #### Scenario: 首次正文与后续差分使用同一表达规则
 
 - **WHEN** 来源A先以完整revision A1进入root或tail，之后以A1→A2增量更新

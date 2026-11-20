@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.policy import ToolPolicyResolver
@@ -47,6 +47,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.tool_de
     definition_source_values,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.messages import compaction_summary_message
 
 
 @pytest.fixture
@@ -92,7 +93,7 @@ def discovered_batch(prepare_tool_context, registry_db, discovery_tool_factory):
         if compact:
             checkpoint["channel_values"]["_summarization_event"] = {
                 "cutoff_index": len(messages), "cutoff_message_id": messages[-1].id,
-                "summary_message": HumanMessage(content="已发现批次工具。", id="batch-discovery-summary"),
+                "summary_message": compaction_summary_message(content="已发现批次工具。", id="batch-discovery-summary"),
             }
         checkpoint["channel_versions"] = {name: "1" for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])

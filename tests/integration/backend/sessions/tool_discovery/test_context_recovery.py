@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.policy import ToolPolicyResolver
@@ -18,6 +18,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     definition_source_values,
 )
+from tests.support.messages import compaction_summary_message
 
 
 @pytest.fixture
@@ -53,7 +54,7 @@ def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory)
         if compact:
             checkpoint["channel_values"]["_summarization_event"] = {
                 "cutoff_index": 2, "cutoff_message_id": messages[-1].id,
-                "summary_message": HumanMessage(content="已发现所需工具。", id="recovery-summary"),
+                "summary_message": compaction_summary_message(content="已发现所需工具。", id="recovery-summary"),
             }
         checkpoint["channel_versions"] = {name: "1" for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])

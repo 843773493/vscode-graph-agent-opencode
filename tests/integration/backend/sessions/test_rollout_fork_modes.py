@@ -253,6 +253,7 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
+from tests.support.messages import compaction_summary_message
 from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
@@ -4060,9 +4061,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     admitted_root = next(item for item in saver._storage.storage.read_items(source.session_id, source_thread)
                          if item.item_id == "compaction-source-root")
     user = messages_from_dict([LangChainMessageCodec().project_message((admitted_root,))])[0]
-    summary = HumanMessage(content="旧上下文摘要", id="compaction-summary", response_metadata={
-        "internal": True,
-        "compaction_summary": True,
+    summary = compaction_summary_message(content="旧上下文摘要", id="compaction-summary", response_metadata={
         "provenance_relations": [ItemProvenanceRelation(
             relation="derived_from", target_kind="canonical_item", target_id="compaction-old-root",
             target_session_id=source.session_id, target_thread_id=source_thread,
@@ -4218,7 +4217,8 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     assert [message.response_metadata.get("canonical_item_manifests") for message in target_messages] == expected_manifest_groups
     summary_messages = [message for message in target_messages if message.id == "compaction-summary"]
     assert len(summary_messages) == 1
-    assert summary_messages[0].content == "旧上下文摘要"
+    assert summary_messages[0].content == summary.content
+    assert summary_messages[0].response_metadata["structured_prompt_kind"] == "compaction_summary"
     source_checkpoint_id = selected_checkpoint.checkpoint["id"]
     source_restored = await _get_tuple(
         fork_context, source.session_id, saver=cold, checkpoint_id=source_checkpoint_id,
@@ -4384,7 +4384,7 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
     user = messages_from_dict([LangChainMessageCodec().project_message((root,))])[0]
     retained = [result, final, user]
     summarized = [message for message in old_messages if message.id not in {"queue-tool-result", "queue-tool-final"}]
-    summary = HumanMessage(content="已压缩的前置说明", id="queue-summary")
+    summary = compaction_summary_message(content="已压缩的前置说明", id="queue-summary")
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
                                  preserved_messages=retained, state_cutoff=len(summarized)),
@@ -9099,7 +9099,7 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         admitted = next(item for item in context.saver._storage.storage.read_items(source.session_id, thread_id)
                         if item.item_id == "unclaimed-copy-root")
         user = messages_from_dict([LangChainMessageCodec().project_message((admitted,))])[0]
-        summary = HumanMessage(content="旧附件的检查已经完成", id="unclaimed-copy-summary", response_metadata={
+        summary = compaction_summary_message(content="旧附件的检查已经完成", id="unclaimed-copy-summary", response_metadata={
             "provenance_relations": [ItemProvenanceRelation(
                 relation="derived_from", target_kind="canonical_item", target_id="item-retry-user",
                 target_session_id=source.session_id, target_thread_id=thread_id, target_turn_id="turn-retry",

@@ -888,6 +888,12 @@ def test_responses_history_drops_late_tool_result_after_job_boundary():
 def test_responses_history_isolates_previous_tool_transactions_and_internal_reminder():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+    from app.prompting import internal_message_factory
+
+    reminder = internal_message_factory.build(
+        kind="checkpoint_reminder", control="用户主动取消旧任务。请停止当前输出。",
+    )
+
     stale_call_id = "call_QWLcaGAtSpzygm4gaup0JyJS"
     model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
@@ -906,12 +912,8 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
             ),
             ToolMessage(content="旧工具结果", tool_call_id=stale_call_id),
             HumanMessage(
-                content=(
-                    "<system_reminder>\n"
-                    "用户主动取消旧任务。请停止当前输出。\n"
-                    "</system_reminder>"
-                ),
-                response_metadata={"internal": True},
+                content=reminder.content,
+                response_metadata=reminder.metadata,
             ),
             HumanMessage(content="当前任务只读取 project.godot"),
         ],
@@ -926,6 +928,20 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
         item.get("content") == "当前任务只读取 project.godot"
         for item in payload["input"]
     )
+
+
+def test_responses_payload_preserves_user_literal_tag_and_tool_retry():
+    from langchain_core.messages import HumanMessage
+
+    from app.prompting import internal_message_factory
+
+    user = "<system_reminder>请解释这个标签</system_reminder>"
+    retry = internal_message_factory.build(kind="tool_test_retry", control="继续调用测试工具。")
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    payload = model._responses_payload([
+        HumanMessage(content=user), HumanMessage(content=retry.content, response_metadata=retry.metadata),
+    ], None, {})
+    assert [item["content"] for item in payload["input"]] == [user, retry.content]
 
 
 def test_responses_history_recovers_from_persisted_orphan_tool_result():

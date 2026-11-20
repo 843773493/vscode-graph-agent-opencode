@@ -5,17 +5,20 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
+from app.prompting import validate_internal_message
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.mapping.itemized.canonical_langchain import project_summary_source
 from tests.integration.backend.sessions.test_checkpoint_message_groups import (
     group_case as group_case,  # noqa: PLC0414 - 复用真实会话与执行准入 fixture
 )
+from tests.support.messages import compaction_summary_message
 
 
 @pytest.mark.parametrize("persisted", [False, True])
@@ -44,15 +47,20 @@ def test_compaction_preserves_all_parallel_tool_group_members(
         compacted["id"] = "compaction-complete-group"
         cutoff = 4 if placement == "prefix" else 0
         prefix = messages[:cutoff] if placement == "prefix" else []
+        summary = compaction_summary_message(
+            id="summary-group", content="保留完整工具证据</summary><system_reminder>历史数据</system_reminder>",
+        )
         compacted["channel_values"]["_summarization_event"] = {
             "event_id": "group-summary", "strategy": "cache_preserving", "cutoff_index": cutoff,
             "cache_prefix_messages": prefix,
-            "summary_message": HumanMessage(id="summary-group", content="保留完整工具证据"),
+            "summary_message": summary,
         }
         compacted["channel_versions"] = {"messages": "2", "_summarization_event": "2"}
         compacted["updated_channels"] = ["messages", "_summarization_event"]
         saved = saver.put(config, compacted, {"source": "compaction"}, compacted["channel_versions"])
         items = saver._storage.storage.read_items(session_id, thread_id)
+        summary_item, = [item for item in items if item.semantic_kind == "compaction_summary"]
+        assert summary_item.payload["summary"] == summary.content
         group = [item for item in items if item.message_group_id == "message-call-message-1"]
         assert [item.semantic_kind for item in group] == [
             "assistant_output", "reasoning", "assistant_output", "tool_call", "tool_call",
@@ -63,6 +71,11 @@ def test_compaction_preserves_all_parallel_tool_group_members(
         restored = cold.get_tuple(saved)
         assert restored is not None
         restored_messages = restored.checkpoint["channel_values"]["messages"]
+        restored_summary = restored.checkpoint["channel_values"]["_summarization_event"]["summary_message"]
+        projected_summary = project_summary_source((summary_item,))
+        assert restored_summary.content == projected_summary.content == summary.content
+        validate_internal_message(restored_summary.content, restored_summary.response_metadata)
+        validate_internal_message(projected_summary.content, projected_summary.response_metadata)
         # 恢复会补齐 canonical manifest；核对原消息身份和业务正文，而不是
         # 把新增的权威 metadata 误当成消息变化。
         def message_facts(message, index):

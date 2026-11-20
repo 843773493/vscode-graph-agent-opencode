@@ -35,6 +35,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
@@ -413,7 +414,7 @@ def test_repeated_compaction_validates_event_summary_in_active_history(
     state = list(_seed_closed_tool_group(saver))
     storage = saver._storage.storage
     thread = storage.main_thread_id(SESSION_ID)
-    summary = HumanMessage(content="已完成读取准备", id="first-compaction-summary")
+    summary = compaction_summary_message(content="已完成读取准备", id="first-compaction-summary")
     # 摘要只存入 event 并投影到 active view；raw channel 保留原始 cutoff 坐标。
     _put_checkpoint(
         saver, build_checkpoint_config(thread), "checkpoint-compacted", state, 3,

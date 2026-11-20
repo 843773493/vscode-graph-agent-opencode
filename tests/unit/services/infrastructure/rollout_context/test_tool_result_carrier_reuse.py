@@ -84,6 +84,7 @@ from app.services.infrastructure.rollout_context.store import (
 )
 from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.canonical_langchain import project_tool_result
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
@@ -851,7 +852,7 @@ async def test_compaction_checkpoint_preserves_selected_state_cutoff(
     assert carrier_saver.safe_compaction_prefix_cutoffs(
         SESSION_ID, thread_id, checkpoint_ns="", state_messages=state, cutoff_indexes=[1, 3],
     ) == frozenset({1, 3})
-    summary = HumanMessage(content="已完成工具调用，保留真实结果。", id="carrier-summary")
+    summary = compaction_summary_message(content="已完成工具调用，保留真实结果。", id="carrier-summary")
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=state[:1], messages_to_summarize=state[1:3],
                                  preserved_messages=state[3:], state_cutoff=3),

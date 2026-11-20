@@ -33,6 +33,8 @@ app/prompting/
 - 控制通知使用 `system_reminder`；CSM 来源使用独立的 `context_sources` 根标签，二者共用注册表、Factory 编码和 section 校验。`source_defined` 表示沿用各来源资格，不将正文提升为控制指令。
 - CSM 来源由 typed frame metadata 标识后校验；不得仅因普通用户正文含相同标签而将其认作内部消息。
 - 未注册 kind、非法嵌套和 metadata/content 不一致必须快速失败。
+- 已知内部入口必须调用严格校验，不得因缺少 schema metadata 跳过；混合消息列表仅按 typed metadata 识别结构消息，不按正文标签猜身份。
+- 新压缩续接使用 `compaction_summary` kind 和不可信 `summary` section；canonical annotation 保存结构标记，恢复不得重写旧封存正文。
 
 # 典型用途示例
 

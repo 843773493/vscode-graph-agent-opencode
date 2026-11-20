@@ -82,6 +82,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
+from tests.support.messages import compaction_summary_message
 
 RULES_URI = "boxteam://workspace/agent-spec/epoch-test"
 SKILL_URI = "boxteam://workspace/test/resources/skills/debugging/SKILL.md"
@@ -174,7 +175,7 @@ class EpochCase:
             checkpoint["channel_values"]["_summarization_event"] = {
                 "cutoff_index": len(checkpoint["channel_values"]["messages"]),
                 "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
-                "summary_message": HumanMessage(content="已完成的对话摘要", id=f"summary-{key}"),
+                "summary_message": compaction_summary_message(content="已完成的对话摘要", id=f"summary-{key}"),
             }
         checkpoint["channel_versions"] = {name: key for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])

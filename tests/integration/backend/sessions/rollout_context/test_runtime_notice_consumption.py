@@ -52,6 +52,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 
@@ -374,7 +375,7 @@ def test_source_boundary_keeps_primary_reason_and_confirms_notice_in_same_seal(n
     if reason == "compaction":
         checkpoint["channel_values"]["_summarization_event"] = {
             "cutoff_index": 1, "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
-            "summary_message": HumanMessage(content="已完成的对话摘要", id="summary-notice-source"),
+            "summary_message": compaction_summary_message(content="已完成的对话摘要", id="summary-notice-source"),
         }
     checkpoint["channel_versions"] = {key: checkpoint["id"] for key in checkpoint["channel_values"]}
     with case.scope(user):

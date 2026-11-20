@@ -65,7 +65,10 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     project_annotations,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
-from app.services.mapping.itemized.canonical_langchain import project_tool_result
+from app.services.mapping.itemized.canonical_langchain import (
+    project_compaction_summary,
+    project_tool_result,
+)
 from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
 )
@@ -593,8 +596,7 @@ class LangChainMessageCodec:
                 id=message_id,
             )
         elif item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
-            message = HumanMessage(content=item.payload["summary"], id=message_id,
-                                   response_metadata={"internal": True, "compaction_summary": True})
+            message = project_compaction_summary(item)
         elif item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             # runtime notice 仍沿用 checkpoint 的 HumanMessage wire projection，
             # 但通过 canonical semantic kind 恢复 internal 标记，避免它被

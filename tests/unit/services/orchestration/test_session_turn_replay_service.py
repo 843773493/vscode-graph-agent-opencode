@@ -29,6 +29,7 @@ from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
 from tests.support.message_service import build_message_service
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.fixture_output import commit_fixture_output
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
@@ -281,7 +282,7 @@ async def _build_service(
         todos=["after_second"],
         summarization_event={
             "cutoff_index": 2,
-            "summary_message": HumanMessage(id="summary-first-turn", content="第一轮摘要"),
+            "summary_message": compaction_summary_message(id="summary-first-turn", content="第一轮摘要"),
             "file_path": "/history/ses_019c205391bb7a4b81b6728df70f63e6.jsonl",
         },
     )

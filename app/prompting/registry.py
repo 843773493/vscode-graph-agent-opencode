@@ -207,6 +207,13 @@ TAG_SPECS = (
         "system_reminder",
     ),
     PromptTagSpec(
+        "summary",
+        PromptTrustLevel.untrusted_data,
+        PromptContentCodec.text,
+        PromptPlacement.internal_human,
+        "system_reminder",
+    ),
+    PromptTagSpec(
         "session_message",
         PromptTrustLevel.untrusted_data,
         PromptContentCodec.text,
@@ -307,6 +314,7 @@ INTERNAL_MESSAGE_KIND_SPECS = (
         frozenset({"control_context", "untrusted_instructions"}),
     ),
     InternalMessageKindSpec("compaction_summary_instruction", frozenset()),
+    InternalMessageKindSpec("compaction_summary", frozenset({"summary"}), frozenset({"summary"})),
     InternalMessageKindSpec("compaction_retry_marker", frozenset()),
 )
 
