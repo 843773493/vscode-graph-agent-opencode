@@ -12,10 +12,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 )
 
 _CARRIERS_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "migrations/history_message_carriers.sql",
-) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/content_carrier_replacements.sql")
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/history_message_carriers.sql",
+) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/history/content_carrier_replacements.sql")
 _SURVIVOR_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/survivor.sql",
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/survivor.sql",
 )
 # 无模型 scope 的 item 各自独立；其余用 raw/scoped ID 缩小候选后核对权威还原身份。
 # 较早载体必须仍在当前 view 存活，查重范围不能随本页的 lower_ordinal 截断。
