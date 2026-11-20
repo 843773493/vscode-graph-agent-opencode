@@ -194,15 +194,24 @@ export class SettingsEditor2 extends EditorPane {`);
       DOM.append(this.settingsTreeContainer, DOM.$('div')),
       DOM.append(this.headerContainer.querySelector<HTMLElement>('.settings-header-controls')!, DOM.$('div')),
       (active: boolean) => {
-        // 管理层覆盖正文时保留原树测量，避免后台更新把行高测成零。
-        this.settingsTree.getHTMLElement().style.visibility = active ? 'hidden' : '';
-        this.settingsTree.getHTMLElement().style.display = this.entityKind ? 'none' : '';
+        this.settingsTree.getHTMLElement().style.display = active || this.entityKind ? 'none' : '';
         this.entityContainer.style.display = !active && this.entityKind ? 'block' : 'none';
         this.rootElement.classList.toggle('boxteam-settings-management', active);
       }, target => this.settingsNavigation.openGatewayConfiguration(target)));`);
     contents = replaceOnce(contents, '\t\t\t\tthis.settingsTree.layout(height, width);', `
         if (height !== undefined) this.entityContainer.style.height = height + 'px';
-        this.settingsTree.layout(height, width);`);
+        if (this.isSettingsTreeVisible()) this.settingsTree.layout(height, width);`);
+    contents = replaceOnce(contents, '\t\t\t\tthis.settingsTree.updateElementHeight(element, height);',
+      '\t\t\t\tif (this.isSettingsTreeVisible()) this.settingsTree.updateElementHeight(element, height);');
+    contents = replaceOnce(contents, '\t\tif (this.isVisible()\n\t\t\t&& this.settingsTree.hasElement(element)',
+      '\t\tif (this.isSettingsTreeVisible()\n\t\t\t&& this.settingsTree.hasElement(element)');
+    contents = replaceOnce(contents, '\t\tif (this.isVisible() && this.currentSettingsModel) {',
+      '\t\tif (this.isSettingsTreeVisible() && this.currentSettingsModel) {');
+    contents = replaceOnce(contents, '\tprivate refreshTree(): void {', `  private isSettingsTreeVisible(): boolean {
+    return this.isVisible() && !this.entityKind && !this.managementView?.active;
+  }
+
+\tprivate refreshTree(): void {`);
     contents = replaceOnce(contents, '\t\treturn this.viewState;\n\t}\n\n\toverride setOptions', `\t\treturn { ...this.viewState, settingsLocation: this.targetSettingsContext.target && settingsHistoryLocation(this.targetSettingsContext.target.location), settingsCategory: this.settingsNavigation.selected, ...(this.entityKind ? this.entityView?.selection : {}) };
 \t}\n\n\toverride setOptions`);
     contents = replaceOnce(contents, '\tprivate _setOptions(options: ISettingsEditorOptions): void {', `\tprivate _setOptions(options: ISettingsEditorOptions): void {
@@ -274,10 +283,11 @@ export class SettingsEditor2 extends EditorPane {`);
     const node = this.settingsNavigation.selectedNode;
     if (this.currentSettingsModel && this.tocTree.hasElement(node)) {
       this.tocTree.setSelection([node]);
+      this.tocTree.setFocus([node]);
     }
     this.showDefinitions(category === 'providers' || category === 'agents' ? category : undefined, id, false, modelId);
-    if (this.currentSettingsModel) this.renderTree(undefined, true);
     this.managementView.show(category, this.targetSettingsContext.target, options, !!this.searchWidget.getValue().trim());
+    if (this.currentSettingsModel) this.renderTree(undefined, true);
   }
 
   private showDefinitions(kind?: DefinitionEditorOptions['definitionKind'], id?: string, hideManagement = true, modelId?: string): void {
