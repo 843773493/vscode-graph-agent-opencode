@@ -84,7 +84,7 @@ StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`.
 
 StateStore按实际阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause。事务失败回滚整批，保留已提交记录，Manager释放在途保存后仍允许下一次显式请求，不自动重试。回滚或诊断也失败时通过AggregateError保留原异常，公开主错误码和阶段不变。真实PTY/HTTP验收通过SQLite事务失败核原进程身份、解除故障后的同尺寸保存和真实资源回收。
 
-旧schema 3 JSON只允许停止终端服务后显式一次性导入：从应用根目录执行`node src/workspace-services/terminal/server/storage/importLegacyState.mjs --workspace <绝对工作区路径> --workspace-id <UUID>`。命令核对现有工作区身份、全部记录和唯一身份，要求目标库不存在，通过独占临时数据库和拒绝覆盖的原子发布完成导入；原JSON保留作离线原件。普通链路只有SQLite；目标库缺失但存在旧JSON时明确要求导入，不自动迁移、不双读双写。
+旧schema 3 JSON只允许停止终端服务后显式一次性导入：从应用根目录执行`node src/workspace-services/terminal/server/storage/migrations/v3_json_to_v1_sqlite.mjs --workspace <绝对工作区路径> --workspace-id <UUID>`。命令核对现有工作区身份、全部记录和唯一身份，要求目标库不存在，通过独占临时数据库和拒绝覆盖的原子发布完成导入；原JSON保留作离线原件。普通链路只有SQLite；目标库缺失但存在旧JSON时明确要求导入，不自动迁移、不双读双写。
 
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 
