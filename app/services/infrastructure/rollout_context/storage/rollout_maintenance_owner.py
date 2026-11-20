@@ -48,21 +48,14 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
-    COMMIT_IDEMPOTENCY_INDEX_SQL,
-    CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL,
-    CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
-    ITEM_CATALOG_LOCATOR_INDEX_SQL,
-    ITEM_CATALOG_MODEL_TOOL_INDEX_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
-    MODEL_CALLS_ASSEMBLY_INDEX_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
-    SOURCE_OVERLAY_LOCATOR_INDEXES_SQL,
     TEAM_OBSERVATIONS_MIGRATION_SQL,
-    TOOL_CALLS_MESSAGE_INDEX_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
+    ensure_query_indexes,
     initialize_rollout_schema,
 )
 from app.services.infrastructure.rollout_context.storage.schema_channel_versions import (
@@ -75,6 +68,9 @@ from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
+)
+from app.services.infrastructure.rollout_context.storage.transaction_projections import (
+    RolloutTransactionProjectionMixin,
 )
 
 if TYPE_CHECKING:
@@ -110,6 +106,95 @@ def reconcile_jsonl_tail(path: Path, committed_offset: int) -> None:
 
 
 __all__ = ["RolloutMaintenanceOwner"]
+
+
+def migrate_schema_snapshot(
+    connection: sqlite3.Connection, *, current_version: int, to_version: int,
+    migration_name: str, migration_sql: str, jsonl_path: Path,
+    transaction_id: str, timestamp: str,
+) -> None:
+    """在调用方持有的候选事务内沿唯一 SQL／审计合同执行一阶迁移。"""
+    checksum = _hash_bytes(migration_sql.encode("utf-8"))
+    migration_cursor = connection.execute(
+        "INSERT INTO schema_migrations(from_version, to_version, migration_name, migration_checksum, status, started_at) VALUES (?, ?, ?, ?, 'started', ?)",
+        (
+            current_version,
+            to_version,
+            migration_name,
+            checksum,
+            timestamp,
+        ),
+    )
+    migration_id = strict_non_negative_int(
+        migration_cursor.lastrowid,
+        field="schema_migrations.migration_id",
+    )
+    if (current_version, to_version) == (19, 20):
+        if migration_sql != CHANNEL_VALUES_MIGRATION_SQL:
+            raise ValueError("schema migration 19→20 必须使用登记的状态版本 SQL")
+        validate_legacy_channel_values(connection)
+    if (current_version, to_version) == (20, 21) and migration_sql != MESSAGES_VERSION_MIGRATION_SQL:
+        raise ValueError("schema migration 20→21 必须使用登记的消息版本 SQL")
+    if (current_version, to_version) == (21, 22) and migration_sql != ASSEMBLY_CONTENT_SCHEMA_SQL:
+        raise ValueError("schema migration 21→22 必须使用登记的assembly内容SQL")
+    if (current_version, to_version) == (22, 23) and migration_sql != VIEW_MEMBERSHIP_MIGRATION_SQL:
+        raise ValueError("schema migration 22→23 必须使用登记的view成员SQL")
+    if (current_version, to_version) == (23, 24) and migration_sql != EXECUTION_QUEUE_SCHEMA_SQL:
+        raise ValueError("schema migration 23→24 必须使用登记的执行队列 SQL")
+    if (current_version, to_version) == (24, 25) and migration_sql != SKILL_SELECTION_MIGRATION_SQL:
+        raise ValueError("schema migration 24→25 必须使用登记的 Skill 选择 SQL")
+    if (current_version, to_version) == (25, 26) and migration_sql != VIEW_CREATION_MIGRATION_SQL:
+        raise ValueError("schema migration 25→26 必须使用登记的 view 创建顺序 SQL")
+    if (current_version, to_version) == (26, 27):
+        if migration_sql != EXECUTION_SCHEDULING_MIGRATION_SQL:
+            raise ValueError("schema migration 26→27 必须使用登记的执行调度 SQL")
+        if connection.execute("SELECT 1 FROM execution_queue WHERE phase<>'terminal' LIMIT 1").fetchone():
+            raise RuntimeError("升级前须在原运行时排空执行队列，不能重解释已冻结的输入上下文")
+    if (current_version, to_version) == (27, 28) and migration_sql != TEAM_OBSERVATIONS_MIGRATION_SQL:
+        raise ValueError("schema migration 27→28 必须使用登记的团队投递回执 SQL")
+    execute_atomic_schema_sql(connection, migration_sql)
+    if (current_version, to_version) == (27, 28):
+        migrate_team_source_observations(connection)
+    if (current_version, to_version) == (21, 22):
+        migrate_assembly_content(connection)
+    if (current_version, to_version) == (22, 23):
+        migrate_members(connection)
+        execute_atomic_schema_sql(connection, load_sql(__package__, "migrations/views/view_membership_022_023_finish.sql"))
+    meta_result = connection.execute(
+        "UPDATE database_meta SET schema_version = ?, updated_at = ? "
+        "WHERE singleton_id = 1",
+        (to_version, timestamp),
+    )
+    if meta_result.rowcount != 1:
+        raise RuntimeError("SQLite migration database_meta 更新失败")
+    migration_result = connection.execute(
+        "UPDATE schema_migrations SET status = 'completed', completed_at = ? WHERE migration_id = ?",
+        (timestamp, migration_id),
+    )
+    if migration_result.rowcount != 1:
+        raise RuntimeError("SQLite migration journal 更新失败")
+    control_sequence = RolloutTransactionProjectionMixin._insert_control(
+        connection,
+        "schema_migration",
+        "schema",
+        migration_name,
+        None,
+        None,
+        None,
+        {"from_version": current_version, "to_version": to_version},
+        transaction_id,
+        timestamp,
+    )
+    control_result = connection.execute(
+        "UPDATE database_meta SET last_control_sequence = ?, updated_at = ? WHERE singleton_id = 1",
+        (control_sequence, timestamp),
+    )
+    if control_result.rowcount != 1:
+        raise RuntimeError("SQLite migration control sequence 更新失败")
+    RolloutSchemaIntrospectionMixin._validate_schema_state(connection, expected_version=to_version)
+    RolloutSchemaIntrospectionMixin._validate_v2_commit_offsets(
+        connection, jsonl_path,
+    )
 
 
 class RolloutMaintenanceOwner(
@@ -217,7 +302,7 @@ class RolloutMaintenanceOwner(
                 if row[1] != storage_version.MESSAGE_FORMAT_VERSION:
                     raise RuntimeError("schema-incompatible: migration source message format 不一致")
                 validate_schema_journal(source, current_version)
-                self._validate_v2_commit_offsets(
+                self._host._validate_v2_commit_offsets(
                     source,
                     self._host.jsonl_path(
                         session_id, checkpoint_ns, thread_id=thread_id
@@ -241,88 +326,11 @@ class RolloutMaintenanceOwner(
                     thread_id, checkpoint_ns, session_id=session_id
                 ) as connection:
                     connection.execute("BEGIN IMMEDIATE")
-                    migration_cursor = connection.execute(
-                        "INSERT INTO schema_migrations(from_version, to_version, migration_name, migration_checksum, status, started_at) VALUES (?, ?, ?, ?, 'started', ?)",
-                        (
-                            current_version,
-                            to_version,
-                            migration_name,
-                            checksum,
-                            timestamp,
-                        ),
-                    )
-                    migration_id = strict_non_negative_int(
-                        migration_cursor.lastrowid,
-                        field="schema_migrations.migration_id",
-                    )
-                    if (current_version, to_version) == (19, 20):
-                        if migration_sql != CHANNEL_VALUES_MIGRATION_SQL:
-                            raise ValueError("schema migration 19→20 必须使用登记的状态版本 SQL")
-                        validate_legacy_channel_values(connection)
-                    if (current_version, to_version) == (20, 21) and migration_sql != MESSAGES_VERSION_MIGRATION_SQL:
-                        raise ValueError("schema migration 20→21 必须使用登记的消息版本 SQL")
-                    if (current_version, to_version) == (21, 22) and migration_sql != ASSEMBLY_CONTENT_SCHEMA_SQL:
-                        raise ValueError("schema migration 21→22 必须使用登记的assembly内容SQL")
-                    if (current_version, to_version) == (22, 23) and migration_sql != VIEW_MEMBERSHIP_MIGRATION_SQL:
-                        raise ValueError("schema migration 22→23 必须使用登记的view成员SQL")
-                    if (current_version, to_version) == (23, 24) and migration_sql != EXECUTION_QUEUE_SCHEMA_SQL:
-                        raise ValueError("schema migration 23→24 必须使用登记的执行队列 SQL")
-                    if (current_version, to_version) == (24, 25) and migration_sql != SKILL_SELECTION_MIGRATION_SQL:
-                        raise ValueError("schema migration 24→25 必须使用登记的 Skill 选择 SQL")
-                    if (current_version, to_version) == (25, 26) and migration_sql != VIEW_CREATION_MIGRATION_SQL:
-                        raise ValueError("schema migration 25→26 必须使用登记的 view 创建顺序 SQL")
-                    if (current_version, to_version) == (26, 27):
-                        if migration_sql != EXECUTION_SCHEDULING_MIGRATION_SQL:
-                            raise ValueError("schema migration 26→27 必须使用登记的执行调度 SQL")
-                        if connection.execute("SELECT 1 FROM execution_queue WHERE phase<>'terminal' LIMIT 1").fetchone():
-                            raise RuntimeError("升级前须在原运行时排空执行队列，不能重解释已冻结的输入上下文")
-                    if (current_version, to_version) == (27, 28) and migration_sql != TEAM_OBSERVATIONS_MIGRATION_SQL:
-                        raise ValueError("schema migration 27→28 必须使用登记的团队投递回执 SQL")
-                    execute_atomic_schema_sql(connection, migration_sql)
-                    if (current_version, to_version) == (27, 28):
-                        migrate_team_source_observations(connection)
-                    if (current_version, to_version) == (21, 22):
-                        migrate_assembly_content(connection)
-                    if (current_version, to_version) == (22, 23):
-                        migrate_members(connection)
-                        execute_atomic_schema_sql(connection, load_sql(__package__, "migrations/views/view_membership_022_023_finish.sql"))
-                    meta_result = connection.execute(
-                        "UPDATE database_meta SET schema_version = ?, updated_at = ? "
-                        "WHERE singleton_id = 1",
-                        (to_version, timestamp),
-                    )
-                    if meta_result.rowcount != 1:
-                        raise RuntimeError("SQLite migration database_meta 更新失败")
-                    migration_result = connection.execute(
-                        "UPDATE schema_migrations SET status = 'completed', completed_at = ? WHERE migration_id = ?",
-                        (timestamp, migration_id),
-                    )
-                    if migration_result.rowcount != 1:
-                        raise RuntimeError("SQLite migration journal 更新失败")
-                    control_sequence = self._host._insert_control(
-                        connection,
-                        "schema_migration",
-                        "schema",
-                        migration_name,
-                        None,
-                        None,
-                        None,
-                        {"from_version": current_version, "to_version": to_version},
-                        transaction_id,
-                        timestamp,
-                    )
-                    control_result = connection.execute(
-                        "UPDATE database_meta SET last_control_sequence = ?, updated_at = ? WHERE singleton_id = 1",
-                        (control_sequence, timestamp),
-                    )
-                    if control_result.rowcount != 1:
-                        raise RuntimeError("SQLite migration control sequence 更新失败")
-                    self._validate_schema_state(connection, expected_version=to_version)
-                    self._validate_v2_commit_offsets(
-                        connection,
-                        self._host.jsonl_path(
-                            session_id, checkpoint_ns, thread_id=thread_id
-                        ),
+                    migrate_schema_snapshot(
+                        connection, current_version=current_version, to_version=to_version,
+                        migration_name=migration_name, migration_sql=migration_sql,
+                        jsonl_path=self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
+                        transaction_id=transaction_id, timestamp=timestamp,
                     )
                     connection.commit()
             except BaseException as error:
@@ -611,7 +619,7 @@ class RolloutMaintenanceOwner(
                     )
                 # 先验证 meta、提交链及 catalog 的同一边界；损坏的 meta
                 # 不能成为截断依据，否则会在报错前删除已提交 item。
-                self._validate_v2_commit_offsets(
+                self._host._validate_v2_commit_offsets(
                     connection,
                     path,
                     validate_jsonl_items=validate_jsonl_items,
@@ -625,12 +633,5 @@ class RolloutMaintenanceOwner(
                     # 索引替换与其他补建共用事务，失败不能只删掉旧索引。
                     if not connection.in_transaction:
                         connection.execute("BEGIN IMMEDIATE")
-                    execute_atomic_schema_sql(connection, TOOL_CALLS_MESSAGE_INDEX_SQL)
-                    connection.execute(ITEM_CATALOG_LOCATOR_INDEX_SQL)
-                    connection.execute(COMMIT_IDEMPOTENCY_INDEX_SQL)
-                    connection.execute(ITEM_CATALOG_MODEL_TOOL_INDEX_SQL)
-                    connection.execute(MODEL_CALLS_ASSEMBLY_INDEX_SQL)
-                    connection.execute(CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL)
-                    connection.execute(CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL)
-                    execute_atomic_schema_sql(connection, SOURCE_OVERLAY_LOCATOR_INDEXES_SQL)
+                    ensure_query_indexes(connection)
                 return manifest

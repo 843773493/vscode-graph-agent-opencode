@@ -30,7 +30,7 @@ migrations/
 # 规范
 
 - Python 显式加载并协调执行顺序、事务、条件和参数，不扫描目录执行。
-- Python 转换只由 `rollout_maintenance_owner.py` 在原迁移事务中显式调用；复用现行正文与索引 owner，不复制运行时写入、hash 或 schema 定义。
+- Python 转换由 `rollout_maintenance_owner.py` 在原迁移事务中显式调用；固定来源的 `v26_sqlite_to_v28_sqlite.py` 由停写维护入口转换独立候选，复用该 owner 的同一迁移核心及现行查询索引；复用现行正文与索引 owner，不复制运行时写入、hash 或 schema 定义。
 - `assembly/assembly_refs_018_019.sql` 保持原始 UTF-8 字节（含无末尾换行），以保留迁移 checksum。
 - 按职责归组仅改变资源路径，不改变既有 SQL 名称、schema 版本、加载后的语句文本或有序迁移登记。
 - 修改后验证建库、冷重开、失败回滚及对应 fork/activation 入口。

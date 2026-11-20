@@ -33,6 +33,8 @@ TextStreamKind = Literal["markdown", "reasoning"]
 
 class BaseEvent(BaseModel):
     """所有事件的基类"""
+    # 此次登记现行事件 envelope 为 v1；后续不兼容字段变化必须递增，不混用 Trace SQLite schema。
+    format_version: Literal[1] = 1
     event_id: str
     part_id: str | None = None
     job_id: str

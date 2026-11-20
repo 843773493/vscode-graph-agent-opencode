@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
-from app.core.sqlite_state import load_sql
+from app.core.sqlite_state import _execute_migration_sql, load_sql
 from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
     ASSEMBLY_REF_SCHEMA_SQL,
 )
@@ -71,6 +71,18 @@ CONTEXT_SOURCE_VERSION_SCHEMA_SQL = load_sql(__package__, "migrations/context_so
 """checkpoint 控制状态版本与未应用的真实 view rebuild 事实。"""
 
 
+def ensure_query_indexes(connection: sqlite3.Connection) -> None:
+    """新库、初始化与停写升级共用现行查询索引，不改变正文事实。"""
+    for script in (
+        ITEM_CATALOG_LOCATOR_INDEX_SQL, COMMIT_IDEMPOTENCY_INDEX_SQL,
+        ITEM_CATALOG_MODEL_TOOL_INDEX_SQL, MODEL_CALLS_ASSEMBLY_INDEX_SQL,
+        CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL, CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL,
+        SOURCE_OVERLAY_LOCATOR_INDEXES_SQL, TOOL_CALLS_MESSAGE_INDEX_SQL,
+        load_sql(__package__, "migrations/execution/item_catalog_background_result_identity.sql"),
+    ):
+        _execute_migration_sql(connection, script)
+
+
 def initialize_rollout_schema(
     connection: sqlite3.Connection,
     *,
@@ -90,14 +102,6 @@ def initialize_rollout_schema(
         + CHANNEL_VALUES_SCHEMA_SQL
         + MESSAGES_SCHEMA_SQL
         + load_sql(__package__, "migrations/rollout.sql")
-        + ITEM_CATALOG_LOCATOR_INDEX_SQL
-        + COMMIT_IDEMPOTENCY_INDEX_SQL
-        + ITEM_CATALOG_MODEL_TOOL_INDEX_SQL
-        + MODEL_CALLS_ASSEMBLY_INDEX_SQL
-        + CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL
-        + CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL
-        + SOURCE_OVERLAY_LOCATOR_INDEXES_SQL
-        + TOOL_CALLS_MESSAGE_INDEX_SQL
         + VIEW_CREATION_SCHEMA_SQL
         + ASSEMBLY_CONTENT_SCHEMA_SQL
         + VIEW_MEMBERSHIP_SCHEMA_SQL
@@ -105,11 +109,7 @@ def initialize_rollout_schema(
         + EXECUTION_SCHEDULING_MIGRATION_SQL
     )
 
-    # 邮箱冷恢复按真实 ModelCall/ToolCall 定位，不能扫描全部已提交工具结果。
-    connection.execute(
-        load_sql(__package__, "migrations/execution/item_catalog_background_result_identity.sql")
-    )
-
+    ensure_query_indexes(connection)
     initialize_activation(connection)
 
 

@@ -18,6 +18,7 @@ import httpx
 import psutil
 import pytest
 
+from app.schemas.internal_v2.turn import TurnDetailDTO
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.workspace_identity_legacy_input import (
     business_snapshot,
@@ -124,7 +125,8 @@ def _dump(database: Path) -> str:
 
 
 def _initialize(case: LegacyInput, label: str) -> dict:
-    environment = {**os.environ, "BOXTEAM_HOME": str(case.home), "BOXTEAM_GATEWAY_ROOT": str(case.home / "state/gateway")}
+    environment = {**os.environ, "BOXTEAM_HOME": str(case.home), "BOXTEAM_GATEWAY_ROOT": str(case.home / "state/gateway"),
+                   "BOXTEAM_E2E_MODEL_API_KEY": "e2e-local-model-key"}
     command = [str(resolve_workspace_python_executable(case.context.project_root)), "-m", "configs.boxteam",
                "initialize", "--project-root", str(case.context.project_root)]
     _command(command, cwd=case.context.project_root, artifacts=case.artifacts, label=label, environment=environment, deadline=60)
@@ -143,7 +145,7 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
         backend = start_backend_process(
             workspace_root=str(case.workspace), port=case.backend_port, log_name="current-backend",
             boxteam_home=case.home, artifacts_dir=artifacts, refresh_user_configuration=False,
-            env_overrides={"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{case.gateway_port}"},
+            env_overrides={"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{case.gateway_port}", "BOXTEAM_E2E_MODEL_API_KEY": "e2e-local-model-key"},
         )
         lifetime.callback(close_backend_process, backend)
         gateway = start_gateway_process(
@@ -162,18 +164,31 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
         assert (target["gateway_id"], target["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"])
         workspace = data(client.get("/api/v1/workspace"))
         assert workspace["workspace_id"] == owner["workspace_id"]
-        assert data(client.get(f"/api/v1/sessions/{session_id}")) == before["session"]
+        session = dict(before["session"])
+        provider_id = session.pop("current_provider_id")
+        session["current_model"] = {"provider_id": provider_id, "model_id": "default"} if provider_id is not None else None
+        assert data(client.get(f"/api/v1/sessions/{session_id}")) == session
         assert data(client.get(f"/api/v1/sessions/{session_id}/main-thread")) == before["thread"]
         history = data(client.post(f"/api/v1/sessions/{session_id}/history", json={"direction": "tail"}))
-        assert history["items"] == before["history"]["items"]
+        (artifacts / "history.json").write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # 当前 DTO 新增可选展示字段；补齐空字段后仍逐字段核原正文、身份、状态和顺序。
+        assert [TurnDetailDTO.model_validate(item) for item in history["items"]] == [
+            TurnDetailDTO.model_validate(item) for item in before["history"]["items"]
+        ]
         assert history["thread_id"] == thread_id
         messages = data(client.get(f"/api/v1/sessions/{session_id}/messages"))
         assert messages["items"] == before["messages"]["items"]
+        traces = data(client.get(f"/api/v1/sessions/{session_id}/traces", params={"limit": 200}))
+        assert traces["has_more"] is False
+        assert [item["raw"] for item in traces["items"]] == [
+            {**event, "format_version": 1} for event in before["trace"]["events"]
+            if event["type"] not in {"job_started", "goal_cleared"}
+        ]
         # 已退役的账户视图只保留历史原件；当前浏览器不读取或接管它。
         with closing(sqlite3.connect(case.home / "state/gateway/gateway.sqlite")) as connection:
             connection.row_factory = sqlite3.Row
             stored = connection.execute(
-                "SELECT gateway_id, workspace_id, session_id, turn_anchor, scroll_offset, follow_latest, "
+                "SELECT user_id, gateway_id, workspace_id, session_id, turn_anchor, scroll_offset, follow_latest, "
                 "projection_version, tool_details_expanded, updated_at FROM user_view_state "
                 "WHERE user_id=? AND gateway_id=? AND workspace_id=? AND session_id=?",
                 (before["user"]["user_id"], owner["gateway_id"], owner["workspace_id"], session_id),
@@ -200,8 +215,6 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
     assert gateway.process.returncode in (0, -signal.SIGTERM)
 
 
-# TODO：该开发快照含未支持的非空 Trace JSONL；用户要求保留未知来源，不在本轮增加导入合同。
-@pytest.mark.skip(reason="旧快照包含未支持的非空 Trace JSONL；完整历史恢复待明确来源合同后验收")
 def test_supported_legacy_startup_automatically_upgrades_and_restarts_with_original_history(legacy_input: LegacyInput) -> None:
     case = legacy_input
     database = case.home / "state/gateway/gateway.sqlite"
@@ -209,6 +222,25 @@ def test_supported_legacy_startup_automatically_upgrades_and_restarts_with_origi
     upgrades = _initialize(case, "initialize")["upgrades"]
     first = upgrades["workspace_identity"]
     assert first["state"] == "completed"
+    history, = upgrades["session_history"]["migrations"]
+    assert history["source_commit"] == LEGACY_COMMIT
+    assert history["discarded_trace_events"] == [{"session_id": case.before["session"]["session_id"], "counts": {"job_started": 1}}]
+    journal_bytes = Path(history["journal"]).read_bytes()
+    backup_roots = sorted(Path(history["backup_root"]).parent.iterdir())
+    history_journal = json.loads(Path(history["journal"]).read_bytes())
+    assert history_journal["format_version"] == 1
+    for name, digest in case.before["trace"]["file_hashes"].items():
+        asset, = [asset for asset in history_journal["assets"] if Path(asset["path"]).name == name]
+        assert hashlib.sha256(Path(asset["before"]).read_bytes()).hexdigest() == digest
+        assert not Path(asset["path"]).exists()
+    catalog_asset, = [asset for asset in history_journal["assets"] if Path(asset["path"]).name == "session-catalog.sqlite"]
+    with (closing(sqlite3.connect(catalog_asset["before"])) as original_catalog,
+          closing(sqlite3.connect(catalog_asset["path"])) as current_catalog):
+        original_envelopes = original_catalog.execute("SELECT session_id,session_metadata_json,preimage_hash FROM session_creation_records").fetchall()
+        current_envelopes = current_catalog.execute("SELECT session_id,session_metadata_json,preimage_hash FROM session_creation_records").fetchall()
+    assert len(original_envelopes) == len(current_envelopes) == 1
+    assert original_envelopes[0][0] == current_envelopes[0][0] == case.before["session"]["session_id"]
+    assert original_envelopes[0][1:] != current_envelopes[0][1:]
     recovery = json.loads(Path(first["recovery_output"]).read_text(encoding="utf-8"))
     assert recovery == {"format_version": 1, "migration_id": first["migration_id"],
                         "registry_gateway_id": case.before["gateway_id"], "mappings": [{
@@ -227,10 +259,14 @@ def test_supported_legacy_startup_automatically_upgrades_and_restarts_with_origi
     assert all(item["current_schema_version"] < item["target_schema_version"]
                for item in pending["sqlite"]["databases"])
     assert _dump(database) == migrated
+    assert Path(history["journal"]).read_bytes() == journal_bytes
+    assert sorted(Path(history["backup_root"]).parent.iterdir()) == backup_roots
     _assert_running_history(case, "first-start")
     after_start = _dump(database)
     assert _initialize(case, "reenter-after-stop")["upgrades"] == {}
     assert _dump(database) == after_start
+    assert Path(history["journal"]).read_bytes() == journal_bytes
+    assert sorted(Path(history["backup_root"]).parent.iterdir()) == backup_roots
     _assert_running_history(case, "second-start")
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
         target = json.loads(connection.execute("SELECT payload_json FROM gateway_workspace_registry").fetchone()[0])

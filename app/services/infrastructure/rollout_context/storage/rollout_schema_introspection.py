@@ -17,6 +17,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    CatalogBodyValidationCache,
     validate_catalog_body,
     validate_projection_membership,
 )
@@ -325,12 +326,13 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError("source-mismatch: context view 缺少已提交创建顺序")
         validate_schema_journal(connection, schema_version)
 
+    @staticmethod
     def _validate_v2_commit_offsets(
-        self,
         connection: sqlite3.Connection,
         jsonl_path: Path,
         *,
         validate_jsonl_items: bool = True,
+        cache: CatalogBodyValidationCache | None = None,
     ) -> None:
         """校验 committed offset 的单一权威和 storage commit 链。"""
         # 完整历史审计只用于恢复、迁移与显式完整校验；普通快照只检查当前提交边界。
@@ -475,7 +477,7 @@ class RolloutSchemaIntrospectionMixin:
                             catalog_hash=catalog_hash,
                             payload_length=logical_length,
                             source_revision=source_revision,
-                            cache=self._host._catalog_body_validation_cache,
+                            cache=cache,
                         )
                     if (
                         item_offset < commit_start

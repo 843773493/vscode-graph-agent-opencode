@@ -72,8 +72,10 @@ def generate(workspace: Path, home: Path, artifacts: Path, runtime: Path,
     providers = cast(list[dict], cast(dict, config["llm"])["providers"])
     model_url = f"http://127.0.0.1:{model_port}/v1/chat/completions"
     for provider in providers:
+        if provider["id"] != "primary":
+            continue
         provider.update(endpoint=f"http://127.0.0.1:{model_port}/v1", model="e2e-stub-model",
-                        api_key="e2e-local-model-key", custom_llm_provider="openai", api_mode={
+                        api_key="${BOXTEAM_E2E_MODEL_API_KEY}", custom_llm_provider="openai", api_mode={
                             "protocol": "chat_completions",
                             "model_info": {"supports_function_calling": True, "supports_reasoning": False},
                             "supports_reasoning": {"reasoning_content": False},
@@ -92,7 +94,7 @@ def generate(workspace: Path, home: Path, artifacts: Path, runtime: Path,
         backend = start_backend_process(
             workspace_root=str(workspace), port=backend_port, log_name="legacy-backend", boxteam_home=home,
             artifacts_dir=artifacts, asgi_app="tests.support.e2e_control.backend_app:app",
-            env_overrides={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true",
+            env_overrides={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true", "BOXTEAM_E2E_MODEL_API_KEY": "e2e-local-model-key",
                            "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}"},
         )
         lifetime.callback(close_backend_process, backend)
@@ -175,12 +177,16 @@ def generate(workspace: Path, home: Path, artifacts: Path, runtime: Path,
     (artifacts / "gateway-before.sql").write_text(dump, encoding="utf-8")
     gateway_id = json.loads((gateway_root / "identity.json").read_text(encoding="utf-8"))["gateway_id"]
     captures = {call: str(capture)}
+    business = business_snapshot(workspace, backend.workspace_id, session_id, thread_id, captures)
+    trace_dir = Path(business["session_node"]) / "logs/traces"
+    trace = {"events": [json.loads(line) for line in (trace_dir / "events.jsonl").read_bytes().splitlines()],
+             "file_hashes": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in trace_dir.iterdir() if path.is_file()}}
     result = {"source_root": str(source), "workspace_id": backend.workspace_id, "gateway_id": gateway_id,
               "legacy_alias": alias, "user": user, "session": session, "thread": thread,
               "history": history, "messages": messages, "view": view, "navigation": navigation,
-              "target_record": target_record, "captures": captures, "pids": pids,
+              "target_record": target_record, "captures": captures, "pids": pids, "trace": trace,
               "exit_codes": {"backend": backend.process.returncode, "gateway": gateway.process.returncode},
-              "business": business_snapshot(workspace, backend.workspace_id, session_id, thread_id, captures),
+              "business": business,
               "identity_bytes": (config_root / "workspace-identity.json").read_text(encoding="utf-8")}
     (artifacts / "legacy-input.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result

@@ -67,9 +67,9 @@ def migrated_active_payload(
     payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
     inline_config: dict[str, object], connection_entries: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    changed = migrated_payload(payload, domain, plan, connection_entries)
+    changed = merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries))
     if domain == "workspace":
-        return merge_json_objects(inline_config, changed)
+        return changed
     logging = changed.setdefault("logging", {})
     if not isinstance(logging, dict):
         raise TypeError("Gateway logging 必须是对象")

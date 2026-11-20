@@ -57,7 +57,7 @@ class RolloutOfflineRestoreMixin:
                 "SQLite offline restore source session identity 不匹配: "
                 f"expected={(session_id, thread_id)}, actual={owner}"
             )
-        self._validate_v2_commit_offsets(
+        self._host._validate_v2_commit_offsets(
             connection,
             self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
             validate_jsonl_items=True,

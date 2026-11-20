@@ -28,6 +28,10 @@ from configs.maintenance.runtime_logging_commit import (
 from configs.maintenance.runtime_logging_migration import (
     preview_runtime_logging_migration,
 )
+from configs.maintenance.session_history import (
+    migrate_session_history,
+    preview_session_history,
+)
 from configs.maintenance.workspace_identity_commit import (
     commit_workspace_identity_migration,
 )
@@ -118,6 +122,21 @@ def prepare_startup_migrations(
         roots.extend(Path(item["root_path"]) for item in cast(list[dict[str, str]], targets)
                      if item.get("connection_kind") == "local")
     roots = list(dict.fromkeys(path.expanduser().resolve() for path in roots))
+    history_roots: list[Path] = []
+    history_reports: list[dict[str, object]] = []
+    for root in roots:
+        state = _journal_state(root / ".boxteam/.session-history-migration.json")
+        if state not in {None, "completed"}:
+            if preview:
+                history_roots.append(root)
+                continue
+            resumed = migrate_session_history(root)
+            assert resumed is not None
+            history_reports.append(resumed)
+            if resumed["state"] == "restored":
+                raise RuntimeError("已完成会话历史回退，保留原恢复方向，本次不启动新版本")
+        if preview_session_history(root) is not None:
+            history_roots.append(root)
     empty_resource_roots = [root for root in roots if retire_empty_legacy_ledger(root, preview=True)]
     databases = (
         (gateway_root / "gateway.sqlite", len(_GATEWAY_MIGRATIONS)),
@@ -205,5 +224,15 @@ def prepare_startup_migrations(
         reports["empty_resource_ledgers"] = {
             "state": "migration_required" if preview else "completed",
             "workspaces": [str(root) for root in empty_resource_roots],
+        }
+    if not preview:
+        for root in history_roots:
+            migrated = migrate_session_history(root)
+            assert migrated is not None
+            history_reports.append(migrated)
+    if history_roots or history_reports:
+        reports["session_history"] = {
+            "state": "migration_required" if preview else "completed",
+            "workspaces": [str(root) for root in history_roots], "migrations": history_reports,
         }
     return reports

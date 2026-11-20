@@ -17,4 +17,7 @@
   - 候选 `20c86faf4ee33041cfff826eb4ff436950609c25` 已本地提交；Ruff、Node语法、差异与OpenSpec严格校验通过，复用Sol只读复审确认首写顺序已闭合。未push或同步固定dev/release/main。
   - Windows编码收口另提交 `bddf1713b`、`353a4b9ef`、`dc38827e8`；Launcher子进程输出明确UTF-8，测试静态资产及journal显式UTF-8，不改变目标全局locale或静态文件的读取合同。
   - 2026-11-19 当前源码复验：配置／身份／SQLite 定向回归149项、Launcher回归31项通过；真实受支持来源升级与两次Gateway／Workspace启动1项通过（47.27秒），核精确原件备份、工作区身份和重入不重写。已同步 configuration-evolution／workspace-identity 主规范，未改产品代码。命令、源码指纹、退出码及正式业务原件见 `out/tests/temp/2026/11/19/upgrade_contract_sync/artifacts/verification.json`。本轮未重跑Windows，2026-11-14 Windows原件只证明其冻结候选；下述2.4仍未完成，不能以这些支持链结果替代。
-- [ ] 2.4 TODO：真实旧快照的完整历史恢复尚未验收。固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 含非空 Trace JSONL，用户已将其裁定为未知来源，本轮保留原件、不新增导入；保留原测试及强断言并明确跳过，不能以支持链局部通过替代。
+- [x] 2.4 按用户最新授权，以固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 的完整旧源码经真实消息入口生成历史；由当前 initialize 升级 catalog／control／rollout／Trace，再经真实 Gateway／Workspace 两次启动核原身份、正文、item／请求 hash、备份和重入不重写。无法补齐新事实的旧 Trace 事件明确丢弃并报告；不新增历史兼容协议。本轮完成 Linux 验收；既有 Windows 支持链结果不代替本次新增历史链验收。
+  - 2026-11-20 固定旧源码真实消息入口 → 当前 initialize → 两次真实 Gateway／Workspace 启动：1 passed／109.22秒。旧 Trace 原字节及创建 preimage 备份可核验，目标丢弃 job_started 1 条并报告；消息、item／请求 hash、身份及重复初始化的 journal／备份数量保持。
+  - 原定向回归761项通过；索引入口修正后补验125项（与前组重叠，不累加）；原事务迁移、失败回滚及多版本链11项通过。真实旧原件恢复探针核中断续跑、完整回退、恢复方向、重复进入及 WAL 新写入冲突；临时探针工作区已删除。Ruff、差异和 OpenSpec 严格校验通过，未新增测试文件。命令、候选源码指纹、退出码和正式原件位置见 `out/tests/temp/2026/11/20/full_history_upgrade/artifacts/verification.json`。
+  - 新增历史链未重跑 Windows，未同步 dev/release/main、未 push；缺少已验收 release 基线，本次仅按用户指定实验来源验收。

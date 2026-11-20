@@ -18,6 +18,12 @@ def require_settled_config_migration(path: Path) -> None:
     journal_path = Path(pointer["journal"])
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     if journal["state"] not in {"completed", "restored"}:
+        if journal.get("action") == "session-history":
+            raise RuntimeError(
+                "控制面迁移尚未完成，禁止读取部分迁移状态；停止相关服务后执行 initialize 续跑，"
+                "或执行 uv run python -m configs.maintenance.session_history "
+                f"--workspace {journal['workspaces'][0]!r} --restore 恢复原件。"
+            )
         action = journal.get("action", "migrate-runtime-config")
         raise RuntimeError(
             "控制面迁移尚未完成，禁止读取部分迁移状态；停止相关服务后执行 "

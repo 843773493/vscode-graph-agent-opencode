@@ -135,8 +135,8 @@ class RolloutTransactionProjectionMixin:
                         f"checkpoint absent channel 写入失败: {checkpoint_id}/{name}"
                     )
 
+    @staticmethod
     def _insert_control(
-        self,
         connection: sqlite3.Connection,
         kind: str,
         entity_type: str,
