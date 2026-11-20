@@ -293,6 +293,57 @@ def test_late_result_requires_complete_selected_checkpoint_group(missing: str):
     assert live.item_id not in superseded_item_ids((*confirmed, live))
 
 
+@pytest.fixture
+def parallel_checkpoint_carriers():
+    first = _confirmed_tool_call()
+    second_id = "parallel-tool-call"
+    payload = {"tool_calls": [
+        *first.payload["tool_calls"],
+        {**first.payload["tool_calls"][0], "id": second_id},
+    ]}
+    checkpoint = replace(first, payload=payload, content_hash=content_hash(first.payload_kind, payload))
+    stream = _stream_tool_call()
+    second_payload = {**stream.payload, "tool_call_id": f"{MODEL_CALL}:tool-call:{second_id}",
+                      "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{second_id}"}
+    second = replace(stream, item_sequence=3, item_id="parallel-stream-call",
+                     payload=second_payload, content_hash=content_hash(stream.payload_kind, second_payload))
+    result = _request_tool_result()
+    result_payload = {**result.payload, "tool_call_id": second_id, "result_id": "parallel-result"}
+    second_result = replace(result, item_sequence=7, item_id="parallel-result", payload=result_payload,
+                            content_hash=content_hash(result.payload_kind, result_payload),
+                            message_group_id="parallel-result", projection_identity=ItemProjectionIdentity(
+                                projection_message_id="parallel-result", model_call_id=MODEL_CALL,
+                            ))
+    return stream, second, (_confirmed_reasoning(), checkpoint, result, second_result)
+
+
+@pytest.mark.parametrize("remaining", [0, 1])
+def test_closed_checkpoint_replaces_remaining_parallel_stream_call(parallel_checkpoint_carriers, remaining: int):
+    """选集先移除一个 stream 调用后，完整闭合组仍替代剩余重复声明。"""
+    *stream, confirmed = parallel_checkpoint_carriers
+    items = (stream[remaining], *confirmed)
+    assert superseded_item_ids(items) == {stream[remaining].item_id}
+    assistant, first, second = project_canonical_items(items, preserve_order=True)
+    assert [message.type for message in (assistant, first, second)] == ["ai", "tool", "tool"]
+    assert [call["id"] for call in assistant.tool_calls] == [first.tool_call_id, second.tool_call_id]
+
+
+@pytest.mark.parametrize("boundary", ["missing_result", "foreign_turn", "foreign_model_call", "extra_call"])
+def test_parallel_stream_subset_requires_closed_matching_checkpoint(parallel_checkpoint_carriers, boundary: str):
+    """子集匹配不能吞掉缺结果、不同归属或未被完整声明覆盖的调用。"""
+    stream, _second, confirmed = parallel_checkpoint_carriers
+    if boundary == "missing_result":
+        confirmed = confirmed[:-1]
+    elif boundary == "foreign_turn":
+        stream = replace(stream, turn_id="another-turn")
+    elif boundary == "foreign_model_call":
+        stream = replace(stream, projection_identity=replace(stream.projection_identity, model_call_id="another-call"))
+    else:
+        payload = {**stream.payload, "tool_call_id": f"{MODEL_CALL}:tool-call:unknown-call"}
+        stream = replace(stream, payload=payload, content_hash=content_hash(stream.payload_kind, payload))
+    assert stream.item_id not in superseded_item_ids((stream, *confirmed))
+
+
 def test_other_turn_result_cannot_replace_original_terminal():
     """相同 model-call 的错误跨 Turn carrier 不得遮蔽原始真实结果。"""
     live = _with_outcome(_live_tool_result(), "unknown")

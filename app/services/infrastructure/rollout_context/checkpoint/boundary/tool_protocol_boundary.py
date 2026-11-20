@@ -155,6 +155,15 @@ def _unsafe_cutoff_indices(
     carriers = _tool_carriers(connection, sorted(carrier_sequences))
     unique_assistant_sequence_by_result: dict[int, int | None] = {}
     visible_results: set[int] = set()
+    closed_carrier_pairs: dict[tuple[str | None, str, str, str, bool], tuple[int, int] | None] = {}
+
+    def pair_identity(call: _ToolCarrier, call_id: str) -> tuple[str | None, str, str, str, bool] | None:
+        identity = call.identity
+        if identity is None or identity.model_call_id is None:
+            return None
+        return (call.turn_id, call.execution_id, identity.model_call_id,
+                provider_tool_call_id(identity, call_id), call.checkpoint)
+
     for call_id, assistant_sequence, result_sequence in rows:
         if result_sequence is None:
             continue
@@ -170,12 +179,30 @@ def _unsafe_cutoff_indices(
                 unique_assistant_sequence_by_result[result_sequence] = assistant_sequence
         if assistant_sequence in position:
             visible_results.add(result_sequence)
+            if (call.checkpoint == result.checkpoint and result_sequence in position
+                    and position[assistant_sequence] < position[result_sequence]):
+                key = pair_identity(call, call_id)
+                if key is not None:
+                    pair = (assistant_sequence, result_sequence)
+                    closed_carrier_pairs[key] = (
+                        pair if key not in closed_carrier_pairs
+                        or closed_carrier_pairs[key] == pair else None
+                    )
 
     for call_id, assistant_sequence, result_sequence in rows:
         call = carriers.get(assistant_sequence)
         result = carriers.get(result_sequence) if result_sequence is not None else None
         paired = call is not None and result is not None and _same_tool_pair(call, result, call_id)
         if assistant_sequence not in position:
+            key = pair_identity(call, call_id) if paired and call.checkpoint == result.checkpoint else None
+            replacement = closed_carrier_pairs.get((*key[:-1], not key[-1])) if key is not None else None
+            if replacement is not None:
+                # 两个 sink 各有真实结果；已选完整配对可替代隐藏声明的
+                # 同归属 shadow，但不能从 backing 补回缺少的调用或结果。
+                visible_results.add(result_sequence)
+                if position[result_sequence] < position[replacement[1]]:
+                    mark_unsafe(position[result_sequence] + 1, position[replacement[1]] + 1)
+                continue
             unique_assistant_sequence = unique_assistant_sequence_by_result.get(
                 result_sequence
             )

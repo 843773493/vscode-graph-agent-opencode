@@ -943,6 +943,19 @@ def test_tool_pairing_survives_selected_carrier_replacement(
             "SELECT message_sequence FROM messages ORDER BY message_sequence"
         )]
         ToolProtocolBoundary(snapshot.connection, all_sequences).validate(len(all_sequences))
+        # selection 可以先移除 stream 声明；其独立结果仍可由同归属、
+        # 已选且闭合的 checkpoint 配对替代，不能被误报为新的 orphan。
+        live_call_sequence = snapshot.connection.execute(
+            "SELECT message_sequence FROM messages WHERE message_id='live-call'",
+        ).fetchone()[0]
+        without_live_call = [sequence for sequence in all_sequences if sequence != live_call_sequence]
+        ToolProtocolBoundary(snapshot.connection, without_live_call).validate(len(without_live_call))
+        if result_order != "checkpoint_only":
+            messages = dict(snapshot.connection.execute("SELECT message_id,message_sequence FROM messages"))
+            reordered = [messages[f"{LIVE_EXECUTION_ID}-result-{SCOPED_TOOL_CALL_ID}"],
+                         messages["request-call"], messages["request-result"]]
+            boundary = ToolProtocolBoundary(snapshot.connection, reordered)
+            assert [index for index in range(4) if boundary.is_safe(index)] == [0, 3]
         pairings = dict(snapshot.connection.execute(
             "SELECT call.tool_call_id, result.message_id FROM tool_calls AS call "
             "JOIN messages AS result ON result.message_sequence = call.result_message_sequence"
