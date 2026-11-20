@@ -26,6 +26,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
@@ -101,7 +102,7 @@ async def mcp_plugin_case(
         config_path = Path(integration_workspace_config_path)
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
         config["llm"]["providers"] = {"mcp-plugin-replay": {"defaults": {
-            "endpoint": "https://opencode.ai/zen/v1", "api_key": "",
+            "endpoint": "https://opencode.ai/zen/v1", "api_key": "${MCP_PLUGIN_REPLAY_KEY}",
             "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "supports_reasoning": {"reasoning_content": False}, "model_info": {
                 "supports_function_calling": True, "supports_vision": True,
@@ -116,6 +117,13 @@ async def mcp_plugin_case(
         config["mcp"] = {"servers": {}}
         config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        home = context.boxteam_home_for_node(request.node.nodeid)
+        install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd())
+        gateway_config_path = home / "config/gateway.jsonc"
+        gateway_config = commentjson.loads(gateway_config_path.read_text())
+        # 此装具仅安装 MCP 包，默认开发工具包不属于本次前置条件。
+        gateway_config.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
+        gateway_config_path.write_text(json.dumps(gateway_config))
         with model_stream_replay(
             context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
             business_assertion="mcp-plugin-lifecycle",
@@ -125,7 +133,8 @@ async def mcp_plugin_case(
                     workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
                     port=gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
                     artifacts_dir=context.artifacts_dir / "gateway",
-                    extra_env={"BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port), **replay.environment},
+                    extra_env={"BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port),
+                        "MCP_PLUGIN_REPLAY_KEY": "replay-only-not-a-credential", **replay.environment},
                     asgi_app="tests.support.e2e_control.gateway_app:app",
                 )
 

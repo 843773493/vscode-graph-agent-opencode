@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Self
 
 import httpx
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.maintenance import MaintenanceTask, start_maintenance
 
 from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
@@ -55,35 +56,56 @@ def _workspace_startup_stage(container: AppContainer, stage: str):
                 container.workspace_id, stage, time.monotonic() - started)
 
 
-async def _prune_workspace_activity_periodically(container: AppContainer) -> None:
-    def prune_config_events() -> int:
-        store = container.workspace_activity_service.store
-        pending = store.get_pending_config_candidate(config_domain="workspace")
-        event = store.latest_config_attempt_event(
-            config_domain="workspace", candidate_id=pending.candidate_id,
-            attempt_id=pending.last_attempt_id,
-        ) if pending is not None else None
-        # 状态诊断仍引用最新候选的事件；保留连续后缀，避免在游标窗口中挖洞。
-        return store.prune_config_events(
-            config_domain="workspace", retain_from=event.event_seq if event is not None else None,
-        )
+async def _prune_workspace_activity(container: AppContainer) -> None:
+    # 原周期任务持有worker到结算；关闭不能在DELETE仍等待写锁时释放存储。
+    # TODO(5.4)：原生I/O不可抢占，其它同步活动读写和整个进程退出仍须单独核实。
+    removed = await run_sync_shielded(container.workspace_activity_service.prune)
+    if removed:
+        logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
 
-    while True:
-        await asyncio.sleep(3600)
-        # 原周期任务持有worker到结算；关闭不能在DELETE仍等待写锁时释放存储。
-        # TODO(5.4)：原生I/O不可抢占，其它同步活动读写和整个进程退出仍须单独核实。
-        removed = await run_sync_shielded(container.workspace_activity_service.prune)
-        if removed:
-            logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
-        removed = await run_sync_shielded(prune_config_events)
-        if removed:
-            logger.info("清理 Workspace 配置事件: removed=%s", removed)
-        removed = await container.html_snapshot_store.prune_html_snapshots()
-        if removed:
-            logger.info("清理 Workspace HTML 快照: removed=%s", removed)
-        removed = await container.rollout_checkpoint_runtime.prune_context_plan_details()
-        if removed:
-            logger.info("清理 Workspace 过期且无引用的 context detail: removed=%s", removed)
+
+async def _prune_workspace_config_events(container: AppContainer) -> None:
+    removed = await run_sync_shielded(partial(_prune_workspace_config_events_sync, container))
+    if removed:
+        logger.info("清理 Workspace 配置事件: removed=%s", removed)
+
+
+def _prune_workspace_config_events_sync(container: AppContainer) -> int:
+    store = container.workspace_activity_service.store
+    pending = store.get_pending_config_candidate(config_domain="workspace")
+    event = store.latest_config_attempt_event(
+        config_domain="workspace", candidate_id=pending.candidate_id,
+        attempt_id=pending.last_attempt_id,
+    ) if pending is not None else None
+    return store.prune_config_events(
+        config_domain="workspace", retain_from=event.event_seq if event is not None else None,
+    )
+
+
+async def _prune_html_snapshots(container: AppContainer) -> None:
+    removed = await container.html_snapshot_store.prune_html_snapshots()
+    if removed:
+        logger.info("清理 Workspace HTML 快照: removed=%s", removed)
+
+
+async def _expire_draft_attachments(container: AppContainer) -> None:
+    removed = await container.attachment_blob_store.expire_draft_uploads(messages=container.checkpointer)
+    if removed:
+        logger.info("清理 Workspace 过期未发送附件: removed=%s", removed)
+
+
+async def _prune_context_plan_details(container: AppContainer) -> None:
+    removed = await container.rollout_checkpoint_runtime.prune_context_plan_details()
+    if removed:
+        logger.info("清理 Workspace 过期且无引用的 context detail: removed=%s", removed)
+
+
+def _report_maintenance_failure(task_id: str, identity: object, elapsed_ms: float, error: Exception) -> None:
+    logger.error(
+        "Workspace周期维护失败: workspace_id=%s task=%s elapsed_ms=%.1f",
+        identity, task_id, elapsed_ms,
+        exc_info=(type(error), error, error.__traceback__),
+    )
 
 
 def _report_periodic_failure(task: asyncio.Task[None]) -> None:
@@ -108,15 +130,6 @@ async def _stop_periodic_tasks(tasks: list[asyncio.Task[None]]) -> None:
 
 
 
-async def _sweep_browser_orphans_periodically(container: AppContainer) -> None:
-    while True:
-        try:
-            await container.browser_resource_owner.sweep_orphans()
-        except Exception:
-            logger.exception("Browser owner 孤儿回收未收敛；资源仍保留阻断事实")
-        await asyncio.sleep(1)
-
-
 async def _retry_pending_fork_exports_periodically(container: AppContainer) -> None:
     while True:
         try:
@@ -139,6 +152,7 @@ async def _drain_workspace_jobs(container: AppContainer) -> None:
 class WorkspaceLifespan:
     def __init__(self, container: AppContainer) -> None:
         self.container = container
+        self._maintenance_scope = LifetimeScope(f"workspace-maintenance:{container.workspace_id}")
         self._periodic_tasks: list[asyncio.Task[None]] = []
         self._close_requested = asyncio.Event()
         self._close_result: asyncio.Future[None] | None = None
@@ -183,11 +197,11 @@ class WorkspaceLifespan:
 
     @property
     def closed(self) -> bool:
-        return not self._steps and not self._periodic_tasks
+        return not self._steps and not self._periodic_tasks and self._maintenance_scope.is_closed
 
     @property
     def pending_close_stage(self) -> str:
-        if self._periodic_tasks:
+        if self._periodic_tasks or not self._maintenance_scope.is_closed:
             return "periodic_tasks"
         return self._steps[0][0] if self._steps else "closed"
 
@@ -291,6 +305,7 @@ class WorkspaceLifespan:
             close_started = time.monotonic()
             logger.info("Workspace关闭阶段 begin: workspace_id=%s stage=periodic_tasks",
                         self.container.workspace_id)
+            await self._maintenance_scope.close()
             await _stop_periodic_tasks(self._periodic_tasks)
             logger.info("Workspace关闭阶段 end: workspace_id=%s stage=periodic_tasks elapsed=%.3fs",
                         self.container.workspace_id, time.monotonic() - close_started)
@@ -500,16 +515,38 @@ class WorkspaceLifespan:
                 resumed = await container.job_service.start_restored_executions()
             if resumed:
                 logger.info("已从原 pending tools checkpoint 续接 %s 个 Job", resumed)
-            task = asyncio.create_task(
-                _prune_workspace_activity_periodically(container),
-                name=f"workspace-activity-prune:{container.workspace_id}",
+            interval_ms = 3_600_000
+            start_maintenance(
+                [
+                    MaintenanceTask(
+                        "workspace-activity-prune", interval_ms, False,
+                        partial(_prune_workspace_activity, container),
+                    ),
+                    MaintenanceTask(
+                        "workspace-config-events-prune", interval_ms, False,
+                        partial(_prune_workspace_config_events, container),
+                    ),
+                    MaintenanceTask(
+                        "workspace-html-snapshot-prune", interval_ms, False,
+                        partial(_prune_html_snapshots, container),
+                    ),
+                    MaintenanceTask(
+                        "workspace-draft-attachment-expire", interval_ms, False,
+                        partial(_expire_draft_attachments, container),
+                    ),
+                    MaintenanceTask(
+                        "workspace-context-plan-detail-prune", interval_ms, False,
+                        partial(_prune_context_plan_details, container),
+                    ),
+                    MaintenanceTask(
+                        "browser-orphan-sweep", 1000, True,
+                        container.browser_resource_owner.sweep_orphans,
+                    ),
+                ],
+                scope=self._maintenance_scope,
+                identity=container.workspace_id,
+                report_error=_report_maintenance_failure,
             )
-            self._periodic_tasks.append(task)
-            browser_sweep = asyncio.create_task(
-                _sweep_browser_orphans_periodically(container),
-                name=f"browser-orphan-reclaim:{container.workspace_id}",
-            )
-            self._periodic_tasks.append(browser_sweep)
             fork_export_cleanup = asyncio.create_task(
                 _retry_pending_fork_exports_periodically(container),
                 name=f"fork-export-cleanup:{container.workspace_id}",

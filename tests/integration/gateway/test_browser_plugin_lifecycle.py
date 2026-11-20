@@ -105,7 +105,10 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
     workspace = prepare_test_workspace(
         workspace_root=context.workspace_root / "browser-workspace", template_root=template, template_items=(),
     )
-    for root in (gateway_workspace, workspace):
+    peer_workspace = prepare_test_workspace(
+        workspace_root=context.workspace_root / "peer-browser-workspace", template_root=template, template_items=(),
+    )
+    for root in (gateway_workspace, workspace, peer_workspace):
         install_test_workspace_config(
             workspace_root=root,
             config_path=project_root / "configs/tests/workspace/default.jsonc",
@@ -141,12 +144,30 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
             }, timeout=75))["data"]
             workspace_id = next(item["workspace_id"] for item in managed["items"]
                 if item["gateway_id"] == gateway_id and item["name"] == "Browser plugin lifecycle")
+            peers = _json(client.post("/api/gateway/managed-workspaces", json={
+                "root_path": str(peer_workspace), "name": "Peer Browser plugin", "create_directory": False,
+            }, timeout=75))["data"]
+            peer_id = next(item["workspace_id"] for item in peers["items"]
+                if item["gateway_id"] == gateway_id and item["name"] == "Peer Browser plugin")
+            _enable_browser(client, gateway_id=gateway_id, workspace_id=peer_id,
+                idempotency_key="peer-browser-enable")
+            peer_plugin = _wait_for_browser_plugin(client, gateway_id=gateway_id, workspace_id=peer_id)
+            peer_headers = {"X-BoxTeam-Workspace-Id": peer_id}
+            peer_session = _json(client.post("/api/v1/sessions", headers=peer_headers,
+                json={"title": "Peer Browser owner"}))["data"]
+            peer_resource = _json(client.post("/api/v1/resources/browsers", headers=peer_headers, json={
+                "session_id": peer_session["session_id"], "thread_id": peer_session["thread_id"],
+                "retention_scope": "workspace", "title": "Independent peer Browser",
+                "url": "data:text/html,<title>peer-browser-preserved</title>",
+            }))["data"]
 
             # 包已由 session fixture 准备并复制到本场景隔离 Home；此用例证明 Browser 业务路由。
             _enable_browser(client, gateway_id=gateway_id, workspace_id=workspace_id,
                 idempotency_key="browser-plugin-lifecycle-enable")
             plugin = _wait_for_browser_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id)
             instance = plugin["instance"]
+            assert instance["instance_id"] != peer_plugin["instance"]["instance_id"]
+            assert instance["process_id"] != peer_plugin["instance"]["process_id"]
             assert instance["services"] == [
                 {"service_id": "http", "service_type": "browser", "protocol": "http"},
                 {"service_id": "socket", "service_type": "browser", "protocol": "websocket"},
@@ -358,5 +379,13 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
             records = _json(client.get(f"{current_root}/api/browsers", params=service_params,
                 headers=owner_headers))["data"]
             assert {record["browser_id"] for record in records} == {resource["resource_id"], survivor["resource_id"]}
+            # 一个实例重启及资源停止不能扰动另一工作区的同包 Browser 实例。
+            peer_after = _wait_for_browser_plugin(client, gateway_id=gateway_id, workspace_id=peer_id)
+            assert peer_after["instance"] == peer_plugin["instance"]
+            peer_state = _json(client.get(f"/api/v1/resources/{peer_resource['resource_id']}",
+                headers=peer_headers))["data"]
+            assert peer_state["status"] == "running" and peer_state["reconciliation_status"] == "verified"
+            assert peer_state["source_thread"] == peer_resource["source_thread"]
+            assert peer_state["metadata"]["pages"][0]["title"] == "peer-browser-preserved"
     finally:
         close_gateway_process(gateway)
