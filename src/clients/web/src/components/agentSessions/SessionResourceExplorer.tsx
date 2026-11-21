@@ -2,7 +2,7 @@ import { formatNumber, t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
 import { getSessionCatalogBreadcrumb } from "../../api/session/sessionCatalog";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
   GatewayWorkspace,
@@ -37,13 +37,21 @@ import { useSessionResourceTreeNavigation } from "./useSessionResourceTreeNaviga
 import { errorMessage } from "../../utils/errorMessage";
 import { useCatalogReveal, type CatalogRevealRequest } from "../../hooks/sessionResourceExplorer/useCatalogReveal";
 
+export interface SessionResourceExplorerActions {
+  refresh: () => void;
+  newWorkspaceFolder: () => void;
+  collapseAll: () => void;
+}
+
 interface SessionResourceExplorerProps {
+  onActionsChange?: (actions?: SessionResourceExplorerActions) => void;
   catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   workspaces: GatewayWorkspace[];
   activeWorkspaceId: string | null;
   currentSessionId: string;
   currentSessionWorkspaceId: string | null;
+  selectedSessionKey: string | null;
   searchOpen: boolean;
   searchQuery: string;
   workspaceSwitching: boolean;
@@ -82,22 +90,15 @@ interface SessionResourceExplorerProps {
   onStartWorkspace: (workspaceId: string) => Promise<void>;
 }
 
-function Chevron({ expanded }: { expanded: boolean }) {
-  return (
-    <span
-      className={`codicon ${expanded ? "codicon-chevron-down" : "codicon-chevron-right"}`}
-      aria-hidden="true"
-    />
-  );
-}
-
 export default function SessionResourceExplorer({
+  onActionsChange,
   catalogReveal,
   apiPort,
   workspaces,
   activeWorkspaceId,
   currentSessionId,
   currentSessionWorkspaceId,
+  selectedSessionKey,
   searchOpen,
   searchQuery,
   workspaceSwitching,
@@ -232,6 +233,16 @@ export default function SessionResourceExplorer({
       onStatusChange(t('navigation.catalog.refreshNodesFailed'));
     });
   };
+  useEffect(() => {
+    onActionsChange?.({
+      refresh: refreshResourceTreeInBackground,
+      newWorkspaceFolder: () => {
+        setWorkspaceFolderEditor({ mode: 'create', nodeId: null, parentNodeId: null, value: t('navigation.folder.newName') });
+      },
+      collapseAll: explorer.collapseAll,
+    });
+    return () => onActionsChange?.();
+  }, [onActionsChange, explorer.refreshResourceTree, explorer.collapseAll, onStatusChange]);
 
   const workspaceRefsByWorkspaceId = new Map(
     navigationNodes
@@ -277,9 +288,8 @@ export default function SessionResourceExplorer({
     depth: number,
   ): ReactNode => (
     <li className="session-resource-inline-editor-row">
-      <div className="session-resource-row workspace-folder" style={{ paddingLeft: `${depth * 14 + 8}px` }}>
-        <span className="session-resource-chevron-spacer" />
-        <span className="codicon codicon-folder" aria-hidden="true" />
+      <div className="session-resource-row workspace-folder" style={{ paddingLeft: `${depth * 12 + 4}px` }}>
+        <span className="session-resource-node-icon codicon codicon-folder" aria-hidden="true" />
         <input
           autoFocus
           className="session-resource-inline-editor"
@@ -414,12 +424,6 @@ export default function SessionResourceExplorer({
             </div>
           </li>
         ) : null}
-        {/* 会话子分支不插入空态行；本地移出子项也不能证明后端分支已经为空。 */}
-        {showContents && hasSnapshot && !failure && parentNode?.kind !== "session"
-          && branch?.total === 0 && branch.cursor === null && branch.items.length === 0
-          && branch.locally_removed_node_ids.length === 0 ? (
-          <li className="session-resource-state">{t('navigation.catalog.empty')}</li>
-        ) : null}
         {showContents && branch?.cursor ? (
           <li>
             <button
@@ -446,11 +450,15 @@ export default function SessionResourceExplorer({
     const expansionId = `catalog:${workspaceId}:${node.node_id}`;
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
-    const canExpand = node.state !== "deleting" && (isFolder || node.has_children);
+    const canExpand = node.state !== "deleting";
+    const expandLabel = t(isFolder
+      ? expanded ? 'navigation.catalog.collapseFolder' : 'navigation.catalog.expandFolder'
+      : expanded ? 'navigation.catalog.collapseSession' : 'navigation.catalog.expandSession', node.name);
     const isCurrent = node.session_id === currentSessionId && workspaceId === currentSessionWorkspaceId;
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
       : null;
+    const isSelected = sessionCacheKey !== null && sessionCacheKey === selectedSessionKey;
     const opening = sessionCacheKey !== null
       && sessionCacheKey === openingSession?.sessionKey;
     const timePresentation = isFolder
@@ -476,13 +484,13 @@ export default function SessionResourceExplorer({
         };
     const targetKey = sessionResourceDropTargetKey(target);
     return (
-      <li key={node.node_id} role="treeitem" aria-expanded={canExpand ? expanded : undefined}>
+      <li key={node.node_id} role="treeitem" aria-selected={isSelected} aria-expanded={canExpand ? expanded : undefined}>
         <div
-          className={`session-resource-row${isCurrent ? " current-session" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
+          className={`session-resource-row${isSelected ? " current-session" : ""}${dropTargetClass(targetKey)}${dragItem?.nodeId === node.node_id ? " dragging" : ""}`}
           aria-current={isCurrent ? "true" : undefined}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable={node.state !== "deleting" && (isFolder ? node.folder_id !== null : true)}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
+          style={{ paddingLeft: `${depth * 12 + 4}px` }}
           data-testid={`catalog-node-${workspaceId}-${node.node_id}`}
           onDragStart={(event) => startDrag(
             event,
@@ -569,15 +577,19 @@ export default function SessionResourceExplorer({
           {canExpand ? (
             <button
               type="button"
-              className="session-resource-chevron"
-              aria-label={t(isFolder
-                ? expanded ? 'navigation.catalog.collapseFolder' : 'navigation.catalog.expandFolder'
-                : expanded ? 'navigation.catalog.collapseSession' : 'navigation.catalog.expandSession', node.name)}
-              onClick={() => explorer.toggleExpanded(expansionId, isFolder || node.has_children ? workspaceId : undefined, node.node_id)}
+              className="session-resource-expand-toggle"
+              aria-expanded={expanded}
+              aria-label={expandLabel}
+              title={expandLabel}
+              onClick={() => explorer.toggleExpanded(expansionId, workspaceId, node.node_id)}
             >
-              <Chevron expanded={expanded} />
+              <span className={`codicon ${isFolder
+                ? expanded ? "codicon-folder-opened" : "codicon-folder"
+                : expanded ? "codicon-chevron-down" : "codicon-chevron-right"}`} aria-hidden="true" />
             </button>
-          ) : <span className="session-resource-chevron-spacer" />}
+          ) : (
+            <span className={`session-resource-node-icon codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
+          )}
           <button
             type="button"
             className="session-resource-main-action"
@@ -590,7 +602,6 @@ export default function SessionResourceExplorer({
             onDoubleClick={!isFolder && node.session_id && onPinSession
               ? () => onPinSession(workspaceId, node.session_id!) : undefined}
           >
-            <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
             <span className="session-resource-label">{node.name}</span>
             {node.pending_state !== null || node.state === "deleting" ? (
               <span
@@ -627,7 +638,7 @@ export default function SessionResourceExplorer({
             ) : null}
           </button>
         </div>
-        {canExpand && expanded && (isFolder || node.has_children) ? renderCatalogBranch(workspaceId, node, depth + 1) : null}
+        {canExpand && expanded ? renderCatalogBranch(workspaceId, node, depth + 1) : null}
       </li>
     );
   };
@@ -666,7 +677,7 @@ export default function SessionResourceExplorer({
           title={hoverTitle}
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable={!workspaceSwitching && !starting && !unavailable && !removing}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
+          style={{ paddingLeft: `${depth * 12 + 4}px` }}
           data-testid={`workspace-node-${workspaceId}`}
           onDragStart={(event) => startDrag(event, {
             kind: "workspace",
@@ -695,14 +706,14 @@ export default function SessionResourceExplorer({
         >
           <button
             type="button"
-            className="session-resource-chevron"
+            className="session-resource-expand-toggle"
+            aria-expanded={expanded}
               aria-label={t(expanded ? 'navigation.workspace.collapse' : 'navigation.workspace.expand', node.name)}
             disabled={starting || removing}
             onClick={() => explorer.toggleExpanded(`workspace:${workspaceId}`, workspaceId, null)}
           >
-            <Chevron expanded={expanded} />
+            <span className={`codicon ${expanded ? "codicon-root-folder-opened" : "codicon-root-folder"}`} aria-hidden="true" />
           </button>
-          <span className="codicon codicon-root-folder" aria-hidden="true" />
           <button
             type="button"
             className="session-resource-label workspace-label"
@@ -785,7 +796,7 @@ export default function SessionResourceExplorer({
           aria-grabbed={dragItem?.nodeId === node.node_id}
           draggable={!activeEditor}
           data-testid={`workspace-folder-node-${node.node_id}`}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
+          style={{ paddingLeft: `${depth * 12 + 4}px` }}
           onDragStart={(event) => startDrag(event, {
             kind: "workspace_folder",
             nodeId: node.node_id,
@@ -809,10 +820,9 @@ export default function SessionResourceExplorer({
             refreshWorkspaceNavigationInBackground();
           }}
         >
-          <button type="button" className="session-resource-chevron" aria-label={t(expanded ? 'navigation.workspace.collapseFolder' : 'navigation.workspace.expandFolder', node.name)} onClick={() => explorer.toggleExpanded(expansionId)}>
-            <Chevron expanded={expanded} />
+          <button type="button" className="session-resource-expand-toggle" aria-expanded={expanded} aria-label={t(expanded ? 'navigation.workspace.collapseFolder' : 'navigation.workspace.expandFolder', node.name)} onClick={() => explorer.toggleExpanded(expansionId)}>
+            <span className={`codicon ${expanded ? "codicon-folder-opened" : "codicon-folder"}`} aria-hidden="true" />
           </button>
-          <span className="codicon codicon-folder" aria-hidden="true" />
           {activeEditor ? (
             <input
               autoFocus
@@ -956,58 +966,6 @@ export default function SessionResourceExplorer({
   return (
     <>
     <section className="session-resource-explorer panel-feedback-host" aria-label={t('navigation.explorer.title')} aria-busy={catalogLoading}>
-      <div className="session-resource-toolbar">
-        <div
-          className={`session-resource-root-drop-target${dropTargetClass("navigation_root")}`}
-          role="heading"
-          aria-level={2}
-          tabIndex={0}
-          title={t('navigation.workspace.folderRootHint')}
-          data-testid="workspace-navigation-root-drop-target"
-          onContextMenu={(event) => {
-            event.preventDefault();
-            setFolderMenu(null);
-            setWorkspaceFolderMenu({
-              nodeId: null,
-              parentNodeId: null,
-              name: t('navigation.workspace.folder'),
-              x: event.clientX,
-              y: event.clientY,
-            });
-            refreshWorkspaceNavigationInBackground();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) {
-              return;
-            }
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            setWorkspaceFolderMenu({
-              nodeId: null,
-              parentNodeId: null,
-              name: t('navigation.workspace.folder'),
-              x: rect.left,
-              y: rect.bottom,
-            });
-            refreshWorkspaceNavigationInBackground();
-          }}
-          onDragOver={(event) => handleDragOver(event, { kind: "navigation_root" })}
-          onDragEnter={(event) => handleDragOver(event, { kind: "navigation_root" })}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              clearDropTarget();
-            }
-          }}
-          onDrop={(event) => handleDrop(event, { kind: "navigation_root" })}
-        >
-          <span className="codicon codicon-folder" aria-hidden="true" /> {t('navigation.workspace.folder')}</div>
-        <button type="button" title={t('navigation.catalog.refreshHint')} aria-label={t('navigation.catalog.refresh')} onClick={refreshResourceTreeInBackground}>
-          <span className={`codicon codicon-refresh${catalogLoading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-        </button>
-        <button type="button" title={t('navigation.workspace.add')} aria-label={t('navigation.workspace.add')} onClick={onRequestAddWorkspace}>
-          <span className="codicon codicon-add" aria-hidden="true" />
-        </button>
-      </div>
       <div className="panel-feedback">
       {actionErrorCard}
       {explorer.navigationError ? (
@@ -1040,8 +998,20 @@ export default function SessionResourceExplorer({
       <ul
         className={`session-resource-list navigation-root${dropTargetClass("navigation_root")}`}
         role="tree"
+        tabIndex={0}
+        aria-label={t('navigation.workspace.root')}
+        data-testid="workspace-navigation-root-drop-target"
+        onKeyDown={event => {
+          if (event.target !== event.currentTarget || (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10'))) return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          setFolderMenu(null);
+          setWorkspaceFolderMenu({ nodeId: null, parentNodeId: null, name: t('navigation.workspace.root'), x: rect.left, y: rect.top });
+          refreshWorkspaceNavigationInBackground();
+        }}
         onDragOver={(event) => handleDragOver(event, { kind: "navigation_root" })}
         onDragEnter={(event) => handleDragOver(event, { kind: "navigation_root" })}
+        onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearDropTarget(); }}
         onDrop={(event) => handleDrop(event, { kind: "navigation_root" })}
         onContextMenu={(event) => {
           if (event.target !== event.currentTarget) {

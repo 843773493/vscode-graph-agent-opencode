@@ -61,7 +61,7 @@ async def test_compute_uses_selected_credentials_without_ambient_key_fallback(
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-process-key")
     requests: list[httpx.Request] = []
 
-    async def send(self, request: httpx.Request, **kwargs: object) -> httpx.Response:
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         requests.append(request)
         assert request.url == "https://embedding.example/v1/embeddings"
         return httpx.Response(200, request=request, json={
@@ -70,7 +70,7 @@ async def test_compute_uses_selected_credentials_without_ambient_key_fallback(
             "usage": {"prompt_tokens": 1, "total_tokens": 1},
         })
 
-    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle_async_request)
     computer = LiteLLMEmbeddingComputer.from_model({
         "provider_id": "team", "model_id": "semantic", "model": "embedding-model",
         "endpoint": "https://embedding.example/v1", "custom_llm_provider": "openai",

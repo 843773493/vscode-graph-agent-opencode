@@ -202,6 +202,23 @@ function observeHostPathOrdering(projectRoot, targetPlatform) {
 
 describe("构建输入指纹的文件读取", () => {
   for (const targetPlatform of Object.keys(golden)) {
+    test(`${targetPlatform}SDK安装元数据不触发重建，真实源码变化仍失效`, () => {
+      const projectRoot = sourceFixture(targetPlatform, "sdk-editable-metadata");
+      const source = path.join(projectRoot, "sdk/python/src/boxteam_plugin_sdk/lifecycle.py");
+      mkdirSync(path.dirname(source), { recursive: true });
+      writeFileSync(source, "# 原 SDK 实现\n");
+      const fingerprint = () => computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      const original = fingerprint();
+      for (const relative of ["sdk/python/src/boxteam_plugin_sdk.egg-info/PKG-INFO", "sdk/python/build/lib/cached.py"]) {
+        const file = path.join(projectRoot, relative);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, "安装时生成的元数据与缓存\n");
+      }
+      expect(fingerprint()).toBe(original);
+      writeFileSync(source, "# 修改后的 SDK 实现\n");
+      expect(fingerprint()).not.toBe(original);
+    });
+
     test(`${targetPlatform}在POSIX和Windows路径规则下使用相同顺序及指纹`, () => {
       const projectRoot = sourceFixture(targetPlatform, "cross-host-paths");
       for (const relative of ["app/a/nested.py", "app/a0.py", "app/树/叶.py", "app/树0.py"]) {

@@ -55,7 +55,7 @@ def outgoing_http(monkeypatch, request):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     requests = []
 
-    def send(_client, actual, **_kwargs):
+    def handle_request(_transport, actual):
         assert actual.url.path in {"/v1/chat/completions", "/v1/responses"}
         assert actual.headers["authorization"] == "Bearer factory-fixture-key"
         body = json.loads(actual.content)
@@ -65,7 +65,7 @@ def outgoing_http(monkeypatch, request):
         artifact.write_bytes(actual.content)
         raise _HTTPBoundaryReached()
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
     return requests
 
 

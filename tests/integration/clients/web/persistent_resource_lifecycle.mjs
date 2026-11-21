@@ -107,7 +107,7 @@ async function ownedResourceReply(reply) {
 async function selectSession(sessionId) {
   const main = await api(`/api/v1/sessions/${sessionId}/main-thread`);
   activeOwner = { session_id: sessionId, thread_id: main.thread_id };
-  await page.getByRole("button", { name: "刷新资源树", exact: true }).waitFor({ state: "visible" });
+  await page.getByTestId("workspace-navigation-root-drop-target").waitFor({ state: "visible" });
   await page.evaluate(uri => globalThis.workbench.commands.executeCommand("_workbench.open", uri),
     `boxteam://${gatewayId}/workspace/${workspaceId}/resources/session/${sessionId}/threads/${main.thread_id}`);
   activeThread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${main.thread_id}"]`);
@@ -500,7 +500,7 @@ try {
     assert.equal(removedBrowser.status, "deleted");
     result.workspace_browser_created_and_deleted = true;
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "刷新资源树", exact: true }).waitFor({ state: "visible" });
+    await page.getByTestId("workspace-navigation-root-drop-target").waitFor({ state: "visible" });
     if (phase === "workspace-browser") await deleteSession(other.session_id);
   }
   assert.deepEqual(result.page_errors, []);

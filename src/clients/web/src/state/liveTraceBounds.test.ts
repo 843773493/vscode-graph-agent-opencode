@@ -3,7 +3,6 @@ import {
   appendTraceEventsToPendingConversations,
   PENDING_CONVERSATION_EVENT_LIMIT,
 } from "./conversations";
-import { aggregateConversationEvents } from "./trace/traceAggregation";
 import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
@@ -113,7 +112,7 @@ describe("Live Trace 有界保留", () => {
     ]);
   });
 
-  test("pending Job 压实 delta 对象但保持完整流式正文", () => {
+  test("pending Job 只保留最近的真实事件，正文不在 Trace 中重复累积", () => {
     const conversation: ConversationView = {
       conversationId: "message-live-bound",
       displayMode: "live",
@@ -136,10 +135,11 @@ describe("Live Trace 有界保留", () => {
     );
 
     const events = pending.get(SESSION_ID)?.[0]?.events ?? [];
-    const response = aggregateConversationEvents(events, JOB_ID, true).find(
-      (item) => item.kind === "aggregated_text" && item.partKind === "markdown",
+    expect(events.map(event => event.event_id)).toEqual(
+      Array.from({ length: PENDING_CONVERSATION_EVENT_LIMIT }, (_, index) =>
+        `event-${deltaCount - PENDING_CONVERSATION_EVENT_LIMIT + index}`),
     );
-    expect(events.length).toBeLessThanOrEqual(PENDING_CONVERSATION_EVENT_LIMIT);
-    expect(response && "text" in response ? response.text.length : 0).toBe(deltaCount);
+    expect(events.reduce((sum, event) => sum + (event.content?.length ?? 0), 0))
+      .toBe(PENDING_CONVERSATION_EVENT_LIMIT);
   });
 });

@@ -19,6 +19,16 @@ describe("渐进 Markdown 渲染", () => {
     expect(html).toContain('data-markdown-rendering="lightweight"');
     expect(html).toContain("# 标题");
     expect(html).not.toContain("<h1>");
+    expect(html.length).toBeLessThan(value.length);
+
+    const streaming = renderToStaticMarkup(<MarkdownContent value={`${value}最新尾部`} streaming />);
+    expect(streaming).toContain("最新尾部");
+    expect(streaming).not.toContain("# 标题");
+    expect(streaming).toContain("展开全文");
+    expect(streaming.length).toBeLessThan(value.length);
+    const historical = renderToStaticMarkup(<MarkdownContent value={`${value}最新尾部`} preview="tail" />);
+    expect(historical).toContain("最新尾部");
+    expect(historical).not.toContain("# 标题");
   });
 
   test("大型 Markdown 在调度后原位增强", async () => {
@@ -38,7 +48,7 @@ describe("渐进 Markdown 渲染", () => {
     )).toHaveLength(1);
     expect(renderer!.root.findAllByType("h1")).toHaveLength(1);
     expect(renderer!.root.findAllByType("button")[0].children.join(""))
-      .toContain("渲染完整 Markdown");
+      .toContain("展开全文");
     renderer!.unmount();
   });
 

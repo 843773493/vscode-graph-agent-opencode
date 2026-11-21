@@ -1,12 +1,3 @@
-.agent-sessions-no-chats {
-  min-height: 22px;
-  padding: 4px 10px 4px 30px;
-  color: var(--bt-text-subtle);
-  font-size: var(--bt-font-size-small);
-  line-height: 14px;
-  text-align: left;
-}
-
 .agent-sessions-stale-notice {
   display: flex;
   align-items: center;

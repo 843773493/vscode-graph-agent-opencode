@@ -20,6 +20,16 @@ def render_test_workspace_config(source_text: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
+def clear_test_provider_api_keys(config: dict, *, endpoint: str | None = None) -> None:
+    """显式隔离不测认证的场景；保留协议、模型身份及 OAuth 声明。"""
+    for provider in config["llm"]["providers"].values():
+        provider["defaults"]["api_key"] = ""
+        if endpoint is not None:
+            provider["defaults"]["endpoint"] = endpoint
+        for model in provider["models"].values():
+            model.get("overrides", {}).pop("api_key", None)
+
+
 def _make_test_tree_writable(path: Path) -> None:
     """只放开待删除副本的 owner 权限，不跟随指向模板或其它目录的链接。"""
     mode = path.lstat().st_mode

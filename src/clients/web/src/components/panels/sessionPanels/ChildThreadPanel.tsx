@@ -30,7 +30,6 @@ export default function ChildThreadPanel({
   mainThreadId,
   activeThreadId,
   onRefresh,
-  onSelectThread,
   onOpenMainThread,
   onOpenThread,
   onForkFromThread,
@@ -44,10 +43,9 @@ export default function ChildThreadPanel({
   sessionId: string;
   /** 当前会话在权威 catalog 中解析出的 canonical main thread ID。 */
   mainThreadId: string | null;
-  /** 当前调试 owner 的 thread id。 */
+  /** 当前编辑器所属的 thread id。 */
   activeThreadId: string | null;
   onRefresh: () => void;
-  onSelectThread?: (threadId: string) => void;
   onOpenMainThread: () => void;
   onOpenThread: (thread: ChildThreadSummary) => void;
   onForkFromThread?: (threadId: string, point: ChildThreadForkPoint) => void;
@@ -207,9 +205,6 @@ export default function ChildThreadPanel({
                       {childThreadStatusLabel(thread.status)}
                     </span>
                   </button>
-                  {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={t("child.debugAria", thread.thread_id)} title={t("child.debug")}>
-                    <span className="codicon codicon-debug" aria-hidden="true" />
-                  </button> : null}
                   {onForkFromThread ? <button type="button" className="child-thread-copy-id" onClick={() => onForkFromThread(thread.thread_id, {})} aria-label={t("child.fork")} title={t("child.fork")}>
                     <span className="codicon codicon-git-branch" aria-hidden="true" />
                   </button> : null}

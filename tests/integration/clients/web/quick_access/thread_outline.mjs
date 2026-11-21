@@ -57,7 +57,7 @@ try {
   };
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces');
   const owner = targets.active_workspace;
   expect(owner).toEqual({ gateway_id: health.gateway_id, workspace_id: expect.any(String) });

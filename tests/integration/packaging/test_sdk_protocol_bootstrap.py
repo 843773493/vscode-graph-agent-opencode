@@ -8,7 +8,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -27,9 +26,6 @@ def bootstrap_checkout(request: pytest.FixtureRequest) -> tuple[Path, Path]:
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules"))
     for name in ("package.json", "pyproject.toml", "uv.lock", "buf.yaml", "buf.gen.yaml", ".python-version"):
         shutil.copyfile(source / name, root / name)
-    archive = tomllib.loads((source / "pyproject.toml").read_text())["tool"]["uv"]["sources"]["boxteam-plugin-sdk"]["path"]
-    (root / archive).parent.mkdir(parents=True)
-    shutil.copyfile(source / archive, root / archive)
     for directory in ("src/clients/web/src/types/protocol_generated", "src/clients/web/src/types/protocol_buf_generated",
                       "src/shared"):
         shutil.copytree(source / directory, root / directory)
@@ -45,6 +41,8 @@ def test_old_sdk_new_wire_generation_install_and_application_gate(bootstrap_chec
     records = []
     environment = {**os.environ, "BOXTEAM_PROJECT_ROOT": str(root)}
     environment.pop("PYTHONPATH", None)
+    environment.pop("UV_PROJECT_ENVIRONMENT", None)
+    environment.pop("VIRTUAL_ENV", None)
 
     def run(label: str, command: list[str], expected: int = 0) -> subprocess.CompletedProcess:
         result = subprocess.run(command, cwd=root, env=environment, capture_output=True, text=True,
@@ -56,7 +54,7 @@ def test_old_sdk_new_wire_generation_install_and_application_gate(bootstrap_chec
         assert result.returncode == expected, result.stderr
         return result
 
-    run("install-old", ["uv", "sync", "--frozen", "--offline", "--no-dev", "--python", sys.executable])
+    run("install-old", ["uv", "sync", "--frozen", "--offline", "--no-dev", "--no-editable", "--python", sys.executable])
     python = str(root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
     proto = root / "proto/boxteam/common/v1/service_lifecycle.proto"
     proto.write_text(proto.read_text() + "\nmessage SdkBootstrapProbe {\n  string value = 1;\n}\n")
@@ -71,7 +69,8 @@ def test_old_sdk_new_wire_generation_install_and_application_gate(bootstrap_chec
     # 生成不偷偷更新环境；旧 wheel 仍不能满足新消费方。
     run("old-remains-old", [python, "-c", "import app.protocol.sdk_upgrade_probe"], expected=1)
     run("prepare-current", ["bun", "scripts/plugins/prepare-product-sdk.mjs", "python"])
-    run("install-current", ["uv", "sync", "--offline", "--no-dev"])
+    run("install-current", ["uv", "sync", "--offline", "--no-dev", "--no-editable",
+        "--reinstall-package", "boxteam-plugin-sdk"])
     loaded = run("new-wire-loaded", [python, "-c", ("import app.protocol.sdk_upgrade_probe; "
         "import boxteam.common.v1.service_lifecycle_pb2 as wire; print(wire.__file__)")])
     assert Path(loaded.stdout.strip()).is_relative_to(root / ".venv")

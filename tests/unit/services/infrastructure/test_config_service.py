@@ -1290,19 +1290,12 @@ def test_workspace_config_overrides_user_global_config(
 
 
 
-def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
+def test_web_fetch_config_needs_no_embedding_options(tmp_path: Path) -> None:
     config = _base_config()
     config["agents"]["default"]["tools"] = {
         "custom": [
             {
-                "name": "fetch_webpage",
-                "factory": "app.agents.tools.web:create_fetch_webpage_tool",
-                "options": {
-                    "embedding": {
-                        "model_ref": PRIMARY_MODEL.model_dump(),
-                        "model": "text-embedding-3-small",
-                    }
-                },
+                "tool_id": "fetch_webpage",
             }
         ]
     }

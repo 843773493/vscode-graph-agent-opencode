@@ -580,55 +580,19 @@ try {
 
   await thread.getByRole("button", { name: "跳到最新消息", exact: true }).click();
   await latestTurn.waitFor({ state: "visible", timeout: 30_000 });
-  await latestTurn.hover();
-  const responseActions = latestTurn.locator(".chat-response-actions");
-  await responseActions.waitFor({ state: "attached", timeout: 30_000 });
-  const responseActionsVisible = await waitUntil(
-    async () => responseActions.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return style.visibility === "visible"
-        && Number.parseFloat(style.opacity) > 0
-        && style.pointerEvents === "auto";
-    }),
-    "历史回复操作栏悬停显示",
-  ).then(() => true);
-  const responseActionLabels = await responseActions.locator("button").evaluateAll(
-    (buttons) => buttons
-      .map((button) => button.getAttribute("aria-label"))
-      .filter((label) => Boolean(label)),
-  );
-  for (const label of ["复制", "有帮助（暂未开放）", "没有帮助（暂未开放）"]) {
-    if (!responseActionLabels.includes(label)) {
-      throw new Error(`历史回复操作栏缺少 ${label}: ${JSON.stringify(responseActionLabels)}`);
-    }
-  }
-  if (responseActionLabels.includes("重新生成最后回复")) {
-    throw new Error(`回复操作栏不应再显示重新生成: ${JSON.stringify(responseActionLabels)}`);
-  }
+  await expect(latestTurn.locator(".chat-response-actions")).toHaveCount(0);
+  const responseCard = latestTurn.getByLabel("模型回复", { exact: true }).last();
+  await responseCard.click({ button: "right" });
+  const copyItem = page.getByRole("menuitem", { name: "复制此项", exact: true });
+  await expect(copyItem).toBeVisible();
+  await expect(copyItem).toBeEnabled();
+  const responseCopyInContextMenu = true;
+  await page.keyboard.press("Escape");
   const boundaryTurn = thread.locator('.chat-turn[data-turn-id="job-0127"]').last();
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
-  await boundaryTurn.hover();
-  const boundaryResponseActions = boundaryTurn.locator(".chat-response-actions");
-  await boundaryResponseActions.waitFor({ state: "attached", timeout: 30_000 });
-  const boundaryResponseActionsVisible = await waitUntil(
-    async () => boundaryResponseActions.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return style.visibility === "visible"
-        && Number.parseFloat(style.opacity) > 0
-        && style.pointerEvents === "auto";
-    }),
-    "无正文边界 Turn 操作栏悬停显示",
-  ).then(() => true);
-  const boundaryResponseActionLabels = await boundaryResponseActions.locator("button").evaluateAll(
-    (buttons) => buttons
-      .map((button) => button.getAttribute("aria-label"))
-      .filter((label) => Boolean(label)),
-  );
-  for (const label of ["复制（暂无可复制内容）", "有帮助（暂未开放）", "没有帮助（暂未开放）"]) {
-    if (!boundaryResponseActionLabels.includes(label)) {
-      throw new Error(`无正文边界 Turn 操作栏缺少 ${label}: ${JSON.stringify(boundaryResponseActionLabels)}`);
-    }
-  }
+  await expect(boundaryTurn.locator(".chat-response-actions")).toHaveCount(0);
+  await expect(boundaryTurn.locator(".chat-turn-activity-header")).toBeVisible();
+  const boundarySummaryWithoutToolbar = true;
 
   const quick = page.locator('.quick-input-widget');
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', '@继续处理第 32 轮'));
@@ -691,10 +655,8 @@ try {
     defaultProjectionSafe,
     detailProjectionSafe,
     canonicalMixedMessageRestored,
-    responseActionsVisible,
-    responseActionLabels,
-    boundaryResponseActionsVisible,
-    boundaryResponseActionLabels,
+    responseCopyInContextMenu,
+    boundarySummaryWithoutToolbar,
     toolDetailsLoaded,
     largeToolSummarySafe,
     largeToolDetailsBounded,

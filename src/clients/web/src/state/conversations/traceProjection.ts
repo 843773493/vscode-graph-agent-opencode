@@ -13,55 +13,12 @@ import { writePendingList } from "./pendingMap";
 
 export const PENDING_CONVERSATION_EVENT_LIMIT = 512;
 
-/** 把同一个 part 的 text_delta 折叠成一条汇总事件，保证 pending 事件列表有界。 */
+/** 正文由 message stream 提供；这里只保留最近的真实 Trace，不能另行拼接全量正文。 */
 export function compactPendingConversationEvents(
   events: TraceEvent[],
   limit: number = PENDING_CONVERSATION_EVENT_LIMIT,
 ): TraceEvent[] {
-  if (events.length <= limit) return events;
-  const provisionalTail = events.slice(-Math.floor(limit / 2));
-  const activePartIds = new Set(
-    provisionalTail.flatMap((event) =>
-      event.part_id && ["text_start", "text_delta", "text_end"].includes(event.type)
-        ? [event.part_id]
-        : [],
-    ),
-  );
-  const summarizedPartIds = [...new Set(events.flatMap((event) =>
-    event.type === "text_delta" && event.part_id && activePartIds.has(event.part_id)
-      ? [event.part_id]
-      : [],
-  ))].slice(-Math.floor(limit / 2));
-  if (summarizedPartIds.length === 0) return events.slice(-limit);
-
-  const tailBudget = limit - summarizedPartIds.length;
-  const prefix = events.slice(0, events.length - tailBudget);
-  const selectedParts = new Set(summarizedPartIds);
-  const summaries = new Map<string, { first: TraceEvent; last: TraceEvent; text: string }>();
-  for (const event of prefix) {
-    if (event.type !== "text_delta" || !event.part_id || !selectedParts.has(event.part_id)) {
-      continue;
-    }
-    const current = summaries.get(event.part_id);
-    const text = tracePayloadString(event, "text");
-    summaries.set(event.part_id, current
-      ? { ...current, last: event, text: current.text + text }
-      : { first: event, last: event, text });
-  }
-  const compacted = [...summaries.entries()].map(([partId, summary]) => ({
-    ...summary.last,
-    event_id: `compacted:${partId}:${summary.last.event_id}`,
-    part_id: partId,
-    content: summary.text,
-    payload: { ...(summary.last.payload ?? {}), text: summary.text },
-    raw: summary.last.raw
-      ? {
-          ...summary.last.raw,
-          payload: { ...(summary.last.raw.payload ?? {}), text: summary.text },
-        }
-      : summary.last.raw,
-  }));
-  return [...compacted, ...events.slice(-tailBudget)];
+  return events.length <= limit ? events : events.slice(-limit);
 }
 
 export function conversationMatchesTraceEvent(

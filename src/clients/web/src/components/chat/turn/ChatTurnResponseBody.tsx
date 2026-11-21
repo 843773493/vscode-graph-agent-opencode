@@ -2,14 +2,12 @@ import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
 import { isLiveConversationView } from "../../../state/trace/traceAggregation";
-import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import type { ConversationView } from "../../../types/frontend";
-import ResponseActionToolbar from "../ResponseActionToolbar";
 import type { ChatTurnActions } from "./useChatTurnActions";
 import type { LoadToolDetails, LoadTurnDetails } from "./types";
-import { RewindStatusPart, MessageStreamStatusPart, HistoricalBoundaryStatusPart, ExecutionLostRecoveryPart, ResponsePart } from "./responseStatusParts";
-import { ConversationWorkSummary, TurnActivitySummary } from "./TurnActivitySummary";
+import { RewindStatusPart, MessageStreamStatusPart, HistoricalBoundaryStatusPart, ExecutionLostRecoveryPart } from "./responseStatusParts";
+import { TurnActivitySummary } from "./TurnActivitySummary";
 import type { ChatTurnHandlers } from "./types";
 
 export default function ChatTurnResponseBody({
@@ -53,8 +51,8 @@ export default function ChatTurnResponseBody({
       && !(hasSessionInterrupted && item.eventType === "job_cancelled")),
   );
   const renderGroups = buildRenderGroups(visibleParts);
-  const activityItems = renderGroups.flatMap((group) => group.kind === "work" ? group.items : []);
-  const hasConnectionOperation = activityItems.some((item) => item.kind === "aggregated_tool" && item.toolName === "connections.manage");
+  const hasConnectionOperation = renderGroups.some((group) => group.kind === "work"
+    && group.items.some((item) => item.kind === "aggregated_tool" && item.toolName === "connections.manage"));
   const historyTurn = conversation.displayMode === "history" && Boolean(conversation.turnId);
   const onForkItem = conversation.displayMode === "history" && onForkConversation
     ? (itemId: string) => {
@@ -66,41 +64,26 @@ export default function ChatTurnResponseBody({
         sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision, itemId,
       });
     } : undefined;
-  const showConversationWorkSummary = !historyTurn && !running
-    && (activityItems.length > 0 || Boolean(conversation.activityStats));
-  let responseTextPart: Extract<TimelineItem, { kind: "aggregated_text" }> | undefined;
-  for (let index = visibleParts.length - 1; index >= 0; index -= 1) {
-    const item = visibleParts[index];
-    if (item?.kind === "aggregated_text" && item.partKind === "markdown") {
-      responseTextPart = item;
-      break;
-    }
-  }
-  const showResponseActions = !running && !conversation.pending;
+  const showUsage = !running && !conversation.pending;
+  const tokenUsage = showUsage ? conversationTokenUsage(conversation) : null;
+  const modelUsage = showUsage ? conversationModelUsage(conversation) : null;
+  const usage = tokenUsage || modelUsage
+    ? { tokenUsage, modelUsage } : undefined;
   return (
     <>
       <RewindStatusPart conversation={conversation} />
       {workspaceId && hasConnectionOperation ? <a target="_blank" rel="noopener noreferrer"
         href={`/?mcp_workspace=${encodeURIComponent(workspaceId)}`}>{t("chat.turn.mcpStatus")}</a> : null}
-      {historyTurn ? (
-        <TurnActivitySummary
+      <TurnActivitySummary
+          live={!historyTurn}
           conversation={conversation}
           groups={renderGroups}
+          usage={usage}
           showRawDetails={showRawDetails}
           onLoadTurnDetails={onLoadTurnDetails}
           onLoadToolDetails={onLoadToolDetails}
           onForkItem={onForkItem}
-        />
-      ) : null}
-      {showConversationWorkSummary ? (
-        <ConversationWorkSummary
-          conversation={conversation}
-          items={activityItems}
-        />
-      ) : null}
-      {!historyTurn ? renderGroups.map((group) => group.kind === "response" ? (
-        <ResponsePart key={group.id} item={group.item} />
-      ) : null) : null}
+      />
       {summaryOnly && !historyTurn ? (
         <div className="chat-turn-detail-loading" role="status">
           <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
@@ -114,13 +97,6 @@ export default function ChatTurnResponseBody({
         actions={actions}
         running={running}
       />
-      {showResponseActions ? (
-        <ResponseActionToolbar
-          responseText={responseTextPart?.text ?? ""}
-          tokenUsage={conversationTokenUsage(conversation)}
-          modelUsage={conversationModelUsage(conversation)}
-        />
-      ) : null}
       {actions.confirmAction ? (
         <div className="chat-turn-action-confirmation" role="group" aria-label={t("chat.turn.confirmAction")}>
           <div className="chat-turn-action-warning">

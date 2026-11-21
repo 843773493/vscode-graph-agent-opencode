@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
+from boxteam_plugin_sdk.maintenance import MaintenanceTask, start_maintenance
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_mailbox import BackgroundMailboxProtocol
@@ -162,7 +163,8 @@ class AgentExecutionService(JobStepExecutor):
         self._team_resource_subscriber = team_resource_subscriber
         self._model_timeout_seconds = model_timeout_seconds
         self._tool_timeout_seconds = tool_timeout_seconds
-        self._sweep_task: asyncio.Task[None] | None = None
+        self._maintenance_scope = LifetimeScope(f"thread-runtime-residency:{self._workspace_id}")
+        self._sweep_task: asyncio.Future[object] | None = None
         self._shutdown_requested = False
         self._shutdown_task: asyncio.Task[None] | None = None
         self.execution_scope_registry = TurnExecutionScopeRegistry()
@@ -271,7 +273,7 @@ class AgentExecutionService(JobStepExecutor):
         include_team_tools: bool,
     ) -> ThreadRuntimeLease[StepAgentRuntime]:
         """只有真实准入可物化 runtime；代 key 与 builder 均不保留该 admission。"""
-        self._check_sweeper()
+        self._check_owner_open()
         pair = MutationIntentOwner(admission.session_id, admission.thread_id)
         binding = resolve_graph_binding(
             store=self._graph_binding_store,
@@ -385,15 +387,23 @@ class AgentExecutionService(JobStepExecutor):
             pair, admission, generation_key, build
         )
 
-    def _check_sweeper(self) -> None:
+    def _check_owner_open(self) -> None:
         if self._shutdown_requested:
             raise RuntimeError("ThreadRuntime owner 正在关闭，拒绝启动或新 admission")
-        task = self._sweep_task
-        if task is not None and task.done():
-            task.result()
-            raise RuntimeError("ThreadRuntime residency worker 意外停止")
 
-    async def _sweep_idle_runtimes(self) -> None:
+    def _report_sweep_stopped(self, task: asyncio.Future[object]) -> None:
+        if self._shutdown_requested:
+            return
+        if not task.cancelled() and task.exception() is not None:
+            # 原 scope 已报告该异常堆栈；这里补齐没有异常的意外停止。
+            return
+        logger.error(
+            "ThreadRuntime 闲置维护任务意外停止: workspace_id=%s "
+            "task_id=thread-runtime-residency cancelled=%s",
+            self._workspace_id, task.cancelled(),
+        )
+
+    async def _sweep_idle_runtimes_on_start(self) -> None:
         try:
             await self._residency_tracker.sweep()
         except Exception:  # tracker 保留失败 owner；显式报告后按原周期重试。
@@ -401,28 +411,37 @@ class AgentExecutionService(JobStepExecutor):
                 raise
             logger.exception("ThreadRuntime 闲置清理未收敛；保留失败 owner，下一周期重试")
 
+    async def _sweep_idle_runtimes(self) -> None:
+        # owner 的关闭准入早于异步 scope.close；同轮唤醒不能开启新扫描。
+        if not self._shutdown_requested:
+            await self._residency_tracker.sweep()
+
+    def _report_maintenance_error(
+        self, task_id: str, identity: object, elapsed_ms: float, error: Exception,
+    ) -> None:
+        if self._shutdown_requested:
+            raise error
+        logger.error(
+            "ThreadRuntime 闲置清理未收敛；保留失败 owner，下一周期重试: "
+            "workspace_id=%s task_id=%s elapsed_ms=%.3f",
+            identity, task_id, elapsed_ms, exc_info=(type(error), error, error.__traceback__),
+        )
+
     async def start(self) -> None:
         """lifespan 启动 idle worker，不读取或编译 cold thread。"""
-        self._check_sweeper()
+        self._check_owner_open()
         if self._sweep_task is not None:
             return
-        await self._sweep_idle_runtimes()
-
-        async def sweep_periodically() -> None:
-            while not self._shutdown_requested:
-                await asyncio.sleep(60)
-                if self._shutdown_requested:
-                    return
-                await self._sweep_idle_runtimes()
-
-        self._sweep_task = asyncio.create_task(
-            sweep_periodically(),
-            name="thread-runtime-residency",
-            context=Context(),
+        await self._sweep_idle_runtimes_on_start()
+        # 周期任务不继承触发启动的请求或执行上下文；关闭仍归原 Agent owner。
+        self._sweep_task, = Context().run(
+            start_maintenance,
+            (MaintenanceTask("thread-runtime-residency", 60_000, False, self._sweep_idle_runtimes),),
+            scope=self._maintenance_scope,
+            identity=self._workspace_id,
+            report_error=self._report_maintenance_error,
         )
-        self._sweep_task.add_done_callback(
-            self._residency_tracker._consume_task_exception
-        )
+        self._sweep_task.add_done_callback(self._report_sweep_stopped)
 
     async def shutdown(self) -> None:
         """有界观察唯一关闭任务；取消和到期不遗弃原扫描或 generation scope。"""
@@ -450,18 +469,12 @@ class AgentExecutionService(JobStepExecutor):
 
     async def _shutdown_owned(self) -> None:
         """等待真实 lease 排空后关闭 generation scope；外部资源仍由原 owner 管理。"""
-        task = self._sweep_task
         errors: list[Exception] = []
-        if task is not None:
-            if not task.done():
-                task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception as error:  # noqa: BLE001 - worker 失败后仍排空其它真实 scope。
-                errors.append(error)
-            self._sweep_task = None
+        try:
+            await self._maintenance_scope.close()
+        except Exception as error:  # noqa: BLE001 - 扫描结算失败后仍排空 generation scope。
+            errors.append(error)
+        self._sweep_task = None
         self._tool_catalog_cache.clear()
         try:
             await run_cleanup_shielded(self._residency_tracker.close)

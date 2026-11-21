@@ -18,7 +18,7 @@ test("停止跟踪命令消费输入并转交原始参数，不进入模型发�
       input, currentSession: null, compactLoading: false,
       getLatestAssistantContent: () => null,
       setInput: (value) => { input = typeof value === "function" ? value(input) : value; },
-      setAttachments: () => undefined, setAttachmentError: () => undefined,
+      clearAttachments: () => undefined, setAttachmentError: () => undefined,
       setComposerNotice: () => undefined, setAgentMenuOpen: () => undefined,
       setViewMenuOpen: () => undefined, setStatus: () => undefined,
       createSession: async () => { throw new Error("不应创建会话"); },
@@ -85,7 +85,7 @@ describe("Composer /new 命令", () => {
         compactLoading: false,
         getLatestAssistantContent: () => null,
         setInput: () => undefined,
-        setAttachments: () => undefined,
+        clearAttachments: () => undefined,
         setAttachmentError: () => undefined,
         setComposerNotice: () => undefined,
         setAgentMenuOpen: () => undefined,
@@ -135,7 +135,7 @@ describe("Composer /new 命令", () => {
         compactLoading: false,
         getLatestAssistantContent: () => null,
         setInput: () => undefined,
-        setAttachments: () => undefined,
+        clearAttachments: () => undefined,
         setAttachmentError: (update) => {
           attachmentError = typeof update === "function"
             ? update(attachmentError)
@@ -220,7 +220,7 @@ describe("Composer /compact 命令", () => {
         compactLoading: false,
         getLatestAssistantContent: () => null,
         setInput: () => undefined,
-        setAttachments: () => undefined,
+        clearAttachments: () => undefined,
         setAttachmentError: () => undefined,
         setComposerNotice: (update) => {
           notice = typeof update === "function" ? update(notice) : update;
@@ -280,7 +280,7 @@ describe("Composer /copy 命令的剪贴板唯一实现", () => {
         compactLoading: false,
         getLatestAssistantContent: () => "最近一条助手回复",
         setInput: () => undefined,
-        setAttachments: () => undefined,
+        clearAttachments: () => undefined,
         setAttachmentError: () => undefined,
         setComposerNotice: (update) => {
           notice = typeof update === "function" ? update(notice) : update;

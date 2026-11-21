@@ -37,12 +37,12 @@ body > #root {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: 0 8px;
   border-radius: 999px;
   font-size: var(--bt-font-size-small);
   white-space: nowrap;
   border: 1px solid transparent;
-  line-height: 1;
+  line-height: var(--bt-line-height-small);
 }
 .badge.neutral {
   background: var(--bt-badge-background);
@@ -246,7 +246,7 @@ body > #root {
   padding: 7px 9px;
   color: var(--bt-text-subtle);
   font-size: var(--bt-font-size-small);
-  line-height: 16px;
+  line-height: var(--bt-line-height-small);
 }
 
 .session-name-overlay {
@@ -360,7 +360,7 @@ body > #root {
 .session-name-error {
   color: var(--bt-status-danger);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 
 .session-name-actions {
@@ -611,13 +611,13 @@ body > #root {
   padding: 4px 4px 0;
   color: var(--bt-status-danger);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 .composer-attachment-notice {
   padding: 4px 4px 0;
   color: var(--bt-status-success);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 .composer-slash-menu {
   width: min(520px, calc(100vw - 40px), var(--anchored-overlay-available-width, 520px));
@@ -691,7 +691,7 @@ body > #root {
 }
 .composer-slash-title {
   font-size: var(--bt-font-size);
-  line-height: 1.25;
+  line-height: var(--bt-line-height);
 }
 .composer-slash-description {
   overflow: hidden;
@@ -709,7 +709,7 @@ body > #root {
   background: color-mix(in srgb, var(--bt-input-background), var(--bt-surface-raised) 8%);
   color: var(--bt-text-muted);
   font-size: var(--bt-font-size-small);
-  line-height: 1.3;
+  line-height: var(--bt-line-height-small);
   text-align: center;
 }
 .composer-hint {
@@ -767,7 +767,7 @@ body > #root {
   cursor: pointer;
   padding: 0 10px;
   font: inherit;
-  line-height: 1;
+  line-height: var(--bt-line-height);
 }
 .composer-actions button:disabled {
   opacity: 0.5;
@@ -789,13 +789,6 @@ body > #root {
   min-width: 0;
   max-width: 132px;
   flex: 0 1 auto;
-}
-.composer-view-button {
-  background: color-mix(
-    in srgb,
-    var(--bt-hover-background),
-    transparent 20%
-  ) !important;
 }
 .composer-view-menu,
 .composer-agent-menu {
@@ -907,13 +900,13 @@ div.composer-agent-menu-item {
 .composer-agent-menu-label {
   font-size: var(--bt-font-size);
   font-weight: 600;
-  line-height: 1.4;
+  line-height: var(--bt-line-height);
 }
 .composer-view-menu-description,
 .composer-agent-menu-description {
   color: var(--bt-text-muted);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 .composer-model-pill.configuration-error {
   border-color: var(--bt-status-danger) !important;
@@ -923,7 +916,6 @@ div.composer-agent-menu-item {
   min-width: 82px;
   max-width: 150px;
   color: var(--bt-button-foreground) !important;
-  background: var(--bt-button-background) !important;
   border-color: transparent !important;
 }
 .composer-agent-label {
@@ -1200,11 +1192,6 @@ body {
   text-transform: none;
 }
 
-.agent-sessions-panel-header {
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .panel-title {
   font-size: var(--bt-font-size);
 }
@@ -1218,40 +1205,6 @@ body {
   flex: 1 1 auto;
   min-height: 120px;
   overflow: hidden auto;
-}
-
-.sessions-sidebar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 31px;
-  flex: 1 1 auto;
-  justify-content: flex-end;
-  min-width: 0;
-  position: relative;
-}
-
-.new-session-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 24px;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--bt-text-muted) 22%, transparent);
-  border-radius: var(--bt-radius-small);
-  background: color-mix(in srgb, var(--bt-surface-raised) 58%, transparent);
-  color: var(--bt-text-primary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.new-session-pill kbd {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: var(--bt-font-size-small);
 }
 
 .sidebar-icon-button,
@@ -1317,51 +1270,6 @@ body {
   line-height: 14px;
 }
 
-.sessions-filter-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: min(190px, var(--anchored-overlay-available-width, 190px));
-  max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
-  padding: 5px;
-  border: 1px solid var(--bt-panel-border);
-  border-radius: var(--bt-radius-large);
-  background: var(--bt-panel-background);
-  overflow: auto;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--bt-text-primary) 18%, transparent);
-}
-
-.sessions-menu-group-title {
-  padding: 4px 8px 2px;
-  color: var(--bt-text-subtle);
-  font-size: var(--bt-font-size-small);
-  font-weight: 700;
-}
-
-.sessions-menu-separator {
-  height: 1px;
-  margin: 4px 3px;
-  background: color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
-}
-
-.sessions-filter-menu button {
-  min-height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-primary);
-  text-align: left;
-  font: inherit;
-  font-size: var(--bt-font-size);
-  cursor: pointer;
-}
-
-.sessions-filter-menu button:hover,
-.sessions-filter-menu button.active {
-  background: var(--bt-toolbar-hover-background);
-}
-
 .sessions-search-box {
   display: flex;
   flex-direction: column;
@@ -1384,51 +1292,6 @@ body {
 
 .sessions-search-box input:focus {
   border-color: var(--bt-chat-input-focus-border);
-}
-
-.agent-sessions-sidebar-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 0 5px;
-}
-
-.agent-sessions-nav-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-height: 24px;
-  padding: 0 2px;
-  border: 0;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: var(--bt-font-size-small);
-  text-align: left;
-  cursor: pointer;
-}
-
-.agent-sessions-nav-row:hover {
-  color: var(--bt-text-primary);
-  background: transparent;
-}
-
-.agent-sessions-nav-icon {
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  color: var(--bt-text-muted);
-  font-size: 14px;
-}
-
-.agent-sessions-nav-count {
-  color: var(--bt-text-subtle);
-  font-size: var(--bt-font-size-small);
 }
 
 .session-view-surface:has(.chat-stream-blank) {
@@ -1578,16 +1441,16 @@ body {
   background: var(--bt-toolbar-hover-background);
 }
 
+.composer-actions button[aria-expanded="true"]:not(:disabled) {
+  background: var(--bt-toolbar-active-background);
+}
+
 .composer-icon-button,
 .sessions-chat-attach-button {
   width: 22px;
   height: 22px !important;
   font-size: 18px !important;
   line-height: 18px !important;
-}
-
-.composer-view-button {
-  background: transparent !important;
 }
 
 .composer-hint {
@@ -1609,7 +1472,6 @@ body {
   padding: 0 7px !important;
   border-radius: var(--bt-radius-small) !important;
   border-color: transparent !important;
-  background: transparent !important;
   color: var(--bt-text-primary) !important;
 }
 

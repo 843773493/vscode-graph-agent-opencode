@@ -28,6 +28,8 @@ interface TurnAnchor {
   controller: AbortController;
   loading: boolean;
   located: boolean;
+  preservingViewport?: true;
+  layoutTarget?: { element: HTMLElement; top: number; awaitingMeasurement: boolean };
   message?: TurnMessageReferenceDTO;
   tool?: TurnToolResultDTO;
   item?: TurnItemNavigation;
@@ -59,6 +61,7 @@ export function useTurnAnchorNavigation({
   messageNavigation?: TurnNavigationTarget;
 }) {
   const anchorRef = React.useRef<TurnAnchor | null>(null);
+  const [viewportAnchored, setViewportAnchored] = React.useState(false);
   const scopeRef = React.useRef(scopeKey);
   const restoredScopeRef = React.useRef<string | null>(null);
   const frameRef = React.useRef<number | null>(null);
@@ -71,6 +74,7 @@ export function useTurnAnchorNavigation({
   if (scopeRef.current !== scopeKey) {
     anchorRef.current?.controller.abort();
     anchorRef.current = null;
+    setViewportAnchored(false);
     scopeRef.current = scopeKey;
     restoredScopeRef.current = null;
     // 已取消的定位状态与任务一起失效，返回原 owner 时不能重新显示。
@@ -83,17 +87,19 @@ export function useTurnAnchorNavigation({
   const cancelAnchor = React.useCallback((clearMessage = false) => {
     anchorRef.current?.controller.abort();
     anchorRef.current = null;
+    setViewportAnchored(false);
     restoredScopeRef.current = currentRef.current.scopeKey;
     setNavigation(null);
     if (clearMessage) { setLocated(undefined); setLocatedItem(undefined); }
   }, []);
   const closeMessageNavigation = React.useCallback(() => cancelAnchor(true), [cancelAnchor]);
 
-  const preserveViewport = React.useCallback(() => {
+  const preserveViewport = React.useCallback((layoutTarget?: HTMLElement) => {
     const scroller = scrollerRef.current;
     if (!scroller || anchorRef.current) return;
     const viewport = scroller.getBoundingClientRect();
-    const element = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
+    const element = layoutTarget?.closest<HTMLElement>("[data-turn-id]")
+      ?? Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
       .find(candidate => {
         const bounds = candidate.getBoundingClientRect();
         return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
@@ -102,8 +108,10 @@ export function useTurnAnchorNavigation({
     // 前插与后续高度测量共用原锚点；保留首行留白，不发布导航或业务状态。
     const anchor: TurnAnchor = { scopeKey: currentRef.current.scopeKey, turnId: element.dataset.turnId,
       offset: viewport.top - element.getBoundingClientRect().top, restoring: false,
-      controller: new AbortController(), loading: false, located: true };
+      controller: new AbortController(), loading: false, located: true, preservingViewport: true,
+      layoutTarget: layoutTarget ? { element: layoutTarget, top: layoutTarget.getBoundingClientRect().top - viewport.top, awaitingMeasurement: true } : undefined };
     anchorRef.current = anchor;
+    setViewportAnchored(true);
     currentRef.current.onViewStateChange?.({ turn_anchor: anchor.turnId,
       scroll_offset: Math.max(0, anchor.offset), follow_latest: false });
     return () => { if (anchorRef.current === anchor) cancelAnchor(); };
@@ -128,6 +136,7 @@ export function useTurnAnchorNavigation({
     if (anchorRef.current !== anchor || anchor.scopeKey !== currentRef.current.scopeKey) return;
     anchor.controller.abort();
     anchorRef.current = null;
+    setViewportAnchored(false);
     setLocated(undefined);
     setLocatedItem(undefined);
     if (anchor.restoring) {
@@ -146,6 +155,7 @@ export function useTurnAnchorNavigation({
       controller: new AbortController(), loading: false, located: false, message, tool, item,
     };
     anchorRef.current = anchor;
+    setViewportAnchored(true);
     if (!anchor.turnId) {
       failAnchor(anchor, t("chat.turnNavigation.emptyTurnId"));
       return;
@@ -173,7 +183,10 @@ export function useTurnAnchorNavigation({
   const alignAnchor = React.useCallback(() => {
     const anchor = anchorRef.current;
     if (!anchor || anchor.loading || anchor.scopeKey !== currentRef.current.scopeKey) return;
-    const index = currentRef.current.items.findIndex((item) => isTargetTurn(item, anchor.turnId));
+    // 布局保位也作用于正在生成的 Turn；主动历史导航仍在加载入口核验历史投影。
+    const index = currentRef.current.items.findIndex((item) => anchor.preservingViewport
+      ? item.kind === "turn" && item.conversation.turnId === anchor.turnId
+      : isTargetTurn(item, anchor.turnId));
     if (index < 0) {
       failAnchor(anchor, t("chat.turnNavigation.notFound", anchor.turnId));
       return;
@@ -181,6 +194,16 @@ export function useTurnAnchorNavigation({
     const scroller = scrollerRef.current;
     const stream = streamRef.current;
     if (!scroller || !stream) return;
+    // 手动展开／折叠固定被点击的标题；异步正文和虚拟列表测量都沿用此锚点。
+    if (anchor.layoutTarget?.element.isConnected) {
+      // 先让 Virtuoso 收到展开后的尺寸；过早滚动会越过旧范围并卸载当前 item。
+      if (anchor.layoutTarget.awaitingMeasurement) return;
+      const delta = anchor.layoutTarget.element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.layoutTarget.top;
+      if (Math.abs(delta) > 0.5) {
+        scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + delta));
+      }
+      return;
+    }
     const element = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
       .find((candidate) => candidate.dataset.turnId === anchor.turnId);
     if (!element) {
@@ -237,6 +260,12 @@ export function useTurnAnchorNavigation({
     });
   }, [alignAnchor]);
 
+  const handleAnchorHeightChanged = React.useCallback(() => {
+    const target = anchorRef.current?.layoutTarget;
+    if (target) target.awaitingMeasurement = false;
+    scheduleAnchorAlignment();
+  }, [scheduleAnchorAlignment]);
+
   React.useLayoutEffect(() => {
     scheduleAnchorAlignment();
   }, [items, navigation, scheduleAnchorAlignment]);
@@ -260,7 +289,7 @@ export function useTurnAnchorNavigation({
       observer.observe(element);
     }
     return () => observer.disconnect();
-  }, [items, navigation, scheduleAnchorAlignment, scrollerRef]);
+  }, [items, navigation, viewportAnchored, scheduleAnchorAlignment, scrollerRef]);
 
   React.useEffect(() => {
     if (!messageNavigation || historyLoading || handledMessageRef.current === messageNavigation) return;
@@ -297,7 +326,7 @@ export function useTurnAnchorNavigation({
   }, []);
 
   return {
-    anchorRef, cancelAnchor, navigateToTurn, preserveViewport, scheduleAnchorAlignment, scrollToLatest,
+    anchorRef, viewportAnchored, cancelAnchor, navigateToTurn, preserveViewport, scheduleAnchorAlignment, handleAnchorHeightChanged, scrollToLatest,
     closeMessageNavigation,
     locatedMessage: located?.scopeKey === scopeKey && "reference" in located.value ? located.value : undefined,
     locatedItem,

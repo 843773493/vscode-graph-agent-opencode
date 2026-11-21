@@ -21,5 +21,6 @@
 - 使用仓库已安装的 ZIP 库，失败时立即抛出明确错误。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
-- `build-sdk.mjs` 独立构建 Node tarball/Python wheel；归档按内容摘要保留，日志合同从唯一源带入。`prepare-product-sdk.mjs` 在开发 bootstrap 中更新产品标准依赖来源；release/CI/远端冻结安装先用 `--check` 重建并核来源，不能改写已提交清单及锁。不导入应用或待安装 SDK。
+- `build-sdk.mjs` 独立构建 Node tarball/Python wheel；归档按内容摘要保留，日志合同从唯一源带入。`prepare-product-sdk.mjs` 同步两种 SDK 的版本、产品 Bun workspace／uv editable 来源与生成日志资源，不为普通源码编辑构建归档。`--check` 只核一致性，不改清单、锁或生成资源，不构建 SDK。不导入应用或待安装 SDK。
+- `export-python-requirements.mjs` 为产品发行导出锁定依赖，排除 Backend 本地 editable 项并加入当前 SDK wheel 及真实摘要；不改变插件安装规则，不让开发目录进入产品制品。
 - 两个 packer 共享目录构建，SDK 放在 `vendor/sdk/<sha256>/`，Bun/uv 正常更新锁后准备依赖；缓存输入与制品身份分开，纯业务源码变化不重装依赖。开发加载完整目录，发行只打 ZIP。

@@ -46,6 +46,7 @@ from tests.support.processes.gateway import (
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.sealed_request_audit import audit_sealed_requests
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
@@ -257,9 +258,7 @@ async def section8_product_nodes(
             )
         config = commentjson.loads(config_path.read_text())
         # 保留协议资产的 Provider URL；精确回放 transport 隔离网络与个人凭据。
-        for provider in config["llm"]["providers"]:
-            provider["api_key"] = "model-stream-replay-unused-key"
-            provider.pop("auth", None)
+        clear_test_provider_api_keys(config)
         config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
         if node_context.workspace_root.name == "workspace" and node_context.workspace_root.parent.name in {"a", "c"}:
             config["runtime"].setdefault("agent", {}).setdefault("run", {})["mode"] = "team"

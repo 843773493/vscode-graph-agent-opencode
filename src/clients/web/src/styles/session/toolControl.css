@@ -3,10 +3,6 @@
   display: inline-flex;
 }
 
-.composer-tool-button.active {
-  background: var(--bt-toolbar-active-background) !important;
-}
-
 .composer-tool-button .codicon {
   display: inline-flex;
   align-items: center;
@@ -151,7 +147,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  line-height: 1;
+  line-height: var(--bt-line-height);
   cursor: pointer;
 }
 
@@ -184,7 +180,7 @@
   color: var(--bt-status-danger);
   background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
   font-size: var(--bt-font-size);
-  line-height: 1.4;
+  line-height: var(--bt-line-height);
   overflow-wrap: anywhere;
 }
 
@@ -342,7 +338,7 @@
   overflow: hidden;
   color: var(--bt-text-muted);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -403,7 +399,7 @@
   margin-left: 22px;
   color: var(--bt-status-danger);
   font-size: var(--bt-font-size);
-  line-height: 1.35;
+  line-height: var(--bt-line-height);
 }
 
 .composer-tool-attempt-errors summary {
@@ -471,5 +467,7 @@
   .composer-agent-button,
   .composer-model-pill { width: 22px !important; min-width: 22px !important; padding: 0 !important; justify-content: center !important; }
   .composer-agent-label,
-  .composer-model-label { display: none; }
+  .composer-model-label,
+  .composer-model-pill > .codicon-chevron-down { display: none; }
+  .composer-model-pill.configuration-error > .composer-picker-button-icon { display: none; }
 }

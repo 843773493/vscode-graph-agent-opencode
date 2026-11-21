@@ -63,6 +63,9 @@
     "yazl": "3.3.1"
   },
   "dependencies": {
-    "@boxteam/plugin-sdk": "file:out/sdk/node/582e40b0540b3427a1981db688a6504fbb677bc02a94b4a4ab80321c334fe09b/boxteam-plugin-sdk-0.0.2.tgz"
-  }
+    "@boxteam/plugin-sdk": "workspace:*"
+  },
+  "workspaces": [
+    "sdk/node"
+  ]
 }

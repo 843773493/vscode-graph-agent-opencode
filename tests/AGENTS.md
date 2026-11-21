@@ -5,7 +5,7 @@
 ```text
 tests/
 ├── conftest.py   共享配置、工作区路径与进程生命周期 fixture
-├── unit/          单模块行为；业务测试镜像被测模块，harness/ 验证测试设施本身
+├── unit/          单模块行为；业务测试镜像被测模块，sdk/ 验共享 SDK，harness/ 验测试设施
 ├── contracts/     公开协议、schema 与跨语言契约
 ├── integration/   多模块或真实进程组合，允许明确的外部服务替身
 │   └── harness/   测试运行设施自身的真实子进程与传输行为
@@ -20,7 +20,7 @@ tests/
 └── runner/        suite 注册、选择、资源保护和命令执行
 ```
 
-先按测试需要证明的边界选择层级，再在层级内按业务职责组织。仅服务于一组测试的 helper 留在该组目录；跨组复用后再提升到 `support/` 或对应运行设施目录，不复制一份到每个层级。静态输入归 `fixtures/`，可变工作区和执行产物归 `out/tests/`，不要由数据文件名决定它的归属。
+先按测试需要证明的边界选择层级，再在层级内按业务职责组织。共享 SDK 测试归 unit/sdk、contracts/sdk 和 integration/sdk，内部再按 Python／Node 分组；产品及具体插件的接入验收仍归各自 owner，不恢复顶层 tests/sdk。仅服务于一组测试的 helper 留在该组目录；跨组复用后再提升到 `support/` 或对应运行设施目录，不复制一份到每个层级。静态输入归 `fixtures/`，可变工作区和执行产物归 `out/tests/`，不要由数据文件名决定它的归属。
 
 ## 可修改内容
 

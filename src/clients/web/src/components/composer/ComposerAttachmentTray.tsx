@@ -7,11 +7,13 @@ export default function ComposerAttachmentTray({
   error,
   notice,
   onRemove,
+  onRetry,
 }: {
   attachments: SelectedAttachment[];
   error: string;
   notice: string;
   onRemove: (fileId: string) => void;
+  onRetry: (fileId: string) => void;
 }): React.ReactNode {
   return (
     <>
@@ -46,6 +48,10 @@ export default function ComposerAttachmentTray({
               <span className="composer-attachment-name">
                 {attachment.name ?? t("composer.attachments.attachment")}
               </span>
+              {attachment.uploadState === "uploading" ? <span role="status" title={t("composer.attachments.uploading")} className="codicon codicon-loading codicon-modifier-spin" /> : null}
+              {attachment.uploadState === "failed" ? <button type="button" className="composer-icon-button"
+                aria-label={t("composer.attachments.retry")} title={t("composer.attachments.retry")}
+                onClick={() => onRetry(attachment.file_id)}><span className="codicon codicon-refresh" aria-hidden="true" /></button> : null}
               <button
                 type="button"
                 className="composer-attachment-remove"

@@ -4,9 +4,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 const projectRoot = process.cwd();
-const artifactRoot = path.join(projectRoot, "out/tests/sdk/node/runtime/artifacts");
+const context = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
+const artifactRoot = context.artifactsDir;
 
 test("受管 Node 插件提供生成合同身份、日志控制和原关闭回执", () => {
   mkdirSync(artifactRoot, { recursive: true });

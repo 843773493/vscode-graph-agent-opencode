@@ -103,7 +103,18 @@ export function TerminalContent({
     const timerId = window.setTimeout(() => {
       setFrameStatus((current) => (current === "loading" ? "stalled" : current));
     }, TERMINAL_FRAME_READY_TIMEOUT_MS);
-    return () => window.clearTimeout(timerId);
+    const terminalId = new URL(frameUrl).searchParams.get("terminalId");
+    const receiveReady = (event: MessageEvent<unknown>) => {
+      const source = frameRef.current?.contentWindow;
+      if (!source || event.origin !== window.location.origin || event.source !== source
+        || !event.data || typeof event.data !== "object") return;
+      const message = event.data as { type?: string; terminalId?: string };
+      if (message.type !== "boxteam.terminal.ready" || message.terminalId !== terminalId) return;
+      window.clearTimeout(timerId);
+      setFrameStatus("ready");
+    };
+    window.addEventListener("message", receiveReady);
+    return () => { window.clearTimeout(timerId); window.removeEventListener("message", receiveReady); };
   }, [frameUrl, frameReloadToken]);
 
   useEffect(() => {
@@ -235,7 +246,6 @@ export function TerminalContent({
                   src={attach.url}
                   className="terminal-panel-frame"
                   title={`${String(selectedEntry.metadata?.title ?? selectedEntry.resource_id)} · ${selectedEntry.retention_scope === "workspace" ? t("resources.keep") : t("bottom.terminal.temporary")}`}
-                  onLoad={() => setFrameStatus("ready")}
                   onError={() => setFrameStatus("stalled")}
                 />
               ) : null}

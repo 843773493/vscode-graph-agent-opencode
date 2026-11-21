@@ -64,15 +64,7 @@ function run(command, args, options = {}) {
 function installPythonDependencies(pythonExecutable) {
   run("bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]);
   const requirementsPath = path.join(outputRoot, "requirements.locked.txt");
-  run("uv", [
-    "export",
-    "--locked",
-    "--no-dev",
-    "--format",
-    "requirements-txt",
-    "--output-file",
-    requirementsPath,
-  ]);
+  run("bun", ["scripts/plugins/export-python-requirements.mjs", requirementsPath]);
   run("uv", [
     "pip",
     "install",

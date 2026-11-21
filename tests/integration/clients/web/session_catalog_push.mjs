@@ -32,7 +32,7 @@ try {
     if (request.method() === 'GET' && /\/session-catalog\/(navigation-events|snapshot)$/.test(path)) catalogGets.push(path);
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const cookie = (await context.cookies()).find(item => item.name === 'boxteam_local_token');
   expect(cookie).toBeDefined();
   expect(cookie.httpOnly).toBe(true);
@@ -63,8 +63,8 @@ try {
   result.initialization = [health, workspaces, workspace].map(body => body.request_id);
   const workspaceRow = page.getByTestId(`workspace-node-${JSON.stringify([target.gateway_id, target.workspace_id])}`);
   await expect(workspaceRow).toBeVisible();
-  const chevron = workspaceRow.locator('.session-resource-chevron');
-  if ((await chevron.getAttribute('aria-label')).startsWith('展开')) await chevron.click();
+  const toggle = workspaceRow.locator('.session-resource-expand-toggle');
+  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
   await expect.poll(() => subscriptions.length > 0).toBe(true);
   // 先等待初读完成，再跨越原先每秒轮询的多个周期。
   await page.waitForTimeout(500);

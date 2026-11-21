@@ -55,7 +55,7 @@ try {
   }, { path, body });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspace = await api('/api/v1/workspace');
   await api('/api/gateway/workspaces');
   const session = await api('/api/v1/sessions', { title: 'Trace 原文定位验收' });
@@ -84,7 +84,7 @@ try {
   await send(child, '生成仅属于 child 本轮执行的响应');
   result.phase = 'wait-navigation';
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('treeitem', { name: /^Trace 原文定位验收/ })).toBeVisible();
   expect(await page.locator(`section.boxteam-thread[data-thread-id="${child}"]`).count()).toBe(0);
   result.phase = 'choose-category';

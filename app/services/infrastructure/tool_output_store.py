@@ -224,7 +224,7 @@ def _text_content(content: str | list[str | dict[object, object]]) -> str | None
 
 
 def _line_count(text: str) -> int:
-    return text.count("\n") + 1
+    return sum(1 for _ in _LINE_BREAK_PATTERN.finditer(text)) + 1
 
 
 def _write_exact_output(path: Path, content: bytes, resource_uri: str) -> None:

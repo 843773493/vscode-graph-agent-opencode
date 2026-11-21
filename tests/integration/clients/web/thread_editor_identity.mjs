@@ -142,7 +142,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   result.phase = 'create-through-product-api';
   const health = await api('/api/gateway/health');
   const workspaces = await api('/api/gateway/workspaces');
@@ -169,7 +169,8 @@ try {
   await open(uri);
   await expect(tabs).toHaveCount(1);
   // 同一资源再由真实导航打开，不能因入口或标题不同创建另一标签。
-  await page.getByRole('button', { name: '刷新资源树', exact: true }).click();
+  await page.locator('.pane-header').filter({ has: page.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
   await page.locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
   await expect(tabs).toHaveCount(1);
   result.stableOpenDeduplicated = true;

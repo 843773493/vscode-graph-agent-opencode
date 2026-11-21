@@ -369,10 +369,16 @@ async def test_cancel_closes_real_http_wait_before_first_directory_response(prob
     ("chat_completions", True), ("chat_completions", False),
     ("responses", True), ("responses", False), ("anthropic_messages", False),
 ])
+@pytest.mark.parametrize("api_key", ["fixture-model-key", ""])
 async def test_model_probe_uses_real_adapter_and_single_request(
     probe_case: ProbeCase, catalog: Catalog, protocol: str, streaming: bool,
+    monkeypatch: pytest.MonkeyPatch, api_key: str,
 ) -> None:
-    request = probe_case.model_test(protocol=protocol, streaming=streaming)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-process-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
+    request = probe_case.model_test(protocol=protocol, streaming=streaming, credential_input={
+        "scope": "provider", "provider_id": "team", "value": api_key,
+    } if api_key else None)
     payload = json.loads(request["jsonc"])
     defaults = payload["llm"]["providers"]["team"]["defaults"]
     defaults["request_options"]["parameters"] = {"temperature": 0, "top_p": None}
@@ -400,10 +406,14 @@ async def test_model_probe_uses_real_adapter_and_single_request(
     assert result["usage"] == {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}
     assert result["first_content_ms"] <= result["elapsed_ms"]
     assert start["observation"] == result["observation"]
+    assert start["observation"]["credential"]["source"] == ("temporary" if api_key else "none")
     assert start["model_ref"] == result["model_ref"] == {"provider_id": "team", "model_id": "main"}
     assert all(event["request_id"] == response.headers["X-Request-ID"] == "catalog-request" for event in events)
     assert start["streaming"] == result["streaming"] == streaming
     assert len(catalog.model_requests) == 1
+    headers = catalog.requests[0][1]
+    assert headers.get("Authorization") == (f"Bearer {api_key}" if api_key and protocol != "anthropic_messages" else None)
+    assert headers.get("X-Api-Key") == (api_key if api_key and protocol == "anthropic_messages" else None)
     assert inspected["request_url"] == str(httpx.URL(catalog.endpoint).copy_with(path=catalog.requests[0][0]))
     wire = catalog.model_requests[0]
     assert wire["model"] == "configured-main" and wire.get("stream", False) is streaming

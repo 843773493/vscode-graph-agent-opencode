@@ -82,7 +82,7 @@ async def test_shutdown_error_is_returned_by_scope_close_not_reported() -> None:
             await finish.wait()
             raise failure
 
-    start_maintenance(
+    worker, = start_maintenance(
         [MaintenanceTask("cleanup", 5, True, cleanup)],
         scope=scope,
         identity="workspace-a",
@@ -96,6 +96,7 @@ async def test_shutdown_error_is_returned_by_scope_close_not_reported() -> None:
         await closing
 
     assert captured.value.exceptions[0].__cause__ is failure
+    assert worker.exception() is failure
     assert reports == []
     assert scope.snapshot().task_count == 0
 
@@ -189,14 +190,12 @@ async def test_slow_task_does_not_overlap_or_block_an_independent_task(monkeypat
         if fast_calls == 2:
             fast_second_run.set()
 
-    start_maintenance(
+    slow_task, fast_task = start_maintenance(
         [MaintenanceTask("slow", 5, True, slow), MaintenanceTask("fast", 5, True, fast)],
         scope=scope,
         identity="workspace-a",
         report_error=lambda *_: None,
     )
-    slow_task = next(task for task, label in scope._tasks.items() if label == "maintenance:slow")
-    fast_task = next(task for task, label in scope._tasks.items() if label == "maintenance:fast")
     try:
         await asyncio.wait_for(slow_entered.wait(), 1)
         fast_wait.set()

@@ -100,6 +100,35 @@ describe("浏览器状态持久化", () => {
     expect(manager.artifactMaintenance).toBeNull();
   });
 
+  for (const stage of ["runtime", "persist"]) {
+    test(`维护与 ${stage} 收尾同时失败时完整交还原错，显式重试不重放维护失败`, async () => {
+      const manager = createBrowserManagerWithStateWriter(null);
+      await manager.init();
+      const maintenanceFailure = new Error("截图文件删除失败");
+      const releaseFailure = new Error(`${stage} 收尾失败`);
+      const prune = Promise.withResolvers();
+      manager.stateStore.pruneScreenshots = () => prune.promise;
+      let attempts = 0;
+      const release = async () => {
+        if (++attempts === 1) throw releaseFailure;
+      };
+      if (stage === "runtime") manager.runtimePool.shutdown = release;
+      else manager.persist = release;
+      manager.startArtifactPrune();
+
+      const closing = manager.shutdown();
+      prune.reject(maintenanceFailure);
+      const failure = await closing.catch(error => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors).toEqual([maintenanceFailure, releaseFailure]);
+      expect(manager.artifactMaintenance).toBeNull();
+
+      await manager.shutdown();
+      expect(attempts).toBe(2);
+      expect(manager.shutdownStage).toBe("complete");
+    });
+  }
+
   test("下载列表淘汰实际删除文件，重启回收未发布的残留而保留可访问下载", async () => {
     const manager = createBrowserManagerWithStateWriter(null);
     const browser = new BrowserSession({ manager, record: {

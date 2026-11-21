@@ -47,7 +47,7 @@ try {
   expect(active.status).toBe(200);
   expect(active.body.data.active_workspace).toEqual(ownerA);
   await page.goto(baseUrl);
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health');
   const listing = await api('/api/gateway/workspaces');
   expect(health.status).toBe(200); expect(listing.status).toBe(200);

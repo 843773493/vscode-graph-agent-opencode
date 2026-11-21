@@ -33,8 +33,11 @@ from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 
 @pytest.fixture(autouse=True)
-def attachment_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def attachment_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 @pytest.fixture
 async def attachment_case(history_target, request) -> AsyncIterator[tuple]:
@@ -42,6 +45,43 @@ async def attachment_case(history_target, request) -> AsyncIterator[tuple]:
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{history_target.gateway_port}",
                                  headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
         yield client, context, history_target.workspace, history_target.replay
+
+
+@pytest.mark.asyncio
+async def test_composer_uploads_before_send_and_restores_reference_after_reload(attachment_case, request) -> None:
+    client, context, workspace, replay = attachment_case
+    health = (await client.get("/api/gateway/health")).json()["data"]
+    active = (await client.get("/api/gateway/workspaces")).json()["data"]["active_workspace"]
+    client.headers["X-BoxTeam-Target-Gateway-Id"] = health["gateway_id"]
+    client.headers["X-BoxTeam-Workspace-Id"] = active["workspace_id"]
+    session = await create_session(client, "附件独立上传验收")
+    thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
+    config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
+    provider = config["llm"]["providers"]["primary"]
+    model = provider["models"]["default"]["model"]
+    replay.control.plan_model_calls(session, thread, cast(list[dict[str, object]], build_cassette(
+        asset_id="composer-preupload", model=model, url=provider["defaults"]["endpoint"] + "/chat/completions",
+        frames=chat_completion_frames(response_id="chatcmpl-preupload", model=model,
+            deltas=({"role": "assistant", "content": "附件已通过独立上传进入消息。"},), finish_reason="stop"),
+    ).raw["interactions"]))
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "附件上传 Web 验收需要 Chromium"
+    environment = {**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+        "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"gatewayId": health["gateway_id"], "workspaceId": active["workspace_id"],
+            "sessionId": session, "threadId": thread}),
+        "BOXTEAM_BROWSER_RESULT_PATH": str(context.artifacts_dir / "preupload.json"),
+        "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "preupload.png"),
+    }
+    with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
+        process = await asyncio.to_thread(subprocess.run, ["bun", "tests/integration/clients/web/attachment_uploads.mjs"],
+            env={**environment, **temporary}, capture_output=True, text=True, timeout=100, check=False)
+    (context.artifacts_dir / "preupload.stdout.raw").write_text(process.stdout)
+    (context.artifacts_dir / "preupload.stderr.raw").write_text(process.stderr)
+    assert process.returncode == 0, process.stdout + process.stderr
+    result = json.loads((context.artifacts_dir / "preupload.json").read_text())
+    assert result["restored"] and result["removed"] and result["sent"] and result["pageErrors"] == []
+    await wait_for_job_done(client, result["jobId"])
 
 
 @pytest.mark.asyncio

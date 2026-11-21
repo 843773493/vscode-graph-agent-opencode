@@ -32,7 +32,7 @@ jobs:
           node-version: "22"
 
       - run: bun scripts/plugins/prepare-product-sdk.mjs --check node python
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-editable
       - run: bun install --frozen-lockfile
       - run: bun run check:protocol:application
       - run: bun run worktree create release HEAD
@@ -70,7 +70,7 @@ jobs:
           node-version: "22"
 
       - run: bun scripts/plugins/prepare-product-sdk.mjs --check node python
-      - run: uv sync --frozen
+      - run: uv sync --frozen --no-editable
       - run: bun install --frozen-lockfile
       - run: bun run check:protocol:application
       - run: bun run worktree create release HEAD

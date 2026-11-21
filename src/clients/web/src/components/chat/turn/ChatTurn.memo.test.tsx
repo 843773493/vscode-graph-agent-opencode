@@ -53,7 +53,7 @@ describe("ChatTurn memo 比较", () => {
     </ChatItemMenuContext.Provider>;
     const forkFromResponse = () => {
       const source = { closest: () => null, getRootNode: () => ({}), ownerDocument: { getSelection: () => null } };
-      renderer!.root.findByProps({ className: "chat-markdown" }).props.onKeyDown({
+      renderer!.root.findByProps({ "aria-label": "模型回复" }).props.onKeyDown({
         key: "ContextMenu", target: source, currentTarget: source, preventDefault() {}, stopPropagation() {},
       });
       menu!.actions.find(action => action.id === "forkItem")!.run();

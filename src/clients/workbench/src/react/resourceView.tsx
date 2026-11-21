@@ -165,7 +165,7 @@ export function ResourceView({ input, runtime, editors, groupId, commands, activ
         conversation={childConversation} onRefresh={() => { void children.refresh(); }}
         onOpenMainThread={() => { if (state.currentSession?.thread_id) openThread(state.currentSession.thread_id, state.currentSession.title); }}
         onOpenThread={child => openThread(child.thread_id, child.title ?? child.thread_id)}
-        onSelectThread={threadId => openThread(threadId, threadId, true)} onForkFromThread={onForkThread} />}
+        onForkFromThread={onForkThread} />}
       resourcePanel={<ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
         loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.workspaceKey} mainThread={thread}
         activePreviewPath={preview?.path ?? null} onRefresh={() => void content.refreshSessionResources(owner.sessionId)}

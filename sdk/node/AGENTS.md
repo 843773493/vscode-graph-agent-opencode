@@ -13,5 +13,6 @@
 
 ## 规范
 
-- SDK 版本由根 `package.json` 在构建时派生。
+- SDK 版本由根 `package.json` 在准备／构建时同步。仓库内产品开发使用 Bun workspace，插件和产品发行仍使用独立 tarball。
+- 日志静态合同由 `prepare-product-sdk.mjs node` 从唯一资源源生成，`--check` 只核一致性；不手改包内生成资源。
 - 公开子模块应能独立导入；模块加载不得启动服务、定时器或读取实例环境。

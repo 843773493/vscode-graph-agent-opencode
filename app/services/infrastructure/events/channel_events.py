@@ -345,7 +345,8 @@ _CONTEXT_SOURCE_SCHEMA: Final[_EventSchema] = _EventSchema(
         (_validate_identity, "source_id", _NO_ENUM),
         (_validate_identity, "source_kind", _NO_ENUM),
         (None, "kind", CONTEXT_SOURCE_KINDS),
-        (_validate_revision, "revision", _NO_ENUM),
+        # 来源 owner 可以发布配置版本等标识，无需为事件传输再计算摘要。
+        (_validate_optional_id, "revision", _NO_ENUM),
         (_validate_optional_id, "session_id", _NO_ENUM),
         (_validate_optional_id, "thread_id", _NO_ENUM),
     ),

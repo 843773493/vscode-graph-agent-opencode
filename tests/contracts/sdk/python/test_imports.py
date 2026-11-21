@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+from importlib.metadata import distribution
 from pathlib import Path
 
 import pytest
@@ -18,8 +20,14 @@ def sdk_import_process(request: pytest.FixtureRequest):
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("BOXTEAM_", "PYTHON"))}
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    sdk = distribution("boxteam-plugin-sdk")
+    direct_url = sdk.read_text("direct_url.json")
+    assert direct_url is not None
+    editable = json.loads(direct_url).get("dir_info", {}).get("editable", False)
+    expected_root = Path.cwd() / "sdk/python/src" if editable else Path(sdk.locate_file(""))
 
     def run(script: str) -> None:
+        script = f"from pathlib import Path\nsdk_root = Path({str(expected_root)!r}).resolve()\n" + script
         result = subprocess.run([sys.executable, "-c", script], cwd=Path.cwd(),
                                 env=environment, capture_output=True, text=True, timeout=20, check=False)
         (context.artifacts_dir / f"{request.node.name}.stdout.log").write_text(result.stdout)
@@ -38,7 +46,7 @@ os.environ["BOXTEAM_RUNTIME_LOG_SINK"] = "invalid-json"
 os.environ["BOXTEAM_RUNTIME_LOGGING"] = "invalid-json"
 for name in ("boxteam_plugin_sdk", "boxteam_plugin_sdk.lifecycle", "boxteam_plugin_sdk.maintenance"):
     module = importlib.import_module(name)
-    assert "/site-packages/" in module.__file__.replace("\\\\", "/"), module.__file__
+    assert Path(module.__file__).resolve().is_relative_to(sdk_root), module.__file__
 assert not any(name in sys.modules for name in ("fastapi", "psutil", "boxteam_plugin_sdk.commands", "boxteam_plugin_sdk.observation"))
 from boxteam_plugin_sdk.commands import plugin_command_router
 async def shutdown():
@@ -63,7 +71,7 @@ def test_product_and_sdk_share_installed_wire_in_either_import_order(sdk_import_
 from google.protobuf import descriptor_pool
 assert sdk_wire is product_wire
 assert sdk_wire.DESCRIPTOR is descriptor_pool.Default().FindFileByName("boxteam/browser/v1/browser.proto")
-assert "/site-packages/" in sdk_wire.__file__.replace("\\\\", "/"), sdk_wire.__file__
+assert Path(sdk_wire.__file__).resolve().is_relative_to(sdk_root), sdk_wire.__file__
 page = product_wire.BrowserPage(browser_id="browser-probe", page_id="page-probe", workspace_id="workspace-probe")
 assert sdk_wire.BrowserPage.FromString(page.SerializeToString()) == page
 print(sdk_wire.__file__)

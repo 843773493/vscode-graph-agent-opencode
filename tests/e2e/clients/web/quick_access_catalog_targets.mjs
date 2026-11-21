@@ -113,7 +113,7 @@ try {
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(url.pathname)) result.forbidden.push(url.pathname);
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
   const ownerA = { gatewayId: health.gateway_id,
     workspaceId: JSON.parse(await readFile(join(workspace, '.boxteam/workspace-identity.json'), 'utf8')).workspace_id };
@@ -152,7 +152,7 @@ try {
   const sessionB = await api('/api/v1/sessions', ownerB, { title: 'catalogexact 同名目标' });
   await mutate(ownerB, 'move_node', { target_node_id: sessionB.session_id, parent_node_id: folderB });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
 
   result.phase = 'session-main-and-unopened-child';
   const quick = page.locator('.quick-input-widget');

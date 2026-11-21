@@ -17,17 +17,14 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
+from tests.support.workspaces import clear_test_provider_api_keys
 
 
 @pytest.fixture(scope="module")
 def integration_config_path(integration_workspace_root_path: str) -> str:
     """迁移只读写任务，不调用模型，也不依赖开发机的 Provider 凭据。"""
     configuration = read_jsonc_object(Path.cwd() / "configs/tests/workspace/default.jsonc")
-    llm = configuration["llm"]
-    assert isinstance(llm, dict)
-    for provider in llm["providers"]:
-        provider["api_key"] = "migration-test-unused-key"
-        provider["endpoint"] = "http://127.0.0.1:1/v1"
+    clear_test_provider_api_keys(configuration, endpoint="http://127.0.0.1:1/v1")
     path = Path(integration_workspace_root_path).parent / "runtime/workspace_migration.jsonc"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(configuration), encoding="utf-8")

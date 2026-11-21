@@ -1,7 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import React, { useContext, useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
-import { MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
+import { discardSessionAttachment, uploadSessionAttachment, MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
 import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerAttachments, useComposerDraft, writeComposerAttachments, type ComposerDraftController } from "../../hooks/composer/useComposerDraft";
@@ -24,6 +24,7 @@ import {
   fileToSelectedAttachment,
   MEDIA_ONLY_PROMPT,
   mediaFilesFromClipboard,
+  type SelectedAttachment,
 } from "../../utils/media/mediaAttachments";
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
@@ -153,6 +154,11 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
   // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。
   const currentScopeKeyRef = useRef(currentSessionCacheKey);
   currentScopeKeyRef.current = currentSessionCacheKey;
+  const attachmentScope = useMemo(() => ({ active: false, pending: new Map<string, AbortController>() }), [currentSessionCacheKey]);
+  useEffect(() => {
+    attachmentScope.active = true;
+    return () => { attachmentScope.active = false; for (const controller of attachmentScope.pending.values()) controller.abort(); attachmentScope.pending.clear(); };
+  }, [attachmentScope]);
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
     ? state.currentGoal
@@ -435,7 +441,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     compactLoading: state.compactLoading,
     getLatestAssistantContent,
     setInput,
-    setAttachments,
+    clearAttachments: () => { for (const attachment of attachments) handleRemoveAttachment(attachment.file_id); },
     setAttachmentError,
     setComposerNotice,
     setAgentMenuOpen,
@@ -457,6 +463,10 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
 
   const handleSend = (deliveryPolicy: DeliveryPolicy = defaultDeliveryPolicy) => {
     if (submitSlashInput(slashCommandIndex)) {
+      return;
+    }
+    if (attachments.some(attachment => attachment.uploadState)) {
+      setAttachmentError(t("composer.attachments.waitForUpload"));
       return;
     }
 
@@ -498,6 +508,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
       content,
       sentAttachments.map((attachment) => ({
         file_id: attachment.file_id,
+        directory_uri: attachment.directory_uri,
         name: attachment.name,
         content_type: attachment.content_type,
         data_url: attachment.data_url,
@@ -544,18 +555,51 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     fileInputRef.current?.click();
   };
 
+  const uploadAttachment = async (attachment: SelectedAttachment, file: Blob) => {
+    if (!attachmentScope.active || attachmentScope.pending.has(attachment.file_id)) return;
+    const targetThread = threadId ?? state.currentSession?.thread_id;
+    if (!currentWorkspaceId || !currentSessionId || !targetThread) {
+      setAttachmentError(t("composer.attachments.missingOwner"));
+      setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "failed" } : item));
+      return;
+    }
+    const controller = new AbortController();
+    attachmentScope.pending.set(attachment.file_id, controller);
+    setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "uploading" } : item));
+    try {
+      const uploaded = await uploadSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT,
+        currentSessionId, targetThread, currentWorkspaceId, file, attachment.name ?? "attachment",
+        attachment.content_type ?? "application/octet-stream", controller.signal);
+      if (controller.signal.aborted || !attachmentScope.active) {
+        await discardSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT,
+          currentSessionId, targetThread, currentWorkspaceId, uploaded.file_id)
+          .catch(error => reportDiagnostic(t("composer.attachments.removeFailed", errorMessage(error))));
+        return;
+      }
+      setAttachments(current => current.map(item => item.file_id === attachment.file_id
+        ? { ...uploaded, mediaKind: attachment.mediaKind, previewUrl: attachment.previewUrl } : item));
+    } catch (error) {
+      if (!controller.signal.aborted && attachmentScope.active) {
+        setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "failed" } : item));
+        setAttachmentError(t("composer.attachments.uploadFailed", errorMessage(error)));
+      }
+    } finally {
+      if (attachmentScope.pending.get(attachment.file_id) === controller) attachmentScope.pending.delete(attachment.file_id);
+    }
+  };
+
   const appendFilesToAttachments = async (files: File[]) => {
     if (files.length === 0) {
       return;
     }
 
-    const results = await Promise.allSettled(
-      files.map((file, index) =>
-        fileToSelectedAttachment(file, attachments.length + index),
-      ),
-    );
+    const results = await Promise.allSettled(files.map(async (file, index) => {
+      if (file.size > 30 * 1024 * 1024) throw new Error(t("composer.attachments.tooLarge"));
+      return { file, attachment: { ...await fileToSelectedAttachment(file, attachments.length + index), uploadState: "uploading" as const } };
+    }));
+    if (!attachmentScope.active) return;
     const nextAttachments = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
+      result.status === "fulfilled" ? [result.value.attachment] : [],
     );
     const errors = results.flatMap((result) =>
       result.status === "rejected"
@@ -565,6 +609,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
 
     if (nextAttachments.length > 0) {
       setAttachments((current) => [...current, ...nextAttachments]);
+      for (const result of results) if (result.status === "fulfilled") void uploadAttachment(result.value.attachment, result.value.file);
     }
     if (errors.length > 0) {
       setAttachmentError(errors.join("；"));
@@ -591,6 +636,14 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
   };
 
   const handleRemoveAttachment = (fileId: string) => {
+    attachmentScope.pending.get(fileId)?.abort();
+    const attachment = attachments.find(item => item.file_id === fileId);
+    const targetThread = threadId ?? state.currentSession?.thread_id;
+    const scopeKey = currentSessionCacheKey;
+    if (attachment?.directory_uri && currentSessionId && currentWorkspaceId && targetThread) {
+      void discardSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT, currentSessionId, targetThread, currentWorkspaceId, fileId)
+        .catch(error => { if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.attachments.removeFailed", errorMessage(error))); });
+    }
     setAttachments((current) =>
       current.filter((attachment) => attachment.file_id !== fileId),
     );
@@ -600,6 +653,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
 
   const handleClear = () => {
     setInput("");
+    for (const attachment of attachments) handleRemoveAttachment(attachment.file_id);
     setAttachments([]);
     setSelectedBrowserElements([]);
     setAttachmentError("");
@@ -645,13 +699,14 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     });
   };
 
-  const handleModelPicker = () => {
+  const handleModelPicker = (anchor?: HTMLButtonElement) => {
     const scopeKey = currentSessionCacheKey;
     setAttachmentError("");
     const open = async () => {
       if (!onPickModel) throw new Error(t("composer.model.pickerMissing"));
       if (!currentWorkspaceId) throw new Error(t("composer.model.sourceGone"));
       await onPickModel({
+        anchor,
         loadModels: async () => (await refreshAgents(currentWorkspaceId)).find(agent => agent.agent_id === currentAgent)?.models ?? [],
         currentModel,
         onSelect: async model => {
@@ -668,7 +723,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
         } : undefined,
       });
     };
-    void open().catch((error: unknown) => {
+    return open().catch((error: unknown) => {
       if (currentScopeKeyRef.current === scopeKey) setAttachmentError(errorMessage(error));
     });
   };
@@ -785,6 +840,12 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
                 error={attachmentError}
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
+                onRetry={fileId => {
+                  const attachment = attachments.find(item => item.file_id === fileId);
+                  if (!attachment?.data_url) return;
+                  void fetch(attachment.data_url).then(response => response.blob()).then(file => uploadAttachment(attachment, file))
+                    .catch(error => setAttachmentError(t("composer.attachments.uploadFailed", errorMessage(error))));
+                }}
               />
               {selectedBrowserElements.length > 0 ? (
                 <div className="composer-browser-elements" aria-label={t("composer.selectedElements")}>
@@ -867,6 +928,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
                   />
                   <ComposerActionButtons
                     hasContent={hasContent}
+                    sendBlocked={!slashCommandMode && attachments.some(attachment => Boolean(attachment.uploadState))}
                     showInterrupt={showInterrupt}
                     stopPending={stopPendingFor !== null && stopPendingFor === currentSessionCacheKey}
                     onClear={handleClear}

@@ -146,7 +146,7 @@ async function launch(home) {
     && url.pathname === '/' && url.search === '', { waitUntil: 'domcontentloaded' });
   launchRecord.url = page.url();
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   return page;
 }
 async function closeNative() {

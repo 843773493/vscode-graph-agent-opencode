@@ -203,12 +203,13 @@ def transport_dispatch(tmp_path: Path, frozen_provider_activation):
     return create
 
 
-def _model() -> BoxteamLiteLLMChatModel:
+def _model(*, api_key: str = "test-key", no_proxy: bool = False) -> BoxteamLiteLLMChatModel:
     return BoxteamLiteLLMChatModel(
         model="openai/big-pickle",
-        api_key="test-key",
+        api_key=api_key,
         api_base="https://opencode.ai/zen/v1",
         custom_llm_provider="openai",
+        no_proxy=no_proxy,
         streaming=True,
     )
 
@@ -376,19 +377,27 @@ def _sequence_scenario() -> StreamScenario:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("client_mode", ["shared", "no_proxy", "anonymous"])
-async def test_litellm_replay_preserves_provider_url_and_parser_chain(transport_dispatch, client_mode: str) -> None:
+@pytest.mark.parametrize("api_key", ["test-key", ""])
+@pytest.mark.parametrize("no_proxy", [False, True])
+async def test_litellm_replay_preserves_provider_url_and_parser_chain(
+    transport_dispatch, monkeypatch: pytest.MonkeyPatch, api_key: str, no_proxy: bool,
+) -> None:
     config = load_model_stream_config(CHAT_BASIC_CONFIG_PATH)
     controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
+        controller.ensure_installed()
+        replay_request = controller.transport.handle_async_request
+
+        async def check_auth(request: httpx.Request) -> httpx.Response:
+            assert request.headers.get("Authorization") == (f"Bearer {api_key}" if api_key else None)
+            return await replay_request(request)
+
+        monkeypatch.setattr(controller.transport, "handle_async_request", check_auth)
+        monkeypatch.setenv("OPENAI_API_KEY", "unrelated-process-key")
         for _ in range(2):
-            model = _model()
-            if client_mode == "no_proxy":
-                model.no_proxy = True
-            elif client_mode == "anonymous":
-                model.api_key = ""
+            model = _model(api_key=api_key, no_proxy=no_proxy)
             try:
                 text = await _visible_text(transport_dispatch(model), "测试 LiteLLM replay")
                 assert text == "基础回放"

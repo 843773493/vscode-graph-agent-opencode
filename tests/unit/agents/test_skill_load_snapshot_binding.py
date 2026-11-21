@@ -72,7 +72,7 @@ async def test_skill_mode_and_cold_restore_preserve_same_name_instruction(
     after = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
     assert next(row for row in after if row.source_id == producer.source_id) == instruction
     cold = source_seal_case.manager()
-    assert cold.source_observation_state(producer.source_id) == ("tracked", producer.revision_token())
+    assert cold.source_observation_state(producer.source_id) == ("tracked", producer.revision)
     assert cold.source_observation_state(skill.source_id)[0] == ("tracked" if mode == "tracked" else "untracked")
     # 冷 owner 重绑 descriptor 后两种来源仍独立，不修改已发布指令或其版本。
     with pytest.raises(RuntimeError, match="instruction-producer-not-wired"):

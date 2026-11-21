@@ -65,7 +65,7 @@ export function setupWorktree(target, scopes, run = spawnSync, { frozen = false 
   if (scopes.includes("workbench")) commands.push(["git", ["submodule", "update", "--init", "--recursive"]]);
   const languages = [scopes.includes("root") ? "node" : null, scopes.includes("python") ? "python" : null].filter(Boolean);
   if (languages.length) commands.push(["bun", ["scripts/plugins/prepare-product-sdk.mjs", ...(frozen ? ["--check"] : []), ...languages]]);
-  if (scopes.includes("python")) commands.push(["uv", ["sync", ...(frozen ? ["--frozen"] : [])]]);
+  if (scopes.includes("python")) commands.push(["uv", ["sync", ...(frozen ? ["--frozen", "--no-editable"] : [])]]);
   for (const [scope, directory] of [["root", "."], ["web", "src/clients/web"], ["workbench", "src/clients/workbench"]]) {
     if (scopes.includes(scope)) commands.push(["bun", ["install", "--cwd", directory, ...(scope === "root" && !frozen ? [] : ["--frozen-lockfile"])]]);
   }

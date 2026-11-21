@@ -65,7 +65,7 @@ try {
 
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health');
   expect(health.gateway_id).toBe(input.gatewayA);
   const workspaces = await api('/api/gateway/workspaces');

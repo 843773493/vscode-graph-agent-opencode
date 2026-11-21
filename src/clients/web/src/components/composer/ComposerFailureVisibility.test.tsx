@@ -298,7 +298,7 @@ describe("Composer 切换类动作失败必须可见", () => {
           },
         },
         open: (renderer) => {
-          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
         },
         select: () => {},
       },
@@ -311,7 +311,7 @@ describe("Composer 切换类动作失败必须可见", () => {
           },
         },
         open: (renderer) => {
-          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
         },
         select: () => {},
         pick: async request => request.onSetWorkspaceDefault((await request.loadModels())[0].model_ref),
@@ -395,7 +395,7 @@ describe("Composer 切换类动作失败必须可见", () => {
     );
 
     await act(async () => {
-      renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+      renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
       await Promise.resolve();
       await Promise.resolve();
     });

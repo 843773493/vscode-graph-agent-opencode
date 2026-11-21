@@ -106,7 +106,7 @@ test("创建互斥、失败初始化可重试、setup 顺序及未知范围拒�
   const releaseCalls = setupWorktree(root, ["python", "root"], () => ({ status: 0 }), { frozen: true });
   expect(releaseCalls.slice(0, 3)).toEqual([
     ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "node", "python"]],
-    ["uv", ["sync", "--frozen"]],
+    ["uv", ["sync", "--frozen", "--no-editable"]],
     ["bun", ["install", "--cwd", ".", "--frozen-lockfile"]],
   ]);
   expect(() => setupWorktree(root, ["python"], () => ({ status: 7 }))).toThrow("可重跑 setup");

@@ -195,7 +195,7 @@ async function runBrowser() {
   async function navigate(folder) {
     await page.goto(folderUrl(folder), { waitUntil: 'domcontentloaded' });
     await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-    await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   }
   async function closeReopen(context, folder, pending = false) {
     const closing = page;

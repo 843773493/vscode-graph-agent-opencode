@@ -96,7 +96,7 @@ async def test_residency_shutdown_keeps_owner_and_dependencies_until_original_sc
     selected = maintenance_case.containers[-1]
     service = selected.agent_execution_service
     worker = service._sweep_task
-    assert worker is not None
+    assert isinstance(worker, asyncio.Task)
     try:
         backend = main.app.state.workspace_lifespan
         workspace = next(item for item in backend.workspaces if item.container is selected)
@@ -157,7 +157,13 @@ async def test_residency_shutdown_keeps_owner_and_dependencies_until_original_sc
             failure, = failures
             assert isinstance(failure, IsADirectoryError) and worker.exception() is failure
             runtime_error, = caught.value.exceptions
-            assert isinstance(runtime_error, ExceptionGroup) and runtime_error.exceptions == (failure,)
+            assert isinstance(runtime_error, ExceptionGroup)
+            maintenance_error, = runtime_error.exceptions
+            assert isinstance(maintenance_error, ExceptionGroup)
+            task_error, = maintenance_error.exceptions
+            assert isinstance(task_error, RuntimeError)
+            assert "task=maintenance:thread-runtime-residency" in str(task_error)
+            assert task_error.__cause__ is failure
             assert workspace.pending_close_stage == "runtime.shutdown" and not workspace.closed
             assert workspace._owner is owner and service._sweep_task is None
             assert not activity.store._database._closed and locator.is_dir()

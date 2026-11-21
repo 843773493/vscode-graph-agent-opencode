@@ -45,8 +45,7 @@ def backend_artifact(request: pytest.FixtureRequest) -> tuple[Path, Path, Path, 
     run("application", ["bun", "--eval", ("import {copyApplicationSources} from './packaging/runtime/application-sources.mjs'; "
         f"copyApplicationSources(process.cwd(), {json.dumps(str(application))});")])
     requirements = root / "requirements.txt"
-    run("export", ["uv", "export", "--locked", "--no-dev", "--no-emit-project", "--format", "requirements-txt",
-        "--output-file", str(requirements)])
+    run("export", ["bun", "scripts/plugins/export-python-requirements.mjs", str(requirements)])
     run("dependencies", ["uv", "pip", "install", "--python", sys.executable, "--target", str(dependencies),
         "--offline", "--no-deps", "--require-hashes", "--requirements", str(requirements)])
     workspace = prepare_test_workspace(workspace_root=context.workspace_root,

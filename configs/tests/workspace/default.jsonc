@@ -212,16 +212,7 @@
             "tool_id": "web_search"
           },
           {
-            "tool_id": "fetch_webpage",
-            "options": {
-              "embedding": {
-                "model_ref": {
-                  "provider_id": "backup_2",
-                  "model_id": "default"
-                },
-                "model": "openai/text-embedding-3-small"
-              }
-            }
+            "tool_id": "fetch_webpage"
           },
           {
             "tool_id": "listBrowserPage"

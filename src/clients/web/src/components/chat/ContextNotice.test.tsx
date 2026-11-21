@@ -44,6 +44,28 @@ test("展开来源、键盘菜单及取消只消费元数据，不读取正文",
   } finally { act(() => renderer.unmount()); }
 });
 
+test("来源列表只显示可读名称，不暴露版本指纹、内部 ID 或裸长度", async () => {
+  const kinds = ["csm_protocol", "agent_instructions", "runtime_identity", "todo-list",
+    "filesystem-rules", "compact-tool-usage", "skill_catalog_metadata", "mcp_tool_catalog"];
+  const names = ["上下文来源规则", "Agent 指令", "运行身份", "任务列表规则",
+    "文件操作规则", "上下文压缩规则", "Skill 目录", "扩展工具目录"];
+  const notices: TurnResponsePart[] = kinds.map((kind, index) => ({ ...notice,
+    part_id: `context:${index}`, context_kind: kind, context_source_id: `instruction:${kind}`,
+    context_source_revision: `sha256:jcs:v1:${"a".repeat(64)}`, context_content_length: 2693,
+  }));
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<ContextNotice notices={notices} />); });
+  try {
+    const marker = renderer.root.findByProps({ className: "chat-context-marker" });
+    expect(marker.props.title).toContain(names.join(" · "));
+    await act(async () => marker.props.onClick());
+    expect(renderer.root.findAllByProps({ className: "chat-context-heading" })
+      .map(heading => heading.children.join(""))).toEqual(names.map((name, index) => `${index + 1}. ${name}`));
+    const rendered = JSON.stringify(renderer.toJSON());
+    for (const internal of ["sha256:", "instruction:", "2693", ...kinds]) expect(rendered).not.toContain(internal);
+  } finally { act(() => renderer.unmount()); }
+});
+
 test("同请求同锚点合成一条标记，在历史和实时模型输出前展示", () => {
   const earlier: TurnResponsePart = { kind: "text", part_id: "answer-1", projection: "detail", text: "之前",
     source: { message_sequence: 1, item_id: "answer-1", logical_item_ordinal: 1, model_call_id: "call-1" } };

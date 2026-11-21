@@ -4202,7 +4202,7 @@ async function catalogRows(page) {
 async function expandCatalogRow(row) {
   await row.waitFor({ state: "visible" });
   if (await row.locator("..").getAttribute("aria-expanded") === "false") {
-    await row.locator(".session-resource-chevron").click();
+    await row.locator(".session-resource-expand-toggle").click();
   }
 }
 
@@ -4263,13 +4263,13 @@ async function catalogFolderDialog(surface, { name, parentName = null, renameNam
     ? namedCatalogRow(surface, parentName || renameName || deleteName)
     : surface.page.getByTestId(`workspace-node-${workspaceSelectionKey(surface)}`);
   await row.click({ button: "right" });
-  const item = deleteName ? "删除文件夹及内容" : renameName ? "重命名" : parentName ? "新建子文件夹" : "新建会话文件夹";
+  const item = deleteName ? "删除文件夹及内容" : renameName ? "重命名" : "新建会话文件夹";
   await surface.page.getByRole("menuitem", { name: item, exact: true }).click();
-  const title = deleteName ? "永久删除会话文件夹" : renameName ? "重命名会话文件夹" : parentName ? "新建子文件夹" : "新建会话文件夹";
+  const title = deleteName ? "永久删除会话文件夹" : renameName ? "重命名会话文件夹" : "新建会话文件夹";
   const dialog = surface.page.getByRole("dialog", { name: title, exact: true });
   await dialog.waitFor({ state: "visible" });
   if (!deleteName) await dialog.getByRole("textbox", { name: "文件夹名称", exact: true }).fill(name);
-  await dialog.getByRole("button", { name: deleteName ? "删除" : parentName || renameName ? "保存" : "创建", exact: true }).click();
+  await dialog.getByRole("button", { name: deleteName ? "删除" : renameName ? "保存" : "创建", exact: true }).click();
   return dialog;
 }
 
@@ -4788,7 +4788,8 @@ async function runNavigationOptimism(surfaces) {
     await release(newerHold);
     const newerReceipt = await navigationTerminal(surface, newer);
     await namedCatalogRow(surface, newerName).waitFor({ state: "visible" });
-    await peerPage.getByRole("button", { name: "刷新资源树", exact: true }).click();
+    await peerPage.locator('.pane-header').filter({ has: peerPage.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+    await peerPage.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
     await namedCatalogRow(peer, newerName).waitFor({ state: "visible" });
     const newerSnapshot = (await ownerApi(peer, "/api/v1/session-catalog/snapshot")).data;
     assert.ok(newerSnapshot.event_seq_watermark > delayedPage.data.event_seq_watermark);

@@ -14,7 +14,7 @@ const selectorAnchors: Record<string, string> = {
   appRoot: "../../workbench/index.html",
   composer: "./components/composer/Composer.tsx",
   sendButton: "./components/composer/ComposerActionButtons.tsx",
-  sessionTree: "./components/agentSessions/AgentSessionsSessionTree.tsx",
+  sessionTree: "./components/agentSessions/SessionResourceExplorer.tsx",
 };
 
 async function readSource(relativePath: string): Promise<string> {

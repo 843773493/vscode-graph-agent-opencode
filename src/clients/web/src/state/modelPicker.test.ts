@@ -13,8 +13,8 @@ describe("模型选择展示偏好", () => {
     preferences = updateModelPreference(preferences, ref("backup"), "favorite");
     preferences = updateModelPreference(preferences, ref("removed"), "use");
     const groups = modelPickerGroups(models, ref("main"), preferences, false);
-    expect(groups.map(group => group.kind)).toEqual(["current", "favorites", "provider"]);
-    expect(visible(groups)).toEqual(models.map(model => model.model_ref));
+    expect(groups.map(group => group.kind)).toEqual(["favorites", "provider", "provider"]);
+    expect(visible(groups)).toEqual([ref("backup"), ref("main"), ref("other", "second")]);
     expect(modelPreferenceId(ref("main"))).not.toBe(modelPreferenceId(ref("backup")));
     expect(modelPreferenceId(ref("main"))).not.toBe(modelPreferenceId(ref("main", "second")));
   });
@@ -34,6 +34,14 @@ describe("模型选择展示偏好", () => {
     expect(preferences.recent).toEqual([modelPreferenceId(ref("main")), modelPreferenceId(ref("backup"))]);
     expect(visible(modelPickerGroups(models.slice(1), ref("main"), preferences, false))).toEqual([ref("backup"), ref("other", "second")]);
     expect(EMPTY_MODEL_PREFERENCES.recent).toEqual([]);
+  });
+  test("切换当前模型与最近使用不移动 Provider 目录项", () => {
+    const preferences = updateModelPreference(EMPTY_MODEL_PREFERENCES, ref("backup"), "use");
+    for (const current of [ref("main"), ref("backup"), null]) {
+      const groups = modelPickerGroups(models, current, preferences, false);
+      expect(groups.map(group => group.kind)).toEqual(["provider", "provider"]);
+      expect(visible(groups)).toEqual(models.map(model => model.model_ref));
+    }
   });
   test("失效当前绑定不会借偏好恢复候选", () => {
     const preferences = updateModelPreference(EMPTY_MODEL_PREFERENCES, ref("removed"), "favorite");

@@ -36,7 +36,7 @@ try {
     return payload.data;
   }, { path, body });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   await api('/api/gateway/health'); await api('/api/gateway/workspaces'); await api('/api/v1/workspace');
   const session = await api('/api/v1/sessions', { title: '请求原文定位验收' });
   const main = (await api(`/api/v1/sessions/${session.session_id}/main-thread`)).thread_id;

@@ -487,21 +487,8 @@ async def test_rollout_history_around_loading_real_web_chain(
         assert result["defaultProjectionSafe"] is True
         assert result["detailProjectionSafe"] is True
         assert result["canonicalMixedMessageRestored"] is True
-        assert result["responseActionsVisible"] is True
-        assert result["responseActionLabels"] == [
-            "从此消息创建分支",
-            "朗读（暂未开放）",
-            "复制",
-            "有帮助（暂未开放）",
-            "没有帮助（暂未开放）",
-        ]
-        assert result["boundaryResponseActionsVisible"] is True
-        assert result["boundaryResponseActionLabels"] == [
-            "朗读（暂未开放）",
-            "复制（暂无可复制内容）",
-            "有帮助（暂未开放）",
-            "没有帮助（暂未开放）",
-        ]
+        assert result["responseCopyInContextMenu"] is True
+        assert result["boundarySummaryWithoutToolbar"] is True
         assert result["toolDetailsLoaded"] is True
         assert result["largeToolSummarySafe"] is True
         assert result["largeToolDetailsBounded"] is True

@@ -275,10 +275,13 @@ export default function ChatPanel({
     bindScroller,
     firstItemIndex,
     followOutput,
+    viewportAnchored,
+    handleTranscriptClickCapture,
     handleAtBottomChange,
     handleEndReached,
     handleStartReached,
     navigation,
+    handleListHeightChanged,
     scheduleAnchorAlignment,
     scrollToLatest,
     showJumpToLatest,
@@ -426,6 +429,7 @@ export default function ChatPanel({
         data-transcript-item-count={transcriptItems.length}
         data-first-turn-id={transcriptConversations[0] ? conversationTurnKey(transcriptConversations[0]) : ""}
         className="chat-stream-virtual-shell"
+        onClickCapture={handleTranscriptClickCapture}
       >
       {transcriptItems.length === 0 ? (
         hasActiveSession ? (
@@ -454,10 +458,11 @@ export default function ChatPanel({
         computeItemKey={computeChatPanelItemKey}
         startReached={handleStartReached}
         endReached={handleEndReached}
-        followOutput={followOutput}
+        // 尺寸变化分支只判断 prop 是否为 false，不调用跟随回调。
+        followOutput={viewportAnchored ? false : followOutput}
         atBottomStateChange={handleAtBottomChange}
         itemsRendered={scheduleAnchorAlignment}
-        totalListHeightChanged={scheduleAnchorAlignment}
+        totalListHeightChanged={handleListHeightChanged}
         components={CHAT_PANEL_VIRTUOSO_COMPONENTS}
         itemContent={renderChatPanelItem}
       />

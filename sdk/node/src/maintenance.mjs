@@ -24,8 +24,10 @@ function validateTasks(tasks) {
   });
 }
 
-function isAbort(error) {
-  return error?.name === "AbortError" || error?.code === "ABORT_ERR";
+function isAbort(error, signal) {
+  // 原生异步 API 将本次 signal.reason 放在 cause；同名异常不证明属于本次停止。
+  return error === signal.reason || (error?.cause === signal.reason
+    && (error?.name === "AbortError" || error?.code === "ABORT_ERR"));
 }
 
 async function runTask(task, identity, reportError, signal) {
@@ -35,7 +37,7 @@ async function runTask(task, identity, reportError, signal) {
       try {
         await sleep(task.interval_ms, undefined, { signal, ref: false });
       } catch (error) {
-        if (signal.aborted && isAbort(error)) return;
+        if (signal.aborted && isAbort(error, signal)) return;
         throw error;
       }
     }
@@ -47,7 +49,7 @@ async function runTask(task, identity, reportError, signal) {
       await task.run(signal);
     } catch (error) {
       if (signal.aborted) {
-        if (isAbort(error)) return;
+        if (isAbort(error, signal)) return;
         throw error;
       }
       try {

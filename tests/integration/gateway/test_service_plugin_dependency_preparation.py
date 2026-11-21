@@ -27,6 +27,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_test_workspace,
 )
@@ -179,9 +180,7 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
     gateway_url = f"http://127.0.0.1:{unused_tcp_port}"
     config_path = gateway_workspace / ".boxteam/workspace.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in payload["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "plugin-dependency-unused-key"
+    clear_test_provider_api_keys(payload)
     payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(

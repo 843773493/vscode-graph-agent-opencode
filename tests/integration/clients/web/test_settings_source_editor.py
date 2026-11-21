@@ -26,6 +26,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
+from tests.support.workspaces import clear_test_provider_api_keys
 
 
 @pytest.mark.asyncio
@@ -45,9 +46,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     ports = integration_port_block_for_file(Path(request.node.fspath))
     config_path = Path(integration_workspace_config_path)
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in configuration["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "source-editor-unused-key"
+    clear_test_provider_api_keys(configuration)
     configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "source-settings-package.zip"

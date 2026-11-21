@@ -353,7 +353,7 @@ fieldset.workspace-dialog-grid {
   margin-left: 35px;
   color: var(--bt-text-subtle);
   font-size: var(--bt-font-size-small);
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 
 .workspace-add-hidden-toggle {

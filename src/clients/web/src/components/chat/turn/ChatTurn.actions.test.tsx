@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import ChatTurn from "./ChatTurn";
 import {
   chatTurnProps,
@@ -10,6 +11,33 @@ import {
 } from "./chatTurnTestFixtures";
 
 describe("ChatTurn 用户动作", () => {
+  for (const displayMode of ["history", "live"] as const) {
+    test(`${displayMode} 的真实用量进入摘要行，未知用量不创建占位`, () => {
+      const value = conversation("done");
+      value.displayMode = displayMode;
+      value.turnId = "turn-usage";
+      value.events = [{ ...value.events[0], type: "agent_end", payload: {
+        token_usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0,
+          cache_read_input_tokens: 0, model_calls: 1, reported_model_calls: 1 },
+      } }];
+      let renderer!: ReactTestRenderer;
+      act(() => { renderer = create(<ChatTurn {...chatTurnProps(value)} />); });
+      try {
+        const header = renderer.root.findByProps({ className: "chat-turn-activity-header" });
+        const usage = header.findByProps({ className: "chat-response-token-usage" });
+        expect(usage.children).toEqual(["本次 0 · 缓存 0"]);
+        expect(usage.props.title).toContain("非整个 Thread 总计");
+        expect(usage.props.title).toContain("输入：0");
+        expect(usage.props.title).toContain("输出：0");
+        expect(renderer.root.findAllByProps({ className: "chat-response-actions" })).toHaveLength(0);
+        if (displayMode === "live") expect(JSON.stringify(renderer.toJSON())).not.toContain("Item 计数同步中");
+        act(() => renderer.update(<ChatTurn {...chatTurnProps({ ...value, events: [] })} />));
+        expect(renderer.root.findAllByProps({ className: "chat-response-token-usage" })).toHaveLength(0);
+        if (displayMode === "live") expect(renderer.root.findAllByProps({ className: "chat-turn-activity-header" })).toHaveLength(0);
+      } finally { act(() => renderer.unmount()); }
+    });
+  }
+
   test("空内部用户消息默认隐藏原文并提供消息操作菜单", () => {
     const value = conversation("done");
     value.userMessage = {
@@ -26,7 +54,7 @@ describe("ChatTurn 用户动作", () => {
     expect(html).not.toContain("<system_reminder>原始消息</system_reminder>");
   });
 
-  test("完成轮次展示内联编辑和回复操作", () => {
+  test("完成轮次保留用户消息且不再占用回复工具栏", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
         {...mediaProps}
@@ -42,8 +70,8 @@ describe("ChatTurn 用户动作", () => {
 
     expect(html).toContain('aria-label="用户消息"');
     expect(html).not.toContain("codicon-add");
-    expect(html).toContain('aria-label="回复操作"');
-    expect(html).toContain('aria-label="复制"');
+    expect(html).not.toContain('class="chat-response-actions"');
+    expect(html).not.toContain("暂未开放");
     expect(html).not.toContain("重新生成最后回复");
   });
 

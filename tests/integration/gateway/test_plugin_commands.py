@@ -23,6 +23,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_test_workspace,
 )
@@ -91,9 +92,7 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
     config = commentjson.loads(config_path.read_text())
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "command-test-unused-key"
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config))
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
     config_root = boxteam_home / "config"
@@ -250,9 +249,7 @@ def test_workspace_commands_release_removed_target_without_changing_sibling(
             path = install_test_workspace_config(workspace_root=workspace,
                 config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
             configuration = commentjson.loads(path.read_text())
-            for provider in configuration["llm"]["providers"]:
-                if "api_key" in provider:
-                    provider["api_key"] = "workspace-command-unused-key"
+            clear_test_provider_api_keys(configuration)
             configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = str(client.base_url).rstrip("/")
             path.write_text(json.dumps(configuration), encoding="utf-8")
             registered = exchange("POST", "/api/gateway/managed-workspaces", {

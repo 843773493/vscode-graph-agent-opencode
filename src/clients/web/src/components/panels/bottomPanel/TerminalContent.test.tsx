@@ -12,7 +12,20 @@ const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "wi
 
 // 内容测试不挂真实 DOM；快照渲染器的释放仍需要一个明确的宿主句柄。
 function create(element: React.ReactElement, options?: TestRendererOptions) {
-  return createRenderer(element, { createNodeMock: () => ({ replaceChildren() {} }), ...options });
+  const contentWindow = { postMessage: jest.fn() };
+  return createRenderer(element, { createNodeMock: node => node.type === "iframe"
+    ? { src: node.props.src, contentWindow } : { replaceChildren() {} }, ...options });
+}
+
+function publishFrameReady(renderer: ReactTestRenderer, overrides: Record<string, unknown> = {}): void {
+  const frame = renderer.root.findByType("iframe");
+  const event = new Event("message");
+  for (const [key, value] of Object.entries({
+    origin: window.location.origin, source: frame.instance.contentWindow,
+    data: { type: "boxteam.terminal.ready", terminalId: new URL(frame.props.src).searchParams.get("terminalId") },
+    ...overrides,
+  })) Object.defineProperty(event, key, { value });
+  window.dispatchEvent(event);
 }
 
 afterEach(() => {
@@ -121,10 +134,14 @@ describe("TerminalContent 终端连接兜底", () => {
     const postMessage = jest.fn();
     const control = jest.fn(async () => ({ ...terminal, status: "terminated" }));
     let renderer!: ReactTestRenderer;
-    let frame = { src: "", contentWindow: { postMessage } };
+    const frame = { src: "", contentWindow: { postMessage } };
     act(() => { renderer = create(<TerminalContent {...props} controller={{ ...props.controller, control }} />,
-      { createNodeMock: node => node.type === "iframe" ? (frame = { ...frame, src: node.props.src }) : { replaceChildren() {} } }); });
-    act(() => renderer.root.findByType("iframe").props.onLoad());
+      { createNodeMock: node => {
+        if (node.type !== "iframe") return { replaceChildren() {} };
+        frame.src = node.props.src;
+        return frame;
+      } }); });
+    act(() => publishFrameReady(renderer));
     expect(postMessage).toHaveBeenCalledWith({ type: "boxteam.terminal.theme", terminalId: terminal.resource_id, theme: {} }, window.location.origin);
     const more = renderer.root.findByProps({ className: "terminal-panel-list-action terminal-panel-list-more" });
     act(() => more.props.onClick({ currentTarget: { getBoundingClientRect: () => ({ left: 100, bottom: 200 }) } }));
@@ -151,11 +168,12 @@ describe("TerminalContent 终端连接兜底", () => {
     const light = { background: "#ffffff", foreground: "#222222", green: "#008000" };
     const dark = { background: "#181818", foreground: "#eeeeee", green: "#11ff11" };
     const render = (theme: typeof light) => <TerminalThemeContext.Provider value={theme}><TerminalContent {...props} /></TerminalThemeContext.Provider>;
+    const contentWindow = { postMessage };
     let renderer!: ReactTestRenderer;
     act(() => { renderer = create(render(light), { createNodeMock: node => node.type === "iframe"
-      ? { src: node.props.src, contentWindow: { postMessage } } : { replaceChildren() {} } }); });
+      ? { src: node.props.src, contentWindow } : { replaceChildren() {} } }); });
     const url = renderer.root.findByType("iframe").props.src;
-    act(() => renderer.root.findByType("iframe").props.onLoad());
+    act(() => publishFrameReady(renderer));
     expect(postMessage).toHaveBeenLastCalledWith({ type: "boxteam.terminal.theme", terminalId: terminal.resource_id, theme: light }, window.location.origin);
     act(() => renderer.update(render(dark)));
     expect(postMessage).toHaveBeenLastCalledWith({ type: "boxteam.terminal.theme", terminalId: terminal.resource_id, theme: dark }, window.location.origin);
@@ -370,16 +388,28 @@ describe("TerminalContent 终端连接兜底", () => {
     renderer.unmount();
   });
 
-  test("iframe 触发 onLoad 后不再显示超时兜底", () => {
+  test("HTML 加载完成但模块未初始化仍会超时，不能误报就绪", () => {
     installWindow();
     jest.useFakeTimers();
     const renderer = renderPanel([entry("workspace_test", "terminal_ready")]);
-    const frame = renderer.root.findAll(
-      (node) => typeof node.props.className === "string"
-        && node.props.className.split(" ").includes("terminal-panel-frame"),
-    )[0]!;
+    act(() => renderer.root.findByType("iframe").props.onLoad?.());
+    act(() => { jest.advanceTimersByTime(16_000); });
+    expect(findFrameFallback(renderer)).toBeDefined();
+    act(() => renderer.unmount());
+  });
 
-    act(() => frame.props.onLoad());
+  test("只有当前终端同源 iframe 的初始化确认才能结束就绪等待", () => {
+    installWindow();
+    jest.useFakeTimers();
+    const renderer = renderPanel([entry("workspace_test", "terminal_ready")]);
+    act(() => {
+      publishFrameReady(renderer, { origin: "http://another-host" });
+      publishFrameReady(renderer, { source: {} });
+      publishFrameReady(renderer, { data: { type: "boxteam.terminal.ready", terminalId: "terminal_other" } });
+      jest.advanceTimersByTime(16_000);
+    });
+    expect(findFrameFallback(renderer)).toBeDefined();
+    act(() => publishFrameReady(renderer));
     act(() => renderer.update(<TerminalContent {...panelProps([entry("workspace_test", "terminal_ready")])} />));
     act(() => {
       jest.advanceTimersByTime(60_000);

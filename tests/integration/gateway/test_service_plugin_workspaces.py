@@ -489,9 +489,6 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         for agent in source["agents"].values():
             if "model" in agent:
                 agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
-            for tool in agent.get("tools", {}).get("custom", []):
-                if tool.get("name") == "fetch_webpage":
-                    tool.setdefault("embedding", {})["model_ref"] = {"provider_id": "primary", "model_id": "default"}
         config_path.write_text(json.dumps(source), encoding="utf-8")
 
         missing = defaults([binding])

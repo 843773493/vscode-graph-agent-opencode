@@ -150,8 +150,8 @@ export function useTurnVirtualScroller({
     : item.kind === "internal_execution" ? `${item.key}:${item.displayPart.text}` : item.key).join("|"), [items]);
 
   const {
-    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool, locatedItem,
-    preserveViewport, scheduleAnchorAlignment, scrollToLatest,
+    anchorRef, viewportAnchored, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool, locatedItem,
+    preserveViewport, scheduleAnchorAlignment, handleAnchorHeightChanged, scrollToLatest,
   } = useTurnAnchorNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
     onLoadAroundTurn, onLoadLatestMessages, hasNewerMessages, historyLoading,
@@ -197,6 +197,16 @@ export function useTurnVirtualScroller({
     ),
     [],
   );
+
+  const handleTranscriptClickCapture = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>("button[aria-expanded], summary") : null;
+    if (!target?.closest("[data-turn-id]")) return;
+    previewRef.current = false;
+    followsLatestRef.current = false;
+    cancelAnchor();
+    preserveViewport(target);
+  }, [cancelAnchor, preserveViewport]);
 
   const bindScroller = React.useCallback((element: HTMLElement | Window | null) => {
     if (scrollerRef.current) {
@@ -461,6 +471,12 @@ export function useTurnVirtualScroller({
     });
   }, [anchorRef, loadNewerMessages, onViewStateRestoreStatus]);
 
+  const handleListHeightChanged = React.useCallback(() => {
+    handleAnchorHeightChanged();
+    // Markdown 的延迟提交会独立改变列表高度，不能只在父层正文更新时跟随。
+    if (followsLatestRef.current) scrollToLatest("auto", false);
+  }, [handleAnchorHeightChanged, scrollToLatest]);
+
   const handleAtBottomChange = React.useCallback((atBottom: boolean) => {
     // 按钮反映真实可见范围；定位和用户手势只决定跟随意图。
     setAtBottom(atBottom);
@@ -474,7 +490,10 @@ export function useTurnVirtualScroller({
     bindScroller,
     firstItemIndex,
     followOutput,
+    viewportAnchored,
+    handleTranscriptClickCapture,
     handleAtBottomChange,
+    handleListHeightChanged,
     handleEndReached,
     handleStartReached,
     navigateToTurn: navigateFromUser,

@@ -51,7 +51,7 @@ try {
     closing = true;
     try { return await operation(); } finally { closing = false; }
   } });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   result.phase = 'settings-source';
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const location = { version: 2, gateway_id: owner.gateway_id, workspace_id: owner.workspace_id,
@@ -102,7 +102,7 @@ try {
   result.physicalSource = { path: physicalConfig, sha256: createHash('sha256').update(physicalText).digest('hex') };
   result.phase = 'saved-clean';
   await host.reload();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   result.phase = 'reopened';
   await command('boxteam.settings.modelsProviders', location, 'native-management-provider-12');
   await expect(page.locator('.configuration-entities[data-definition-kind="providers"] [data-definition-id="native-management-provider-12"]')).toBeVisible();

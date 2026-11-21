@@ -153,6 +153,19 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
       act(() => mounted!.update(React.createElement(Harness)));
     },
     resize: () => { act(() => resize()); settle(); },
+    toggleTurn(id: string) {
+      scroller.mountedId = id;
+      const heading = Object.assign(new Scroller(), {
+        isConnected: true,
+        closest: (selector: string) => selector === "button[aria-expanded], summary" ? heading : scroller.querySelectorAll()[0],
+        getBoundingClientRect: () => {
+          const bounds = scroller.querySelectorAll()[0].getBoundingClientRect();
+          return { ...scroller.getBoundingClientRect(), top: bounds.top + 20, bottom: bounds.top + 44 };
+        },
+      });
+      act(() => current.handleTranscriptClickCapture({ target: heading } as unknown as React.MouseEvent<HTMLElement>));
+      return heading;
+    },
     scrollbarDown: () => dispatchScrollbarEvent("pointerdown", scroller, 1),
     scrollbarUp: () => dispatchScrollbarEvent("pointerup", scroller, 0),
     scrollbarMouseDown: () => dispatchScrollbarEvent("mousedown", scroller, 1),
@@ -171,6 +184,48 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
 }
 
 describe("Turn 虚拟列表滚动跟随", () => {
+  test.each(["latest", "history"])("%s 下手动展开和折叠保持标题，详情补读不触发追尾，用户滚动可解除锚定", (mode) => {
+    const h = navigationHarness([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3)]);
+    h.settle();
+    if (mode === "history") h.userScroll(100, "wheel");
+    const targetId = mode === "latest" ? "turn-3" : "turn-2";
+    const top = h.scroller.scrollTop;
+    const heading = h.toggleTurn(targetId);
+    const headingTop = heading.getBoundingClientRect().top;
+    expect(h.state().viewportAnchored).toBe(true);
+    expect(h.state().followOutput(true)).toBe(false);
+    h.scrolls.length = 0;
+    const expanded = turn(targetId, mode === "latest" ? 3 : 2);
+    expanded.conversation.turnRevision = 2;
+    h.heights.set(targetId, 350);
+    h.update([turn("turn-1", 1), mode === "history" ? expanded : turn("turn-2", 2), mode === "latest" ? expanded : turn("turn-3", 3)]);
+    // 模拟虚拟列表高度测量的补偿，锚点应还原标题，而不是保持底部。
+    h.scroller.scrollTop += 80;
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(top + 80);
+    act(() => h.state().handleListHeightChanged());
+    h.settle();
+    expect(heading.getBoundingClientRect().top).toBe(headingTop);
+    expect(h.scroller.scrollTop).toBe(top);
+    expect(h.scrolls).toEqual([]);
+    expect(h.state().navigation).toBeNull();
+    h.toggleTurn(targetId);
+    h.heights.set(targetId, 150);
+    h.resize();
+    act(() => h.state().handleListHeightChanged());
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(top);
+    h.userScroll(40, "wheel");
+    expect(h.state().viewportAnchored).toBe(false);
+    h.scroller.mountedId = "turn-3";
+    h.update([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3), turn("turn-4", 4)]);
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(40);
+    act(() => h.state().scrollToLatest());
+    h.settle();
+    expect(h.state().followOutput(true)).toBe("auto");
+  });
+
   test("消息不足一屏时，上滚、触摸和位置恢复不会显示最新消息跳转", () => {
     const h = navigationHarness([turn("only-turn", 1)]);
     h.settle();
@@ -260,8 +315,11 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(h.viewport().capture()).toBeUndefined();
   });
 
-  test.each(["wheel", "keydown", "touchstart"] as const)("前插与迟到高度测量保留可见Turn，后续%s释放保位", async input => {
+  test.each(["wheel", "keydown", "touchstart", "live-wheel"] as const)("前插与迟到高度测量保留可见Turn，后续%s释放保位", async input => {
     const initial = [turn("visible", 3), turn("next", 4), turn("last", 5)];
+    if (input === "live-wheel") initial[0] = { ...initial[0], conversation: {
+      ...initial[0].conversation, displayMode: "live", pending: true, status: "running",
+    } };
     const h = navigationHarness(initial, undefined, true, undefined, { hasOlderMessages: true });
     h.settle();
     h.userScroll(0, "wheel");
@@ -281,7 +339,7 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(h.positions).toEqual([{ turn_anchor: "visible", scroll_offset: 0, follow_latest: false }]);
     if (input === "keydown") act(() => h.scroller.onkeydown?.({ key: "PageDown", defaultPrevented: false }));
     if (input === "touchstart") act(() => h.scroller.ontouchstart?.());
-    h.userScroll(100, input === "wheel" ? "wheel" : undefined);
+    h.userScroll(100, input === "wheel" || input === "live-wheel" ? "wheel" : undefined);
     h.heights.set("first", 220);
     h.resize();
     expect(h.scroller.scrollTop).toBe(100);
@@ -325,6 +383,17 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(turnFollowOutput(true, true)).toBe("auto");
     expect(turnFollowOutput(false, true)).toBe(false);
     expect(turnFollowOutput(true, false)).toBe(false);
+    const h = navigationHarness([turn("first", 1), turn("last", 2)]);
+    h.settle();
+    h.scrolls.length = 0;
+    h.heights.set("last", 250);
+    act(() => h.state().handleListHeightChanged());
+    expect(h.scrolls.at(-1)?.index).toBe("LAST");
+    h.userScroll(0, "wheel");
+    h.scrolls.length = 0;
+    h.heights.set("last", 300);
+    act(() => h.state().handleListHeightChanged());
+    expect(h.scrolls).toEqual([]);
   });
 
   test("已排队的自动跟随帧在用户上滚后失效", () => {

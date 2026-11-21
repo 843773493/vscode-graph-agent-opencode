@@ -7,6 +7,8 @@ import {
   listMessages,
   replayMessageTurn,
   sendUserMessage,
+  uploadSessionAttachment,
+  discardSessionAttachment,
 } from "./sessionMessages";
 import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
@@ -247,6 +249,35 @@ describe("发送与重放统一消费真实准入身份", () => {
     workspace_changes_reverted: false,
     notice: "已准入重放",
   } as const;
+  test("预上传发送原始字节，消息和重试快照只保存附件引用", async () => {
+    const attachment = { file_id: "boxteam://gateway-test/workspaces/ws/attachments/att_test/original/content",
+      directory_uri: "boxteam://gateway-test/workspaces/ws/attachments/att_test", name: "报告.txt", content_type: "text/plain" };
+    const file = new File(["原始文件 Ω"], attachment.name, { type: "text/plain" });
+    const requests: string[] = [];
+    installSessionApiFetchMock(async ({ path, method, init }) => {
+      requests.push(`${method} ${path}`);
+      if (path.endsWith("/attachments")) {
+        if (method === "POST") {
+          expect(init?.body).toBe(file);
+          expect(new Headers(init?.headers).get("Content-Type")).toBe(file.type);
+          return Response.json({ data: attachment, request_id: "req-upload" });
+        }
+        expect(method).toBe("DELETE");
+        return Response.json({ data: null, request_id: "req-discard" });
+      }
+      expect(path.endsWith("/messages")).toBe(true);
+      const payload = JSON.parse(String(init?.body));
+      expect(payload.message.attachments).toEqual([attachment]);
+      expect(String(init?.body)).not.toContain("data:");
+      const [pending] = await loadMessageSubmissions({ workspaceKey: WORKSPACE_KEY, sessionId: "session-accepted", threadId: "thread-accepted" });
+      expect(pending.request.message.attachments).toEqual([attachment]);
+      return Response.json({ data: accepted, request_id: "req-send" });
+    });
+    const uploaded = await uploadSessionAttachment(48_311, "session-accepted", "thread-accepted", WORKSPACE_KEY, file, file.name, file.type);
+    await sendUserMessage(48_311, "session-accepted", "读取附件", undefined, [uploaded], WORKSPACE_KEY, "after_turn", "thread-accepted", MESSAGE_OPERATION_ID);
+    await discardSessionAttachment(48_311, "session-accepted", "thread-accepted", WORKSPACE_KEY, uploaded.file_id);
+    expect(requests.map(request => request.split(" ")[0])).toEqual(["POST", "POST", "DELETE"]);
+  });
   const actions = [
     { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入", undefined, [],
       WORKSPACE_KEY, "after_turn", "thread-accepted", MESSAGE_OPERATION_ID) },

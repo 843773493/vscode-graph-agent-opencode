@@ -1,12 +1,14 @@
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { startMaintenance } from "@boxteam/plugin-sdk/maintenance";
 
-const output = path.resolve("out/tests/sdk/node/test_maintenance_worker_io");
-const workspace = path.join(output, "workspace");
+const context = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
+const workspace = context.workspaceRoot;
 const workers = new Set();
 
 async function startFileWriter(target, failureText = null) {

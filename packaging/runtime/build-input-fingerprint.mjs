@@ -69,6 +69,8 @@ function collectBuildInputPaths(projectRoot, inputPath, entry, inputPaths) {
   for (const child of readdirSync(absolutePath, { withFileTypes: true })) {
     if (
       GENERATED_DIRECTORY_NAMES.has(child.name) ||
+      (child.isDirectory() && inputPath === "sdk/python" && child.name === "build") ||
+      (child.isDirectory() && inputPath === "sdk/python/src" && child.name.endsWith(".egg-info")) ||
       (child.isFile() &&
         isUnshippedInstructionOrTest(path.posix.join(inputPath, child.name)))
     ) {

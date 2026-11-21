@@ -29,7 +29,7 @@ try {
     if (url.pathname === '/api/gateway/workspaces') result.requests.push({ phase: result.phase, url: request.url() });
   });
   await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const api = (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(path, { ...init, headers: { 'Content-Type': 'application/json', 'X-Local-Token': token, ...init.headers } });

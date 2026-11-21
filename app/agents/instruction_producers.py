@@ -124,28 +124,8 @@ class InstructionProducerSpec:
             )
 
     @property
-    def content_hash(self) -> str:
-        """确定性内容 hash；可按同一 payload 独立重算核对。"""
-        return sha256_jcs({"content": self.content})
-
-    @property
     def is_conditional(self) -> bool:
         return self.policy_key is not None
-
-    def revision_token(self) -> str:
-        """producer 内容 + 条件绑定的稳定 revision token。
-
-        Root placement 本身不参与：同一正文的资格声明变化由 owner 的 epoch
-        边界决定，不得借此伪造新内容 revision。
-        """
-        return sha256_jcs(
-            {
-                "kind": "instruction-producer-revision",
-                "producer_id": self.producer_id,
-                "revision": self.revision,
-                "policy_key": self.policy_key,
-            }
-        )
 
 
 def assert_producer_registrable(spec: InstructionProducerSpec) -> None:
@@ -259,7 +239,8 @@ def register_instruction_producer(
     assert spec.update_binding is not None
     manager.register(descriptor, tracking_status="tracked",
                      binding_revision=spec.update_binding.publication_revision)
-    manager.observe(spec.source_id, spec.content, revision=spec.revision_token()).require_tracked()
+    # source_id 隔离来源，policy 由 descriptor/ToolSet 约束；复用 owner 版本命中原观察状态。
+    manager.observe(spec.source_id, spec.content, revision=spec.revision).require_tracked()
 
 
 def runtime_instruction_producers(

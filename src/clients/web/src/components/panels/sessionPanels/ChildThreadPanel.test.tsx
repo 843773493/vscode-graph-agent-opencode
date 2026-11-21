@@ -52,7 +52,7 @@ function thread(
 
 function panelProps(overrides: {
   onRefresh?: () => void;
-  onSelectThread?: (threadId: string) => void;
+  onOpenMainThread?: () => void;
 } = {}) {
   return {
     threads: [] as ChildThreadSummary[],
@@ -64,9 +64,8 @@ function panelProps(overrides: {
     mainThreadId: "thr_main_canonical",
     activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
-    onSelectThread: overrides.onSelectThread ?? (() => {}),
     onOpenThread: (_thread: ChildThreadSummary) => {},
-    onOpenMainThread: () => overrides.onSelectThread?.("thr_main_canonical"),
+    onOpenMainThread: overrides.onOpenMainThread ?? (() => {}),
     conversation: {
       selectedThread: null,
       owner: null,
@@ -285,19 +284,17 @@ describe("子会话线程面板", () => {
     expect(noSessionHtml).toContain("选择会话后查看其 Thread");
   });
 
-  test("主 Thread 直接展示为列表项；打开对话不触发调试或内嵌历史", () => {
+  test("主 Thread 直接展示为列表项并打开对话", () => {
     const opened: string[] = [];
-    const debugged: string[] = [];
     const props = panelProps();
     let tree!: ReactTestRenderer;
     try {
       act(() => { tree = create(<ChildThreadPanel {...props}
-        onOpenMainThread={() => opened.push(props.mainThreadId)} onSelectThread={id => debugged.push(id)} />); });
+        onOpenMainThread={() => opened.push(props.mainThreadId)} />); });
       expect(tree.root.findAllByProps({ "data-thread-id": props.mainThreadId })).toHaveLength(1);
       expect(tree.root.findAllByProps({ className: "empty-state" })).toHaveLength(0);
       act(() => tree.root.findByProps({ "aria-label": "打开主 Thread 对话" }).props.onClick());
       expect(opened).toEqual([props.mainThreadId]);
-      expect(debugged).toEqual([]);
     } finally { act(() => tree?.unmount()); }
   });
 
@@ -342,7 +339,7 @@ describe("子会话线程面板", () => {
       renderer = create(
         <ChildThreadPanel
           {...panelProps({
-            onSelectThread: (threadId) => { selected.push(threadId); },
+            onOpenMainThread: () => { selected.push("thr_main_canonical"); },
           })}
           mainThreadId={null}
         />,
@@ -358,38 +355,39 @@ describe("子会话线程面板", () => {
     renderer!.unmount();
   });
 
-  test("点击 child 项回传 thread_id，并支持切回主线程", () => {
+  test("Thread 列表只提供对话打开及资源操作，不提供调试跳转", () => {
     const selected: string[] = [];
     let renderer: ReactTestRenderer;
     act(() => {
       renderer = create(
         <ChildThreadPanel
           {...panelProps({
-            onSelectThread: (threadId) => { selected.push(threadId); },
+            onOpenMainThread: () => { selected.push("thr_main_canonical"); },
           })}
           threads={[thread(1), thread(2)]}
           activeThreadId="thr_child_2"
+          onOpenThread={child => selected.push(child.thread_id)}
         />,
       );
     });
 
-    const rows = renderer!.root.findAllByType("button").filter(
-      (node) => String(node.props["aria-label"]).startsWith("调试子线程："),
-    );
+    const rows = renderer!.root.findAllByProps({ className: "child-thread-main" }).slice(1);
     expect(rows).toHaveLength(2);
+    expect(renderer!.root.findAllByProps({ className: "codicon codicon-debug" })).toHaveLength(0);
+    expect(renderer!.root.findAllByType("button").filter(node => String(node.props["aria-label"]).startsWith("调试子线程："))).toHaveLength(0);
     act(() => rows[0]!.props.onClick());
     const mainRow = renderer!.root.findByProps({
       "aria-label": "打开主 Thread 对话",
     });
     act(() => mainRow.props.onClick());
     expect(selected).toEqual(["thr_child_1", "thr_main_canonical"]);
-    // 执行状态独立展示；调试 owner 通过专用按钮表达。
+    // 打开对话仍保留真实执行状态与当前编辑器的选中态。
     const statuses = renderer!.root.findAll(
       (node) => typeof node.props.className === "string"
         && node.props.className.split(" ").includes("child-thread-status"),
     );
     expect(statuses.map((node) => textOf(node))).toEqual(["主线程", "运行中", "运行中"]);
-    expect(rows[1]!.props.title).toBe("调试此子线程");
+    expect(rows[1]!.props["aria-current"]).toBe("page");
     renderer!.unmount();
   });
 

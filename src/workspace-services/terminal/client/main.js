@@ -754,7 +754,11 @@ deleteButton.addEventListener("click", async () => {
 });
 
 void initializeGatewayAuth()
-  .then(() => resumeVisibleTerminal())
+  .then(() => {
+    // HTML 加载不代表模块及 xterm 初始化成功，只有本页真正可用后才通知宿主。
+    if (embedded) window.parent.postMessage({ type: "boxteam.terminal.ready", terminalId }, window.location.origin);
+    return resumeVisibleTerminal();
+  })
   .catch((error) => {
     setStatus(error instanceof Error ? error.message : String(error), true);
     updateControls();

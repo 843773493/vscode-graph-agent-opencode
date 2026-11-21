@@ -1078,6 +1078,8 @@ export function useSessionResourceExplorer({
     }
   }, [expandedIds, loadBranch]);
 
+  const collapseAll = useCallback(() => setExpandedIds(new Set()), []);
+
   const createWorkspaceFolder = useCallback(async (
     name: string,
     parentNodeId?: string | null,
@@ -1648,6 +1650,7 @@ export function useSessionResourceExplorer({
     refreshResourceTree,
     loadBranch,
     toggleExpanded,
+    collapseAll,
     createWorkspaceFolder,
     revealSearchResult,
     revealWorkspaceFolder,
@@ -1686,6 +1689,7 @@ export function useSessionResourceExplorer({
     searchResults,
     searching,
     toggleExpanded,
+    collapseAll,
   ]);
 }
 

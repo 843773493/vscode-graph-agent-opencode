@@ -34,7 +34,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 60_000 });
   const active = (await api('/api/gateway/workspaces')).data.active_workspace;
   const headers = { 'X-BoxTeam-Workspace-Id': active.workspace_id, 'X-BoxTeam-Target-Gateway-Id': active.gateway_id };
   const workspace = await api('/api/v1/workspace', { headers });

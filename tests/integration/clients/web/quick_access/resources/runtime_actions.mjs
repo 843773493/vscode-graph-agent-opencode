@@ -70,7 +70,7 @@ try {
     thread_id: (await api(`/api/v1/sessions/${unopenedSession.session_id}/main-thread`, b)).thread_id };
   const browserResource = await api('/api/v1/resources/browsers', a, { ...sessions[0], title: 'Needle 浏览器', retention_scope: 'thread', url: 'about:blank', viewport: { width: 640, height: 480 } });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   await command('workbench.action.closeAllEditors');
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const camel = owner => ({ gatewayId: owner.gateway_id, workspaceId: owner.workspace_id });

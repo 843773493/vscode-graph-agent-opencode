@@ -27,6 +27,7 @@ from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
     _build_owned_container,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     prepare_test_workspace,
     render_test_workspace_config,
 )
@@ -46,9 +47,7 @@ def startup_container(
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "startup-contract-unused-key"
-        provider.pop("auth", None)
+    clear_test_provider_api_keys(config)
     (context.workspace_root / ".boxteam").mkdir()
     (context.workspace_root / ".boxteam/workspace.jsonc").write_text(
         json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8",

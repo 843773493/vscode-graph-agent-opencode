@@ -1,16 +1,47 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Sequence
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+import re
+from collections.abc import AsyncIterator
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from app.agents.tools import web as web_tools
-from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+
+
+@pytest.mark.parametrize("tool_name", ["web_search", "fetch_webpage"])
+def test_skill_parameter_contract_matches_live_tool_schema(tool_name: str) -> None:
+    skill = (Path.cwd() / "resources/skills/web-search-fetch/SKILL.md").read_text()
+    documented = {item["tool_name"]: item["arguments_schema"] for item in (
+        json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", skill, re.DOTALL)
+    )}[tool_name]
+    model = web_tools.WebSearchInput if tool_name == "web_search" else web_tools.FetchWebPageInput
+    live = model.model_json_schema()
+    actual_validator = Draft202012Validator(live)
+    documented_validator = Draft202012Validator(documented)
+    if tool_name == "web_search":
+        examples = [{}, {"query": ""}, {"query": "Python"}, {"query": "Python", "time_range": None}]
+        for key, values in {"max_results": [0, 1, 10, 11], "search_type": ["text", "news", "invalid"],
+                            "safesearch": ["on", "off", "moderate", "invalid"], "time_range": ["d", "y", "invalid"]}.items():
+            examples.extend({"query": "Python", key: value} for value in values)
+    else:
+        examples = [{}, {"urls": []}, {"urls": [" HTTP://example.com "]}, {"urls": ["x"] * 5}, {"urls": ["x"] * 6}]
+        examples.extend({"urls": ["https://example.com"], "max_chars_per_page": value} for value in (999, 1000, 20000, 20001))
+        examples.extend({"urls": ["https://example.com"], "query": value} for value in (None, "C++", 1))
+    for payload in examples:
+        assert documented_validator.is_valid(payload) == actual_validator.is_valid(payload), payload
+    assert documented.get("additionalProperties") == live.get("additionalProperties")
+    assert documented["required"] == live["required"]
+    assert set(documented["properties"]) == set(live["properties"])
+    for key, schema in documented["properties"].items():
+        assert schema.get("default") == live["properties"][key].get("default")
 
 
 @pytest.fixture(autouse=True)
@@ -36,18 +67,6 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
         "no_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-class _FakeEmbeddingComputer:
-    provider_id = "embedding_test"
-    model_id = "semantic"
-    model = "semantic-test-model"
-
-    async def compute(self, inputs: Sequence[str]) -> list[list[float]]:
-        return [
-            [1.0, 0.0] if "uv sync" in value or value == "dependencies install" else [0.0, 1.0]
-            for value in inputs
-        ]
 
 
 @pytest.mark.asyncio
@@ -90,6 +109,7 @@ async def test_web_search_returns_structured_duckduckgo_results(
         "query": "Python official website",
         "provider": "duckduckgo",
         "search_type": "text",
+        "content_is_untrusted": True,
         "returned_result_count": 1,
         "results": [
             {
@@ -102,7 +122,7 @@ async def test_web_search_returns_structured_duckduckgo_results(
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_extracts_visible_html_and_prioritizes_query() -> None:
+async def test_fetch_page_extracts_main_content_without_navigation() -> None:
     irrelevant = "unrelated navigation " * 120
     html = f"""
     <html>
@@ -127,98 +147,19 @@ async def test_fetch_page_extracts_visible_html_and_prioritizes_query() -> None:
         transport=httpx.MockTransport(handler),
         follow_redirects=True,
     ) as client:
-        ranker = web_tools._SemanticChunkRanker(
-            query="dependencies install",
-            computer=_FakeEmbeddingComputer(),
-        )
         result = await web_tools._fetch_page(
             client,
             "https://example.com/docs",
-            1_000,
-            ranker,
         )
 
     assert result["title"] == "Example documentation"
     assert result["final_url"] == "https://example.com/docs"
     assert "uv sync to install dependencies" in str(result["content"])
     assert "hidden script" not in str(result["content"])
+    assert "unrelated navigation" not in str(result["content"])
     assert result["content_is_untrusted"] is True
-    assert result["content_selection"] == "semantic_embedding"
-    assert result["returned_chars"] <= 1_000
-    assert result["content_truncated"] is True
-
-
-@pytest.mark.asyncio
-async def test_fetch_webpage_returns_all_page_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_fetch_page(
-        client: httpx.AsyncClient,
-        url: str,
-        max_chars: int,
-        ranker: web_tools._SemanticChunkRanker | None,
-    ) -> dict[str, object]:
-        assert isinstance(client, httpx.AsyncClient)
-        assert max_chars == 1_500
-        assert ranker is not None
-        assert ranker.query == "needle"
-        assert await ranker.score(["matching page"]) == [1.0]
-        return {
-            "url": url,
-            "final_url": url,
-            "status_code": 200,
-            "content": f"needle in {url}",
-        }
-
-    monkeypatch.setattr(web_tools, "_fetch_page", fake_fetch_page)
-    context = MagicMock()
-    context.tool_options = {
-        "embedding": {
-            "model_ref": {"provider_id": "embedding_test", "model_id": "semantic"},
-            "model": "semantic-test-model",
-        }
-    }
-    context.config_service.resolve_llm_model = AsyncMock(return_value={
-        "provider_id": "embedding_test",
-        "model_id": "semantic",
-        "endpoint": "https://example.com/v1",
-        "model": "unused",
-        "api_key": "test-key",
-        "custom_llm_provider": "openai",
-    })
-    async def embed(**kwargs: object) -> SimpleNamespace:
-        assert kwargs["model"] == "semantic-test-model"
-        assert kwargs["api_base"] == "https://example.com/v1"
-        assert kwargs["api_key"] == "test-key"
-        return SimpleNamespace(data=[{"embedding": [1, 0]} for _ in kwargs["input"]])
-
-    monkeypatch.setattr("litellm.aembedding", embed)
-    tool = web_tools.create_fetch_webpage_tool(context)
-    urls = ["https://example.com/a", "https://example.com/b"]
-
-    result = json.loads(
-        await tool.ainvoke(
-            {
-                "urls": urls,
-                "query": "needle",
-                "max_chars_per_page": 1_500,
-            }
-        )
-    )
-
-    assert result["requested_url_count"] == 2
-    assert result["returned_page_count"] == 2
-    assert result["content_is_untrusted"] is True
-    context.config_service.resolve_llm_model.assert_awaited_once_with(
-        ModelReferenceDTO(provider_id="embedding_test", model_id="semantic"),
-    )
-    assert result["content_selection"] == {
-        "strategy": "semantic_embedding",
-        "provider_id": "embedding_test",
-        "model_id": "semantic",
-        "model": "semantic-test-model",
-    }
-    assert [page["url"] for page in result["pages"]] == urls
+    assert result["page_chars"] == len(str(result["content"]))
+    assert result["download_truncated"] is False
 
 
 @pytest.mark.asyncio
@@ -236,8 +177,6 @@ async def test_fetch_page_rejects_binary_response() -> None:
             await web_tools._fetch_page(
                 client,
                 "https://example.com/image.png",
-                1_000,
-                None,
             )
 
 
@@ -247,18 +186,116 @@ def test_fetch_page_rejects_url_credentials() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_webpage_query_requires_embedding_configuration() -> None:
-    context = MagicMock()
-    context.tool_options = {}
-    tool = web_tools.create_fetch_webpage_tool(context)
+@pytest.mark.parametrize(
+    ("encoding", "declaration", "header"),
+    [
+        ("utf-8", "", "text/html"),
+        ("gbk", '<meta charset="gbk">', "text/html"),
+        ("gbk", '<meta http-equiv="Content-Type" content="text/html; charset=gbk">', "text/html"),
+        ("utf-8", '<meta charset="gbk">', "text/html; charset=utf-8"),
+    ],
+)
+async def test_fetch_page_respects_http_and_html_encodings(
+    encoding: str, declaration: str, header: str,
+) -> None:
+    source = (
+        f"<html><head>{declaration}<title>安装指南</title></head>"
+        "<body><article><p>中文文档安装步骤说明。</p></article></body></html>"
+    ).encode(encoding)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": header}, content=source),
+    )) as client:
+        page = await web_tools._fetch_page(client, "https://example.com/docs")
+    assert page["title"] == "安装指南"
+    assert "中文文档安装步骤说明。" in str(page["content"])
 
-    with pytest.raises(RuntimeError, match="未配置语义排序"):
-        await tool.ainvoke(
-            {
-                "urls": ["https://example.com"],
-                "query": "semantic query",
-            }
-        )
+
+@pytest.mark.asyncio
+async def test_fetch_page_total_deadline_closes_continuously_streaming_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowStream(httpx.AsyncByteStream):
+        closed = False
+        produced = 0
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for _ in range(100):
+                await asyncio.sleep(0.005)
+                self.produced += 1
+                yield b"still streaming\n"
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = SlowStream()
+    monkeypatch.setattr(web_tools, "_FETCH_TIMEOUT_SECONDS", 0.04)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": "text/plain"}, stream=stream),
+    )) as client:
+        with pytest.raises(RuntimeError, match="抓取网页失败") as caught:
+            await web_tools._fetch_page(client, "https://example.com/slow")
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert stream.closed is True
+    assert stream.produced < 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["failure", "cancel"])
+async def test_batch_fetch_closes_other_streams_before_leaving(
+    monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class WaitingStream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            started.set()
+            await release.wait()
+            yield b"done"
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = WaitingStream()
+
+    async def handle(_transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fail":
+            await started.wait()
+            return httpx.Response(503)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, stream=stream)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle)
+    urls = ["https://example.com/slow"]
+    if mode == "failure":
+        urls.append("https://example.com/fail")
+    task = asyncio.create_task(web_tools.create_fetch_webpage_tool(MagicMock()).ainvoke({"urls": urls}))
+    try:
+        await started.wait()
+        if mode == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(RuntimeError, match="抓取网页失败") as caught:
+                await task
+            assert isinstance(caught.value.__cause__, httpx.HTTPStatusError)
+        assert stream.closed is True
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
+async def test_fetch_webpage_rejects_removed_query_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_client(**_kwargs: object) -> None:
+        raise AssertionError("已移除的参数应在创建 HTTP 客户端前被拒绝")
+
+    tool = web_tools.create_fetch_webpage_tool(MagicMock())
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_client)
+    with pytest.raises(ValidationError) as caught:
+        await tool.ainvoke({"urls": ["https://example.com"], "query": "unused"})
+    assert caught.value.errors()[0]["type"] == "extra_forbidden"
 
 
 @pytest.mark.parametrize("tool_name", ["web_search", "fetch_webpage"])

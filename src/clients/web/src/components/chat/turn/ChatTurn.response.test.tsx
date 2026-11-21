@@ -1,9 +1,52 @@
 import { describe, expect, test } from "bun:test";
+import { act, create } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import ChatTurn from "./ChatTurn";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 
 describe("ChatTurn response 展示", () => {
+  test("新增回答段不转移展开状态，终态接管正文后保留最后一段的阅读状态", async () => {
+    const value = conversation("running");
+    value.displayMode = "live";
+    value.pending = true;
+    value.assistantMessages = [];
+    value.responseParts = [{ ...value.responseParts![0], part_id: "live-a", projection: "streaming",
+      status: "completed", text: "第一段".repeat(2200) }];
+    const renderer = create(<ChatTurn {...chatTurnProps(value)} />);
+    const buttons = () => renderer.root.findAllByProps({ className: "chat-markdown-show-full" });
+    try {
+      await act(async () => buttons()[0]!.props.onClick());
+      const second = { ...value.responseParts[0]!, part_id: "live-b", text: "第二段".repeat(2200) };
+      const multipart = { ...value, responseParts: [...value.responseParts, second] };
+      await act(async () => renderer.update(<ChatTurn {...chatTurnProps(multipart)} />));
+      expect(buttons().map(button => button.props["aria-expanded"])).toEqual([true, false]);
+      await act(async () => buttons()[1]!.props.onClick());
+      const terminal = { ...multipart, displayMode: "history" as const, status: "done" as const,
+        pending: false, turnId: "turn-final", turnStatus: "completed" as const,
+        responseParts: [{ ...second, part_id: "canonical-final", projection: "detail" as const,
+          status: "completed" as const, text: "权威正文".repeat(2200) }] };
+      await act(async () => renderer.update(<ChatTurn {...chatTurnProps(terminal)} />));
+      expect(buttons()).toHaveLength(1);
+      expect(buttons()[0]!.props["aria-expanded"]).toBe(true);
+      expect(JSON.stringify(renderer.toJSON())).toContain("权威正文");
+      expect(JSON.stringify(renderer.toJSON())).not.toContain("第二段");
+    } finally { act(() => renderer.unmount()); }
+  });
+
+  test("回复正文使用圆角气泡，摘要独立展示且没有头像占位", () => {
+    const value = conversation("done");
+    value.turnId = "turn-compact";
+    value.activityStats = { duration_ms: 27000, item_count: 1 };
+    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+
+    expect(html).toContain('class="chat-assistant-row chat-assistant-content"');
+    expect(html).toContain('class="chat-markdown chat-response-bubble"');
+    expect(html).toContain("原始回答");
+    expect(html).toContain('class="chat-turn-activity-header"');
+    expect(html).not.toContain("chat-assistant-avatar");
+    expect(html).not.toContain("codicon-copilot");
+  });
+
   test("消息流终态只有完整正文时直接展示正文", () => {
     const value = conversation("done");
   value.displayMode = "live";
@@ -50,7 +93,7 @@ describe("ChatTurn response 展示", () => {
     expect(html).not.toContain("实时消息流出现缺口");
   });
 
-  test("消息流正文优先于同一视图残留的历史 response parts", () => {
+  test("流式正文使用实时内容，摘要从首段回复到完成始终位于正文前", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -76,10 +119,19 @@ describe("ChatTurn response 展示", () => {
   }];
   value.assistantMessages = [];
 
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain("实时正文");
-    expect(html).not.toContain("旧历史正文");
+    for (const status of ["running", "done"] as const) {
+      value.status = status;
+      const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
+      expect(html).toContain("实时正文");
+      expect(html).not.toContain("旧历史正文");
+      const summaryPosition = html.indexOf('class="chat-turn-activity-header"');
+      expect(summaryPosition).toBeGreaterThanOrEqual(0);
+      expect(summaryPosition).toBeLessThan(html.indexOf("实时正文"));
+      if (status === "running") {
+        expect(html).toContain('aria-busy="true"');
+        expect(html).not.toContain("耗时 —");
+      }
+    }
   });
 
   test("默认主线不重复状态栏的思考提示，也不挂载原始 reasoning", () => {

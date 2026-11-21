@@ -44,20 +44,30 @@ async function open(session) {
   result.composerOpenMs.push({ sessionId: session.session_id, elapsedMs: performance.now() - started });
   return thread;
 }
-const quick = () => page.locator('.quick-input-widget');
+const menu = () => page.locator('.action-widget:not(.action-list-submenu-panel)');
 const modelLabels = { default: '日常助手', backup: '备用助手' };
-const row = model => quick().locator('.monaco-list-row').filter({ has: page.locator('.label-name', { hasText: new RegExp(`^${modelLabels[model] ?? `picker-${model}`}$`) }) });
+const row = model => menu().locator('.monaco-list-row').filter({ has: page.locator('.title', { hasText: new RegExp(`^${modelLabels[model] ?? `picker-${model}`}$`) }) });
 async function picker(thread) {
   await thread.locator('.composer-model-pill').click();
-  await expect(quick()).toBeVisible();
-  await expect(quick().locator('input').first()).toBeFocused();
+  await expect(menu()).toBeVisible();
+  await expect(menu().locator('input').first()).toBeFocused();
   await expect(row('default')).toBeVisible();
   await expect(row('catalog-only')).toHaveCount(0);
+  const anchor = await thread.locator('.composer-model-pill').boundingBox();
+  const popup = await menu().boundingBox();
+  assert(anchor && popup && popup.width <= 421, '模型菜单必须保持紧凑宽度');
+  assert(popup.x >= 0 && popup.x + popup.width <= page.viewportSize().width + 1, '模型菜单不得横向越界');
+  assert(popup.y >= 0 && popup.y + popup.height <= page.viewportSize().height + 1, '模型菜单不得纵向越界');
+  assert(popup.y + popup.height <= anchor.y + 1 || popup.y >= anchor.y + anchor.height - 1, '模型菜单必须贴着原按钮打开');
+  const bounds = await row('default').boundingBox();
+  assert(bounds && bounds.x >= popup.x && bounds.x + bounds.width <= popup.x + popup.width + 1,
+    '异步返回的模型行必须位于菜单外框内');
+  await expect(page.locator('.quick-input-widget')).toBeHidden();
 }
 async function choose(thread, model) {
   await picker(thread);
   await row(model).click();
-  await expect(quick()).toBeHidden();
+  await expect(menu()).toBeHidden();
   await expect(thread.locator('.composer-model-label')).toHaveText(modelLabels[model]);
 }
 async function itemAction(model, name) {
@@ -281,16 +291,16 @@ try {
     await thread.locator('.composer-model-pill').click();
     result.phase = 'late-candidates-waiting-for-request';
     await expect.poll(() => candidatesArrived, { timeout: 10000 }).toBe(true);
-    await expect(quick()).toBeVisible();
+    await expect(menu()).toBeVisible();
     result.phase = 'late-candidates-switch-thread';
     await open(result.sessions[1]);
-    await expect(quick()).toBeHidden();
+    await expect(menu()).toBeHidden();
     const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/agents');
     releaseCandidates();
     await response;
     // 后续产品查询完成后再检查，避免在候选回调前得到假阳性。
     assert.deepEqual(await current(result.sessions[0]), reference('default'));
-    await expect(quick()).toBeHidden();
+    await expect(menu()).toBeHidden();
     result.lateCandidatesSuppressed = true;
   } finally {
     releaseCandidates();
@@ -300,7 +310,7 @@ try {
   result.phase = 'display-name-and-server-name-search';
   await picker(thread);
   for (const query of ['备用助手', 'picker-backup', 'primary / backup']) {
-    await quick().locator('input').first().fill(query);
+    await menu().locator('input').first().fill(query);
     await expect(row('backup')).toBeVisible();
     await expect(row('default')).toHaveCount(0);
   }
@@ -313,7 +323,7 @@ try {
   await expect(row('backup')).toHaveCount(0);
   assert.equal(result.requests.length, writes);
   assert.deepEqual(await current(result.sessions[0]), reference('default'));
-  await quick().getByRole('button', { name: '显示隐藏的模型', exact: true }).click();
+  await menu().getByRole('button', { name: '显示隐藏的模型', exact: true }).click();
   await itemAction('backup', '显示模型');
   await row('backup').click();
   await expect(thread.locator('.composer-model-label')).toHaveText('备用助手');
@@ -326,14 +336,35 @@ try {
   thread = await open(result.sessions[1]);
   await picker(thread);
   await expect(row('backup')).toHaveCount(0);
-  await quick().getByRole('button', { name: '显示隐藏的模型', exact: true }).click();
+  await menu().getByRole('button', { name: '显示隐藏的模型', exact: true }).click();
   await itemAction('backup', '显示模型');
   await itemAction('backup', '取消收藏');
   await row('backup').click();
   await expect(thread.locator('.composer-model-label')).toHaveText('备用助手');
   await choose(thread, 'default');
   await picker(thread);
-  await expect(quick()).toContainText('最近使用');
+  const before = await menu().locator('.monaco-list-row .title').allTextContents();
+  assert(before.indexOf('日常助手') < before.indexOf('备用助手'), '选择模型不应改变原目录顺序');
+  await page.screenshot({ path: path.join(fixture.artifacts, 'composer-model-menu.png') });
+  await page.keyboard.press('Escape');
+  if (await page.locator('.part.sidebar').isVisible()) await command('workbench.action.toggleSidebarVisibility');
+  await page.setViewportSize({ width: 460, height: 650 });
+  await picker(thread);
+  await page.screenshot({ path: path.join(fixture.artifacts, 'composer-model-menu-narrow.png') });
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1400, height: 950 });
+  await page.keyboard.press('Escape');
+  await expect(thread.locator('.composer-model-pill')).toBeFocused();
+  await thread.locator('.composer-model-pill').click({ modifiers: ['Shift'] });
+  const quick = page.locator('.quick-input-widget');
+  await expect(quick).toBeVisible();
+  await quick.locator('input').first().fill('picker-backup');
+  await quick.locator('.monaco-list-row').filter({ has: page.locator('.label-name', { hasText: /^备用助手$/ }) }).click();
+  await expect(quick).toBeHidden();
+  await expect(thread.locator('.composer-model-label')).toHaveText('备用助手');
+  assert.deepEqual(await current(result.sessions[1]), reference('backup'));
+  await choose(thread, 'default');
+  await picker(thread);
   await page.keyboard.press('Escape');
   result.phase = 'six-session-selection-isolation';
   const expected = ['backup', 'default', 'backup', 'default', 'backup', 'default'];
@@ -373,7 +404,7 @@ try {
   thread = await open(result.sessions[0]);
   await picker(thread);
   await itemAction('backup', '设为工作区默认模型，仅影响新会话');
-  await expect(quick()).toBeHidden();
+  await expect(menu()).toBeHidden();
   await expect.poll(async () => (await api('/api/v1/agents')).data.find(agent => agent.agent_id === 'default')
     .models.filter(model => model.workspace_default).map(model => model.model_ref)).toEqual([reference('backup')]);
   const newDefault = await api('/api/v1/sessions', { method: 'POST', body: JSON.stringify({ title: '新会话默认模型', agent_id: 'default' }) });

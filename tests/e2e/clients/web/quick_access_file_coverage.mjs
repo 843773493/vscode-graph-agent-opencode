@@ -58,7 +58,7 @@ try {
   await page.goto(new URL('/api/gateway/health', baseUrl).href, { waitUntil: 'domcontentloaded' });
   await api('/api/gateway/managed-workspaces', { method: 'POST', body: JSON.stringify({ root_path: workspaceB, name: '覆盖隔离 B' }) });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
   const ownerA = workspaces.data.active_workspace;
   const headers = { 'X-BoxTeam-Workspace-Id': ownerA.workspace_id, 'X-BoxTeam-Target-Gateway-Id': ownerA.gateway_id };

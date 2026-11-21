@@ -34,6 +34,7 @@ from tests.support.processes.workspace import (
     wait_for_http_ok,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
@@ -92,16 +93,7 @@ async def metadata_case(
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text())
-    for provider in config["llm"]["providers"].values():
-        provider["defaults"].update({
-            "endpoint": f"http://127.0.0.1:{provider_port}/v1", "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
-            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                         "supports_reasoning": {"reasoning_content": False}},
-        })
-        provider["defaults"].pop("auth", None)
-        provider["defaults"].pop("request_options", None)
-        for model in provider["models"].values():
-            model["model"] = "e2e-stub-model"
+    clear_test_provider_api_keys(config, endpoint=f"http://127.0.0.1:{provider_port}/v1")
     for agent in config["agents"].values():
         agent["model"]["fallbacks"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")

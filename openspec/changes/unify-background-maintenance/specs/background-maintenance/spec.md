@@ -60,7 +60,7 @@ Python SDK 与产品 SHALL 共享同一轻量 request_id 上下文及请求 stat
 
 Python SDK SHALL 完整交付现有 Python 生成协议的真实顶层 `boxteam` 包；Backend、SDK 与插件 SHALL 使用同一标准导入及生成定义。生成工具 SHALL 直接输出到 SDK 所拥有的包，迁齐消费者后 MUST 删除旧产品生成目录和模块别名注入，不维护另一份同名协议、按导入顺序选实现或增加第三个协议安装包。SDK 包初始化 MUST 保持按需导入，不加载全部协议。
 
-协议生成及生成产物 check SHALL 独立于应用导入与 SDK 安装；check MUST NOT 安装依赖或回写源码／环境。需要 Backend 的原 HTTP／OpenAPI 合同检查 SHALL 在本次协议生成、当前 SDK 构建及正常依赖安装完成后执行，使用本次 descriptor 与实际安装的 wheel；原构建／CI 调用方 MUST 保留这道必需校验，不以纯生成通过替代。
+协议生成及生成产物 check SHALL 独立于应用导入与 SDK 安装；check MUST NOT 安装依赖或回写源码／环境。需要 Backend 的原 HTTP／OpenAPI 合同检查 SHALL 在本次协议生成、当前 SDK 构建及正常依赖安装完成后执行，使用本次 descriptor 与实际安装的 SDK（开发可 editable，制品验收用 wheel）；原构建／CI 调用方 MUST 保留这道必需校验，不以纯生成通过替代。
 
 #### Scenario: 产品与 SDK 以不同顺序导入协议
 
@@ -117,7 +117,7 @@ SDK SHALL 随包提供从唯一源构建的日志静态合同，沿原格式版�
 
 ### Requirement: 开发与 release 运行同一构建结构的完整插件目录
 
-开发与 release SHALL 共用一个完整目录构建流程及同一依赖声明、标准锁和依赖校验；开发加载构建目录，release 只封装该目录为 ZIP，不在最后一步替换依赖或追加缺失资源。开发 MUST NOT 通过源码路径、workspace 链接或 editable 运行 SDK。SDK 改动 SHALL 重建归档、更新对应锁来源及摘要；只改插件业务代码 SHALL 复用未变化依赖。开发版本 SHALL 依据实际组装有效载荷派生，输入指纹仅用于缓存，不以相同输入豁免实际内容差异。更新 SHALL 先发布完整不可变制品，再显式提交所选配置绑定的版本，由原配置生命周期交接实例，不覆盖运行目录或重启无关绑定。
+开发与 release SHALL 共用一个完整目录构建流程及同一依赖声明、标准锁和依赖校验；开发加载构建目录，release 只封装该目录为 ZIP，不在最后一步替换依赖或追加缺失资源。插件制品开发 MUST NOT 通过源码路径、workspace 链接或 editable 运行 SDK。插件制品中的 SDK 改动 SHALL 重建归档、更新对应锁来源及摘要；只改插件业务代码 SHALL 复用未变化依赖。开发版本 SHALL 依据实际组装有效载荷派生，输入指纹仅用于缓存，不以相同输入豁免实际内容差异。更新 SHALL 先发布完整不可变制品，再显式提交所选配置绑定的版本，由原配置生命周期交接实例，不覆盖运行目录或重启无关绑定。
 
 #### Scenario: 同一目录分别用于开发和 ZIP 验收
 
@@ -288,3 +288,65 @@ Browser 插件 SHALL 使用 Node SDK 在后台首次立即清理截图，随后�
 
 - **WHEN** 隔离工作区固定执行 3 批，每批 10000 条真实候选、100 条有效对照、一次真实 owner 清理及 20 次经 Gateway 访问同一存储的并发暖分页请求
 - **THEN** 采集阶段在进程外 60 秒硬超时内保留全部 60 次请求及 owner 区间、原始时长、p95、max、响应大小和 request_id，按全部样本核原预算且有效对照记录未被错误清理；单列实际重叠次数与样本，不以最少重叠次数判定预算通过，也不把无重叠结果或正确性屏障冒充竞争延迟证据；禁止用屏障、sleep／mock 慢回调或人工占锁制造性能重叠，禁止自动加数据、补批、调参、失败重试或删除慢样本。并发正确性与延迟分别报告，任一业务正确性或预算失败均不得宣告验收通过
+
+### Requirement: Thread 闲置扫描复用调度且保留原 owner
+
+AgentExecutionService SHALL 将 Thread 闲置扫描的周期触发注册到 Python SDK，启动时仍等待一次原检查，随后每次检查结算后等待 60 秒；任务 SHALL 使用空执行上下文；维护任务存活 MUST NOT 作为 Job 准入条件。SDK SHALL 按注册顺序返回 scope 持有的原任务供观察，关闭仍通过唯一 scope 完成。ThreadResidencyTracker SHALL 独占准入、blocker、generation、30 分钟闲置阈值及卸载判断，不增加第二个扫描调用方或资源事实源。
+
+#### Scenario: 启动检查失败后正常周期重试
+
+- **WHEN** 首次检查或后续周期扫描中的原资源释放失败
+- **THEN** 原错误可查，失败 owner 保留并在下个正常 60 秒周期重试；重复 start 不创建第二任务，其他工作区不受影响
+
+#### Scenario: Thread 扫描关闭未结算
+
+- **WHEN** 原 runtime.shutdown 等待扫描期间，观察者被取消或等待超过原 30 秒期限
+- **THEN** 保留唯一关闭任务、原扫描句柄、缓存和依赖，不重启或重复取消扫描；原扫描结算后再释放依赖，迟到错误沿关闭链交付后仅允许显式重试剩余关闭
+
+#### Scenario: 关闭准入与维护 scope 关闭之间的竞态
+
+- **WHEN** Agent owner 已请求关闭，维护 scope 尚未开始关闭，同轮事件循环唤醒周期任务或返回在途扫描错误
+- **THEN** 不开启新的扫描，在途原错误仍沿关闭链交付；不因 scope 暂时开放而记录“下周期重试”后返回关闭成功
+
+#### Scenario: 维护任务意外退出后接受新执行
+
+- **WHEN** 原维护任务意外取消或因调度异常退出，之后收到用户消息或内部执行，而 owner 及实际执行资源仍可用
+- **THEN** 维护故障独立可查，新 Job 沿原 runtime 构建或复用链正常执行；不因维护退出标记失败或用户取消，不自动重启维护。owner 正在关闭时仍拒绝新 runtime admission，真实用户取消和原维护关闭错误仍沿原入口处理
+
+#### Scenario: 新活动阻断闲置卸载时接受同代执行
+
+- **WHEN** 新 runtime admission 正在等待已有闲置卸载，而卸载在线性化前因新增调试或后台活动 blocker 撤回
+- **THEN** admission 重新检查 owner、generation 及 scope 后复用可用的同代 runtime，不因该撤回失败或重复构建；需要换代时仍由原 blocker 阻止卸载，真实资源释放错误仍交回等待者
+
+### Requirement: Backend 开发可用标准 editable 安装且不改变发行独立性
+
+Backend 本地开发 SHALL 通过 uv 的 `sdk/python` editable 来源安装 Python SDK，不手改导入路径；普通 SDK 源码修改 MUST NOT 要求重建 wheel、修改版本或更新锁。SDK 元数据版本 SHALL 从根软件版本同步；包内日志合同 SHALL 从唯一源生成并校验，干净 checkout 的标准安装必须完整可用。发行环境 SHALL 正常安装 wheel，产品依赖导出保留锁定依赖及摘要，以当前 SDK wheel 替换本地 editable 项；插件制品来源规则不变。
+
+#### Scenario: 安装后修改 SDK 源码
+
+- **WHEN** 开发环境完成标准 editable 安装后修改 SDK 源码，并从仓库外工作目录启动新的 Python 进程
+- **THEN** 无需重新安装即可加载修改后的实现，包内日志合同可用，依赖锁不因普通源码变化而更新
+
+#### Scenario: 制品不再能访问开发源码
+
+- **WHEN** 产品从当前 SDK 导出带摘要的 wheel 依赖，完成正常安装后开发源码目录被移走
+- **THEN** 实际 SDK 和日志资源仍从已安装制品加载，依赖中没有 editable 或开发目录链接
+
+#### Scenario: 生成日志资源过期
+
+- **WHEN** SDK 包内生成日志合同与唯一源不一致
+- **THEN** 只读准备检查明确失败且不回写，显式准备后两者一致
+
+### Requirement: 仓库内 Node 产品开发使用标准 workspace 且发行保持独立
+
+仓库内 Node 产品消费者 SHALL 通过 Bun workspace 解析 `sdk/node` 的公开包入口，普通 SDK 源码编辑 MUST NOT 要求重建 tarball、修改版本或更新锁。准备入口 SHALL 同步版本、workspace 声明及包内生成日志资源，check MUST NOT 构建 SDK 或回写文件。产品发行 SHALL 沿原独立运行时清单安装包内 tarball，不携带开发 workspace 链接；插件制品继续遵守独立构建与安装规则。
+
+#### Scenario: workspace 安装后修改实现
+
+- **WHEN** 标准 Bun workspace 安装完成后修改 SDK 源码，并从仓库外工作目录运行消费者的新 Node 进程
+- **THEN** 公开包入口解析到该 workspace 源码，无需重新安装或修改锁即可读取改动，包内日志资源可用
+
+#### Scenario: 发行运行脱离 workspace
+
+- **WHEN** 原产品构建入口生成独立运行时清单、安装包内 SDK tarball，随后开发源码被移走
+- **THEN** Node 消费者及日志资源仍从发行依赖目录加载，清单没有 workspace 声明或源码目录来源

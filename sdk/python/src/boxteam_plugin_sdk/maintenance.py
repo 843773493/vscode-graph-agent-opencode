@@ -51,8 +51,8 @@ def start_maintenance(
     scope: LifetimeScope,
     identity: object,
     report_error: MaintenanceErrorReporter,
-) -> None:
-    """先验证整个静态集合，再由原 LifetimeScope 持有每项维护循环。"""
+) -> tuple[asyncio.Future[object], ...]:
+    """由原 scope 持有维护循环；按注册顺序返回原任务，供 owner 观察存活状态。"""
     selected = _validate_tasks(tasks)
     if not isinstance(scope, LifetimeScope) or scope.state != "open":
         raise RuntimeError("维护任务需要可用的开放 LifetimeScope")
@@ -62,6 +62,7 @@ def start_maintenance(
         raise TypeError("维护错误报告入口不可调用")
     asyncio.get_running_loop()
 
+    handles: list[asyncio.Future[object]] = []
     for task in selected:
         async def run_periodically(item: MaintenanceTask = task) -> None:
             interval = item.interval_ms / 1000
@@ -82,6 +83,7 @@ def start_maintenance(
                     return
                 await asyncio.sleep(interval)
 
-        scope.start_task(run_periodically, label=f"maintenance:{task.id}")
+        handles.append(scope.start_task(run_periodically, label=f"maintenance:{task.id}"))
+    return tuple(handles)
 
 __all__ = ["MaintenanceErrorReporter", "MaintenanceTask", "start_maintenance"]

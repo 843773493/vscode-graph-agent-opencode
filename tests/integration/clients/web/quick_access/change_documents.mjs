@@ -52,7 +52,7 @@ try {
     return payload.data;
   }, { path, data, owner });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
   const target = targets.active_workspace;
   expect(target.gateway_id).toBe(health.gateway_id);

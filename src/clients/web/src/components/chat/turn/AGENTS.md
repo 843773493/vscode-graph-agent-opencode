@@ -11,6 +11,7 @@ turn/
 ├── MessageAttachments.tsx       # 单轮附件展示
 ├── ChatTurnResponseBody.tsx     # Assistant response 组合
 ├── TurnActivitySummary.tsx      # 工具与执行活动摘要
+├── ResponseUsage.tsx            # 摘要行中的最后一次模型请求用量
 ├── responseStatusParts.tsx      # response 状态片段
 ├── activityRenderers.tsx        # 活动类型到展示组件的映射
 ├── useChatTurnActions.ts        # 单轮动作编排

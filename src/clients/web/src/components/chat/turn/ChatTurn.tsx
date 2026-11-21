@@ -75,23 +75,16 @@ function ChatTurn({
         onOpenAttachment={onOpenAttachment}
         onForkConversation={onForkConversation}
       />
-      <div className="chat-assistant-row">
-        <div className="chat-assistant-avatar-menu">
-          <div className="chat-assistant-avatar" aria-hidden="true">
-            <span className="codicon codicon-copilot" />
-          </div>
-        </div>
-        <div className="chat-assistant-content">
-          <ChatTurnResponseBody
-            conversation={conversation}
-            workspaceId={workspaceId}
-            showRawDetails={showRawDetails}
-            actions={actions}
-            onLoadTurnDetails={onLoadTurnDetails}
-            onLoadToolDetails={onLoadToolDetails}
-            onForkConversation={onForkConversation}
-          />
-        </div>
+      <div className="chat-assistant-row chat-assistant-content">
+        <ChatTurnResponseBody
+          conversation={conversation}
+          workspaceId={workspaceId}
+          showRawDetails={showRawDetails}
+          actions={actions}
+          onLoadTurnDetails={onLoadTurnDetails}
+          onLoadToolDetails={onLoadToolDetails}
+          onForkConversation={onForkConversation}
+        />
       </div>
     </article></ChatItemOwnerContext.Provider>
   );

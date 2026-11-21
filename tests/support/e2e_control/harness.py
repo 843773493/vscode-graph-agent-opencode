@@ -345,7 +345,10 @@ class E2ETestControlHarness:
             self._phase_matches[cast(str, request["barrier_id"])].barrier.released.set()
             return None
         if action == "acknowledged":
-            self.acknowledged(cast(str, request["operation_id"]), cast(str, request["phase"]))
+            self.acknowledged(
+                cast(str, request["operation_id"]), cast(str, request["phase"]),
+                timeout=cast(float, request.get("timeout", 30)),
+            )
             return None
         if action == "release":
             self.release(cast(str, request["operation_id"]), cast(str, request["phase"]))

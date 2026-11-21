@@ -35,6 +35,29 @@ import {
 
 export const DEFAULT_AGENT_ID = "default";
 
+export async function uploadSessionAttachment(
+  port: number, sessionId: string, threadId: string, workspaceId: string,
+  file: Blob, name: string, contentType: string, signal?: AbortSignal,
+): Promise<AttachmentRef> {
+  if (file.size > 30 * 1024 * 1024) throw new Error("附件超过 30 MiB 限制");
+  const response = await requestGatewayResponse(port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/threads/${encodeURIComponent(threadId)}/attachments?${new URLSearchParams({ name })}`,
+    { method: "POST", body: file, signal,
+      headers: { ...workspaceHeader(workspaceId), "Content-Type": contentType } },
+  );
+  const { data_url: _inlineBytes, ...reference } = unwrapApiData(await response.json() as APIResponse<AttachmentRef>);
+  return reference;
+}
+
+export async function discardSessionAttachment(
+  port: number, sessionId: string, threadId: string, workspaceId: string, fileId: string,
+): Promise<void> {
+  await requestJson(port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/threads/${encodeURIComponent(threadId)}/attachments?${new URLSearchParams({ file_id: fileId })}`,
+    { method: "DELETE", headers: workspaceHeader(workspaceId) },
+  );
+}
+
 export type LocatedTrace = Omit<TraceLocationDTO, "record"> & { record: TraceEvent };
 
 export async function locateTrace(
@@ -391,19 +414,15 @@ export async function sendUserMessage(
   operationId = `op_${crypto.randomUUID().replaceAll("-", "")}`,
 ): Promise<MessageRunAccepted> {
   if (!workspaceId || !threadId) throw new Error("可靠消息提交缺少固定工作区或 Thread 身份");
-  // 原生文件引用仍按读取时内容处理；这份字节只保护当前尚未确认的提交，不建立文件版本库。
+  // 消息提交只冻结稳定引用；本机粘贴内容和可变文件先走同一原始字节上传入口。
   const frozenAttachments: AttachmentRef[] = [];
   for (const attachment of structuredClone(attachments)) {
-    if (attachment.data_url?.startsWith("data:")) { frozenAttachments.push({ ...attachment }); continue; }
-    if (attachment.file_id.startsWith("blob:") || attachment.data_url) throw new Error("消息附件缺少可恢复的原始输入");
-    const blob = await getWorkspaceRawFileBlob(port, attachment.file_id, workspaceId);
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("消息附件读取未返回字节输入"));
-      reader.onerror = () => reject(reader.error ?? new Error("消息附件读取失败"));
-      reader.readAsDataURL(blob);
-    });
-    frozenAttachments.push({ ...attachment, data_url: dataUrl });
+    if (attachment.directory_uri && !attachment.data_url) { frozenAttachments.push(attachment); continue; }
+    const blob = attachment.data_url?.startsWith("data:")
+      ? await (await fetch(attachment.data_url)).blob()
+      : await getWorkspaceRawFileBlob(port, attachment.file_id, workspaceId);
+    frozenAttachments.push(await uploadSessionAttachment(port, sessionId, threadId, workspaceId,
+      blob, attachment.name ?? "attachment", attachment.content_type ?? (blob.type || "application/octet-stream")));
   }
   const payload: MessageRunRequest = {
     operation_id: operationId,

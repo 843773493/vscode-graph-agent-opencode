@@ -51,7 +51,7 @@ try {
       if (match) { match.failure = request.failure()?.errorText ?? 'request failed'; delete match.request; }
     });
   } });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const active = (await api('/api/gateway/workspaces')).data.active_workspace;
   expect(active.workspace_id).toBe(owner.workspace_id);
   const headers = { 'X-BoxTeam-Workspace-Id': owner.workspace_id,
@@ -111,7 +111,7 @@ try {
   await saved;
   await expect(quick).not.toBeVisible();
   await host.reload();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   searchEditor = page.locator('.search-editor');
   await expect(searchEditor).toHaveCount(1);
   await expect(searchEditor.locator('.boxteam-search-scope')).toContainText('原生范围 B');

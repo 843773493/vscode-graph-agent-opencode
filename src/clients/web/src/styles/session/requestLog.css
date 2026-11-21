@@ -236,7 +236,7 @@
   background: var(--bt-surface-background);
   color: var(--bt-text-primary);
   font-size: var(--bt-font-size-small);
-  line-height: 1.45;
+  line-height: var(--bt-line-height-small);
   overflow-wrap: anywhere;
 }
 

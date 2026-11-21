@@ -673,13 +673,17 @@ export class BrowserManager {
       if (shutdownFailures.length > 1) throw new AggregateError(shutdownFailures, "Browser维护关闭失败");
       throw new Error("Browser共享运行时仍有未核实资源，不能关闭");
     }
-    this.shutdownStage = "runtime";
-    if (!this.runtimeShutdownComplete) {
-      await this.runtimePool.shutdown();
-      this.runtimeShutdownComplete = true;
+    try {
+      this.shutdownStage = "runtime";
+      if (!this.runtimeShutdownComplete) {
+        await this.runtimePool.shutdown();
+        this.runtimeShutdownComplete = true;
+      }
+      this.shutdownStage = "persist";
+      await this.persist();
+    } catch (error) {
+      throw withShutdownFailures(error);
     }
-    this.shutdownStage = "persist";
-    await this.persist();
     if (failure) throw withShutdownFailures(failure);
     if (shutdownFailures.length === 1) throw shutdownFailures[0];
     if (shutdownFailures.length > 1) throw new AggregateError(shutdownFailures, "Browser维护关闭失败");

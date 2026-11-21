@@ -53,6 +53,9 @@ dependencies = [
     "orjson>=3.11,<4",
     "jsonyx>=2.5,<3",
     "cdifflib>=1.2.9,<2",
+    "readability-lxml>=0.9",
+    "markdownify>=1.2.4",
+    "lxml>=6.1.1",
 ]
 
 [project.optional-dependencies]
@@ -88,4 +91,4 @@ filterwarnings = [
 ]
 
 [tool.uv.sources]
-boxteam-plugin-sdk = { path = "out/sdk/python/3e2612fef84e76c09afe3c15fa0def6d18ad5551eec4dddb21a232f6c93a86f7/boxteam_plugin_sdk-0.0.2-py3-none-any.whl" }
+boxteam-plugin-sdk = { path = "sdk/python", editable = true }

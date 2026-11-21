@@ -13,7 +13,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const initialization = await page.evaluate(async () => {
     const token = (await (await fetch("/api/gateway/auth/local-credential")).json()).data.token;
     const observed = [];

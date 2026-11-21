@@ -34,7 +34,7 @@ try {
       query: searchRequest(response.request()).query, requestId: response.headers()['x-request-id'], status: response.status() });
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const api = (path, data) => page.evaluate(async ({ path, data }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { method: data ? 'POST' : 'GET', body: data ? JSON.stringify(data) : undefined,
@@ -54,7 +54,7 @@ try {
   const b = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(item => item.name === '文本恢复B');
   expect(b.status).toBe('ready'); expect(b.workspace_id).not.toBe(a.workspace_id);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   await command('workbench.action.quickOpen', '');
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   await quick.getByRole('button', { name: '选择搜索范围', exact: true }).click();

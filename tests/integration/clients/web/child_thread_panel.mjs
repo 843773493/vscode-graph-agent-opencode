@@ -79,7 +79,7 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 
 async function openWorkbenchPage(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
 }
 
 function isSessionMessageRequest(request) {
@@ -297,7 +297,9 @@ try {
   });
   assert.deepEqual(updated?.data?.current_model, { provider_id: "primary", model_id: "default" }, "Session 没有切换到指定模型");
 
-  await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
+  await page.locator('.pane-header').filter({ has: page.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+
+  await page.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
   await selectSession(page, result.sessionId, 1);
 
   // 第一轮：纯文本确认回复；child 使用独立的冻结 seed 请求及响应。

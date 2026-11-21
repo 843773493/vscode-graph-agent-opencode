@@ -50,7 +50,7 @@ try {
   cdp.on('Network.loadingFinished', event => { record(event.requestId).finished = true; });
   await cdp.send('Network.enable');
   const ready = async version => {
-    await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
     expect(await page.evaluate(() => globalThis.__boxteamStaticUpgrade)).toBe(version);
     expect(await page.evaluate(path => new Promise((resolve, reject) => {
       const instance = new Worker(path, { type: 'module', name: 'boxteam-static-upgrade' });

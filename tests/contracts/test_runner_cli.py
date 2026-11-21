@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -74,6 +75,11 @@ def synthetic_project(tmp_path: Path) -> tuple[Path, Path]:
         ],
     }
     (runner_dir / "matrix.jsonc").write_text(json.dumps(matrix), encoding="utf-8")
+    # 正常矩阵入口会启动性能采样与报告；隔离项目也必须带上这两项真实依赖。
+    for name in ("resources.py", "report.py"):
+        target = tmp_path / "tests/harness/performance" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path.cwd() / "tests/harness/performance" / name, target)
     return tmp_path, tmp_path / "spawned.marker"
 
 
@@ -153,6 +159,14 @@ def test_bun_discovers_product_tests_without_running_upstream_or_generated_tests
     project = tmp_path / "discovery"
     project.mkdir()
     (project / "bunfig.toml").write_bytes((Path.cwd() / "bunfig.toml").read_bytes())
+    for name in (
+        "tests/harness/js/workbench-locale.ts",
+        "src/clients/shared/core/i18n/index.ts",
+        "src/clients/shared/core/i18n/messages/zh-cn.json",
+    ):
+        target = project / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path.cwd() / name, target)
     markers = tmp_path / "executed"
     markers.mkdir()
     fixtures = {
@@ -182,6 +196,27 @@ def test_bun_discovers_product_tests_without_running_upstream_or_generated_tests
     }, indent=2) + "\n", encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
     assert sorted(path.name for path in markers.iterdir()) == ["web", "workbench"]
+
+
+def test_sdk_node_tests_are_covered_by_their_declared_runtime() -> None:
+    root = Path.cwd()
+    suites = commentjson.loads((root / "tests/runner/matrix.jsonc").read_text())["suites"]
+    for layer in ("unit", "contracts", "integration"):
+        for test in sorted((root / "tests" / layer / "sdk/node").glob("*.test.mjs")):
+            source = test.read_text()
+            engine = "bun" if 'from "bun:test"' in source else "node"
+            assert f'from "{engine}:test"' in source, test
+            owners = []
+            for suite in suites:
+                command = suite.get("command", [])
+                if not suite["enabled"] or len(command) < 3 or command[1] not in {"test", "--test"}:
+                    continue
+                if any(test == root / target or (root / target).is_dir() and test.is_relative_to(root / target)
+                       for target in command[2:] if not target.startswith("-")):
+                    owners.append(suite)
+            assert len(owners) == 1, (test, [suite["id"] for suite in owners])
+            assert owners[0]["command"][:2] == [engine, "test" if engine == "bun" else "--test"], test
+            assert owners[0]["layer"] == ("contract" if layer == "contracts" else layer), test
 
 
 @pytest.fixture

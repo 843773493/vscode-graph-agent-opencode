@@ -3,6 +3,7 @@ import { memo, useMemo } from "react";
 import type { ChildThreadSummary, InternalExecutionHistory, TurnDetail, TurnHistoryPage } from "../../../types/backend";
 import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
 import type { ChatTurnHandlers } from "../../chat/turn/types";
+import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
 import { conversationFromTurn } from "../../../state/conversations/turnProjection";
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import MarkdownContent from "../../chat/MarkdownContent";
@@ -53,6 +54,8 @@ function ChildUserMessage({ message, turn, onFork }: {
 const ChildTurn = memo(function ChildTurn({ turn, threadId, onFork }: { turn: TurnDetail; threadId: string; onFork?: ForkPoint }) {
   const conversation = conversationFromTurn(turn, threadId);
   const groups = buildRenderGroups(responseItemsForConversation(conversation));
+  const tokenUsage = conversationTokenUsage(conversation);
+  const modelUsage = conversationModelUsage(conversation);
   const sourceSnapshot = { sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision };
   return (
     <ChatItemOwnerContext.Provider value={{ sessionId: turn.session_id, threadId }}><article className="child-thread-turn chat-turn" data-turn-id={turn.turn_id} data-conversation-id={turn.turn_id} data-root-logical-item-ordinal={turn.root_logical_item_ordinal}>
@@ -60,6 +63,7 @@ const ChildTurn = memo(function ChildTurn({ turn, threadId, onFork }: { turn: Tu
       {(turn.user_messages ?? []).map((message) => <ChildUserMessage key={message.message_id} message={message} turn={turn} onFork={onFork} />)}
       <div className="child-thread-assistant chat-assistant-content">
         <TurnActivitySummary conversation={conversation} groups={groups} showRawDetails={false}
+          usage={tokenUsage || modelUsage ? { tokenUsage, modelUsage } : undefined}
           onForkItem={onFork ? (itemId) => onFork({ ...sourceSnapshot, itemId }) : undefined} />
       </div>
       {turn.detail_truncated ? <p>{t("child.historyBudget")}</p> : null}

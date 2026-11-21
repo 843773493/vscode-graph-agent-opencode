@@ -357,16 +357,7 @@
             "tool_id": "web_search" // builtin_tool_registry 稳定工具 ID。
           },
           {
-            "tool_id": "fetch_webpage", // builtin_tool_registry 稳定工具 ID。
-            "options": {
-              "embedding": {
-                "model_ref": {
-                  "provider_id": "backup_2",
-                  "model_id": "default"
-                },
-                "model": "openai/text-embedding-3-small"
-              }
-            }
+            "tool_id": "fetch_webpage" // 网页正文抓取，无需模型配置。
           },
           {
             "tool_id": "listBrowserPage" // builtin_tool_registry 稳定工具 ID。

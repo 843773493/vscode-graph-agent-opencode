@@ -311,7 +311,7 @@ export function useSessionResourceTreeNavigation({
   ) => {
     const requestSequence = ++openingSessionRequestSequenceRef.current;
     setOpeningSession({ requestSequence, sessionKey });
-    void Promise.resolve(onSelectSession(workspaceId, sessionId))
+    void Promise.resolve().then(() => onSelectSession(workspaceId, sessionId))
       .catch((error) => handleError(t('navigation.sessions.openFailed'), error))
       .finally(() => {
         setOpeningSession((current) => (

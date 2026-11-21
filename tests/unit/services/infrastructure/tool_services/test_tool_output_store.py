@@ -49,6 +49,21 @@ def stored_output(tmp_path: Path, session_bundle_factory: Callable[[Path, str], 
     return StoredOutput(store, session_id, directory, directory / "tool-results" / uri.rsplit("/", 1)[1], uri, content)
 
 
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\x85", "\u2028", "\u2029"])
+def test_line_limit_and_reference_count_use_resource_reader_line_boundaries(
+    stored_output: StoredOutput, separator: str,
+) -> None:
+    content = separator.join(f"line-{index}" for index in range(12))
+    message = stored_output.store.limit_message(
+        session_id=stored_output.session_id, tool_name="lines", tool_call_id="call-lines",
+        message=ToolMessage(content=content, tool_call_id="call-lines"),
+    )
+    reference = extract_tool_output_reference(message)
+    assert reference is not None
+    assert reference["line_count"] == len(content.splitlines()) == 12
+    assert stored_output.store.read(stored_output.session_id, str(reference["read_path"]), 1024).data == content.encode()
+
+
 @pytest.mark.parametrize("concurrent", [False, True])
 def test_conflicting_result_reports_uri_and_keeps_exact_winner(
     stored_output: StoredOutput, concurrent: bool, monkeypatch: pytest.MonkeyPatch,

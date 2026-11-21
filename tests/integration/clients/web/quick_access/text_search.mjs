@@ -67,7 +67,7 @@ try {
   // 先注册静态目标再加载页面，导航通过正式初始化取得 A/B 两个工作区。
   const registered = await api('/api/gateway/managed-workspaces', { method: 'POST', body: JSON.stringify({ root_path: otherWorkspace, name: '搜索隔离 B' }) });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
   const active = workspaces.data.active_workspace;
   const headers = { 'X-BoxTeam-Workspace-Id': active.workspace_id, 'X-BoxTeam-Target-Gateway-Id': active.gateway_id };

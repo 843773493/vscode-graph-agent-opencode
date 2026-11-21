@@ -98,6 +98,7 @@ async function mountExplorer(options: {
         activeWorkspaceId={null}
         currentSessionId=""
         currentSessionWorkspaceId={null}
+        selectedSessionKey={null}
         searchOpen={false}
         searchQuery=""
         workspaceSwitching={false}

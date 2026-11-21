@@ -28,6 +28,7 @@ from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,
     ThreadResidencyTracker,
     ThreadRuntimeLease,
+    ThreadUnloadBlocked,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
@@ -209,6 +210,98 @@ async def test_blocker_release_restarts_idle_counting_from_release_moment() -> N
     assert snapshot.idle_seconds == pytest.approx(1799.0)
     clock.advance(1)
     assert tracker.snapshot(*_OWNER).cold_eligible is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generation_key", ["config-v1", "config-v2"])
+async def test_admission_waiting_for_blocked_idle_unload_rechecks_generation(
+    monkeypatch: pytest.MonkeyPatch, generation_key: str,
+) -> None:
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    first = await _resident_runtime(tracker)
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    close_runtime = tracker._close_runtime
+
+    async def held_close(*args, **kwargs):
+        entered.set()
+        await proceed.wait()
+        await close_runtime(*args, **kwargs)
+
+    monkeypatch.setattr(tracker, "_close_runtime", held_close)
+    clock.advance(1800)
+    sweep = asyncio.create_task(tracker.sweep())
+    pending = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        tracker.register_blocker(
+            *_OWNER, blocker_key="debug-run", kind="node_debug_process",
+            reason="新增调试进程",
+        )
+        pending = asyncio.create_task(tracker.acquire(
+            MutationIntentOwner(*_OWNER), _unit_admission(), generation_key,
+            lambda *_: pytest.fail("阻断撤回后不能重建 runtime"),
+        ))
+        await asyncio.sleep(0)
+        assert tracker._states[_OWNER].pending_runtime_leases == 1
+        assert not pending.done()
+        proceed.set()
+        assert await asyncio.wait_for(sweep, 3) == ()
+        if generation_key == "config-v2":
+            with pytest.raises(ThreadUnloadBlocked):
+                await asyncio.wait_for(pending, 3)
+        else:
+            lease = await asyncio.wait_for(pending, 3)
+            async with lease:
+                assert lease.generation == first.generation
+        assert tracker.snapshot(*_OWNER).residency == "resident"
+    finally:
+        proceed.set()
+        await asyncio.gather(sweep, *([pending] if pending else []), return_exceptions=True)
+        tracker.release_blocker(*_OWNER, blocker_key="debug-run")
+        await tracker.close()
+
+
+@pytest.mark.asyncio
+async def test_admission_waiting_for_idle_unload_receives_real_release_failure() -> None:
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    await _resident_runtime(tracker)
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    failure = ConnectionError("资源 owner 未返回释放回执")
+    fail_once = True
+
+    async def release(*_args):
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            entered.set()
+            await proceed.wait()
+            raise failure
+
+    tracker.add_unload_listener(release)
+    clock.advance(1800)
+    sweep = asyncio.create_task(tracker.sweep())
+    pending = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        pending = asyncio.create_task(tracker.acquire(
+            MutationIntentOwner(*_OWNER), _unit_admission(), "config-v1",
+            lambda *_: pytest.fail("释放失败不能重建 runtime"),
+        ))
+        await asyncio.sleep(0)
+        assert tracker._states[_OWNER].pending_runtime_leases == 1
+        assert not pending.done()
+        proceed.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(sweep, pending, return_exceptions=True), 3,
+        )
+        assert results == [failure, failure]
+        assert tracker.snapshot(*_OWNER).residency == "resident"
+    finally:
+        proceed.set()
+        await asyncio.gather(sweep, *([pending] if pending else []), return_exceptions=True)
+        await tracker.close()
 
 
 @pytest.mark.asyncio

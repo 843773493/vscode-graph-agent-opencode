@@ -188,7 +188,11 @@ class ThreadResidencyTracker:
                         "ThreadResidencyTracker 正在关闭，拒绝新 admission"
                     )
                 if state.runtime_unload is not None:
-                    await self._wait_runtime_task(state.runtime_unload, state, deadline, "admission")
+                    try:
+                        await self._wait_runtime_task(state.runtime_unload, state, deadline, "admission")
+                    except ThreadUnloadBlocked:
+                        # 已有卸载被新活动撤回；重新检查代际，不能连带拒绝同代执行。
+                        pass
                     continue
                 runtime = state.runtime
                 if runtime is not None:

@@ -83,7 +83,7 @@ try {
   await api(`/api/gateway/workspaces/${ownerA.workspace_id}/activate`, ownerA, {});
   await api(`/api/gateway/workspaces/${b.workspace_id}/runtime/stop`, ownerB, {});
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const current = () => api('/api/gateway/workspaces?check_health=false');
   const ready = await current();
   expect(ready.active_workspace).toEqual(ownerA);
@@ -166,7 +166,7 @@ try {
   await expect(row).toContainText('ready');
   await choose('切换到此工作区');
   await expect.poll(async () => (await current()).active_workspace).toEqual(ownerB);
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeEnabled();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   expect(phaseWrites(result.phase)).toEqual([expect.objectContaining({ path: `/api/gateway/workspaces/${b.workspace_id}/activate`, owner: ownerB })]);
   result.activatedExplicitly = true;
 

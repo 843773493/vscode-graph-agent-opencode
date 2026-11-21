@@ -29,7 +29,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.workspaces import install_test_workspace_config
+from tests.support.workspaces import (
+    clear_test_provider_api_keys,
+    install_test_workspace_config,
+)
 
 PYTHON_PLUGIN = '''
 import asyncio, json, os, sys
@@ -119,9 +122,7 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"].values():
-        if "api_key" in provider:
-            provider["api_key"] = "plugin-lifecycle-unused-key"
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config), encoding="utf-8")
     home = context.boxteam_home_for_node(request.node.nodeid)
     _prepare_probe_home(home)
@@ -468,9 +469,7 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"].values():
-        if "api_key" in provider:
-            provider["api_key"] = "cold-runtime-unused-key"
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config), encoding="utf-8")
     gateway = None
     bindings = [{"package_id": "cold.tools" if shared_package else f"cold.{runtime}", "package_version": "1.0.0",

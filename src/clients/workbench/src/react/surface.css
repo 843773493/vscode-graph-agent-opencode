@@ -5,9 +5,6 @@
   background-position: center, var(--bt-background-position, center);
   background-size: cover, var(--bt-background-size, cover);
   background-repeat: no-repeat, var(--bt-background-repeat, no-repeat);
-  font-family: var(--bt-font-family);
-  font-size: var(--bt-font-size);
-  line-height: 1.4;
   --bt-radius-small: 3px;
   --bt-radius-large: 6px;
 }

@@ -2,6 +2,8 @@
 
 本目录维护自包含平台运行时的 staging、npm 包组装、构建输入指纹和下载实现；安装验收实现位于 `verification/`，发布命令入口位于 `scripts/release/`。
 
+产品 Python 依赖通过 `scripts/plugins/export-python-requirements.mjs` 导出锁定依赖并加入带摘要的 SDK wheel；Backend 开发的 editable 来源不能进入发行依赖或运行时目录。SDK 的 setuptools `build/` 与 `src/*.egg-info/` 是本地安装生成物，不计入构建输入指纹，真实 SDK 源码和包资源仍须计入。
+
 ```text
 runtime/
 ├── versions.mjs                   发布版本及第三方固定资源清单

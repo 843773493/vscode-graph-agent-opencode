@@ -83,11 +83,11 @@ async def test_model_searches_web_then_fetches_selected_result(
         "先调用 web_search，query='Python programming language official website'，"
         "max_results=3，search_type='text'，time_range=null。"
         "优先选择结果中 python.org 的 URL；如果没有才选择第一条 URL。"
-        "再调用 fetch_webpage 抓取这个 URL，query='Python programming language'，"
+        "再调用 fetch_webpage 抓取这个 URL，"
         "max_chars_per_page=2000。"
         "最终只回复一个 JSON 对象：search_result_count 使用搜索实际返回数量；"
         "fetched_url、status_code、title 使用抓取页面的实际字段；"
-        "content_contains_python 表示抓取 content 忽略大小写后是否包含 python。不要解释。"
+        "content_contains_python 表示抓取 output 预览忽略大小写后是否包含 python。不要解释。"
     )
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -147,10 +147,6 @@ async def test_model_searches_web_then_fetches_selected_result(
     ]
     assert fetch_ends
     fetch_result = json.loads(str(get_trace_payload(fetch_ends[-1])["result"]))
-    assert fetch_result["content_selection"] == {
-        "strategy": "semantic_embedding",
-        "provider_id": "backup_2",
-        "model_id": "default",
-        "model": "openai/text-embedding-3-small",
-    }
-    assert fetch_result["pages"][0]["content_selection"] == "semantic_embedding"
+    page = fetch_result["pages"][0]
+    assert page["full_content"]["read_path"].startswith("boxteam://")
+    assert "python" in fetch_result["output"].lower()

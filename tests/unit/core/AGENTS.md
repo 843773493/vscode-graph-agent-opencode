@@ -27,15 +27,14 @@ tests/unit/core/
 │   ├── test_boxteam_env.py、test_mounted_workspaces.py
 │   └── test_user_storage_migration.py、test_backend_activation.py
 ├── configuration/
-│   ├── test_config_sources.py、test_checkpoint_config.py
-│   └── test_logging_config.py
+│   └── test_config_sources.py、test_checkpoint_config.py
 ├── events/
 │   ├── test_job_event_bus.py
 │   └── test_job_event_bus_channel_adapter.py
 ├── execution/
 │   ├── test_cancelable_stream.py、test_execution_admission_context.py
-│   ├── test_key_lock_pool.py、test_lifetime_handle.py
-│   └── test_lifetime_scope.py、test_turn_execution_scope.py
+│   ├── test_key_lock_pool.py、test_shielded_worker.py
+│   └── test_turn_execution_scope.py
 └── 根目录测试（按职责分组）
     ├── Session 目录与生命周期
     │   ├── catalog_workspace_helper.py、test_catalog_workspace_helper.py
@@ -64,3 +63,5 @@ tests/unit/core/
 - 测试命名应清晰表达被测行为和预期结果。
 - 优先使用 pytest-asyncio 测试异步代码。
 - 每个测试应独立，不依赖外部状态。
+
+SDK 的 LifetimeScope、handle、维护、日志和 request_id 单测归 `tests/unit/sdk/python/`；产品 TraceMiddleware 与 SDK 的协作仍在对应产品测试中验证。

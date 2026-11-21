@@ -20,7 +20,7 @@ try {
   page = await context.newPage(); page.setDefaultTimeout(15_000);
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const api = path => page.evaluate(async path => {
     const auth = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
     const response = await fetch(path, { headers: { 'X-Local-Token': auth.token } });

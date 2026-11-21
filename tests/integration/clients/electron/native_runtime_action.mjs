@@ -55,7 +55,7 @@ try {
       if (item) { item.failure = request.failure()?.errorText ?? 'request failed'; delete item.request; }
     });
   } });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   await page.evaluate(value => { window.__boxteamNativeActionOwner = value; }, owner);
   const navigation = (await api('/api/gateway/workspaces')).data;
   expect(navigation.items.some(item => item.gateway_id === owner.gateway_id

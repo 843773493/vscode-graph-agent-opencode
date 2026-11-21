@@ -62,7 +62,7 @@ async function observeDependencies(moduleUrl, scenario) {
     const result = installWindowsPythonDependencies({ pythonExecutable, outputRoot, runtimePackageRoot,
       crossBuild: scenario !== "native", run(command, args) {
         calls.push([command, args]);
-        if (args[0] === "export") {
+        if (args[0] === "scripts/plugins/export-python-requirements.mjs") {
           if (scenario === "export-failure") throw failureMarker;
           fs.writeFileSync(requirementsPath, locked);
         } else if (args.includes("--no-build")) {
@@ -92,7 +92,7 @@ async function observeDependencies(moduleUrl, scenario) {
     });
     assert.equal(result, undefined);
   } catch (error) { failure = error; }
-  const exportCommand = ["uv", ["export", "--locked", "--no-dev", "--format", "requirements-txt", "--output-file", requirementsPath]];
+  const exportCommand = ["bun", ["scripts/plugins/export-python-requirements.mjs", requirementsPath]];
   assert.deepEqual(calls.shift(), ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]]);
   const targetCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--python-version",
     PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath]];

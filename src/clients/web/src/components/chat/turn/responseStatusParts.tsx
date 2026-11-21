@@ -248,8 +248,9 @@ export function ResponsePart({
     return (
       <MarkdownContent
         value={item.text}
-        className={item.active ? "is-streaming" : ""}
+        className={`chat-response-bubble${item.active ? " is-streaming" : ""}`}
         streaming={item.active}
+        preview="tail"
         responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}
         contextMenu={{ ...menu, "aria-label": t("chat.itemMenu.response") }}
       />

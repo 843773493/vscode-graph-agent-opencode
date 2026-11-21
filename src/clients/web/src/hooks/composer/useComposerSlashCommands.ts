@@ -9,7 +9,6 @@ import {
 } from "../../state/slashCommands";
 import type { ConversationContentView } from "../../types/frontend";
 import type { Session, SessionCompactResult } from "../../types/backend";
-import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
 import { errorMessage } from "../../utils/errorMessage";
 import { copyTextToClipboard } from "../../utils/clipboard";
 
@@ -19,7 +18,7 @@ export function useComposerSlashCommands({
   compactLoading,
   getLatestAssistantContent,
   setInput,
-  setAttachments,
+  clearAttachments,
   setAttachmentError,
   setComposerNotice,
   setAgentMenuOpen,
@@ -37,7 +36,7 @@ export function useComposerSlashCommands({
   compactLoading: boolean;
   getLatestAssistantContent: () => string | null;
   setInput: Dispatch<SetStateAction<string>>;
-  setAttachments: Dispatch<SetStateAction<SelectedAttachment[]>>;
+  clearAttachments: () => void;
   setAttachmentError: Dispatch<SetStateAction<string>>;
   setComposerNotice: Dispatch<SetStateAction<string>>;
   setAgentMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -69,7 +68,7 @@ export function useComposerSlashCommands({
           setAttachmentError(t("slash.closePage"));
           break;
         case "new":
-          setAttachments([]);
+          clearAttachments();
           void createSession(args.trim() || undefined).catch((error: unknown) => {
             // 与 /compact 分支同范式：失败写进 Composer 可见错误区，并接住
             // rejection 避免未处理拒绝。AppProvider 也会把同一条失败写进
@@ -86,7 +85,7 @@ export function useComposerSlashCommands({
           setAttachmentError(t("slash.unavailable", "/init"));
           break;
         case "clear":
-          setAttachments([]);
+          clearAttachments();
           setStatus(t("slash.inputCleared"));
           setComposerNotice(t("slash.draftCleared"));
           break;
@@ -180,7 +179,7 @@ export function useComposerSlashCommands({
       runSkillUntrackCommand,
       setAgentMenuOpen,
       setAttachmentError,
-      setAttachments,
+      clearAttachments,
       setComposerNotice,
       setInput,
       setStatus,

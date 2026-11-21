@@ -59,9 +59,6 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
     }}
     for agent in payload["agents"].values():
         agent["model"] = {"primary": model_ref, "fallbacks": []}
-    for tool in payload["agents"]["default"]["tools"]["custom"]:
-        if tool.get("tool_id") == "fetch_webpage":
-            tool["options"]["embedding"]["model_ref"] = model_ref
     configuration.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     fixture_root = runtime / "model-stream-fixture"
     (fixture_root / "scenarios").mkdir(parents=True, exist_ok=True)

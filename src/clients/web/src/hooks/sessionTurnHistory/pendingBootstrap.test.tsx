@@ -251,10 +251,10 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         expect(getConversationsForSession(SESSION_ID, currentState, SCOPE_KEY)[0]?.displayMode).toBe("history");
         await act(async () => { renderer.root.findByType("button").props.onClick(); await wait(30); });
         expect(requests).toHaveLength(2);
-        expect(renderer.root.findByProps({ className: "chat-thinking-preview" }).children.join(""))
-          .toBe("耗时 1.0s · Item 1 项");
-        expect(renderer.root.findByProps({ className: "chat-working-detail" }).children.join(""))
-          .toBe("正在加载中间消息…");
+        const toggle = renderer.root.findByType("button");
+        expect(toggle.props["aria-label"]).toContain("耗时 1.0s · Item 1 项");
+        expect(toggle.props["aria-busy"]).toBe(true);
+        expect(toggle.props["aria-description"]).toContain("正在加载中间消息…");
         await act(async () => { resolveFull(full); await wait(40); });
       }
       await act(async () => {

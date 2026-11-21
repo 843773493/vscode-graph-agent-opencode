@@ -19,3 +19,4 @@
 - 用本地 HTTP 和隔离的 `out/tests/` workspace 验证下载、校验和文件发布边界。
 - Linux 上的 Windows 专用 skip 不是 Windows 原生验证证据。
 - 保留准确命令、原始输出、退出码和使用的源码快照。
+- `test_sdk_protocol_bootstrap.py` 在独立 checkout 和标准旧 SDK 环境验证纯生成、正常安装与应用合同门；按真实构建／安装链归 Integration。`test_backend_sdk_artifact.py` 验正式 application 清单与锁定依赖组成的完整 Backend 初始化，不以开发 editable 补齐制品。

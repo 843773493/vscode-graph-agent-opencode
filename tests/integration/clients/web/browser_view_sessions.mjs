@@ -77,7 +77,7 @@ function observe(page, name) {
 
 async function initialize(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.deepEqual(workspaces.active_workspace, { gateway_id: gatewayId, workspace_id: workspaceId });
   assert.equal((await api(page, "/api/v1/workspace")).workspace_id, workspaceId);

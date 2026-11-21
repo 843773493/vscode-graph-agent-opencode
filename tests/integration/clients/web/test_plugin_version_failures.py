@@ -25,6 +25,7 @@ from tests.support.plugin_package import native_plugin_target
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
@@ -94,9 +95,7 @@ def test_workbench_version_failure_keeps_desired_and_requires_explicit_restart(
         config_path=context.project_root / "configs/tests/workspace/default.jsonc",
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "version-failure-unused-key"
+    clear_test_provider_api_keys(config)
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{version_failure_port}"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     attempts = context.artifacts_dir / "actual-plugin-starts.jsonl"

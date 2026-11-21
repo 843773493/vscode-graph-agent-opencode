@@ -60,7 +60,7 @@ try {
   const managed = await api('/api/gateway/managed-workspaces', undefined, { root_path: required('BOXTEAM_SOURCE_OTHER_WORKSPACE'), name: 'Resource B' });
   const b = managed.items.find(item => item.name === 'Resource B'); expect(b?.workspace_id).toBeTruthy();
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   await command('workbench.action.closeAllEditors');
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first(), groups = page.locator('.editor-group-container');
   const text = index => groups.nth(index).locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines');

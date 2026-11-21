@@ -1613,6 +1613,77 @@ async def test_real_compiler_cold_reads_idle_boundary_background_blocker_and_exa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
+async def test_real_job_reuses_runtime_after_background_work_blocks_idle_unload(
+    runtime_case: RuntimeCase, runtime_clock, monkeypatch: pytest.MonkeyPatch,
+    origin: str,
+):
+    case = runtime_case
+    container = case.runner.container
+    session_id, thread_id = await _session(case.runner)
+    first = await _complete_job(case, session_id, thread_id)
+    _pair, graph, scope = case.compiled[0]
+    entered, proceed, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    close_runtime = case.tracker._close_runtime
+    wait_runtime = case.tracker._wait_runtime_task
+
+    async def held_close(*args, **kwargs):
+        entered.set()
+        await proceed.wait()
+        await close_runtime(*args, **kwargs)
+
+    async def observed_wait(task, state, deadline, operation):
+        if operation == "admission" and task is state.runtime_unload:
+            waiting.set()
+        return await wait_runtime(task, state, deadline, operation)
+
+    monkeypatch.setattr(case.tracker, "_close_runtime", held_close)
+    monkeypatch.setattr(case.tracker, "_wait_runtime_task", observed_wait)
+    runtime_clock[0] = 1800
+    sweep = asyncio.create_task(case.tracker.sweep())
+    handle = job = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        handle = await container.background_task_registry.spawn(
+            session_id=session_id, thread_id=thread_id, agent_id="default",
+            task_id="bgt_unload-race", descriptor=BackgroundTaskDescriptor(
+                kind="emit_system_time_messages", version=1, payload={
+                    "interval_seconds": 7200, "message_count": 1, "source_id": "unload-race",
+                    "started_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+                },
+            ),
+        )
+        job = await _start_job(case.runner, origin, session_id, thread_id)
+        assert job.task is not None
+        await asyncio.wait_for(waiting.wait(), 3)
+        assert not job.task.done() and scope.state == "open"
+        proceed.set()
+        assert await asyncio.wait_for(sweep, 3) == ()
+        await asyncio.wait_for(asyncio.shield(job.task), 20)
+        assert job.status == JobStatus.completed, job.error_message
+        second = case.runner.saver.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job.job_id,
+        )
+        assert case.model_admissions == [first, second]
+        assert first.execution_id != second.execution_id
+        assert case.compiled == [((session_id, thread_id), graph, scope)]
+        assert scope.state == "open" and not case.reactors[0].released
+        executions, _turns, _commits = _facts(case.runner, session_id, thread_id)
+        assert len(executions) == 2 and all(row[3] == "completed" for row in executions)
+        snapshot = case.tracker.snapshot(session_id, thread_id)
+        assert snapshot.residency == "resident"
+        assert [blocker.kind for blocker in snapshot.blockers] == ["background_task"]
+    finally:
+        proceed.set()
+        await asyncio.gather(
+            sweep, *([job.task] if job is not None and job.task is not None else []),
+            return_exceptions=True,
+        )
+        if handle is not None:
+            await container.background_task_registry.cancel(session_id, handle.task_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["user", "internal"])
 async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_lease(
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
@@ -1897,8 +1968,7 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             allow_close = asyncio.Event()
             wake_worker = asyncio.Event()
             original_sleep = asyncio.sleep
-            original_sweep = case.tracker.sweep
-            sweep_calls = 0
+            worker_failure = RuntimeError("真实 residency worker 失败")
 
             def held_failure():
                 if not allow_close.is_set():
@@ -1907,30 +1977,29 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             async def worker_sleep(seconds):
                 if seconds == 60:
                     await wake_worker.wait()
+                    # 周期回调失败应继续重试；此处验证调度任务本身意外停止。
+                    raise worker_failure
                 else:
                     await original_sleep(seconds)
 
-            async def fail_worker_sweep():
-                nonlocal sweep_calls
-                sweep_calls += 1
-                if sweep_calls == 2:
-                    raise RuntimeError("真实 residency worker 失败")
-                return await original_sweep()
-
             failed_scope.register(held_failure, label="待重试资源")
             monkeypatch.setattr(asyncio, "sleep", worker_sleep)
-            monkeypatch.setattr(case.tracker, "sweep", fail_worker_sweep)
             await service.start()
             worker = service._sweep_task
             assert worker is not None
             wake_worker.set()
             with pytest.raises(RuntimeError, match="真实 residency worker"):
                 await asyncio.wait_for(asyncio.shield(worker), 3)
-            with pytest.raises(RuntimeError, match="真实 residency worker"):
-                service._check_sweeper()
+            service._check_owner_open()
+            await service.start()
+            assert service._sweep_task is worker
             with pytest.raises(ExceptionGroup, match="ThreadRuntime owner") as failure:
                 await asyncio.wait_for(service.shutdown(), 3)
-            assert str(failure.value.exceptions[0]) == "真实 residency worker 失败"
+            maintenance_error = failure.value.exceptions[0]
+            assert isinstance(maintenance_error, ExceptionGroup)
+            task_error, = maintenance_error.exceptions
+            assert isinstance(task_error, RuntimeError) and task_error.__cause__ is worker_failure
+            assert worker.exception() is worker_failure
             assert failed_scope.state == "close_failed" and healthy_scope.state == "closed"
             assert case.tracker._states[(session_id, main_thread_id)].runtime.lifetime_scope is failed_scope
             healthy = case.tracker.snapshot(session_id, child_id)
@@ -1939,6 +2008,67 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             allow_close.set()
             await asyncio.wait_for(service.shutdown(), 3)
             assert failed_scope.state == "closed" and service._sweep_task is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["user", "internal"])
+@pytest.mark.parametrize("worker_stop", ["cancelled", "failed"])
+async def test_stopped_residency_worker_keeps_new_jobs_available(
+    runtime_case: RuntimeCase, origin: str, worker_stop: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+):
+    case = runtime_case
+    service = case.runner.container.agent_execution_service
+    session_id, thread_id = await _session(case.runner)
+    original_sleep = asyncio.sleep
+    worker_failure = RuntimeError("真实 residency worker 意外退出")
+
+    async def sleep(seconds):
+        if seconds == 60 and asyncio.current_task() is service._sweep_task:
+            raise worker_failure
+        await original_sleep(seconds)
+
+    if worker_stop == "failed":
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+    await service.start()
+    worker = service._sweep_task
+    assert worker is not None
+    if worker_stop == "cancelled":
+        worker.cancel("模拟驻留维护任务意外取消")
+    await asyncio.gather(worker, return_exceptions=True)
+    if worker_stop == "cancelled":
+        assert "闲置维护任务意外停止" in caplog.text and "cancelled=True" in caplog.text
+    else:
+        assert worker.exception() is worker_failure
+        assert "真实 residency worker 意外退出" in caplog.text
+
+    for _ in range(2):
+        job = await _start_job(case.runner, origin, session_id, thread_id)
+        assert job.task is not None
+        await asyncio.wait_for(asyncio.shield(job.task), 8)
+        assert job.status == JobStatus.completed, job.error_message
+        assert job.cancellation_reason is None
+    executions, turns, _commits = _facts(case.runner, session_id, thread_id)
+    assert len(executions) == 2 and {execution[3] for execution in executions} == {"completed"}
+    assert len(turns) == (2 if origin == "user" else 0)
+    assert len(case.compiled) == 1 and len(case.model_admissions) == 2
+    await service.start()
+    assert service._sweep_task is worker and worker.done()
+    admission = case.runner.saver.execution_admission_for_job(
+        session_id, thread_id=thread_id, job_id=job.job_id,
+    )
+    if worker_stop == "failed":
+        with pytest.raises(ExceptionGroup) as caught:
+            await service.shutdown()
+        maintenance_error, = caught.value.exceptions
+        assert isinstance(maintenance_error, ExceptionGroup)
+        task_error, = maintenance_error.exceptions
+        assert isinstance(task_error, RuntimeError) and task_error.__cause__ is worker_failure
+        await service.shutdown()
+    else:
+        await service.shutdown()
+    with pytest.raises(RuntimeError, match="owner 正在关闭"):
+        await _lease(case, admission)
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AgentSessionsPanel from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
+import AgentSessionsPanel, { type SessionNavigationActions } from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
 import WarmConfirmProvider, { useWarmConfirm } from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import SessionNameDialog from '../../../web/src/components/overlays/SessionNameDialog.js';
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
@@ -36,21 +36,27 @@ import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHand
 import { sessionActionCommands, type SessionAction, type SessionActionHandlers } from '../search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
 
-function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, bindGatewayActions, catalogReveal }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, bindGatewayActions, bindNavigationActions, catalogReveal }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
   bindWorkspaceActions: (actions?: WorkspaceActionHandlers) => void;
   bindSessionActions: (actions?: SessionActionHandlers) => void;
   bindGatewayActions: (actions?: GatewayNavigationActions) => void;
+  bindNavigationActions: (actions?: SessionNavigationActions) => void;
   catalogReveal?: CatalogRevealRequest;
 }) {
   const confirm = useWarmConfirm();
   const [workspaceDetails, setWorkspaceDetails] = useState<WorkspaceDetailsTarget | null>(null);
   const [diagnostic, setDiagnostic] = useState<{ title: string; detail: string } | null>(null);
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
+  const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(() => {
+    const input = editors.activeEditor;
+    return input instanceof ThreadInput && input.owner.workspaceKey
+      ? sessionScopeKey(input.owner.workspaceKey, input.owner.sessionId) : null;
+  });
   const gesture = useRef({ pinned: false, sideBySide: false });
-  const openRequests = useRef(new Map<number, number>());
+  const openRequests = useRef(new Map<number, symbol>());
   const created = useCallback(async (session: Session, workspaceKey: string | null) => {
     if (!workspaceKey || !session.thread_id) throw new Error(t('navigation.sessions.createdReceiptMissing'));
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
@@ -140,9 +146,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   };
   useEffect(() => { if (state.status) console.info(t('navigation.statusPrefix'), state.status); }, [state.status]);
   const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
+    // 树选择是展示态；点击即反馈，读取失败时仍保留选择，不伪造业务 Session。
+    setSelectedSessionKey(sessionScopeKey(workspaceKey, sessionId));
     // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
     const group = options.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
-    const request = (openRequests.current.get(group) ?? 0) + 1;
+    const request = Symbol();
     openRequests.current.set(group, request);
     const session = await setActiveSession(workspaceKey, sessionId);
     // Session DTO 已携带 catalog 冻结的 main Thread，不再串行查询同一身份。
@@ -161,6 +169,8 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       if (selection?.group === group && selection.editor === input) return;
       selection = undefined;
       setActiveEditor(input);
+      setSelectedSessionKey(input instanceof ThreadInput && input.owner.workspaceKey
+        ? sessionScopeKey(input.owner.workspaceKey, input.owner.sessionId) : null);
       openRequests.current.clear();
       clearActiveSession();
       const pane = editors.activeEditorPane;
@@ -200,8 +210,9 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       .catch(cause => reportError(String(cause)));
   };
   return <div className="native-session-navigation" onClickCapture={event => { gesture.current = { pinned: event.detail > 1, sideBySide: event.altKey }; }}>
-    <AgentSessionsPanel catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
+    <AgentSessionsPanel onActionsChange={bindNavigationActions} catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
       currentSessionWorkspaceId={state.currentSessionWorkspaceId}
+      selectedSessionKey={selectedSessionKey}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={(...args) => runSessionAction('rename', ...args)} onDeleteSession={(...args) => runSessionAction('delete', ...args)} onSetSessionParent={actions.changeSessionParent}
       onForkSessionContext={(workspaceKey, sessionId) => commands.executeCommand(sessionActionCommands.fork, { owner: workspaceOwnerFromKey(workspaceKey), sessionId })}
@@ -246,6 +257,7 @@ export interface GatewayNavigationActions {
 }
 
 export class NavigationSurface {
+  private navigationActions?: SessionNavigationActions;
   private catalogReveal?: CatalogRevealRequest;
   private readonly surface: ReactSurface;
   private readonly render: (request?: CatalogRevealRequest) => void;
@@ -270,12 +282,17 @@ export class NavigationSurface {
       this.gatewayActions = actions;
       if (actions && this.gatewayReady) { void this.gatewayReady.complete(actions); this.gatewayReady = undefined; }
     };
+    const bindNavigationActions = (actions?: SessionNavigationActions) => { this.navigationActions = actions; };
     this.render = (catalogReveal = this.catalogReveal) => { this.catalogReveal = catalogReveal; this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
       notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} bindSessionActions={bindSessionActions}
-      bindGatewayActions={bindGatewayActions} catalogReveal={catalogReveal} /></WarmConfirmProvider>); };
+      bindGatewayActions={bindGatewayActions} bindNavigationActions={bindNavigationActions} catalogReveal={catalogReveal} /></WarmConfirmProvider>); };
     this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }
+  async runNavigationAction(action: keyof SessionNavigationActions): Promise<void> {
+    if (!this.navigationActions) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+    await this.navigationActions[action]();
+  }
   async runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void, request?: GatewayRuntimeGroupRequest): Promise<void> {
     if (!this.workspaceActions) await (this.actionsReady ??= new DeferredPromise<WorkspaceActionHandlers>()).p;
     assertAccess();
@@ -307,6 +324,7 @@ export class NavigationSurface {
     });
   }
   dispose(): void {
+    this.navigationActions = undefined;
     this.reveal?.abort(new Error(t('navigation.sessions.navigationClosed')));
     if (this.actionsReady) void this.actionsReady.error(new Error(t('navigation.workspace.navigationClosedAction')));
     if (this.sessionActionsReady) void this.sessionActionsReady.error(new Error(t('navigation.sessions.navigationClosedAction')));

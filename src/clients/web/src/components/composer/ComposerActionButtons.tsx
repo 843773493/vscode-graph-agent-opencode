@@ -6,6 +6,7 @@ import { DELIVERY_POLICY_LABELS } from "../deliveryPolicyPresentation";
 
 export default function ComposerActionButtons({
   hasContent,
+  sendBlocked = false,
   showInterrupt,
   stopPending = false,
   onClear,
@@ -16,6 +17,7 @@ export default function ComposerActionButtons({
   defaultDeliveryPolicy,
 }: {
   hasContent: boolean;
+  sendBlocked?: boolean;
   showInterrupt: boolean;
   stopPending?: boolean;
   onClear: () => void;
@@ -90,7 +92,7 @@ export default function ComposerActionButtons({
         data-testid="composer-send"
         type="button"
         className="send-button"
-        disabled={!hasContent}
+        disabled={!hasContent || sendBlocked}
         onClick={onSend}
         title={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
         aria-label={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
@@ -103,7 +105,7 @@ export default function ComposerActionButtons({
         <button
           type="button"
           className="composer-icon-button queue-message-button"
-          disabled={!hasContent}
+          disabled={!hasContent || sendBlocked}
           onClick={onAlternate}
           title={t("composer.actions.alternate")}
           aria-label={t("composer.actions.alternate")}

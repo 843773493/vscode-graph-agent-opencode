@@ -15,7 +15,7 @@
 |---|---|---|
 | `resource_platform/ResourceRegistry` | 语义资源身份、URI、来源、版本与 immutable snapshot | 不承担物理资源回收，不注册维护任务 |
 | `WorkspaceResourceOwner` | 终端／浏览器保留范围、Thread 关联、原 operation lease、核实后释放 | 继续拥有 `sweep_orphans` 及全部回收判断 |
-| `ThreadResidencyTracker` | runtime 准入、占用、代际和 idle unload | 不迁入后台维护调度，不改变 unload 阈值 |
+| `ThreadResidencyTracker` | runtime 准入、占用、代际和 idle unload | AgentExecutionService 用 SDK 调度周期检查，tracker 保留全部判断和 unload 阈值 |
 | `LifetimeScope` | 进程内任务与回调的持有、取消和释放 | 原实现归 Python SDK；补齐已结束任务错误的关闭结算，Backend 与插件复用，不实现第二个 scope |
 | 各数据 owner | 附件引用、保留策略、日志轮转和实际删除 | 维护只调用原入口，不建立资源清单 |
 
@@ -29,6 +29,7 @@
 | `attachment_blob_store.expire_draft_uploads` | 每小时 | 独立注册；保留未发送期限、canonical 引用和 pin 保护 |
 | `rollout_checkpoint_runtime.prune_context_plan_details` | 每小时 | 独立注册；保留 sealed／lineage 引用保护 |
 | `browser_resource_owner.sweep_orphans` | 启动周期任务后立即一次，随后每秒 | 接入公共调度；原资源锁、lease、范围与孤儿期限不变 |
+| `ThreadResidencyTracker.sweep` | 启动时等待一次，随后每 60 秒 | AgentExecutionService 注册 SDK 周期任务；首次检查及原 runtime.shutdown 排空保持原位 |
 | `recover_pending_ingests` 等启动恢复 | 按既有启动依赖执行 | 保持原位；不变为可跳过的后台维护 |
 | `retry_pending_remote_exports` | 独立每秒循环，非法状态停止并报错 | 属于 durable 业务操作恢复，保持原循环及失败行为 |
 | terminal steering 内的 `sweep_orphans` | 原 scan 周期 | 保持原位；本次不拆 steering，不新增第二个 sweep |
@@ -41,7 +42,7 @@
 
 ## Goals / Non-Goals
 
-**Goals:** 建立可独立使用的 Node／Python 插件 SDK，以小型进程内调度原语消除本次六个 Backend 维护任务与 Browser 截图定时任务的重复调度；公共管理能力迁出产品私有目录，插件安装后不依赖源码目录；让单任务失败可见且不影响其他任务，关闭时不遗弃在途操作，回收资格仍由原 owner 决定。
+**Goals:** 建立可独立使用的 Node／Python 插件 SDK，以小型进程内调度原语消除本次七个 Backend 维护任务与 Browser 截图定时任务的重复调度；公共管理能力迁出产品私有目录，插件安装后不依赖源码目录；让单任务失败可见且不影响其他任务，关闭时不遗弃在途操作，回收资格仍由原 owner 决定。
 
 **Non-Goals:** 中央 GC 服务、通用资源注册表、跨进程调度协议、持久执行账本、任务管理 UI、cron／用户脚本、新的配置热重载机制或清理策略；不实现完整 VS Code 扩展 API、VSIX、新的 Extension Host 或公网 SDK／插件市场。持久任务和用户消息调度不属于后台维护调度。
 
@@ -131,7 +132,7 @@ Node 的实例管理和命令从 `src/shared/serverPluginRuntime*`、`serverPlug
 
 Python SDK wheel 同时交付 `boxteam_plugin_sdk` 与标准顶层 `boxteam` 包，后者拥有全部现有 Python wire 生成输出，保留 proto 原包名与生成代码的标准绝对 import。产品与 SDK 一律直接使用该 `boxteam.*`；迁齐全部消费者后删除 `app/protocol/generated` 及 `app/protocol/__init__.py` 的 `sys.modules` 别名注入。产品 `app/protocol` 的 schema／OpenAPI 等业务代码留在原处，只迁其生成模块 import。`buf.gen.yaml`、`scripts/generate_protocol.mjs` 的输出根、包标记、staging 和 check 同批调整为唯一 SDK 输出，不额外建协议发行包，不用 `sys.path`、别名或重复 descriptor 兜底。包标记保持轻量，不在导入包时加载全部 wire 模块。
 
-协议生成与应用合同校验分开：`gen:protocol` 和 `check:protocol` 只运行 Buf、生成输出及原静态生成检查，不导入 Backend、已安装 SDK 或 OpenAPI 导出器，也不安装依赖；check 只比较产物，不回写源码或环境。删除生成前调用 `scripts.export_openapi_snapshot` 的顺序依赖。需要应用代码的 HTTP／OpenAPI 合同检查仍为必需门，沿现有导出器在“生成协议 → 构建当前 SDK wheel → 以正常依赖方式安装该 wheel → 应用合同校验”之后执行，校验使用本次 proto descriptor 和本次 wheel。原构建／CI 检查调用方同批接入这条顺序，不能因纯生成通过就省略应用检查。新增消息或字段时不要求先用旧 SDK 成功导入新 Backend；不允许通过源码路径注入、旧协议回退或手工预装解除依赖环。
+协议生成与应用合同校验分开：`gen:protocol` 和 `check:protocol` 只运行 Buf、生成输出及原静态生成检查，不导入 Backend、已安装 SDK 或 OpenAPI 导出器，也不安装依赖；check 只比较产物，不回写源码或环境。删除生成前调用 `scripts.export_openapi_snapshot` 的顺序依赖。需要应用代码的 HTTP／OpenAPI 合同检查仍为必需门，沿现有导出器在“生成协议 → 准备当前 SDK → 以正常依赖方式安装 SDK（开发可 editable，发行用 wheel）→ 应用合同校验”之后执行，校验使用本次 proto descriptor 和本次实际安装的 SDK。原构建／CI 检查调用方同批接入这条顺序，不能因纯生成通过就省略应用检查。新增消息或字段时不要求先用旧 SDK 成功导入新 Backend；不允许通过源码路径注入、旧协议回退或手工预装解除依赖环。
 
 Python 的 `LifetimeScope` 原实现迁至 SDK 的 `lifecycle.py`，所有原消费者直接迁至公开入口；必要的现有异步收尾原语按真实依赖一并迁齐。仅按决策 7 修正已结束任务错误永久阻塞关闭的问题；资源释放顺序、失败资源的显式重试和取消保护保持，不复制 scope 或建立维护专用关闭器。维护调度只放 SDK 的 `maintenance.py`，Backend 直接使用，不再新增 `app/core/maintenance.py`。Node 遵守同样调度约束，不强行统一两种语言的同步 API。
 
@@ -139,18 +140,18 @@ Python 的唯一 request_id ContextVar 及现有 get／set／reset／require 迁
 
 原日志等级／热应用状态不另存镜像；清单中的 Skill、工具和配置仍由现有贡献 owner 注册，不在 SDK 再建业务目录。SDK 第三方运行依赖由自身元数据声明，不能靠环境碰巧安装或回落导入产品模块。
 
-`resources/logging/runtime-contract.json` 保留唯一可编辑源及原 version=1；它是既有静态合同，不改名为新配置格式。构建将该源带入两种 SDK 的包内只读资源，生成资源不手工维护，构建／check 核内容一致。Node 用包模块 URL、Python 用 `importlib.resources` 定位，禁止依赖 cwd、产品根环境变量或向上搜索源码；源码开发也经过同一资源准备步骤，不增加源码路径 fallback。所有实际加载合同的消费者同批迁齐；产品 Home 解析、日志目标与文件句柄仍由原 owner 决定，不把用户可写配置写进 SDK。资源在日志显式初始化／实际使用时加载，维护／生命周期导入不读文件；缺失或不支持版本明确报错。换 cwd、独立制品及原日志热应用均须验证。
+`resources/logging/runtime-contract.json` 保留唯一可编辑源及原 version=1；它是既有静态合同，不改名为新配置格式。Python SDK 的包内资源由 `prepare-product-sdk.mjs python` 从该源生成并纳入版本控制，使干净 checkout 的 editable 安装完整可用；`--check python` 只核对版本、依赖声明和资源一致性，不打 wheel 或回写。发行构建仍从同一源带入资源。Node 构建规则不变；生成资源不手工维护。Node 用包模块 URL、Python 用 `importlib.resources` 定位，禁止依赖 cwd、产品根环境变量或向上搜索源码；源码开发也经过同一资源准备步骤，不增加源码路径 fallback。所有实际加载合同的消费者同批迁齐；产品 Home 解析、日志目标与文件句柄仍由原 owner 决定，不把用户可写配置写进 SDK。资源在日志显式初始化／实际使用时加载，维护／生命周期导入不读文件；缺失或不支持版本明确报错。换 cwd、独立制品及原日志热应用均须验证。
 
 ### 4. 一个调度原语，静态装配
 
 Backend 在 `app/workspace_lifecycle.py` 使用 Python SDK 装配固定任务，Browser 插件在自身运行实例内使用 Node SDK 装配截图维护。调度原语只需要任务标识、异步回调、周期及是否首次立即执行。Backend 的工作区身份或插件的实例身份由装配传入用于日志，不从全局激活工作区推断；调用注册在本进程的函数，函数不跨进程传输。
 
-最小公开调用形状固定如下，不引入自定义取消 token、任务句柄集合或另一套日志 DTO：
+最小公开调用形状固定如下，不引入自定义取消 token、句柄包装对象或另一套日志 DTO：
 
 | 语言 | 任务与启动入口 | 取消与关闭 |
 |---|---|---|
 | Node | `startMaintenance({ tasks, identity, reportError })`；任务为 `{ id, interval_ms, run_immediately, run(signal) }`，回调返回 Promise | 每次装配持有原生 AbortController，回调接收其 AbortSignal；返回 `close(): Promise<void>`，由原 shutdown 持有 |
-| Python | `start_maintenance(tasks, *, scope, identity, report_error) -> None`；任务为 `MaintenanceTask(id, interval_ms, run_immediately, run)`，回调为无参数 async callable | 调用方传入维护专用原 `LifetimeScope`；通过 Task 取消协作，直接等待该 scope 的 `close()`，不再返回第二个关闭对象 |
+| Python | `start_maintenance(tasks, *, scope, identity, report_error) -> tuple[asyncio.Future[object], ...]`；任务为 `MaintenanceTask(id, interval_ms, run_immediately, run)`，回调为无参数 async callable；按注册顺序返回原任务供 owner 观察存活 | 调用方传入维护专用原 `LifetimeScope`；通过 Task 取消协作，直接等待该 scope 的 `close()`，不再返回第二个关闭对象 |
 
 `identity` 采用所属工作区／实例现有身份；错误报告回调直接接原 logger，接收任务标识、身份、单调时钟耗时毫秒与原异常，不生成 HTTP 结果类型。两种语言的 `interval_ms` 均为 1 至 2147483647 的整数（排除布尔值），避免 Node timer 溢出导致紧循环；小时和秒只在装配点转换为 3600000 和 1000。Python 内部等待时换算秒，公开 API 不混用单位。
 
@@ -176,7 +177,7 @@ Backend 在 `app/workspace_lifecycle.py` 使用 Python SDK 装配固定任务，
 
 取消和进程终止类信号不得当作普通维护失败吞掉。Python 调度循环自身意外终止继续沿原 `LifetimeScope` 暴露，Node 沿插件原错误出口报告；不自行重建一套任务监督器。
 
-该策略适用于表内可重新扫描的六个 Backend 维护入口及 Browser 截图周期维护。Browser 当前在后台任务内首次立即清理截图，保留该方式并由同一循环继续每小时执行；首次失败同样明确报告，在下一正常周期再尝试，不新增阻塞插件就绪的 startup gate，不再另执行第二次首次清理。插件其他必须完成的原启动检查、Backend 启动恢复和 fork durable 恢复保持原失败语义。若发现某维护入口不具备重新扫描语义，先修正分类和规范，不能额外添加 `continue_on_error` 开关掩盖问题。
+该策略适用于表内可重新扫描的七个 Backend 维护入口及 Browser 截图周期维护。Browser 当前在后台任务内首次立即清理截图，保留该方式并由同一循环继续每小时执行；首次失败同样明确报告，在下一正常周期再尝试，不新增阻塞插件就绪的 startup gate，不再另执行第二次首次清理。插件其他必须完成的原启动检查、Backend 启动恢复和 fork durable 恢复保持原失败语义。若发现某维护入口不具备重新扫描语义，先修正分类和规范，不能额外添加 `continue_on_error` 开关掩盖问题。
 
 ### 7. 等待异步关闭，保留各进程既有关闭顺序
 
@@ -188,13 +189,23 @@ scope 正常关闭可复用其原幂等行为；并发关闭不应重复执行�
 
 关闭在第一次调用时即禁止新执行，唤醒等待并请求协作取消；每次等待结束及调用回调之前再次检查停止状态，覆盖到期与关闭同一轮事件循环的竞态。Node 并发 `close()` 共用本次在途排空 Promise；任务结果全部结算后从原持有集合移除，并把真实错误交给该次调用。失败后仅允许后续显式 close 核实剩余排空，不永久缓存 rejected Promise，也不重报已经交付的终态错误；成功后重复关闭无操作。Python 使用上述唯一 scope 结算规则。两者都保持调度已停止，不重新启动回调、不增加独立错误账本。取消一个关闭等待者不能遗弃原关闭操作；回调忽略取消而稍后正常返回也不能开启下一周期。
 
-维护子 scope 在早期 periodic 阶段关闭，进程资源平台的后续关闭不能变成第一次停止维护。未迁移的 fork 周期任务继续由原生命周期持有；不能为了删掉 `_periodic_tasks` 就把它混入后台维护调度。
+Thread 周期扫描由 AgentExecutionService 的专属维护 scope 持有，注册时使用空 Context，不继承请求或执行上下文；维护任务存活与 Job 准入解耦，意外退出独立报告。它不加入 Workspace 六任务列表，关闭仍在原 runtime.shutdown 阶段，唯一关闭任务先等待维护 scope 结算，再清扫描句柄和目录缓存、关闭 tracker；保留每次 30 秒观察、观察者取消不取消关闭 owner、迟到失败先交付及显式重试，不新增关闭状态机。
+
+Agent owner 在 shutdown 入口同步禁止准入，早于异步维护 scope 开始关闭。周期回调须沿该准入拒绝新扫描；已在途扫描若在此窗口失败，错误报告入口须交回原错误，不能因 scope 暂时仍开放而转为普通周期重试并使关闭虚报成功。
+
+维护任务意外退出不阻断新 Job，也不改变其终态：原 scope 报告异常堆栈，任务完成回调补报意外取消或正常返回造成的停止；正常关闭不误报故障。重复 start 保持幂等，不自动重启维护。新 runtime admission 只检查 owner 是否正在关闭，实际构建、lease、blocker 和 generation 安全仍由原 tracker 保障。原 Job.control 用户取消和维护关闭错误交付不变，不新增健康状态镜像或监督器。
+
+新 admission 等待已有闲置卸载期间，若卸载在线性化前因新增 blocker 撤回，应重新检查原 runtime 的 generation 和 scope；同代可用时直接取得 lease，不能将维护撤回作为执行失败。需要换代的 admission 仍须经原卸载与 blocker 检查，真实资源释放错误继续交回等待者，不捕获为正常撤回。
+
+Workspace 六任务的维护子 scope 在早期 periodic 阶段关闭，进程资源平台的后续关闭不能变成第一次停止维护。未迁移的 fork 周期任务继续由原生命周期持有；不能为了删掉 `_periodic_tasks` 就把它混入后台维护调度。
 
 插件使用 SDK 的异步停止／排空入口接入自己的原 shutdown：先停止维护调度、等待已开始的清理结算，再关闭清理依赖和实际业务资源。Node 可以使用原生 AbortSignal 与异步关闭，不为对齐 Python 再造完整 `LifetimeScope` 框架。VS Code 的 `ExtensionContext.subscriptions` 明确不等待异步 dispose，本项目不能照搬此语义；不允许只清除 timer 就宣称在途清理已排空。
 
 维护收尾失败必须沿原关闭链保留并报告，不因首个错误跳过其他原本必须尝试的独立释放步骤；有在途操作时保留其依赖，不新增用日志替代释放结论的做法。SDK 不接管 PTY／Playwright，不拥有插件进程退出决定，Gateway 仍通过原 shutdown 合同和进程事实核实退出。
 
 ### 8. 保留启动时机，不引入“就绪先扫全库”
+
+Thread 启动时仍等待首次检查；失败沿原启动日志报告后由正常周期重试，随后每次检查完成后等待 60 秒。tracker 的 30 分钟 idle 阈值、准入、blocker、generation 和 unload 规则不变。
 
 五个小时级任务首次运行保持在周期启动一小时之后；Browser sweep 保持首次立即执行。现有 startup prune／attachment recovery 继续按既有依赖顺序执行，不为每个维护任务新增 startup run，不把全部启动恢复重新执行一次。创建维护任务后不等待周期清理完成才宣布工作区就绪。
 
@@ -204,7 +215,7 @@ Browser 截图首次清理保持非阻塞，随后沿每小时周期；其他原
 
 ### 9. 开发与 release 共用完整插件目录构建链
 
-开发和 release 的插件都运行构建好的完整目录。沿现有插件构建脚本抽出同一个目录构建函数，调用方只决定加载目录还是将该目录打 ZIP；不另写 release 专用依赖替换，不保留源码直接运行模式。插件／产品显式声明 SDK 依赖；开发也使用构建包，不通过 `../../sdk`、workspace 链接、Python editable 或源码 pythonpath 运行 SDK。Backend 的开发与产品制品同样安装构建好的 Python wheel，避免生成协议又回到源码别名路径。
+开发和 release 的插件都运行构建好的完整目录。沿现有插件构建脚本抽出同一个目录构建函数，调用方只决定加载目录还是将该目录打 ZIP；不另写 release 专用依赖替换，不保留源码直接运行模式。插件／产品显式声明 SDK 依赖；插件开发仍使用构建包，不通过 workspace 链接、Python editable 或源码 pythonpath 运行插件制品。仓库内 Node 产品开发使用 Bun workspace 来源 `sdk/node`，Backend 本地开发使用 uv 标准 editable 来源 `sdk/python`；不改模块搜索路径或建立协议别名，SDK 代码及 wire 仍仅一份。Node 产品发行沿原独立运行时清单携带包内 tarball，不复制根 workspace 声明或源码链接。SDK 的元数据版本和产品依赖版本由准备入口从根 `package.json` 同步，普通源码编辑无须改版本、重建 SDK 归档或更新锁，依赖和元数据变化后重新同步。release worktree／发行 CI 用 `uv sync --frozen --no-editable`；产品依赖导出通过 `export-python-requirements.mjs` 保留锁定的传递依赖和摘要，排除本地 editable 项并加入当前 SDK wheel 及真实摘要，再沿原安装链安装。插件的包内 wheel、锁和完整性合同不变。
 
 ```text
 SDK 源码 + 插件源码
@@ -222,7 +233,7 @@ SDK 归档位于 `vendor/sdk/<归档 sha256>/<标准文件名>`，Node 用 `file
 
 SDK 版本在构建时由根 `package.json` 派生并固化，运行不回读产品根；协议版本不因搬目录升级。沿既有构建缓存分别复用 SDK 归档和依赖准备结果，依赖准备以归档实际内容、声明／锁和目标运行时／ABI 为输入；只改插件代码时不重复安装依赖。完整目录准备成功后先沿原安装入口发布新的不可变制品，再显式应用所选绑定的版本配置，由原 reconcile 停止旧实例并启动 enabled 的绑定。不单独修改 enabled 来编排重启，不覆盖运行目录、不热换 `node_modules`、不重启其他绑定。
 
-干净 checkout 的依赖准备顺序必须可执行：先通过独立的 SDK 打包入口，使用已纳入版本控制的生成代码、静态合同源和标准构建工具产出 SDK 包，再准备产品／插件依赖，最后才运行引用 SDK 的开发启动器。SDK 打包入口不导入 `app`、产品 logger 或待安装 SDK，也不要求先完成依赖 SDK 的产品初始化；协议需要重生成时先走决策 3 的纯生成入口，应用合同校验在当前 wheel 安装后执行。将该顺序接入现有 worktree／依赖 bootstrap，不要求开发者临时修改锁文件或手工建立源码链接。清空本任务隔离构建缓存的首次构建验收用于发现这类自举依赖环。
+干净 checkout 的依赖准备顺序必须可执行：仓库内产品开发先核对／同步两种 SDK 元数据及生成资源，再由 Bun workspace／uv editable 安装；插件和发行仍通过独立打包入口使用生成代码、静态合同源和标准构建工具产出 SDK 包并安装，最后才运行对应启动器。SDK 打包入口不导入 `app`、产品 logger 或待安装 SDK，也不要求先完成依赖 SDK 的产品初始化；协议需要重生成时先走决策 3 的纯生成入口，应用合同校验在当前 SDK 正常安装后执行，发行制品验收仍验证 wheel。将该顺序接入现有 worktree／依赖 bootstrap，不要求开发者临时修改锁文件或手工建立源码链接。清空本任务隔离构建缓存的首次构建验收用于发现这类自举依赖环。
 
 构建输入指纹只作缓存键，不决定插件包版本；它覆盖 SDK／插件源码、生成代码与工具版本、静态资源、基础锁、构建脚本及目标运行时／ABI。缓存命中复用未修改的完整输出；不要求在不同构建环境得到字节完全相同的原生制品，也不以相同输入指纹豁免版本冲突。
 

@@ -10,14 +10,26 @@ const models = [main, backup].map(model_ref => ({ model_ref, model: `server-${mo
   custom_llm_provider: "openai", available: true }));
 
 describe("ComposerModelControl", () => {
-  test("同 Provider 的当前模型按完整引用展示，选择交给宿主", () => {
+  test("同 Provider 的当前模型按完整引用展示，选择交给宿主", async () => {
     let opened = 0;
-    const renderer = create(<ComposerModelControl models={models} currentModel={backup} onOpen={() => opened++} />);
+    const renderer = create(<ComposerModelControl models={models} currentModel={backup} onOpen={() => { opened++; }} />);
     try {
       expect(renderer.root.findByProps({ className: "composer-model-label" }).children).toEqual(["server-backup"]);
-      act(() => renderer.root.findByType("button").props.onClick());
+      await act(async () => { await renderer.root.findByType("button").props.onClick({ currentTarget: {}, shiftKey: false }); });
       expect(opened).toBe(1);
       expect(renderer.root.findAllByProps({ role: "menuitemradio" })).toHaveLength(0);
+    } finally { act(() => renderer.unmount()); }
+  });
+  test("普通点击传入原按钮，Shift 点击省略锚点进入快捷选择", async () => {
+    const anchors: unknown[] = [];
+    const anchor = {};
+    const renderer = create(<ComposerModelControl models={models} currentModel={main} onOpen={value => { anchors.push(value); }} />);
+    try {
+      for (const shiftKey of [false, true]) await act(async () => {
+        await renderer.root.findByType("button").props.onClick({ currentTarget: anchor, shiftKey });
+      });
+      expect(anchors).toEqual([anchor, undefined]);
+      expect(renderer.root.findByType("button").props["aria-expanded"]).toBe(false);
     } finally { act(() => renderer.unmount()); }
   });
   test("失效绑定保留身份与错误，仍可打开宿主重新选择", () => {
@@ -37,6 +49,7 @@ describe("ComposerModelControl", () => {
   test("配置故障保留原始原因", () => {
     const html = renderToStaticMarkup(<ComposerModelControl models={[{ ...models[0], available: false,
       configuration_error: "Cannot find module '/home/alice/missing.js'" }]} currentModel={main} onOpen={() => {}} />);
+    expect(html).toContain('aria-haspopup="listbox"');
     expect(html).toContain("Cannot find module");
     expect(html).toContain("/home/alice/missing.js");
   });

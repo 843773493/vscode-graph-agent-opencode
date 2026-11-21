@@ -81,7 +81,7 @@ try {
   expect(result.before.effective.agents.reviewer).toBeTruthy();
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const form = page.locator('.configuration-entities[data-definition-kind="agents"]');
   const modal = page.locator('.monaco-dialog-box[role="dialog"]');

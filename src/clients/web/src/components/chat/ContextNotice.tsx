@@ -6,6 +6,21 @@ import { errorMessage } from "../../utils/errorMessage";
 
 function noticeLabel(notice: TurnResponsePart): string {
   const kind = notice.context_kind ?? "";
+  switch (kind) {
+    case "csm_protocol": return t("chat.contextNotice.sourceProtocol");
+    case "agent_instructions": return t("chat.contextNotice.agentInstructions");
+    case "runtime_identity": return t("chat.contextNotice.runtimeIdentity");
+    case "todo-list":
+    case "todo_list": return t("chat.contextNotice.todoRules");
+    case "filesystem-rules":
+    case "filesystem_rules": return t("chat.contextNotice.filesystemRules");
+    case "compact-tool-usage":
+    case "compact_tool_usage": return t("chat.contextNotice.compactionRules");
+    case "skill_catalog_metadata": return t("chat.contextNotice.skillCatalog");
+    case "mcp_tool_catalog": return t("chat.contextNotice.toolCatalog");
+    case "workspace_agents": return t("chat.contextNotice.workspaceInstructions");
+    case "team_coordination_policy": return t("chat.contextNotice.teamRules");
+  }
   if (kind === "checkpoint_reminder") return t("chat.contextNotice.interruption");
   if (kind.endsWith("_retry")) return t("chat.contextNotice.retry");
   if (kind.startsWith("goal_")) return t("chat.contextNotice.goal");
@@ -41,7 +56,6 @@ export default function ContextNotice({ notices }: { notices: readonly TurnRespo
     {expanded ? <div className="chat-context-details" role="region" aria-label={t("chat.contextNotice.title")}>
       {notices.map((notice, index) => <div className="chat-context-source" key={notice.part_id}>
         <span className="chat-context-heading">{t("chat.contextNotice.sourceTitle", index + 1, sources[index].name)}</span>
-        <span>{notice.context_source_id} · {notice.context_source_revision} · {notice.context_content_length}</span>
       </div>)}
     </div> : null}
     {cursor ? <button type="button" disabled={!loadMore || loading} onClick={async () => {
