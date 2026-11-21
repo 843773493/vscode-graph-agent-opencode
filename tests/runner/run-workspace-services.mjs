@@ -25,6 +25,15 @@ async function discover(directory) {
 
 await discover(testsRoot);
 if (![...groups.values()].some(files => files.length > 0)) throw new Error(`未发现辅助服务测试: ${testsRoot}`);
+// 矩阵已经准备时直接复用；独立运行也不能读取上次留下的 dist。
+if (process.env.BOXTEAM_TEST_PREPARED_NODE_SDK_ROOT !== root) {
+  const prepared = Bun.spawnSync([process.env.NODE_BIN ?? "node", path.join(root, "sdk/node/build.mjs")], {
+    cwd: root, stdout: "inherit", stderr: "inherit", timeout: 60_000,
+  });
+  if (prepared.exitCode !== 0 || prepared.signalCode) {
+    throw new Error(`测试 SDK 构建失败: exit=${prepared.exitCode} signal=${prepared.signalCode ?? "none"}`);
+  }
+}
 let failed = false;
 for (const [framework, files] of groups) {
   if (files.length === 0) continue;

@@ -42,6 +42,10 @@ export function sortConversationViews(
         - (right.pendingPosition ?? right.enqueueSequence ?? Number.MAX_SAFE_INTEGER)
       );
     }
+    if (left.sessionId === right.sessionId && left.threadId === right.threadId
+      && left.turnOrdinal !== undefined && right.turnOrdinal !== undefined) {
+      return left.turnOrdinal - right.turnOrdinal;
+    }
     return startTimeMsForSort(left) - startTimeMsForSort(right);
   });
 }
@@ -105,6 +109,7 @@ export function mergeConversation(
   persisted: ConversationView,
   pending: ConversationView,
 ): ConversationView {
+  if (persisted.bodyEvicted) return persisted;
   const userMessage = persisted.userMessage && pending.userMessage
     ? {
         ...persisted.userMessage,

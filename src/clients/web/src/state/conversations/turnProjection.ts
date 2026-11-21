@@ -89,6 +89,7 @@ export function conversationFromTurn(turn: TurnRecord, threadId: string): Conver
     displayMode: "history",
     turnId: turn.turn_id,
     turnRevision: turn.revision,
+    bodyEvicted: turn.bodyEvicted,
     sourceViewId: turn.source_view_id,
     sourceViewRevision: turn.source_view_revision,
     turnOrdinal: turn.ordinal,

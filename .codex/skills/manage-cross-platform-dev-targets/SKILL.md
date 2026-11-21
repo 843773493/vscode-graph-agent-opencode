@@ -69,7 +69,7 @@ bun run scripts/launch/cross-platform-development-target.mjs status docker-debia
 修改后至少运行：
 
 ```bash
-bun test scripts/launch/cross-platform-development-target.test.mjs
+bun test scripts/launch/tests/cross-platform-development-target.test.mjs
 ```
 
 对改过的平台脚本再执行可用的语法检查；没有真实 Windows VMware 时，保留明确 TODO，不声称已经完成 Windows 实机验证。

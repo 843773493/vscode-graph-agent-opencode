@@ -29,6 +29,8 @@ def streaming_workspace(integration_workspace_root_path, integration_workspace_c
     path = Path(integration_workspace_config_path)
     config = commentjson.loads(path.read_text(encoding="utf-8"))
     config["llm"]["providers"] = {"primary": config["llm"]["providers"]["primary"]}
+    # 回放模型的输入容量覆盖多轮大正文；本场景验证前端释放，不消费压缩模型回放。
+    config["llm"]["providers"]["primary"]["defaults"]["api_mode"]["model_info"]["max_input_tokens"] = 4_000_000
     for agent in config["agents"].values():
         agent["model"]["primary"] = {"provider_id": "primary", "model_id": "default"}
         agent["model"]["fallbacks"] = []
@@ -62,20 +64,21 @@ def test_six_generating_sessions_keep_reading_and_following_responsive(
             try:
                 supervisor = context.project_root / "app/runtime" / (
                     "windows_job.py" if sys.platform == "win32" else "posix_job.py")
+                browser_timeout = 600 + 60 * int(os.getenv("BOXTEAM_MEMORY_REPEAT_ROUNDS", "0"))
                 command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
-                    "--timeout-seconds", "600", "--", "bun",
+                    "--timeout-seconds", str(browser_timeout), "--", "bun",
                     "tests/integration/clients/web/multisession_stream_memory.mjs"]
                 environment = os.environ | replay.environment | {
                     "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                     "BOXTEAM_MEMORY_ARTIFACTS": str(artifacts), "BOXTEAM_MEMORY_BASELINE": "0"}
                 with chromium_temporary_environment(runtime / "chromium") as temporary:
                     process = subprocess.run(command, cwd=context.project_root, env=environment | temporary,
-                        capture_output=True, text=True, timeout=620, check=False)
-                (artifacts / "browser.stdout.log").write_text(process.stdout, encoding="utf-8")
-                (artifacts / "browser.stderr.log").write_text(process.stderr, encoding="utf-8")
+                        capture_output=True, timeout=browser_timeout + 20, check=False)
+                (artifacts / "browser.stdout.log").write_bytes(process.stdout)
+                (artifacts / "browser.stderr.log").write_bytes(process.stderr)
                 (artifacts / "command.json").write_text(json.dumps({"command": command,
                     "exit_code": process.returncode}), encoding="utf-8")
-                assert process.returncode == 0, process.stderr
+                assert process.returncode == 0, process.stderr.decode("utf-8", errors="backslashreplace")
                 result = json.loads((artifacts / "result.json").read_text(encoding="utf-8"))
                 assert result["completed"] is True
                 assert len(result["samples"]) == 8

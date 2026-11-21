@@ -1,9 +1,11 @@
 # 目录用途
 
-存放Terminal的操作系统进程身份、隔离PTY宿主及进程退出处理；不管理工作区终端集合或聊天会话。
+存放Terminal的PTY启停协调、运行环境解析、操作系统进程身份、隔离PTY宿主及进程退出处理；不管理工作区终端集合或聊天会话。
 
 ```text
 processes/
+├── terminalPtyLifecycle.js          Session组合的PTY启停、身份核实和启动失败收尾
+├── terminalEnvironment.js           cwd解析、shell选择及共享诊断出口
 ├── terminalProcessLifecycle.test.js  元数据解析及POSIX停止快照后新后代的系统边界替身
 ├── terminalWindowsTermination.test.js  Windows工具失败及目标退出确认的系统边界替身
 ├── isolatedPtyProcess.js             后端持有的隔离Node句柄与IPC
@@ -11,7 +13,7 @@ processes/
 └── ptyWorker.js                      隔离进程内的node-pty及逐包读取背压
 ```
 
-按资源边界理解调用链：Manager和Session决定终端业务状态，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，`@boxteam/plugin-sdk/process-lifecycle` 核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
+按资源边界理解调用链：Manager和Session持有终端业务状态，TerminalPtyLifecycle沿同一Session协调启停和落盘，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，`@boxteam/plugin-sdk/process-lifecycle` 核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
 
 共享 `ProcessStat`统一说明PID、进程组、操作系统SID/Darwin sess与`processStartTime`。启动标记只用于同平台身份联合核验：Linux为启动后的时钟滴答数，其他POSIX为ps原文；不是业务Session ID或UTC时间。Linux僵尸进程已停止执行，等待父进程回收不属于终端停止职责。真实信号与身份检查位于`tests/integration/workspace_services/terminal/test_process_release.py`。
 
@@ -45,7 +47,7 @@ worker的`outputPacketId`（IPC字段仍为`messageId`）逐包计费，宿主�
 
 ## 不可修改内容
 
-- 不管理TerminalManager集合、资源保留策略、HTTP/WebSocket或持久化文件。
+- 不管理TerminalManager集合、资源保留策略或HTTP/WebSocket协议；启停协调沿Session及原Manager writer落盘，不直接管理持久化文件。
 - 不处理UI的累计ACK、输出重放或模型读取游标；这些归`../output/`。
 - 不保留父目录旧文件的转发模块，不复制另一套进程身份或终止实现。
 

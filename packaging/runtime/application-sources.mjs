@@ -72,8 +72,8 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
   }
 }
 
-export function writeApplicationNodeManifest(projectRoot, applicationRoot) {
-  const sdk = buildPluginSdk({ projectRoot, language: "node" });
+export function writeApplicationNodeManifest(projectRoot, applicationRoot, { nodeExecutable } = {}) {
+  const sdk = buildPluginSdk({ projectRoot, language: "node", nodeExecutable });
   const relative = `vendor/sdk/${sdk.digest}/${path.basename(sdk.archive)}`;
   mkdirSync(path.dirname(path.join(applicationRoot, relative)), { recursive: true });
   cpSync(sdk.archive, path.join(applicationRoot, relative));

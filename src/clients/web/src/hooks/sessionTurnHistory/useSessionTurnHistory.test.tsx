@@ -32,6 +32,45 @@ afterEach(() => {
 });
 
 describe("useSessionTurnHistory partial bootstrap", () => {
+  test("详情超时保留已初始化时间线的订阅资格，后续详情成功可清除错误", async () => {
+    installWindow(0);
+    let current = appState();
+    let failDetails = false;
+    let history!: ReturnType<typeof useSessionTurnHistory>;
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+      if (path.endsWith("/local-credential")) return Response.json({ data: { token: "history-detail-failure" } });
+      if (path.endsWith("/pending-requests")) return emptyPendingResponse();
+      if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "detail-bootstrap", data: bootstrap("ready", 1) });
+      if (!path.endsWith("/history")) throw new Error(`未声明的请求: ${path}`);
+      if (failDetails) throw new Error(`请求超时: ${path}`);
+      return Response.json({ code: 0, message: "ok", request_id: "detail-history", data: { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING,
+        projection_epoch: 1, items: [turnDetail(1)] } });
+    }, { preconnect: originalFetch.preconnect });
+    function Harness(): React.ReactNode {
+      history = useSessionTurnHistory({ apiPort: 0, sessionId: SESSION_ID, threadId: THREAD_ID,
+        workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY, reloadNonce: 0,
+        getCurrentTimeline: () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
+        setState: update => { current = typeof update === "function" ? update(current) : update; } });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => { renderer = create(<Harness />); await wait(60); });
+      expect(current.turnTimelinesBySession.get(SCOPE_KEY)?.phase).toBe("ready");
+      failDetails = true;
+      await act(async () => {
+        await expect(history.loadTurnDetails(["job_latest"])).rejects.toThrow("请求超时");
+      });
+      const failed = current.turnTimelinesBySession.get(SCOPE_KEY)!;
+      expect(failed.phase).toBe("ready");
+      expect(failed.eventCursor).toBe("event-1");
+      expect(failed.error).toContain("请求超时");
+      failDetails = false;
+      await act(async () => { await history.loadTurnDetails(["job_latest"]); });
+      expect(current.turnTimelinesBySession.get(SCOPE_KEY)?.error).toBeNull();
+    } finally { act(() => renderer.unmount()); }
+  });
   test("同一 Session 的显式 Thread 在同源端口分别初始化、分页与水合", async () => {
     installWindow(0);
     const threads = [THREAD_ID, "thr_018f0000000070008000000000000002"];

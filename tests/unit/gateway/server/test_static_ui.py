@@ -63,11 +63,17 @@ def test_attach_assets_follow_selected_frontend(
         "vendor/codicon/codicon.css": frontend / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
         "vendor/codicon/codicon.ttf": frontend / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
     }
+    sdk = frontend / "node_modules/@boxteam/plugin-sdk"
+    for relative in (f"boxteam/{kind}/v1/{kind}_input_pb.js", "boxteam/common/v1/error_pb.js"):
+        files[f"protocol/generated/{relative}"] = sdk / "dist/generated" / relative
     if kind == "terminal":
+        files["terminalConnection.js"] = frontend / "src/workspace-services/terminal/client/terminalConnection.js"
         files["vendor/xterm/addon-unicode11.js"] = frontend / "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"
     for asset, file in files.items():
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(f"selected frontend {asset}", encoding="utf-8")
+    # 发行 SDK 只有 dist，不能依赖 workspace 链接中恰好存在的源码。
+    assert not (sdk / "src").exists()
     app = FastAPI()
     app.include_router(attach_router)
     with TestClient(app) as client:
@@ -75,6 +81,10 @@ def test_attach_assets_follow_selected_frontend(
             response = client.get(f"/api/gateway/attach/{kind}/{asset}")
             assert response.status_code == 200
             assert response.text == f"selected frontend {asset}"
+            if asset.startswith("protocol/generated/"):
+                shared = client.get(f"/api/gateway/attach/{asset}")
+                assert shared.status_code == 200
+                assert shared.content == response.content
 
 
 def test_static_ui_normalizes_backslash_mount_paths(
@@ -158,9 +168,10 @@ def test_oauth_callback_is_not_cached_and_access_log_omits_private_query(
     with caplog.at_level(logging.INFO, logger="uvicorn.access"):
         for target in ("/mcp-oauth-callback.html?code=private-code&state=private-state", "/api/gateway/workspaces?view=details"):
             logging.getLogger("uvicorn.access").info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", target, "1.1", 200)
-    assert '"GET /mcp-oauth-callback.html HTTP/1.1" 200' in caplog.text
-    assert "private-code" not in caplog.text and "private-state" not in caplog.text
-    assert "/api/gateway/workspaces?view=details" in caplog.text
+    access_log = "\n".join(record.getMessage() for record in caplog.records if record.name == "uvicorn.access")
+    assert '"GET /mcp-oauth-callback.html HTTP/1.1" 200' in access_log
+    assert "private-code" not in access_log and "private-state" not in access_log
+    assert "/api/gateway/workspaces?view=details" in access_log
 
 
 @pytest.mark.parametrize("encoding,compressed", [("gzip, deflate, br", True), ("identity", False), ("gzip;q=0, *;q=1", False)])

@@ -2,6 +2,8 @@
 
 `test_multisession_stream_memory.py` 与同名浏览器驱动通过真实 Workbench／Gateway／Backend／SDK 打开六个会话，使用现有 model_stream 精确 HTTP transport 和逐帧屏障分批交付 SSE；两个视口阅读历史，四个跟随最新。记录强制 GC 后的 JS heap、DOM、主线程耗时及生成期间的输入延迟，并验证阅读位置、尾部可见和终态；内存诊断只读 React 镜像，不写入业务状态，不按 SQL 或内部调用次数断言。
 
+设置 `BOXTEAM_MEMORY_REPEAT_ROUNDS` 时继续生成多轮，检查旧正文回看补读、跳回最新、关闭和重开；正文保留数与投影大小只作诊断，不能替代实际堆内存和用户交互验收。
+
 `gateway_auth_resource_recovery.mjs` 同时核验导航错误的原版宿主出口：只将导航 GET 替换为明确的 503，打开真实诊断对话框，检查完整多行正文按文本呈现、无需再次读取服务日志、草稿保留，以及撤销替身后的真实 Gateway 恢复及 request_id。该失败替身必须写入结果边界，不能表述为真实服务故障验收。
 
 存放纯 Web 组件/页面 harness，或浏览器前端、Gateway、后端和受控替身服务之间的集成测试。

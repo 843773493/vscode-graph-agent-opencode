@@ -4,6 +4,8 @@
   "schemaVersion": 1,
   "suites": [
     // Python 集成入口的外部期限包含公共名额最多600秒的等待，执行预算分别保留500秒和90秒。
+    {"id":"integration-node-sdk-preparation","layer":"integration","client":null,"enabled":true,"timeoutMs":690000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-q","tests/integration/harness/test_node_sdk_preparation.py"]},
+    {"id":"integration-sdk-archive-dependencies","layer":"integration","client":null,"enabled":true,"timeoutMs":780000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-q","tests/integration/packaging/test_sdk_archive_dependencies.py"]},
     {"id":"integration-sdk-protocol-bootstrap","layer":"integration","client":null,"enabled":true,"timeoutMs":1100000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-q","tests/integration/packaging/test_sdk_protocol_bootstrap.py"]},
     {"id":"integration-python-sdk-offline","layer":"integration","client":null,"enabled":true,"timeoutMs":780000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-q","tests/integration/sdk/python/test_offline_package.py","tests/integration/packaging/test_backend_sdk_artifact.py"]},
     {"id":"unit-sdk-python","layer":"unit","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/unit/sdk/python"]},

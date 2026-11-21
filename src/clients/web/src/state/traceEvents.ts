@@ -6,7 +6,6 @@ import type {
 } from "../types/frontend";
 
 export const FRONTEND_EVENT_QUEUE_LIMIT = 200;
-export const LIVE_TRACE_EVENT_LIMIT = 512;
 const PINNED_FRONTEND_EVENT_TYPES = new Set([
   "session_load_completed",
   "session_load_failed",
@@ -64,18 +63,6 @@ export function dedupeTraceEvents(events: TraceEvent[]): TraceEvent[] {
   }
   orderedEvents.sort((left, right) => left.timestampMs - right.timestampMs);
   return orderedEvents.map(({ event }) => event);
-}
-
-export function appendBoundedLiveTraceEvents(
-  current: TraceEvent[],
-  incoming: TraceEvent[],
-  limit: number = LIVE_TRACE_EVENT_LIMIT,
-): TraceEvent[] {
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error(`Live Trace 上限必须是正整数，实际为 ${limit}`);
-  }
-  const merged = dedupeTraceEvents([...current, ...incoming]);
-  return merged.length <= limit ? merged : merged.slice(-limit);
 }
 
 function frontendEventQueueId(event: TraceEvent, source: FrontendEventSource) {

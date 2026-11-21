@@ -258,3 +258,6 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 - `integration-sdk-protocol-bootstrap` 用独立旧 SDK 环境验证纯生成、正常构建安装及原应用合同门，外层1100秒包含名额最多600秒等待及原500秒执行预算，内存4GiB。`integration-python-sdk-offline` 验完整包内 MCP、独立 SDK 插件的维护／日志热应用，以及正式 application 清单与锁定依赖组成的 Backend 初始化和会话 API；固定780秒／4GiB并沿集成闸门，不代替固定运行时的正式 release 或 Windows 验收。
 
 SDK 定向入口按层级和引擎运行：`unit-sdk-python`／`contract-sdk-python` 使用 pytest；`unit-sdk-node-bun`／`unit-sdk-node-native` 分别使用 Bun／原生 Node；`contract-sdk-node` 核 exports 与日志样本。`integration-sdk-node-native` 保留真实 Node HTTP／Worker，`integration-sdk-node-bun` 驱动真实 Node 子进程；上述新增入口均固定60秒／4GiB。`integration-sdk-python-runtime` 验 SDK 路由与产品 Trace／同步 worker 协作，外层690秒包含名额最多600秒等待及90秒执行预算，内存4GiB并沿原集成闸门；完整离线制品及自举继续沿原长入口，不加入快速单测。
+
+- 仓库矩阵在实际执行 suite 前构建一次 SDK；列表、参数错误、禁用及前置条件不满足的 suite 不构建。准备沿既有平台内存保护并另限60秒，失败不启动测试。辅助服务 runner 独立运行也准备 SDK，经矩阵运行时只复用本次同源码根的准备，不维护持久缓存标记。
+- `integration-node-sdk-preparation` 用真实 SDK 编译器、矩阵与 Bun／Node 测试器验证 TS 改动生效、语法失败不启动测试、运行错误不能复用旧成功，以及辅助服务两种引擎只编译一次。固定690秒／4GiB，含原集成闸门最多600秒等待，不代表产品服务或 Windows 原生验收。

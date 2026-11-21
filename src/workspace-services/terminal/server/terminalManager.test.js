@@ -1,3 +1,5 @@
+import { resolveTerminalCwd } from "./processes/terminalEnvironment.js";
+import { TerminalPtyLifecycle } from "./processes/terminalPtyLifecycle.js";
 import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -13,7 +15,7 @@ import {
   matchesTerminalProcessIdentity,
 } from "./terminalManager.js";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
-import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
+import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalManager/workspace", randomUUID());
 // 在文件级结束钩子清理本次运行，其他测试进程和历史正式产物保持独立。
@@ -123,10 +125,10 @@ test("原生创建之前必须等待同一unknown意图发布", async (t) => {
       await release.promise;
     }
   });
-  t.mock.method(TerminalSession.prototype, "start", async function () {
+  t.mock.method(TerminalPtyLifecycle.prototype, "start", async function () {
     starts += 1;
-    this.status = "running";
-    this.markReconciliationStatus("verified");
+    this.session.status = "running";
+    this.session.markReconciliationStatus("verified");
   });
   const creating = manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 });
   try {
@@ -153,7 +155,7 @@ for (const afterPublish of [false, true]) {
     const original = new Error("原意图写入失败");
     const write = manager.stateStore.write.bind(manager.stateStore);
     let writes = 0;
-    const start = t.mock.method(TerminalSession.prototype, "start", async () => {});
+    const start = t.mock.method(TerminalPtyLifecycle.prototype, "start", async () => {});
     t.mock.method(manager.stateStore, "write", async snapshot => {
       if (++writes === 1) {
         if (afterPublish) await write(snapshot);
@@ -181,7 +183,7 @@ test("未派发意图的关闭写入再失败保留两份原错且不签回执",
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
   const failures = [new Error("意图写入失败"), new Error("未派发收尾写入失败")];
   let writes = 0;
-  const start = t.mock.method(TerminalSession.prototype, "start", async () => {});
+  const start = t.mock.method(TerminalPtyLifecycle.prototype, "start", async () => {});
   t.mock.method(manager.stateStore, "write", async () => { throw failures[writes++]; });
   await assert.rejects(manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 }), error => {
     assert(error instanceof AggregateError);
@@ -356,7 +358,6 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
     workspaceRoot: createTerminalTestWorkspace(),
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
-  const terminated = [];
   for (let index = 0; index < MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE; index += 1) {
     const id = `term_${String(index).padStart(2, "0")}`;
     manager.terminalsById.set(id, {
@@ -364,10 +365,6 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
       status: "running",
       lastCommandStatus: "running",
       lastUsedAt: new Date(index * 1_000).toISOString(),
-      async terminateForRelease(options) {
-        this.status = options.status;
-        terminated.push({ id, ...options });
-      },
       toRecord() {
         return { terminal_id: id, status: this.status };
       },
@@ -375,7 +372,7 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
   }
 
   await assert.rejects(manager.ensureExecutionCapacity(), /工作区终端进程已达到上限/);
-  assert.deepEqual(terminated, []);
+  assert.ok([...manager.terminalsById.values()].every(terminal => terminal.status === "running"));
   assert.equal(manager.terminalsById.size, MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE);
 });
 

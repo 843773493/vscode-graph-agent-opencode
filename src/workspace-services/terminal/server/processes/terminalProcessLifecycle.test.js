@@ -186,7 +186,7 @@ function observeNativeFailure(scenario, failSink = false) {
     console.log(JSON.stringify({ signals, result, failed: Boolean(failure) }));
   `;
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", source,
-    JSON.stringify([new URL("../../../../../sdk/node/src/process-lifecycle.mjs", import.meta.url).href, scenario, failSink])],
+    JSON.stringify([import.meta.resolve("@boxteam/plugin-sdk/process-lifecycle"), scenario, failSink])],
   { encoding: "utf8", timeout: 5000 }));
 }
 
@@ -260,7 +260,7 @@ function observeForkDuringTermination(signal, explicitIdentity) {
   `;
   const stdout = execFileSync(process.execPath, [
     "--input-type=module", "--eval", source,
-    JSON.stringify([new URL("../../../../../sdk/node/src/process-lifecycle.mjs", import.meta.url).href, signal, explicitIdentity]),
+    JSON.stringify([import.meta.resolve("@boxteam/plugin-sdk/process-lifecycle"), signal, explicitIdentity]),
   ], { encoding: "utf8", timeout: 5000 });
   return JSON.parse(stdout);
 }

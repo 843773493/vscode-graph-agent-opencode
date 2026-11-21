@@ -118,6 +118,24 @@ export function useSessionTurnHistory({
       toolCallIds,
     );
   }, [loadTurnDetailsRaw]);
+  const retainTurnBodies = useCallback(async (turnIds: string[]) => {
+    if (!sessionCacheKey) return;
+    const timeline = getCurrentTimeline();
+    const missing = turnIds.filter(id => timeline?.turnsById[id]?.bodyEvicted);
+    setState(previous => {
+      const current = previous.turnTimelinesBySession.get(sessionCacheKey);
+      if (!current) return previous;
+      const retained = current.bodyWindowTurnIds;
+      if (retained?.length === turnIds.length && retained.every((id, index) => id === turnIds[index])) return previous;
+      return { ...previous, turnTimelinesBySession: writeTurnTimelineCache(previous.turnTimelinesBySession,
+        sessionCacheKey, { ...current, bodyWindowTurnIds: turnIds }) };
+    });
+    // 沿唯一详情 reader 分批补读，不生成分页游标，也不重载整个时间线。
+    for (let index = 0; index < missing.length; index += 4) {
+      if (requestScopeController.signal.aborted) return;
+      await loadTurnDetails(missing.slice(index, index + 4));
+    }
+  }, [getCurrentTimeline, loadTurnDetails, requestScopeController, sessionCacheKey, setState]);
   const loadInitialTurns = useInitialTurnLoader({
     apiPort,
     sessionId,
@@ -180,6 +198,7 @@ export function useSessionTurnHistory({
   const loadMoreContext = useContextNoticeLoader({ apiPort, sessionId, threadId, workspaceId, sessionCacheKey,
     getCurrentTimeline, generationRef, requestSignal: requestScopeController.signal, setState, refreshTurnHistory });
   return {
+    retainTurnBodies,
     loadMoreContext,
     loadAroundTurn,
     loadNewerTurns,

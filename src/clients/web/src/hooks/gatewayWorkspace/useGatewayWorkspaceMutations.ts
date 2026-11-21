@@ -336,7 +336,6 @@ export function useGatewayWorkspaceMutations({
               : [],
             currentSession: null,
             currentSessionWorkspaceId: null,
-            traceEvents: [],
             llmRequestLogs: [],
             sessionResources: [],
             agentStateJsonl: "",

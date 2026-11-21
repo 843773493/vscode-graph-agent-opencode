@@ -10,8 +10,9 @@ import type {
   TurnResponsePart,
 } from "../../types/backend";
 import { compareInternalResponseParts } from "../timeline/responseParts";
+import { compactTurnBodies } from "./turnBodyRetention";
 
-export type TurnRecord = TurnSummary | TurnDetail;
+export type TurnRecord = (TurnSummary | TurnDetail) & { bodyEvicted?: true };
 export type TurnTimelinePhase = "idle" | "bootstrapping" | "ready" | "error";
 export type TurnProjectionState = NonNullable<
   SessionTurnBootstrap["projection_state"]
@@ -33,6 +34,8 @@ export interface SessionTurnTimeline {
   /** Turn 之外的 internal execution 展示记录；仅由独立 history DTO 提供。 */
   internalExecutions: InternalExecutionHistory[];
   detailAccessOrder: string[];
+  /** 当前挂载范围及邻近回合，属于展示态，不是后端历史窗口或分页游标。 */
+  bodyWindowTurnIds?: string[];
   activeJobs: TurnJobSummary[];
   beforeCursor: string | null;
   afterCursor: string | null;
@@ -305,6 +308,7 @@ function mergeSameRevisionTurn(
   current: TurnRecord,
   incoming: TurnRecord,
 ): TurnRecord {
+  if (current.bodyEvicted) return incoming;
   const currentRecord = projectionRecord(current);
   const incomingRecord = projectionRecord(incoming);
   const merged = { ...currentRecord, ...incomingRecord };
@@ -549,6 +553,7 @@ function compactTurnDetails(
     if (
       retainedDetailCount <= maxDetailCount
       && totalProjectionUnits <= maxProjectionUnits
+      || timeline.bodyWindowTurnIds?.includes(turnId)
     ) {
       retainedDetailIds.push(turnId);
       continue;
@@ -799,7 +804,7 @@ export function applyTurnHistoryPage(
     ...timeline,
     // around 的双向游标只描述返回窗口；不能把远处旧页拼成带空洞的连续列表。
     ...(direction === "around" ? {
-      turnsById: {}, orderedTurnIds: [], summaryTurnsById: {}, detailAccessOrder: [], loadingDetailIds: [], internalExecutions: [],
+      turnsById: {}, orderedTurnIds: [], summaryTurnsById: {}, detailAccessOrder: [], loadingDetailIds: [], internalExecutions: [], bodyWindowTurnIds: undefined,
     } : {}),
     threadId: page.thread_id,
     historyViewRevision: hasPageBinding
@@ -1008,7 +1013,8 @@ export function failTurnTimeline(
   }
   return {
     ...timeline,
-    phase: "error",
+    // 详情或分页失败不撤销已完成的初始化，事件订阅仍须继续推进执行状态。
+    phase: timeline.phase === "ready" ? "ready" : "error",
     loadingBefore: false,
     loadingAfter: false,
     loadingDetailIds: [],
@@ -1028,7 +1034,7 @@ export function writeTurnTimelineCache(
     }
   }
   next.delete(scopeKey);
-  next.set(scopeKey, compactTurnDetails(timeline));
+  next.set(scopeKey, compactTurnDetails(compactTurnBodies(timeline)));
   while (next.size > TURN_TIMELINE_CACHE_LIMIT) {
     const oldestKey = next.keys().next().value;
     if (typeof oldestKey !== "string") {

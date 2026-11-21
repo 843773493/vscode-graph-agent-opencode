@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from functools import partial
 from unittest.mock import MagicMock
 
 import httpx
@@ -12,9 +11,6 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.core.history_loading import HistoryLoadingConfig
-from app.gateway.auxiliary_proxy import (
-    _proxy_request_headers as _auxiliary_proxy_headers,
-)
 from app.gateway.config import GatewayConfig
 from app.gateway.federation.channel_owner import FederationChannelOwner
 from app.gateway.main import app
@@ -107,16 +103,7 @@ def _upstream_request_id_values(headers: dict[str, str]) -> list[str]:
     ]
 
 
-@pytest.mark.parametrize(
-    "build_headers",
-    [
-        pytest.param(partial(_proxy_headers, gateway_id="gateway_" + "a" * 32), id="workspace-api"),
-        pytest.param(_auxiliary_proxy_headers, id="auxiliary-service"),
-    ],
-)
-def test_gateway_proxy_does_not_append_second_request_id_on_duplicate_inbound(
-    build_headers,
-) -> None:
+def test_gateway_proxy_does_not_append_second_request_id_on_duplicate_inbound() -> None:
     """客户端重复发送 X-Request-ID 时，代理不得让第二个请求 ID 到达上游。
 
     AGENTS.md 要求「任何一层不得补造第二个请求 ID」。原实现按大小写敏感的键名
@@ -138,7 +125,7 @@ def test_gateway_proxy_does_not_append_second_request_id_on_duplicate_inbound(
     )
     request.state.request_id = "req_authoritative"
 
-    values = _upstream_request_id_values(build_headers(request))
+    values = _upstream_request_id_values(_proxy_headers(request, gateway_id="gateway_" + "a" * 32))
 
     assert values == ["req_authoritative"]
 

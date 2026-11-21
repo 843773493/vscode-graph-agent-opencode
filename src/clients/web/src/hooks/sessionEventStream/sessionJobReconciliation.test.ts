@@ -21,10 +21,11 @@ import {
   upsertTurn,
 } from "../../state/session/turnTimeline";
 import { invalidateGatewayToken } from "../../api/http";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 
 const originalFetch = globalThis.fetch;
 const SESSION_ID = "ses_reconciliation";
-const WORKSPACE_ID = "gw_reconciliation";
+const WORKSPACE_ID = gatewayWorkspaceKey({ gatewayId: "gw_reconciliation", workspaceId: "ws_local" });
 const SESSION_CACHE_KEY = `${WORKSPACE_ID}::${SESSION_ID}`;
 const ACTIVE_JOB_ID = "job_reconciliation";
 const ACTIVE_TURN_ID = "turn_reconciliation";
@@ -172,7 +173,6 @@ function appState(): AppState {
     currentSession,
     currentSessionWorkspaceId: WORKSPACE_ID,
     turnTimelinesBySession: new Map([[SESSION_CACHE_KEY, turnTimeline]]),
-    traceEvents: [],
     llmRequestLogs: [],
     llmRequestLogsLoadedAt: null,
     llmRequestLogsLoading: false,
@@ -253,6 +253,7 @@ function installMockBackend({
   pendingSnapshot = {
     session_id: SESSION_ID,
     thread_id: "thr_018f0000000070008000000000000001",
+    snapshot_version: 1,
     active_job_id: null,
     requests: [],
   },
@@ -399,7 +400,6 @@ describe("运行中 Job 对账", () => {
       harness.setState,
     );
 
-    expect(harness.current().traceEvents).toEqual([]);
     expect(harness.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(
       false,
     );
@@ -664,7 +664,6 @@ describe("运行中 Job 对账", () => {
       lastEventCursor: "evt_previous",
       recoveredEventCount: 0,
     });
-    expect(harness.current().traceEvents).toEqual([]);
     expect(harness.current().status).toBe("正在处理");
   });
 
@@ -676,6 +675,7 @@ describe("运行中 Job 对账", () => {
       pendingSnapshot: {
         session_id: SESSION_ID,
         thread_id: "thr_018f0000000070008000000000000001",
+        snapshot_version: 1,
         active_job_id: ACTIVE_JOB_ID,
         requests: [],
       },

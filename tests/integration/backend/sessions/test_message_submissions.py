@@ -16,6 +16,7 @@ from app.api.deps import (
 )
 from app.container import AppContainer
 from app.core.identifier import create_prefixed_id
+from app.core.job_event_bus import EventType
 from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session import SessionCreateRequest
@@ -142,3 +143,43 @@ async def test_unknown_operation_is_not_reported_as_rejected(submission_case: Su
     assert response.status_code == 200, response.text
     assert response.json()["data"]["status"] == "unknown"
     assert response.json()["data"]["accepted"] is None
+
+
+async def test_receipt_during_job_registration_keeps_accepted_identity(
+    submission_case: SubmissionCase, monkeypatch: pytest.MonkeyPatch,
+):
+    case = submission_case
+    jobs = case.container.job_service
+    registered, release, reading = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    publish, dispatch = jobs._bus.publish, jobs.submission_dispatch
+
+    async def hold_created(**event):
+        if event["event_type"] == EventType.JOB_CREATED:
+            registered.set()
+            await release.wait()
+        await publish(**event)
+
+    async def read_dispatch(record):
+        reading.set()
+        return await dispatch(record)
+
+    monkeypatch.setattr(jobs._bus, "publish", hold_created)
+    monkeypatch.setattr(jobs, "submission_dispatch", read_dispatch)
+    payload = request_body()
+    sending = asyncio.create_task(case.submit(payload))
+    querying = None
+    try:
+        await asyncio.wait_for(registered.wait(), 10)
+        querying = asyncio.create_task(case.client.get(
+            case.root + f"/message-submissions/{payload['operation_id']}"))
+        await asyncio.wait_for(reading.wait(), 10)
+        release.set()
+        sent, queried = await asyncio.gather(sending, querying)
+        assert sent.status_code == queried.status_code == 200
+        accepted = queried.json()["data"]["accepted"]
+        assert queried.json()["data"]["status"] == "accepted"
+        for key in ("operation_id", "message_id", "job_id", "turn_id", "thread_id"):
+            assert accepted[key] == sent.json()["data"][key]
+    finally:
+        release.set()
+        await asyncio.gather(sending, *([querying] if querying else []), return_exceptions=True)

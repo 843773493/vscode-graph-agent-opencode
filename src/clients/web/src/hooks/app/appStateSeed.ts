@@ -27,7 +27,6 @@ export const INITIAL_APP_STATE: AppState = {
   currentSession: null,
   currentSessionWorkspaceId: null,
   turnTimelinesBySession: new Map(),
-  traceEvents: [],
   messageStreamsByTurnStream: new Map(),
   llmRequestLogs: [],
   llmRequestLogsLoadedAt: null,

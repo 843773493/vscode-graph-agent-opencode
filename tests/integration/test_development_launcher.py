@@ -43,7 +43,7 @@ def test_development_launcher_consumes_real_identity_cli_twice(
     launcher_workspace: Path, bun_executable: str,
 ) -> None:
     result = _run_bun(bun_executable, r"""
-import { resolveBackendWorkspaceId } from "./scripts/launch/dev-environment.mjs";
+import { resolveBackendWorkspaceId } from "./scripts/launch/development/environment.mjs";
 const options = { projectRoot: process.cwd(), workspaceRoot: process.argv[1], pythonExecutable: process.argv[2] };
 console.log(JSON.stringify([resolveBackendWorkspaceId(options), resolveBackendWorkspaceId(options)]));
 """, str(launcher_workspace), sys.executable)
@@ -65,7 +65,7 @@ def test_development_launcher_rejects_noncanonical_cli_response(
     bun_executable: str, stdout: str, stderr: str, exit_code: int,
 ) -> None:
     result = _run_bun(bun_executable, r"""
-import { resolveBackendWorkspaceId } from "./scripts/launch/dev-environment.mjs";
+import { resolveBackendWorkspaceId } from "./scripts/launch/development/environment.mjs";
 const [stdout, stderr, exitCode] = JSON.parse(process.argv[1]);
 Bun.spawnSync = () => ({ stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), exitCode });
 try {
@@ -90,7 +90,7 @@ def test_ready_wait_rejects_exited_or_collected_unit_without_health_poll(
     bun_executable: str, load: str, active: str, sub: str,
 ) -> None:
     result = _run_bun(bun_executable, r"""
-import { waitForGateway } from "./scripts/launch/dev-systemd.mjs";
+import { waitForGateway } from "./scripts/launch/development/systemd.mjs";
 const [load, active, sub] = JSON.parse(process.argv[1]);
 let reads = 0;
 Bun.spawnSync = () => {
@@ -117,7 +117,7 @@ def test_ready_wait_does_not_accept_health_after_unit_disappears(
     ready = launcher_workspace / "development-ready.json"
     ready.write_text('{"pid":1234}')
     result = _run_bun(bun_executable, r"""
-import { waitForGateway } from "./scripts/launch/dev-systemd.mjs";
+import { waitForGateway } from "./scripts/launch/development/systemd.mjs";
 let reads = 0;
 Bun.spawnSync = () => {
   reads += 1;
@@ -140,7 +140,7 @@ def test_development_launcher_accepts_crlf_but_rejects_extra_windows_line(
     bun_executable: str,
 ) -> None:
     result = _run_bun(bun_executable, r"""
-import { resolveBackendWorkspaceId } from "./scripts/launch/dev-environment.mjs";
+import { resolveBackendWorkspaceId } from "./scripts/launch/development/environment.mjs";
 const id = "00000000-0000-4000-8000-000000000001";
 let stdout = id + "\r\n";
 Bun.spawnSync = () => ({ stdout: Buffer.from(stdout), stderr: Buffer.alloc(0), exitCode: 0 });

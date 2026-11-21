@@ -10,7 +10,7 @@ scripts/
 │   └── assert_isolated_index_commit.mjs
 ├── launch/                  开发服务和目标生命周期
 │   ├── dev.mjs              开发栈入口，负责安装调试模板
-│   └── debug-fixtures/      仅供开发启动器使用的只读调试模板
+│   └── development/        开发栈内部实现、tests/ 与只读 fixtures/
 ├── install/                 安装后处理
 ├── release/                 发布打包
 └── generate_*.{py,mjs}      协议、类型和测试数据生成入口

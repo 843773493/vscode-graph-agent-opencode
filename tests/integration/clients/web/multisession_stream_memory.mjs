@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { openSync, writeSync, closeSync } from 'node:fs';
 import { testControl, planChatCalls } from '../../../support/e2e_control/browser_client.mjs';
 import { Perf } from '../../../harness/js/performance.mjs';
 import { observePage } from '../../../harness/js/browser-performance.mjs';
@@ -38,7 +39,7 @@ async function api(path, init = {}) {
 async function command(id, ...args) {
   return page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
 }
-async function sample(label) {
+async function sample(label, samples = result.samples) {
   await cdp.send('HeapProfiler.collectGarbage');
   const metrics = Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item => [item.name, item.value]));
   const dom = await page.locator('section.boxteam-thread').evaluateAll(elements => elements.map(element => {
@@ -83,17 +84,49 @@ async function sample(label) {
       scrollHeight: scroller?.scrollHeight, height: scroller?.clientHeight,
       streams: state?.messageStreamsByTurnStream.size, seq: stream?.lastEventSeq,
       blocks: stream?.blocks.length, textChars: stream?.blocks.reduce((sum, block) => sum + block.text.length, 0),
+      events: state?.eventQueuesBySession.get([...state.eventQueuesBySession.keys()][0])?.length,
+      pendingTurns: state && [...state.pendingConversations.values()].flat().length,
+      historyTurns: state && [...state.turnTimelinesBySession.values()].reduce((sum, timeline) => sum + timeline.orderedTurnIds.length, 0),
+      retainedTurnBodies: state && [...state.turnTimelinesBySession.values()].reduce((sum, timeline) => sum
+        + Object.values(timeline.turnsById).filter(turn => !turn.bodyEvicted).length, 0),
+      historyProjectionChars: state && [...state.turnTimelinesBySession.values()].reduce((sum, timeline) => sum
+        + JSON.stringify(timeline.turnsById).length + JSON.stringify(timeline.summaryTurnsById).length, 0),
       pendingEventChars: state && [...state.pendingConversations.values()].flat().reduce((sum, pending) => sum + JSON.stringify(pending.events).length, 0),
+      status: state?.status, executionError: state?.sessionExecutionSyncError,
+      timelines: state && [...state.turnTimelinesBySession.values()].map(item => ({
+        phase: item.phase, projection: item.projectionState, error: item.error })),
+      activeJobs: state && [...state.activeJobIdsBySession.values()],
+      queueVersions: state && [...state.pendingQueueVersions.values()].map(versions => [...versions]),
+      recentEvents: state && [...state.eventQueuesBySession.values()].flat().slice(-8).map(item =>
+        item.kind === 'trace' ? { type: item.event.type, jobId: item.event.job_id, at: item.event.timestamp } : { kind: item.kind }),
+      pending: state && [...state.pendingConversations.values()].flat().map(item => ({
+        jobId: item.jobId, turnId: item.turnId, status: item.status, pending: item.pending,
+        turnStatus: item.turnStatus, queueVersion: item.queueSnapshotVersion })),
+      streamStates: state && [...state.messageStreamsByTurnStream.values()].map(item => ({
+        turnId: item.turnId, status: item.streamStatus, connection: item.connectionStatus, error: item.protocolError })),
       tailVisible,
       renderedTextChars: text?.textContent.length };
   }));
   const row = { label, at: Date.now(), heapUsed: metrics.JSHeapUsedSize, heapTotal: metrics.JSHeapTotalSize,
     nodes: metrics.Nodes, listeners: metrics.JSEventListeners, taskSeconds: metrics.TaskDuration, dom };
-  result.samples.push(row);
+  samples.push(row);
   await observation.checkpoint(label);
   await writeFile(`${artifacts}/result.json`, JSON.stringify(result, null, 2));
   console.log(JSON.stringify(row));
   return row;
+}
+
+async function heapSnapshot(label) {
+  if (process.env.BOXTEAM_MEMORY_HEAP_SNAPSHOTS !== '1') return;
+  const descriptor = openSync(`${artifacts}/${label}.heapsnapshot`, 'wx');
+  const writeChunk = ({ chunk }) => writeSync(descriptor, chunk);
+  cdp.on('HeapProfiler.addHeapSnapshotChunk', writeChunk);
+  try {
+    await cdp.send('HeapProfiler.takeHeapSnapshot');
+  } finally {
+    cdp.off('HeapProfiler.addHeapSnapshotChunk', writeChunk);
+    closeSync(descriptor);
+  }
 }
 
 try {
@@ -160,9 +193,11 @@ try {
     if (!baseline) expect(row.dom.slice(2).every(item => item.tailVisible)).toBe(true);
   }
   await page.screenshot({ path: `${artifacts}/six-sessions.png` });
+  await heapSnapshot('generating');
   await Promise.all(result.owners.map(owner => testControl({action:'release', ...barrier(owner.callId,1501)})));
   await expect(page.locator('#interruptButton')).toHaveCount(0, { timeout: 60000 });
   const completed = await sample('completed');
+  await heapSnapshot('completed');
   expect(completed.dom.slice(0, 2).every(item => item.scrollTop <= 2)).toBe(true);
   if (!baseline) expect(completed.dom.slice(2).every(item => item.tailVisible)).toBe(true);
   for (const owner of result.owners.slice(0, 2)) {
@@ -170,11 +205,68 @@ try {
     await pane.getByRole('button', {name:'跳到最新消息',exact:true}).click();
     await expect(pane.getByTestId('composer-input')).toBeVisible();
   }
+  const repeatRounds = Number(process.env.BOXTEAM_MEMORY_REPEAT_ROUNDS ?? 0);
+  result.lifecycle = [];
+  for (let round = 1; round <= repeatRounds; round++) {
+    for (const owner of result.owners) {
+      await planChatCalls(owner.sessionId, owner.threadId, [{ label: `${run}-repeat-${round}-${owner.sessionId}`,
+        text: `后续第 ${round} 轮：` + '持续对话，验证已完成消息的缓存与释放。'.repeat(3000) + `\n第 ${round} 轮完成` }]);
+      const pane = page.locator(`section.boxteam-thread[data-session-id="${owner.sessionId}"]`);
+      await pane.getByTestId('composer-input').fill(`继续第 ${round} 轮。`);
+      await pane.getByTestId('composer-send').click();
+    }
+    await Promise.all(result.owners.map(async owner => {
+      const pane = page.locator(`section.boxteam-thread[data-session-id="${owner.sessionId}"]`);
+      // 合成长上下文的生成等待不作为输入响应预算；逐轮仍验证真实正文和终态。
+      await expect(pane.getByText(`第 ${round} 轮完成`, { exact: false }).last()).toBeVisible({ timeout: 120000 });
+      await expect(pane.getByRole('button', { name: '停止', exact: true })).toHaveCount(0, { timeout: 30000 });
+    }));
+    await sample(`repeat-${round}`, result.lifecycle);
+  }
+  if (repeatRounds || process.env.BOXTEAM_MEMORY_HEAP_SNAPSHOTS === '1') {
+    if (repeatRounds) {
+      const owner = result.owners[0];
+      const pane = page.locator(`section.boxteam-thread[data-session-id="${owner.sessionId}"]`);
+      await pane.locator('[data-virtuoso-scroller]').hover();
+      await page.mouse.wheel(0, -100000);
+      await expect(pane.getByText('这是可控 SSE 的完整回复。', { exact: false }).first()).toBeVisible({ timeout: 60000 });
+      await sample('history-reread', result.lifecycle);
+      await pane.getByRole('button', { name: '跳到最新消息', exact: true }).click();
+      await expect(pane.getByText(`第 ${repeatRounds} 轮完成`, { exact: false }).last()).toBeVisible({ timeout: 60000 });
+    }
+    if (repeatRounds) await heapSnapshot('repeated');
+    await command('workbench.action.closeAllEditors');
+    await expect(page.locator('section.boxteam-thread')).toHaveCount(0);
+    result.closed = await sample('closed', []);
+    await heapSnapshot('closed');
+    if (repeatRounds) {
+      const owner = result.owners[0];
+      await command('_workbench.open', `boxteam-thread://${owner.gatewayId}/${owner.workspaceId}/${owner.sessionId}/${owner.threadId}`, [0, { pinned: true }]);
+      const pane = page.locator(`section.boxteam-thread[data-session-id="${owner.sessionId}"]`);
+      await expect(pane.getByTestId('composer-input')).toBeVisible({ timeout: 60000 });
+      await expect(pane.getByText(`第 ${repeatRounds} 轮完成`, { exact: false }).last()).toBeVisible({ timeout: 60000 });
+      await sample('reopened', result.lifecycle);
+      await command('workbench.action.closeAllEditors');
+      await expect(page.locator('section.boxteam-thread')).toHaveCount(0);
+      result.reclosed = await sample('reclosed', []);
+    }
+  }
   expect(errors).toEqual([]);
   result.completed = true;
 } catch (error) {
   result.failure = String(error.stack ?? error);
-  await page.screenshot({ path: `${artifacts}/failure.png` }).catch(() => {});
+  for (const [label, diagnose] of [
+    ['screenshot', () => page.screenshot({ path: `${artifacts}/failure.png` })],
+    ['state', () => sample('failed', result.lifecycle ??= [])],
+    ['close', async () => {
+      await command('workbench.action.closeAllEditors');
+      await expect(page.locator('section.boxteam-thread')).toHaveCount(0);
+      result.closedAfterFailure = await sample('closed-after-failure', []);
+    }],
+  ]) {
+    try { await diagnose(); }
+    catch (diagnosticError) { (result.diagnosticErrors ??= []).push({ label, error: String(diagnosticError) }); }
+  }
   throw error;
 } finally {
   await writeFile(`${artifacts}/result.json`, JSON.stringify(result, null, 2));

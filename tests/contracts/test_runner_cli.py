@@ -37,6 +37,7 @@ INVALID_ARGUMENTS = [
     pytest.param(["--all"], "不支持 --all", id="all-option"),
     pytest.param(["--suite=all"], "不支持 --suite=all", id="all-suite"),
     pytest.param([VALID_SUITE_ID], "未知参数", id="positional-suite"),
+    pytest.param([f"--suite={VALID_SUITE_ID}", "--perf=invalid"], "未知 performance mode", id="invalid-performance-mode"),
 ]
 
 
@@ -75,6 +76,10 @@ def synthetic_project(tmp_path: Path) -> tuple[Path, Path]:
         ],
     }
     (runner_dir / "matrix.jsonc").write_text(json.dumps(matrix), encoding="utf-8")
+    builder = tmp_path / "sdk/node/build.mjs"
+    builder.parent.mkdir(parents=True)
+    builder.write_text("import { writeFileSync } from 'node:fs';\n"
+                       "writeFileSync('sdk-build.marker', 'prepared');\n", encoding="utf-8")
     # 正常矩阵入口会启动性能采样与报告；隔离项目也必须带上这两项真实依赖。
     for name in ("resources.py", "report.py"):
         target = tmp_path / "tests/harness/performance" / name
@@ -96,6 +101,7 @@ def test_invalid_cli_arguments_fail_before_starting_suite(
     assert result.returncode != 0
     assert message in result.stderr
     assert not sentinel.exists(), "非法参数启动了矩阵中的 suite 命令"
+    assert not (project / "sdk-build.marker").exists()
     assert protected_output.read_text(encoding="utf-8") == "preserve"
 
 
@@ -108,6 +114,7 @@ def test_explicit_suite_runs_its_matrix_command(
 
     assert result.returncode == 0, result.stderr
     assert sentinel.read_text(encoding="utf-8") == "spawned"
+    assert (project / "sdk-build.marker").read_text() == "prepared"
 
 
 def test_list_prints_matrix_without_starting_suite(
@@ -120,6 +127,7 @@ def test_list_prints_matrix_without_starting_suite(
     assert result.returncode == 0, result.stderr
     assert f"{VALID_SUITE_ID}\tunit\tsystem\tenabled" in result.stdout
     assert not sentinel.exists()
+    assert not (project / "sdk-build.marker").exists()
 
 
 def test_repository_matrix_lists_full_and_focused_web_suites(tmp_path: Path) -> None:
@@ -225,6 +233,9 @@ def workspace_services_project(tmp_path: Path) -> tuple[Path, Path]:
     source.mkdir(parents=True)
     (tmp_path / "package.json").write_text('{"type":"module"}', encoding="utf-8")
     marker = tmp_path / "runtimes.jsonl"
+    builder = tmp_path / "sdk/node/build.mjs"
+    builder.parent.mkdir(parents=True)
+    builder.write_text("// 仅验证测试框架分派，真实 SDK 构建由 harness 集成测试覆盖。\n", encoding="utf-8")
     for framework, runtime in [("node:test", "node"), ("bun:test", "bun")]:
         (source / f"{runtime}.test.js").write_text(
             'import { test } from ' + json.dumps(framework) + ';\n'

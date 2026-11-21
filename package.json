@@ -31,7 +31,11 @@
     "dev:electron": "bun run --cwd src/clients/electron start",
     "build:electron": "bun run --cwd src/clients/electron build",
     "package:electron": "bun scripts/release/package-electron.mjs",
-    "check:protocol:application": "bun scripts/check_protocol_application.mjs"
+    "check:protocol:application": "bun scripts/check_protocol_application.mjs",
+    "sdk:node:build": "node sdk/node/build.mjs",
+    "sdk:node:watch": "node sdk/node/build.mjs --watch",
+    "sdk:node:check": "node sdk/node/build.mjs --check",
+    "postinstall": "node sdk/node/build.mjs"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.72.0",
@@ -59,6 +63,7 @@
     "playwright": "^1.61.1",
     "shlex": "1.0.3",
     "tar": "7.5.22",
+    "typescript": "5.9.3",
     "ws": "^8.18.0",
     "yazl": "3.3.1"
   },

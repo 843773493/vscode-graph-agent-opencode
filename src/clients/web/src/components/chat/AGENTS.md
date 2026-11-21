@@ -9,6 +9,7 @@ chat/
 ├── ChatHistory*             # 历史加载、空状态和投影提示
 ├── transcriptItems.ts       # 把会话投影整理成可虚拟化的 transcript 项
 ├── useTurnVirtualScroller.ts # 跨 turn 的窗口化渲染与滚动锚点
+├── useTurnBodyWindow.ts      # 将实际挂载范围交给历史 owner，保留正文占位高度
 ├── useTurnAnchorNavigation.ts
 ├── InternalExecutionTranscriptItem.tsx
 └── MarkdownContent.tsx、ThinkingSection.tsx、ToolRow.tsx 等共享展示组件

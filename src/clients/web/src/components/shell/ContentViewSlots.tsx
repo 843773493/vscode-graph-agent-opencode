@@ -47,6 +47,7 @@ interface ContentViewSlotsProps extends Pick<
   | "onLoadLatestMessages"
   | "onLoadAroundTurn"
   | "onLoadTurnDetails"
+  | "onRetainTurnBodies"
   | "onLoadToolDetails"
   | "onLoadAgentStateMessageRawContent"
   | "onRetryHistory"
@@ -181,6 +182,7 @@ export default function ContentViewSlots({
   messageNavigation,
   onViewportReady,
   onLoadTurnDetails,
+  onRetainTurnBodies,
   onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
   onRetryHistory,
@@ -298,6 +300,7 @@ export default function ContentViewSlots({
           messageNavigation={messageNavigation}
           onViewportReady={onViewportReady}
           onLoadTurnDetails={onLoadTurnDetails}
+          onRetainTurnBodies={onRetainTurnBodies}
           onLoadToolDetails={onLoadToolDetails}
           onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
           onRetryHistory={onRetryHistory}

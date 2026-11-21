@@ -403,40 +403,6 @@ test("历史 stale_turn_reference 期间保留超时回合及可见错误", () =
   expect(fallback?.events).toEqual([timeoutEvent]);
 });
 
-test("内部 Goal continuation 不构造用户可见会话", () => {
-  const state = {
-    messages: [],
-    pendingConversations: new Map(),
-    traceEvents: [
-      {
-        event_id: "evt_internal_goal",
-        session_id: "ses_goal",
-        job_id: "job_goal",
-        type: "message_created",
-        phase: "message",
-        title: "用户消息已创建",
-        content: "<system_reminder>继续 Goal</system_reminder>",
-        status: "completed",
-        tool_name: null,
-        skill_names: [],
-        step_id: null,
-        timestamp: "2026-07-27T00:00:00Z",
-        raw: {
-          payload: {
-            message_id: "msg_internal_goal",
-            session_id: "ses_goal",
-            role: "user",
-            content: "<system_reminder>继续 Goal</system_reminder>",
-            metadata: { internal: true, goal_continuation: true },
-          },
-        },
-      },
-    ],
-  } as unknown as AppState;
-
-  expect(getConversationsForSession("ses_goal", state)).toEqual([]);
-});
-
 test("排队中的内部准入不会伪造用户聊天回合", () => {
   const conversations = pendingSnapshotToConversations({
     session_id: "ses_report",
@@ -509,20 +475,6 @@ test("Turn detail 恢复内部展示消息时保留展示类型", () => {
     messages: [],
     pendingConversations: new Map(),
     turnTimelinesBySession: new Map([["ses_child", timeline]]),
-    traceEvents: [{
-      event_id: "evt_stale",
-      session_id: "ses_child",
-      job_id: "job_stale",
-      type: "message_created",
-      phase: "message",
-      title: "用户消息已创建",
-      content: "不应从 Trace 恢复的旧消息",
-      status: "completed",
-      tool_name: null,
-      skill_names: [],
-      step_id: null,
-      timestamp: "2026-07-28T00:00:00Z",
-    }],
   } as unknown as AppState;
 
   const conversations = getConversationsForSession("ses_child", state);

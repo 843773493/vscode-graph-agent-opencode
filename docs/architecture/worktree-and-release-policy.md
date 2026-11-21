@@ -89,7 +89,7 @@ bun run dev:stop --backend-root /absolute/backend-checkout
 bun run dev:foreground --backend-root /absolute/backend-checkout
 ```
 
-底层 `dev-manager.mjs`、`dev-systemd.mjs` 与 `dev.mjs` 都接受 `--backend-root`。布局中的 `BOXTEAM_PROJECT_ROOT` 指向后端源码，`BOXTEAM_FRONTEND_ROOT` 指向前端源码；未显式分离时两者相同。显式后端覆盖不会创建或同步 checkout，也不会接管另一实例的 Home。维护 start/stop/status 时应重复相同选择。运行 manifest、Workbench 开发资产及 Vite 缓存分别位于所选 Home 的 `state/runtime-manifest.json`、`state/workbench-assets/dist/` 与 `state/vite-cache/`，避免多个实例共享根源码时覆盖彼此的生成内容。
+公开 `scripts/launch/dev.mjs` 和 `development/` 下的内部启动器都接受 `--backend-root`。布局中的 `BOXTEAM_PROJECT_ROOT` 指向后端源码，`BOXTEAM_FRONTEND_ROOT` 指向前端源码；未显式分离时两者相同。显式后端覆盖不会创建或同步 checkout，也不会接管另一实例的 Home。维护 start/stop/status 时应重复相同选择。运行 manifest、Workbench 开发资产及 Vite 缓存分别位于所选 Home 的 `state/runtime-manifest.json`、`state/workbench-assets/dist/` 与 `state/vite-cache/`，避免多个实例共享根源码时覆盖彼此的生成内容。
 
 根、dev、实验与 installed/release 的 Home、业务工作区、端口、凭据和实例锁分别管理。现有端口偏移可用于独立源码实例；端口占用先核对所有者，不自动抢占其他实例。启动与验证应展示实际源码/产物、Home、工作区、Gateway 和 Web 地址；后端健康成功不能代替真实页面初始化链路。
 

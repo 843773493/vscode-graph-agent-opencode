@@ -1,6 +1,6 @@
 import { stripCommandMarkerLines } from "./shared/commandText.js";
 import { installTerminalUserActions } from "./terminalUserActions.js";
-import { encodeTerminalClientMessage } from "./protocol/messages.js";
+import { TerminalConnection } from "./terminalConnection.js";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "./shared/sse.js";
 import { openRealtimeResponse } from "./shared/realtime.js";
 import { validateResourceChanges } from "./shared/sseRuntime.js";
@@ -11,7 +11,6 @@ const workspaceId = params.get("workspaceId");
 const targetGatewayId = params.get("target_gateway_id");
 const ownerApiBase = window.location.origin;
 let ownerResource = null;
-let grantLoading = false;
 let resumeLoading = false;
 let lastActionError = null;
 let gatewayToken = null;
@@ -72,8 +71,6 @@ terminal.loadAddon(searchAddon);
 terminal.open(terminalContainer);
 fitAddon.fit();
 
-let socket = null;
-let attached = false;
 let intersecting = false;
 let visible = false;
 let deleted = false;
@@ -85,13 +82,6 @@ let statusSyncRetryTimer = null;
 let statusSyncPending = null;
 let statusDirty = false;
 let resizeFrame = null;
-let lastSentCols = null;
-let lastSentRows = null;
-let desiredAttached = false;
-let reconnectTimer = null;
-let reconnectAttempts = 0;
-const sequenceStorageKey = `boxteam-terminal-sequence:${terminalId || "missing"}`;
-let lastSequence = Number(window.sessionStorage.getItem(sequenceStorageKey) || 0);
 
 function setAttachButtonMode(mode) {
   const labels = {
@@ -174,7 +164,7 @@ function updateControls() {
   terminateButton.disabled = deleted || !terminalRunning;
   deleteButton.disabled = deleted;
   terminalContainer.classList.toggle("is-disabled", deleted || !terminalRunning);
-  terminal.options.disableStdin = !attached || deleted || !terminalRunning;
+  terminal.options.disableStdin = !connection.attached || deleted || !terminalRunning;
 }
 
 function updateTerminalTitle(snapshot) {
@@ -184,12 +174,9 @@ function updateTerminalTitle(snapshot) {
 function markDeleted(message = "终端已删除或不存在", snapshot = null) {
   deleted = true;
   stopStatusObservation();
-  desiredAttached = false;
-  attached = false;
+  connection.desiredAttached = false;
   currentTerminalStatus = "deleted";
-  socket?.close();
-  socket = null;
-  setAttachButtonMode("detached");
+  connection.disconnect();
   if (terminalId) {
     terminalIdElement.textContent = `${terminalId} · ${statusLabel("deleted")}`;
   }
@@ -217,28 +204,6 @@ function renderSnapshot(display, onRendered) {
   snapshotDisplay = display;
   // clear() 会保留当前行和终端模式；RIS 与快照一起排队，避免旧输出污染重放。
   terminal.write(`\x1bc${display}`, onRendered);
-}
-
-function rememberSequence(sequence) {
-  if (!Number.isInteger(sequence) || sequence < lastSequence) {
-    return;
-  }
-  lastSequence = sequence;
-  window.sessionStorage.setItem(sequenceStorageKey, String(sequence));
-}
-
-function acknowledgeOutput(sequence) {
-  rememberSequence(sequence);
-  if (socket?.readyState === WebSocket.OPEN) {
-    send({ type: "ack", sequence });
-  }
-}
-
-function send(message) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    throw new Error("WebSocket 尚未连接");
-  }
-  socket.send(encodeTerminalClientMessage(message));
 }
 
 function resizeRemote() {
@@ -275,19 +240,7 @@ function resizeRemote() {
         }
       }
     }
-    if (!attached || socket?.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (terminal.cols === lastSentCols && terminal.rows === lastSentRows) {
-      return;
-    }
-    send({
-      type: "resize",
-      cols: terminal.cols,
-      rows: terminal.rows,
-    });
-    lastSentCols = terminal.cols;
-    lastSentRows = terminal.rows;
+    connection.resize(terminal.cols, terminal.rows);
   });
 }
 
@@ -320,7 +273,7 @@ function acceptOwnerResource(resource) {
 async function loadSnapshot() {
   if (!terminalId) throw new Error("URL 缺少 terminalId 参数");
   const snapshot = acceptOwnerResource(await ownerRequest());
-  rememberSequence(snapshot.sequence || 0);
+  connection.rememberSequence(snapshot.sequence || 0);
   renderSnapshot(snapshotDisplayBuffer(snapshot));
   if (!lastActionError) setStatus(describeSnapshot(snapshot));
   return snapshot;
@@ -334,11 +287,8 @@ async function syncTerminalState() {
   const snapshot = resource.status !== "running" && resource.status !== currentTerminalStatus
     ? await loadSnapshot() : acceptOwnerResource(resource);
   if (snapshot.status !== "running") {
-    desiredAttached = false;
-    attached = false;
-    socket?.close();
-    socket = null;
-    setAttachButtonMode("detached");
+    connection.desiredAttached = false;
+    connection.disconnect();
   }
   if (!lastActionError) setStatus(describeSnapshot(snapshot));
 }
@@ -446,41 +396,7 @@ async function startStatusObservation() {
   }
 }
 
-function detach({ preserveIntent = false } = {}) {
-  if (!preserveIntent) desiredAttached = false;
-  if (reconnectTimer !== null) {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    send({ type: "detach", terminalId });
-  }
-  socket?.close();
-  socket = null;
-  attached = false;
-  lastSentCols = null;
-  lastSentRows = null;
-  setAttachButtonMode("detached");
-  setStatus("已 detach，终端仍在后台运行");
-  updateControls();
-}
-
-async function attach() {
-  if (!visible) return;
-  if (!terminalId) {
-    setStatus("URL 缺少 terminalId 参数", true);
-    return;
-  }
-  if (attached) {
-    return;
-  }
-  if (socket && socket.readyState !== WebSocket.CLOSED) {
-    setStatus("正在连接终端...");
-    return;
-  }
-  if (grantLoading) return;
-  desiredAttached = true;
-  grantLoading = true;
+async function requestTransportGrant() {
   let grant;
   try {
     acceptOwnerResource(await ownerRequest("?include_output=false"));
@@ -498,130 +414,82 @@ async function attach() {
     lastActionError = error instanceof Error ? error.message : String(error);
     try { acceptOwnerResource(await ownerRequest()); } catch (refreshError) { lastActionError += `；刷新失败: ${refreshError.message}`; }
     setStatus(lastActionError, true);
-    setAttachButtonMode("detached");
-    desiredAttached = false;
-    return;
-  } finally { grantLoading = false; }
-  if (!desiredAttached || !visible) return;
-  const currentSocket = new WebSocket(backendWsUrl(grant.service));
-  socket = currentSocket;
-  setAttachButtonMode("attaching");
-  setStatus("正在连接终端...");
-
-  socket.addEventListener("open", () => {
-    if (socket !== currentSocket || !visible) { currentSocket.close(); return; }
-    fitAddon.fit();
-    send({
-      type: "attach",
-      terminalId,
-      grantToken: grant.grant_token,
-      cols: terminal.cols,
-      rows: terminal.rows,
-      afterSequence: lastSequence,
-    });
-    lastSentCols = terminal.cols;
-    lastSentRows = terminal.rows;
-  });
-
-  socket.addEventListener("message", (event) => {
-    if (socket !== currentSocket || !visible) return;
-    const message = JSON.parse(event.data);
-    if (message.type === "attached") {
-      attached = true;
-      reconnectAttempts = 0;
-      currentTerminalStatus = message.snapshot?.status || currentTerminalStatus;
-      setAttachButtonMode("attached");
-      if (message.replayMode !== "incremental") {
-        renderSnapshot(
-          message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "",
-          () => acknowledgeOutput(message.snapshot?.sequence || 0),
-        );
-      }
-      setStatus(message.snapshot ? `已 attach · ${describeSnapshot(message.snapshot)}` : "已 attach");
-      if (currentTerminalStatus !== "running") {
-        attached = false;
-        socket?.close();
-        setAttachButtonMode("detached");
-      }
-      updateControls();
-      return;
-    }
-    if (message.type === "detached") {
-      attached = false;
-      setAttachButtonMode("detached");
-      setStatus("已 detach，终端仍在后台运行");
-      updateControls();
-      return;
-    }
-    if (message.type === "output") {
-      if (message.sequence <= lastSequence) {
-        acknowledgeOutput(message.sequence);
-        return;
-      }
-      terminal.write(stripCommandMarkerLines(String(message.data || "")), () => {
-        acknowledgeOutput(message.sequence);
-      });
-      return;
-    }
-    if (message.type === "resync") {
-      renderSnapshot(snapshotDisplayBuffer(message.snapshot), () => {
-        acknowledgeOutput(message.snapshot.sequence || 0);
-      });
-      return;
-    }
-    if (message.type === "exit") {
-      desiredAttached = false;
-      currentTerminalStatus = "terminated";
-      setStatus(`终端已退出: ${message.exitCode ?? ""} ${message.signal ?? ""}`);
-      updateControls();
-      return;
-    }
-    if (message.type === "deleted") {
-      markDeleted("终端已删除", message.snapshot ?? null);
-      return;
-    }
-    if (message.type === "error") {
-      setStatus(message.message, true);
-    }
-  });
-
-  currentSocket.addEventListener("close", (event) => {
-    if (socket !== currentSocket) {
-      return;
-    }
-    attached = false;
-    socket = null;
-    lastSentCols = null;
-    lastSentRows = null;
-    setAttachButtonMode("detached");
-    if (event.code === 4009) {
-      desiredAttached = false;
-      lastActionError = "终端资源关联或版本已变化，请刷新后重新连接";
-      setStatus(lastActionError, true);
-      void syncTerminalState().catch((error) => setStatus(error.message, true));
-    }
-    if (desiredAttached && !deleted && currentTerminalStatus === "running") {
-      reconnectAttempts += 1;
-      const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 5000);
-      setStatus(`连接已断开，${delay}ms 后自动重连...`);
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = null;
-        attach();
-      }, delay);
-    }
-    updateControls();
-  });
-
-  currentSocket.addEventListener("error", () => {
-    setStatus("WebSocket 连接失败", true);
-  });
-}
-
-terminal.onData((data) => {
-  if (!attached) {
     return;
   }
-  send({ type: "input", data });
+  return grant;
+}
+
+function handleTerminalMessage(message) {
+  if (message.type === "attached") {
+    currentTerminalStatus = message.snapshot?.status || currentTerminalStatus;
+    if (message.replayMode !== "incremental") {
+      renderSnapshot(
+        message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "",
+        () => connection.acknowledge(message.snapshot?.sequence || 0),
+      );
+    }
+    setStatus(message.snapshot ? `已 attach · ${describeSnapshot(message.snapshot)}` : "已 attach");
+    updateControls();
+    return;
+  }
+  if (message.type === "detached") {
+    setStatus("已 detach，终端仍在后台运行");
+    updateControls();
+    return;
+  }
+  if (message.type === "output") {
+    if (message.sequence <= connection.lastSequence) {
+      connection.acknowledge(message.sequence);
+      return;
+    }
+    terminal.write(stripCommandMarkerLines(String(message.data || "")), () => {
+      connection.acknowledge(message.sequence);
+    });
+    return;
+  }
+  if (message.type === "resync") {
+    renderSnapshot(snapshotDisplayBuffer(message.snapshot), () => {
+      connection.acknowledge(message.snapshot.sequence || 0);
+    });
+    return;
+  }
+  if (message.type === "exit") {
+    currentTerminalStatus = "terminated";
+    setStatus(`终端已退出: ${message.exitCode ?? ""} ${message.signal ?? ""}`);
+    updateControls();
+    return;
+  }
+  if (message.type === "deleted") {
+    markDeleted("终端已删除", message.snapshot ?? null);
+    return;
+  }
+  if (message.type === "error") {
+    setStatus(message.message, true);
+  }
+}
+
+const connection = new TerminalConnection({
+  terminalId,
+  requestGrant: requestTransportGrant,
+  socketUrl: backendWsUrl,
+  isVisible: () => visible,
+  canReconnect: () => !deleted && currentTerminalStatus === "running",
+  getSize() { fitAddon.fit(); return { cols: terminal.cols, rows: terminal.rows }; },
+  onMessage: handleTerminalMessage,
+  onMode(mode) { setAttachButtonMode(mode); updateControls(); },
+  onStatus: setStatus,
+  onRevoked() {
+    lastActionError = "终端资源关联或版本已变化，请刷新后重新连接";
+    setStatus(lastActionError, true);
+    void syncTerminalState().catch(error => setStatus(error.message, true));
+  },
+});
+
+terminal.onData((data) => {
+  if (!connection.attached) {
+    return;
+  }
+  connection.send({ type: "input", data });
 });
 
 const userActions = installTerminalUserActions({
@@ -636,7 +504,7 @@ const userActions = installTerminalUserActions({
     searchNext: terminalSearchNext,
     searchClose: terminalSearchClose,
   },
-  getAttached: () => attached,
+  getAttached: () => connection.attached,
   setStatus,
   resizeTerminal: resizeRemote,
 });
@@ -652,8 +520,8 @@ window.addEventListener("message", event => {
   }
   if (event.data.type !== "boxteam.terminal.action") return;
   switch (event.data.action) {
-    case "connect": void attach(); break;
-    case "disconnect": detach(); break;
+    case "connect": void connection.attach(); break;
+    case "disconnect": connection.detach(); break;
     case "search": userActions.openSearch(); break;
     case "refresh": void loadSnapshot().catch(error => setStatus(error.message, true)); break;
   }
@@ -666,13 +534,13 @@ async function resumeVisibleTerminal() {
   try {
     if (ownerResource === null) {
       const snapshot = await loadSnapshot();
-      desiredAttached = snapshot.status === "running";
+      connection.desiredAttached = snapshot.status === "running";
     } else {
       await syncTerminalState();
     }
     if (!visible) return;
     resizeRemote();
-    if (desiredAttached) void attach();
+    if (connection.desiredAttached) void connection.attach();
     void startStatusObservation();
   } finally {
     resumeLoading = false;
@@ -687,7 +555,7 @@ function updateVisibility() {
     void resumeVisibleTerminal().catch(error => setStatus(error.message, true));
   } else {
     stopStatusObservation();
-    detach({ preserveIntent: true });
+    connection.detach({ preserveIntent: true });
   }
 }
 
@@ -709,9 +577,7 @@ window.addEventListener("beforeunload", () => {
     window.cancelAnimationFrame(resizeFrame);
   }
   stopStatusObservation();
-  if (reconnectTimer !== null) {
-    window.clearTimeout(reconnectTimer);
-  }
+  connection.detach();
   visibilityObserver.disconnect();
   document.removeEventListener("visibilitychange", updateVisibility);
   terminalResizeObserver.disconnect();
@@ -720,10 +586,10 @@ window.addEventListener("beforeunload", () => {
 setAttachButtonMode("detached");
 
 attachToggle.addEventListener("click", () => {
-  if (attached) {
-    detach();
+  if (connection.attached) {
+    connection.detach();
   } else {
-    attach();
+    connection.attach();
   }
 });
 
@@ -749,7 +615,7 @@ deleteButton.addEventListener("click", async () => {
   if (!window.confirm(`确认删除终端 ${terminalId}？删除后不可再 attach。`)) {
     return;
   }
-  detach();
+  connection.detach();
   await ownerCommand("delete");
 });
 

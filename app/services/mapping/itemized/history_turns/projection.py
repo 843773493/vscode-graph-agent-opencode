@@ -47,7 +47,6 @@ class HistoryProjectionBudget:
     def can_add(self, *, byte_count: int, char_count: int) -> bool:
         return (
             self.fragments_used < self.limits.fragments
-            and byte_count <= self.limits.item_chars
             and char_count <= self.limits.item_chars
             and self.bytes_used + byte_count <= self.limits.bytes
             and self.chars_used + char_count <= self.limits.chars
@@ -250,19 +249,19 @@ def bounded_text(
     encoded = json.dumps(candidate, ensure_ascii=False)
     while candidate and not budget.can_add(
         byte_count=len(encoded.encode("utf-8")),
-        char_count=len(encoded),
+        char_count=len(candidate),
     ):
         limit //= 2
         candidate = value[:limit]
         encoded = json.dumps(candidate, ensure_ascii=False)
     if not budget.can_add(
         byte_count=len(encoded.encode("utf-8")),
-        char_count=len(encoded),
+        char_count=len(candidate),
     ):
         return "", True
     budget.add(
         byte_count=len(encoded.encode("utf-8")),
-        char_count=len(encoded),
+        char_count=len(candidate),
     )
     return candidate, len(candidate) < len(value)
 

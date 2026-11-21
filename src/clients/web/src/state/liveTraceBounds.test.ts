@@ -4,10 +4,8 @@ import {
   PENDING_CONVERSATION_EVENT_LIMIT,
 } from "./conversations";
 import {
-  appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   FRONTEND_EVENT_QUEUE_LIMIT,
-  LIVE_TRACE_EVENT_LIMIT,
 } from "./traceEvents";
 import type { TraceEvent } from "../types/backend";
 import type { ConversationView, FrontendReceivedEvent } from "../types/frontend";
@@ -39,18 +37,15 @@ function createTraceEvent(
 }
 
 describe("Live Trace 有界保留", () => {
-  test("全局镜像和事件视图队列均保持固定上限且保留终态", () => {
+  test("事件视图队列保持固定上限且保留终态", () => {
     const incoming = Array.from(
-      { length: LIVE_TRACE_EVENT_LIMIT * 3 },
+      { length: FRONTEND_EVENT_QUEUE_LIMIT * 3 },
       (_, index) => createTraceEvent(index),
     );
     incoming.push(createTraceEvent(incoming.length, "job_completed"));
-    const live = appendBoundedLiveTraceEvents([], incoming);
     const eventQueues = new Map<string, FrontendReceivedEvent[]>();
     appendReceivedEvents(eventQueues, SESSION_ID, incoming, "sse");
 
-    expect(live).toHaveLength(LIVE_TRACE_EVENT_LIMIT);
-    expect(live[live.length - 1]?.type).toBe("job_completed");
     expect(eventQueues.get(SESSION_ID)?.length).toBeLessThanOrEqual(
       FRONTEND_EVENT_QUEUE_LIMIT,
     );

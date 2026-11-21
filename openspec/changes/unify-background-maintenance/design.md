@@ -81,14 +81,15 @@ Gateway 自身维护   → Gateway 自己的数据 owner（本次不变）
 sdk/
 ├─ node/                              @boxteam/plugin-sdk
 │  ├─ package.json
+│  ├─ build.mjs                       开发 JS／独立类型检查／发行声明
+│  ├─ tsconfig.jsonc
 │  └─ src/
-│     ├─ index.mjs                     公开入口
-│     ├─ index.d.mts                   公开类型，不引用客户端
-│     ├─ runtime.mjs                   实例身份、管理 HTTP 接入、关闭委托
-│     ├─ maintenance.mjs               轻量周期调度
-│     ├─ commands.mjs                  命令注册、调用、取消
-│     ├─ logging.mjs                   原日志公共接入
-│     ├─ observation.mjs               原诊断公共接入
+│     ├─ index.ts                      公开入口与类型，不引用客户端
+│     ├─ runtime.ts                    实例身份、管理 HTTP 接入、关闭委托
+│     ├─ maintenance.ts                轻量周期调度
+│     ├─ commands.ts                   命令注册、调用、取消
+│     ├─ logging.ts                    原日志公共接入
+│     ├─ observation.ts                原诊断公共接入
 │     ├─ resources/                    构建带入的只读日志合同
 │     └─ generated/                    现有 proto 的生成输出
 └─ python/                            boxteam-plugin-sdk
@@ -215,7 +216,11 @@ Browser 截图首次清理保持非阻塞，随后沿每小时周期；其他原
 
 ### 9. 开发与 release 共用完整插件目录构建链
 
-开发和 release 的插件都运行构建好的完整目录。沿现有插件构建脚本抽出同一个目录构建函数，调用方只决定加载目录还是将该目录打 ZIP；不另写 release 专用依赖替换，不保留源码直接运行模式。插件／产品显式声明 SDK 依赖；插件开发仍使用构建包，不通过 workspace 链接、Python editable 或源码 pythonpath 运行插件制品。仓库内 Node 产品开发使用 Bun workspace 来源 `sdk/node`，Backend 本地开发使用 uv 标准 editable 来源 `sdk/python`；不改模块搜索路径或建立协议别名，SDK 代码及 wire 仍仅一份。Node 产品发行沿原独立运行时清单携带包内 tarball，不复制根 workspace 声明或源码链接。SDK 的元数据版本和产品依赖版本由准备入口从根 `package.json` 同步，普通源码编辑无须改版本、重建 SDK 归档或更新锁，依赖和元数据变化后重新同步。release worktree／发行 CI 用 `uv sync --frozen --no-editable`；产品依赖导出通过 `export-python-requirements.mjs` 保留锁定的传递依赖和摘要，排除本地 editable 项并加入当前 SDK wheel 及真实摘要，再沿原安装链安装。插件的包内 wheel、锁和完整性合同不变。
+开发和 release 的插件都运行构建好的完整目录。沿现有插件构建脚本抽出同一个目录构建函数，调用方只决定加载目录还是将该目录打 ZIP；不另写 release 专用依赖替换，不保留源码直接运行模式。插件／产品显式声明 SDK 依赖；插件开发仍使用构建包，不通过 workspace 链接、Python editable 或源码 pythonpath 运行插件制品。仓库内 Node 产品开发使用 Bun workspace 来源 `sdk/node`，Backend 本地开发使用 uv 标准 editable 来源 `sdk/python`；不改模块搜索路径或建立协议别名，SDK 代码及 wire 仍仅一份。Node 产品发行沿原独立运行时清单携带包内 tarball，不复制根 workspace 声明或源码链接。Node SDK 的手写实现与公开类型统一维护在 TypeScript；workspace 的 types 解析当前源码，default 运行入口解析 esbuild 生成的 JS。标准安装后生成开发 JS，watch 使用同一 esbuild context 增量转换，不在每次修改后运行完整类型检查或生成声明；类型检查单独执行，发行必须从空输出生成声明并检查。开发插件仍构建不可变运行归档，可以跳过声明；发行归档必须包含生成声明且不依赖源码。原开发启动入口在加载 SDK 消费者前，自动构建本次选定前后端源码根的运行 JS；同一根只构建一次，成功且内容变化才写入。开发者继续使用原启动／停止命令，无须额外编译步骤或常驻 watch 协调进程；SDK 独立 watch 仅作为编译工具保留，不管理产品实例或自动修改已有插件绑定。SDK 的元数据版本和产品依赖版本由准备入口从根 `package.json` 同步，普通源码编辑无须改版本、重建 SDK 归档或更新锁，依赖和元数据变化后重新同步。release worktree／发行 CI 用 `uv sync --frozen --no-editable`；产品依赖导出通过 `export-python-requirements.mjs` 保留锁定的传递依赖和摘要，排除本地 editable 项并加入当前 SDK wheel 及真实摘要，再沿原安装链安装。插件的包内 wheel、锁和完整性合同不变。
+
+SDK 归档先读取并冻结源码与资源，输入指纹和 staging 使用同一份内容，编译不再读取仍可被编辑的 checkout；临时依赖链接只服务标准构建解析，归档前移除。发行的 JS 与声明由同一个 TypeScript Program 生成，避免检查后重新读源码导致实现与声明不一致。开发 watch 登记资源的完整目录树，包括中间和空目录，新增或删除深层资源均自动同步。
+
+公开 `scripts/launch/dev.mjs` 统一承担启动前准备，并复用 `development/` 下原有 manager／systemd／服务编排；内部已准备的进程直接进入编排，不重复构建。停止与状态查询不触发编译，不因未完成编辑而被阻断。构建失败在启动服务前显式报错。普通 start 保持幂等复用已有实例；本次新建后就绪失败由创建 manager 清理，启动与清理均失败时保留两份原异常。删除独立产品 watch、独占启动参数及其专属启停状态，不新增实例归属账本。开发栈测试与模板分别放在 `development/tests/` 与 `development/fixtures/`。
 
 ```text
 SDK 源码 + 插件源码
@@ -249,7 +254,7 @@ SDK 更新只改变相关归档来源及锁记录，其余依赖沿原基础锁�
 
 新工作区默认项属于 Gateway 配置的独立操作，只影响后续创建，不与现有工作区更新隐式联动。首次隔离开发 Home 的内置默认绑定从本次构建清单取实际版本，经原初始化入口生成；已有 Home 只更新显式选择的绑定。普通启动不批量改配置，未选绑定保留原版本；实例状态仅用于结果核实。构建、安装或配置更新失败时，保留旧制品并报告原配置／停止状态，不启动一个配置未确认的新实例，不新增跨层自动回滚。验收检查配置版本与真实运行版本、SDK 加载来源一致。
 
-现有 `app/gateway/plugins/dependencies.py` 的锁校验、两个插件构建脚本及 `scripts/launch/dev-bundled-plugins.mjs` 必须同批迁齐；目录与 ZIP 安装使用相同规则，仅为已显式声明的 SDK 增加“包内归档”来源，不全面放开本地依赖。Bun 本地 tarball 条目是原生三项形式（身份含相对归档路径、依赖 metadata、sha512），不能硬套 registry 的四项及版本解析；从归档 package.json 核真实 name／version，并与声明、锁来源和已解包依赖树对齐。uv wheel 条目按标准 `source.path`、wheel filename／sha256 解析；根 requires-dist 可能记录 path，须结合 pyproject 版本约束、tool.uv.sources、归档 METADATA 和实际 dist-info 核对 name／version／marker／extras 及来源，不能只比较空 specifier 或跳过根依赖一致性检查。SDK 的传递依赖仍按原 registry 规则核实，其他未知来源明确拒绝。
+现有 `app/gateway/plugins/dependencies.py` 的锁校验、两个插件构建脚本及 `scripts/launch/development/bundled-plugins.mjs` 必须同批迁齐；目录与 ZIP 安装使用相同规则，仅为已显式声明的 SDK 增加“包内归档”来源，不全面放开本地依赖。Bun 本地 tarball 条目是原生三项形式（身份含相对归档路径、依赖 metadata、sha512），不能硬套 registry 的四项及版本解析；从归档 package.json 核真实 name／version，并与声明、锁来源和已解包依赖树对齐。uv wheel 条目按标准 `source.path`、wheel filename／sha256 解析；根 requires-dist 可能记录 path，须结合 pyproject 版本约束、tool.uv.sources、归档 METADATA 和实际 dist-info 核对 name／version／marker／extras 及来源，不能只比较空 specifier 或跳过根依赖一致性检查。SDK 的传递依赖仍按原 registry 规则核实，其他未知来源明确拒绝。
 
 只允许上述包内普通归档文件，实际解析路径必须留在插件包内；拒绝绝对路径、越界／链接、目录来源、editable、Git 及任意外部 file URL。核原生锁摘要和归档 metadata，沿原依赖树完整性与包发布校验执行，不另建 SDK 摘要账本，也不在普通请求重复校验。正向验收须经过真实打包及安装验证入口；负向覆盖摘要篡改、name／version／来源冲突、缺失归档和越界引用。现有 registry-only 插件保持原规则，不要求它们改为本地归档或自动重写既有安装包。
 

@@ -100,7 +100,6 @@ function appState(overrides: Partial<AppState> = {}): AppState {
     sessions: [],
     currentSession: null,
     currentSessionWorkspaceId: null,
-    traceEvents: [],
     llmRequestLogs: [],
     sessionResources: [],
     agentStateJsonl: "{}",
@@ -626,7 +625,6 @@ describe("Gateway 工作区删除", () => {
       ]),
       currentSession: session("ses-current"),
       currentSessionWorkspaceId: workspaceKey("ws-active"),
-      traceEvents: [{ id: "trace" } as never],
       llmRequestLogs: [{ id: "log" } as never],
       sessionResources: [{ id: "resource" } as never],
       agentStateJsonl: "{\"a\":1}",
@@ -644,7 +642,6 @@ describe("Gateway 工作区删除", () => {
     expect(next.sessions).toEqual([nextSession]);
     expect(next.currentSession).toBeNull();
     expect(next.currentSessionWorkspaceId).toBeNull();
-    expect(next.traceEvents).toEqual([]);
     expect(next.llmRequestLogs).toEqual([]);
     expect(next.sessionResources).toEqual([]);
     expect(next.agentStateJsonl).toBe("");

@@ -524,7 +524,9 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         notices = read_notice_parts(self._context_reader, snapshot, chain,
             turn_ids=[span.turn_id for span in spans],
             execution_ids=list(dict.fromkeys(entry.execution_id for entry in internal_entries)))
-        for span in spans:
+        # 先为窗口末端分配正文预算，避免旧回复耗尽预算后截空最新回复。
+        # DTO 仍按请求的原顺序返回。
+        for span in reversed(spans):
             detail = self._load_indexed_span(
                 session_id,
                 span,
@@ -547,6 +549,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 )
             )
             items.append(project_detail(detail, include, budget))
+        items.reverse()
+        summaries.reverse()
         internal_executions = build_internal_execution_history(internal_entries, include=include)
         for execution in internal_executions:
             execution.response_parts.extend(notices.get(execution.execution_id, ()))

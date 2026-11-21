@@ -81,6 +81,8 @@ export interface ConversationView {
   /** 展示历史中的权威 Turn 身份；待处理消息和旧诊断路径没有该字段。 */
   turnId?: string;
   turnRevision?: number;
+  /** 远处历史正文已释放，进入渲染范围时从权威历史补读。 */
+  bodyEvicted?: true;
   /** 实际历史读取快照；不能用当前活动会话或时间线最新快照替代。 */
   sourceViewId?: string;
   sourceViewRevision?: number;
@@ -187,7 +189,6 @@ export interface AppState {
   currentSession: Session | null;
   currentSessionWorkspaceId: string | null;
   turnTimelinesBySession: Map<string, SessionTurnTimeline>;
-  traceEvents: TraceEvent[];
   messageStreamsByTurnStream?: Map<string, MessageStreamState>;
   llmRequestLogs: LLMRequestLogSummaryDTO[];
   llmRequestLogsLoadedAt: string | null;

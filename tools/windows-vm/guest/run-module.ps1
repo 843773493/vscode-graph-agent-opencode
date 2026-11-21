@@ -276,7 +276,7 @@ switch ($Module) {
             Assert-DevPortsClear
         }
     }
-    "js-platform" { Invoke-Native "bun" @("test", "scripts/launch/cross-platform-development-target.test.mjs") }
+    "js-platform" { Invoke-Native "bun" @("test", "scripts/launch/tests/cross-platform-development-target.test.mjs") }
     "backend-js" { Invoke-Native "bun" @("test", "src/shared", "src/workspace-services/browser", "src/workspace-services/terminal") }
     "web-build" { Invoke-Native "bun" @("run", "--cwd", "src/clients/web", "build") }
     "full-python" { Invoke-Native "uv" @("run", "pytest") }

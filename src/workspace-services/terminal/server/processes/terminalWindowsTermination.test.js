@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-const lifecycleModule = new URL("../../../../../sdk/node/src/process-lifecycle.mjs", import.meta.url).href;
+const lifecycleModule = import.meta.resolve("@boxteam/plugin-sdk/process-lifecycle");
 
 function observeWindowsTermination(scenario) {
   // 在独立进程中模拟Windows系统边界，绝不向宿主上的真实PID发送信号。

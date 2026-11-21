@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 
-import { waitForGateway } from "../../../scripts/launch/dev-systemd.mjs";
+import { waitForGateway } from "../../../scripts/launch/development/systemd.mjs";
 
 async function withGatewayProbe(respond, exercise, { managerReady = true } = {}) {
   const runtimeRoot = path.resolve(

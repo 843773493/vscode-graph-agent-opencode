@@ -38,7 +38,6 @@ export function applySessionSelectionTransition(
   eventPayload: Record<string, unknown>,
 ): void {
   next.unreadSessionKeys.delete(cacheKey);
-  next.traceEvents = [];
   next.llmRequestLogs = [];
   next.llmRequestLogsLoadedAt = null;
   next.llmRequestLogsLoading = previous.contentView === "requests";

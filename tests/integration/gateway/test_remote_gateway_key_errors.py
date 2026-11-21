@@ -20,6 +20,7 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
+from tests.support.processes.workspace import TEST_READY_TIMEOUT_SECONDS
 from tests.support.workspaces import clear_test_provider_api_keys
 
 
@@ -50,6 +51,12 @@ def gateway(
         port=port, artifacts_dir=context.artifacts_dir,
     )
     try:
+        # Gateway 健康不代表托管工作区已恢复；启动等待与后续错误请求分开计时。
+        with httpx.Client(headers=LOCAL_TOKEN_HEADERS, timeout=TEST_READY_TIMEOUT_SECONDS, trust_env=False) as client:
+            response = client.get(f"http://127.0.0.1:{port}/api/gateway/workspaces")
+            assert response.status_code == 200, response.text
+            items = response.json()["data"]["items"]
+            assert len(items) == 1 and items[0]["status"] == "ready", response.text
         yield context, f"http://127.0.0.1:{port}"
     finally:
         close_gateway_process(handle)

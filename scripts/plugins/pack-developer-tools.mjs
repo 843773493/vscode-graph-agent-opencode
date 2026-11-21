@@ -14,6 +14,8 @@ const SOURCE_FILES = [
   "src/workspace-services/terminal/server/output/terminalUtf8Output.js",
   "src/workspace-services/terminal/server/processes/isolatedPtyProcess.js",
   "src/workspace-services/terminal/server/processes/ptyWorker.js",
+  "src/workspace-services/terminal/server/processes/terminalPtyLifecycle.js",
+  "src/workspace-services/terminal/server/processes/terminalEnvironment.js",
   "src/workspace-services/terminal/server/terminalInput.js",
   "src/workspace-services/terminal/server/terminalManager.js",
   "src/workspace-services/terminal/server/terminalSession.js",
@@ -160,7 +162,7 @@ export async function buildDeveloperToolsDirectory(options) {
   assertRepositoryRoot(projectRoot);
   if (!path.isAbsolute(output) || existsSync(output)) throw new Error(`插件目录必须是未使用的绝对路径: ${output}`);
   packageDependencies(projectRoot);
-  const sdk = options.sdk ?? buildPluginSdk({ projectRoot, language: "node", bunExecutable });
+  const sdk = options.sdk ?? buildPluginSdk({ projectRoot, language: "node", bunExecutable, nodeExecutable });
   // 依赖缓存只由声明、锁、SDK 归档与目标构建工具决定，业务源码变化不重装依赖。
   const hash = createHash("sha256").update(JSON.stringify({ target, sdk: sdk.digest, bunExecutable, nodeExecutable, pythonExecutable }));
   hash.update(run(bunExecutable, ["--version"], projectRoot, process.env));

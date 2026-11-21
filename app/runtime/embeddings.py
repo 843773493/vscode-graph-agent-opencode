@@ -76,10 +76,7 @@ class LiteLLMEmbeddingComputer:
 
         async with AsyncExitStack() as scope:
             client = None
-            headers: dict[str, object] = dict(self.default_headers)
             if self.custom_llm_provider == "openai":
-                from openai import Omit
-
                 from app.agents.providers.provider_http_client import (
                     build_provider_openai_client,
                 )
@@ -89,15 +86,13 @@ class LiteLLMEmbeddingComputer:
                     is_async=True, base_url=self.endpoint, api_key=self.api_key,
                     trust_env=not self.no_proxy,
                 ))
-                if not self.api_key and not any(name.lower() == "authorization" for name in headers):
-                    headers["Authorization"] = Omit()
             response = await litellm.aembedding(
                 model=self.model,
                 input=list(inputs),
                 api_base=self.endpoint,
                 api_key=self.api_key,
                 custom_llm_provider=self.custom_llm_provider,
-                extra_headers=headers,
+                extra_headers=self.default_headers,
                 client=client,
                 max_retries=3,
                 timeout=60,

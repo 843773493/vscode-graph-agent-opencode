@@ -15,7 +15,7 @@ test("真实线程池排队中的cwd检查不阻断同进程HTTP，原结果在�
   const root = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalCwdPersistence/workspace", randomUUID());
   t.after(() => rmSync(root, { recursive: true, force: true }));
   cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/terminal_cwd_workspace"), root, { recursive: true });
-  const moduleUrl = pathToFileURL(path.join(process.cwd(), "src/workspace-services/terminal/server/terminalSession.js")).href;
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), "src/workspace-services/terminal/server/processes/terminalEnvironment.js")).href;
   const script = `
 import assert from "node:assert/strict";
 import { createServer, get } from "node:http";
@@ -87,6 +87,6 @@ test("外部绝对 cwd 经真实创建、落盘和恢复后仍传给同一 PTY �
   t.after(() => restoredManager.shutdown());
   await restoredManager.init();
   assert.equal(restoredManager.get(terminalId).cwd, externalCwd);
-  await restoredManager.get(terminalId).start();
+  await restoredManager.get(terminalId).lifecycle.start();
   assert.deepEqual(workerDirectories, [externalCwd, externalCwd]);
 });

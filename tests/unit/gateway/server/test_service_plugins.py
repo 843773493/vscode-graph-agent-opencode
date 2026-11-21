@@ -21,7 +21,7 @@ from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.plugins.workspaces import WorkspacePluginBindings
-from app.gateway.proxy_upstream import UpstreamResponseBody
+from app.gateway.proxy_upstream import HOP_BY_HOP_HEADERS, UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime, PluginSlot
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
@@ -210,14 +210,16 @@ async def test_service_path_cannot_escape_declared_service(plugin_proxy: tuple[F
     assert calls == []
 
 
-async def test_native_service_publishes_installed_package_identity(
-    plugin_proxy: tuple[FastAPI, list[httpx.Request]],
+@pytest.mark.parametrize("header", sorted(HOP_BY_HOP_HEADERS))
+async def test_native_service_publishes_identity_and_filters_hop_headers(
+    plugin_proxy: tuple[FastAPI, list[httpx.Request]], header: str,
 ) -> None:
     app, _ = plugin_proxy
     owner = app.state.service_plugins
     await owner.client.aclose()
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
-        headers={"X-BoxTeam-Plugin-Package-Digest": "forged", "X-BoxTeam-Plugin-Instance-Id": "forged"},
+        headers={"X-BoxTeam-Plugin-Package-Digest": "forged", "X-BoxTeam-Plugin-Instance-Id": "forged",
+                 header: "upstream-hop", "X-Kept": "end-to-end"},
         json={"result": "ready"})))
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -226,6 +228,32 @@ async def test_native_service_publishes_installed_package_identity(
     assert response.headers["X-BoxTeam-Plugin-Package-Digest"] == "a" * 64
     assert response.headers["X-BoxTeam-Plugin-Instance-Id"] == "original"
     assert response.headers["X-BoxTeam-Plugin-Gateway-Id"] == owner.gateway_id
+    assert header not in response.headers
+    assert response.headers["X-Kept"] == "end-to-end"
+    assert response.json() == {"result": "ready"}
+
+
+async def test_service_replaces_duplicate_request_ids_and_drops_caller_credentials(
+    plugin_proxy: tuple[FastAPI, list[httpx.Request]],
+) -> None:
+    app, calls = plugin_proxy
+    private_headers = ["X-Local-Token", "X-BoxTeam-Federation-Token", "Cookie",
+        "X-BoxTeam-Resource-Owner", "X-BoxTeam-Navigation-Actor", "X-BoxTeam-Service-Plugin-Runtime-Manage",
+        "X-BoxTeam-Error-Context"]
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/read?package_version=1.0.0",
+            headers=[("X-Request-ID", "authoritative-request"), ("x-request-id", "forged-request"),
+                     *[(name, "attacker") for name in private_headers], ("Accept", "application/json")])
+    assert response.status_code == 502
+    assert response.headers.get_list("X-Request-ID") == ["authoritative-request"]
+    assert response.json()["request_id"] == "authoritative-request"
+    assert len(calls) == 1
+    assert calls[0].headers.get_list("X-Request-ID") == ["authoritative-request"]
+    assert calls[0].headers.get_list("X-Local-Token") == ["private"]
+    assert calls[0].headers["Accept"] == "application/json"
+    for name in private_headers[1:]:
+        assert name not in calls[0].headers
 
 
 @pytest.mark.parametrize(("workspace_id", "binding_workspace", "expected_status"), [

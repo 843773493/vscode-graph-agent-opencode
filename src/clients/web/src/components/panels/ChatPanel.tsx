@@ -29,6 +29,7 @@ import { ChatItemOwnerContext } from "../chat/itemContextMenu";
 import ChatTurnErrorBoundary from "../chat/turn/ChatTurnErrorBoundary";
 import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
 import { useTurnVirtualScroller, type TurnViewportController } from "../chat/useTurnVirtualScroller";
+import { useTurnBodyWindow } from "../chat/useTurnBodyWindow";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
 import { MessageSearchLocationContext } from "../chat/messageSearchLocation";
@@ -53,6 +54,7 @@ interface ChatPanelRenderState extends ChatTurnHandlers {
   historyError: string | null;
   onRetryHistory: () => void;
   pendingActionError: string | null;
+  bodyHeights: Map<string, number>;
 }
 
 interface ChatPanelVirtuosoContext {
@@ -134,6 +136,12 @@ const renderChatPanelItem: ItemContent<
       </div>
     );
   }
+  if (item.conversation.bodyEvicted) {
+    return <div className="chat-virtual-item" data-turn-id={item.conversation.turnId}
+      style={{ height: state.bodyHeights.get(item.key) }} aria-busy="true">
+      <div role="status">{t("chat.turn.loadingFull")}</div>
+    </div>;
+  }
   return (
     <div
       className="chat-virtual-item"
@@ -194,6 +202,7 @@ export default function ChatPanel({
   onLoadLatestMessages,
   onLoadOlderMessages,
   onLoadTurnDetails,
+  onRetainTurnBodies,
   onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
   onRetryHistory,
@@ -232,6 +241,7 @@ export default function ChatPanel({
   onLoadLatestMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
+  onRetainTurnBodies?: (turnIds: string[]) => Promise<void>;
   onLoadToolDetails?: LoadToolDetails;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
@@ -312,6 +322,10 @@ export default function ChatPanel({
     (conversation) => isLiveConversationView(conversation)
       && (conversation.status === "running" || conversation.status === "queued"),
   );
+  const { heights: bodyHeights, itemsRendered } = useTurnBodyWindow({
+    items: transcriptItems, scopeKey, retain: onRetainTurnBodies,
+    onRendered: scheduleAnchorAlignment, onError: error => setPendingActionError(errorMessage(error)),
+  });
   // 等待事件及其恢复快照是入口；普通会话不查询工具确认。
   const approvalWaits = conversations.flatMap((conversation) =>
     conversation.sessionId === sessionId && conversation.threadId === threadId
@@ -413,6 +427,7 @@ export default function ChatPanel({
     historyError,
     onRetryHistory: retryHistory,
     pendingActionError,
+    bodyHeights,
   };
 
   return (
@@ -461,7 +476,7 @@ export default function ChatPanel({
         // 尺寸变化分支只判断 prop 是否为 false，不调用跟随回调。
         followOutput={viewportAnchored ? false : followOutput}
         atBottomStateChange={handleAtBottomChange}
-        itemsRendered={scheduleAnchorAlignment}
+        itemsRendered={itemsRendered}
         totalListHeightChanged={handleListHeightChanged}
         components={CHAT_PANEL_VIRTUOSO_COMPONENTS}
         itemContent={renderChatPanelItem}

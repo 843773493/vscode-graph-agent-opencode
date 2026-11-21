@@ -76,7 +76,7 @@ function installPythonDependencies(pythonExecutable) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  writeApplicationNodeManifest(projectRoot, applicationRoot);
+  writeApplicationNodeManifest(projectRoot, applicationRoot, { nodeExecutable });
   run("bun", ["install", "--production", "--exact", "--ignore-scripts"], {
     cwd: applicationRoot,
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },

@@ -94,11 +94,6 @@ def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)
 
-# 为测试填充缺失的API密钥（如果为空）
-if not os.environ.get("OPENROUTER_API_KEY"):
-    os.environ["OPENROUTER_API_KEY"] = "test-key-placeholder"
-
-
 CONFIGS_DIR = os.path.join(Path.cwd(), "configs")
 TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.jsonc")
 

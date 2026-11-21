@@ -1,7 +1,7 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { parseDevelopmentPortOffset } from "./dev-environment.mjs";
+import { parseDevelopmentPortOffset } from "./development/environment.mjs";
 import { repositoryContext, requireManaged } from "./worktree/repository.mjs";
 
 function parseArguments(args) {
@@ -79,7 +79,7 @@ export function main(args = process.argv.slice(2), cwd = process.cwd(), environm
   const selected = resolveWorkspaceTarget({ ...parsed, cwd, environment });
   const command = [
     process.execPath,
-    path.join(selected.frontendRoot, "scripts/launch/dev-manager.mjs"),
+    path.join(selected.frontendRoot, "scripts/launch/dev.mjs"),
     parsed.action,
   ];
   const result = run(command[0], command.slice(1), {

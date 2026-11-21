@@ -168,6 +168,11 @@ async function verifyEmbeddedTerminals(page) {
 try {
   // route.fulfill 的测试宿主页没有真实远端地址，Chromium 将它视为公共网络；显式授予测试上下文本机网络权限。
   const context = await browser.newContext({ permissions: ['local-network-access'] });
+  // attach页面应能仅靠owner快照与内存游标运行；浏览器存储不可用不能阻断终端。
+  await context.addInitScript(() => {
+    if (window.location.pathname !== "/api/gateway/attach/terminal/") return;
+    Object.defineProperty(window, "sessionStorage", { get() { throw new Error("本场景禁止读取终端sessionStorage"); } });
+  });
   page = await context.newPage();
   await page.context().addCookies(input.cookies);
   page.on("pageerror", error => pageErrors.push(String(error)));
@@ -206,6 +211,14 @@ try {
   await page.keyboard.press("Enter");
   await expect(page.locator(".xterm-rows")).toContainText(marker, { timeout: 15_000 });
   await expect.poll(() => responses.some(response => response.path === "/api/v1/resources/events" && response.status === 200)).toBe(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "断开终端", exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".xterm-rows")).toContainText(marker);
+  const reloadMarker = `terminal-reloaded-${suffix}`;
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type(`printf '%s%s\\n' 'terminal-reloaded-' '${suffix}'`);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".xterm-rows")).toContainText(reloadMarker, { timeout: 15_000 });
   // 独立页验证真实输入输出；静止零补读在下方六终端完成初始化后覆盖完整心跳周期。
   expect(pageErrors).toEqual([]);
   expect(requestFailures).toEqual([]);
@@ -220,7 +233,7 @@ try {
   expect(pageErrors).toEqual([]);
   expect(httpFailures).toEqual(embeddedResult.expectedFailures);
   await writeFile(path.join(artifactsDir, "result.json"), JSON.stringify({
-    gatewayId, workspaceId, resourceId, instanceId, marker, pageErrors, consoleMessages,
+    gatewayId, workspaceId, resourceId, instanceId, marker, reloadMarker, pageErrors, consoleMessages,
     requestFailures, httpFailures, staticAssetFailures, sockets, responses,
     screen, embeddedResult,
   }, null, 2), { flag: "wx" });

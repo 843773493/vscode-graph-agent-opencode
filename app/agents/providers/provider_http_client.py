@@ -20,6 +20,15 @@ class _NoAuthentication(httpx.Auth):
         yield request
 
 
+class _OmitEmptyAuthorization(httpx.Auth):
+    """SDK 用空认证头声明匿名请求；实际发送时移除，保留显式配置的认证头。"""
+
+    def auth_flow(self, request: httpx.Request) -> Iterator[httpx.Request]:
+        if request.headers.get("Authorization") == "":
+            del request.headers["Authorization"]
+        yield request
+
+
 def build_provider_http_handler(*, is_async: bool, trust_env: bool, no_auth: bool) -> AsyncHTTPHandler | HTTPHandler:
     """Anthropic 和 Responses 使用 LiteLLM handler，外部注入的 httpx client 由调用方关闭。"""
     if is_async:
@@ -46,16 +55,21 @@ def build_provider_openai_client(
         return AsyncOpenAI(
             api_key=api_key,
             _enforce_credentials=api_key != "",
+            default_headers={"Authorization": ""} if api_key == "" else None,
             base_url=base_url,
-            http_client=httpx.AsyncClient(transport=model_stream_async_transport(), trust_env=trust_env),
+            http_client=httpx.AsyncClient(
+                transport=model_stream_async_transport(), trust_env=trust_env,
+                auth=_OmitEmptyAuthorization() if api_key == "" else None,
+            ),
         )
     from openai import OpenAI
 
     return OpenAI(
         api_key=api_key,
         _enforce_credentials=api_key != "",
+        default_headers={"Authorization": ""} if api_key == "" else None,
         base_url=base_url,
-        http_client=httpx.Client(trust_env=trust_env),
+        http_client=httpx.Client(trust_env=trust_env, auth=_OmitEmptyAuthorization() if api_key == "" else None),
     )
 
 

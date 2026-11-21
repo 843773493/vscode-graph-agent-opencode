@@ -156,6 +156,7 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
         onViewportReady={connectViewport}
         onViewStateChange={runtime.views.saveSessionViewState} onViewStateRestoreStatus={runtime.setStatus}
         onLoadTurnDetails={history.loadTurnDetails}
+        onRetainTurnBodies={history.retainTurnBodies}
         onLoadToolDetails={(turnId, toolCallId) => history.loadTurnDetails([turnId], `tool:${turnId}:${toolCallId}`, false, ['tool_call', 'tool_result'], [toolCallId])}
         onLoadAgentStateMessageRawContent={content.loadAgentStateMessageRawContent}
         onRetryHistory={history.refreshTurnHistory} onReplayTurn={actions.replayTurn} onOpenChanges={openChanges}

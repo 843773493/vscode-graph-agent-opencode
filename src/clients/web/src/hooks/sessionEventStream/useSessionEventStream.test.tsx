@@ -28,7 +28,7 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
   let current: AppState = { ...INITIAL_APP_STATE, currentSession: { session_id: sessionId } as AppState["currentSession"],
     currentSessionWorkspaceId: "gateway_a", eventQueuesBySession: new Map(), pendingConversations: new Map(),
     pendingQueueVersions: new Map(),
-    sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]), traceEvents: [] };
+    sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]) };
   const event = (payloadSession: string, name: string): SessionStreamEvent => ({
     event_id: `event_${payloadSession}`, session_id: sessionId, thread_id: "thr_00000000700070008000000000000001", job_id: "job_attachment", type: "message_created",
     phase: "message", title: "创建消息", content: "", timestamp: "2026-10-14T00:00:00Z",
@@ -57,7 +57,8 @@ test("Trace保留Goal诊断事件，但不能第二次写入统一任务的Goal�
     setState: update => { current = typeof update === "function" ? update(current) : update; } });
   expect(current.currentGoal).toBe(goal);
   expect(current.currentGoalSyncVersion).toBe(3);
-  expect(current.traceEvents.some(event => event.type === "goal_cleared")).toBe(true);
+  expect(current.eventQueuesBySession.get("workspace-session-main")?.some(item =>
+    item.kind === "trace" && item.event.type === "goal_cleared")).toBe(true);
 });
 
 const originalFetch = globalThis.fetch;

@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 
-import { waitForDetachedReady, waitForHttpOk } from "../../../scripts/launch/dev-readiness.mjs";
+import { waitForDetachedReady, waitForHttpOk } from "../../../scripts/launch/development/readiness.mjs";
 
 const runtimeRoot = path.resolve(
   "out/tests/integration/harness/dev_service_readiness/runtime", randomUUID(),

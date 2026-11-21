@@ -56,7 +56,6 @@ function appState(): AppState {
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),
     turnTimelinesBySession: new Map(),
-    traceEvents: [],
   } as unknown as AppState;
 }
 
@@ -118,7 +117,7 @@ function ComposerBoundary({
 }
 
 describe("Composer React 状态边界", () => {
-  test("timeline 和 trace 更新不触发 Context consumer 重渲染", () => {
+  test("timeline 更新不触发 Context consumer 重渲染", () => {
     let renderCount = 0;
     const Consumer = React.memo(() => {
       useComposerState();
@@ -136,7 +135,6 @@ describe("Composer React 状态边界", () => {
     });
     const timelineDelta = {
       ...initial,
-      traceEvents: [{ event_id: "event_delta" }],
       turnTimelinesBySession: new Map([
         [SESSION_CACHE_KEY, {
           ...createSessionTurnTimeline(SESSION_CACHE_KEY),

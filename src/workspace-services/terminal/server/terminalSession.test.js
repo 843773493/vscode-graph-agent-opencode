@@ -1,3 +1,4 @@
+import { resolveTerminalCwd } from "./processes/terminalEnvironment.js";
 import { inspect } from "node:util";
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
@@ -5,7 +6,7 @@ import path from "node:path";
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
-import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
+import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
 import { readProcessStat } from "@boxteam/plugin-sdk/process-lifecycle";
 
@@ -52,7 +53,7 @@ test("PTY 启动失败只公开终端身份，保留底层 cause 和原生启动
   const diagnostic = t.mock.method(process.stderr, "write", () => {});
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw original; });
   try {
-    await assert.rejects(session.start(), (error) => {
+    await assert.rejects(session.lifecycle.start(), (error) => {
       assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
       assert.equal(error.cause, original);
       return true;
@@ -109,14 +110,14 @@ test("启动诊断次错保留原PTY异常和原Worker句柄", async (t) => {
   const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => { throw original; });
   try {
-    await assert.rejects(session.start(), (error) => {
+    await assert.rejects(session.lifecycle.start(), (error) => {
       assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
       assert(error.cause instanceof AggregateError);
       assert.deepEqual(error.cause.errors, [original, diagnosticError]);
       assert.equal(error.cause.cause, original);
       return true;
     });
-    assert(session.ptyProcess instanceof IsolatedPtyProcess);
+    assert(session.lifecycle.ptyProcess instanceof IsolatedPtyProcess);
     assert.equal(session.status, "created");
     assert.equal(session.osPid, null);
     assert.equal(diagnostic.mock.callCount(), 1);
@@ -132,7 +133,7 @@ test("启动诊断次错逐层保留cwd及PTY阶段原因", async (t) => {
   const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
   const start = t.mock.method(IsolatedPtyProcess.prototype, "start", async () => assert.fail("cwd拒绝不能启动PTY"));
   try {
-    await assert.rejects(session.start(), (error) => {
+    await assert.rejects(session.lifecycle.start(), (error) => {
       assert.equal(error.message, `终端 PTY 启动失败: terminal_id=${session.id}`);
       const [cwdError, ptyDiagnostic] = error.cause.errors;
       assert.equal(error.cause.cause, cwdError);
@@ -159,10 +160,10 @@ test("启动诊断次错保留启动清理三错、未知身份和显式重试",
   const diagnosticError = new Error(`日志写入失败: ${session.cwd}/private-log`);
   const diagnostic = t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
   const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() { throw cleanupError; } };
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   const states = [];
   session.manager.persist = async () => { states.push(session.toRecord()); };
-  await assert.rejects(session.failStartup(original), (error) => {
+  await assert.rejects(session.lifecycle.failStartup(original), (error) => {
     assert.equal(error.message, `终端启动失败且清理未完成: terminal_id=${session.id}`);
     assert(error instanceof AggregateError);
     const [failure, secondary] = error.errors;
@@ -172,7 +173,7 @@ test("启动诊断次错保留启动清理三错、未知身份和显式重试",
     assert.equal(failure.cause, original);
     return true;
   });
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
   assert.equal(session.status, "created");
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(session.osPid, 42002);
@@ -181,9 +182,9 @@ test("启动诊断次错保留启动清理三错、未知身份和显式重试",
   assert.equal(diagnostic.mock.callCount(), 1);
   assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(cleanupError)));
   worker.shutdown = async () => {};
-  await assert.rejects(session.failStartup(original), (error) => error === original);
+  await assert.rejects(session.lifecycle.failStartup(original), (error) => error === original);
   assert.equal(states.length, 3);
-  assert.equal(session.ptyProcess, null);
+  assert.equal(session.lifecycle.ptyProcess, null);
   assert.equal(session.status, "terminated");
   assert.equal(session.reconciliationStatus, "verified");
   assert.deepEqual(original.creationReceipt, {
@@ -196,7 +197,7 @@ test("Worker 错误不进入持久状态，仍保留 unknown 与原始诊断", a
   const session = completedSession(t);
   const original = new Error(`EIO: ${session.cwd}/private-worker`);
   const diagnostic = t.mock.method(process.stderr, "write", () => {});
-  await session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original });
+  await session.lifecycle.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original });
   assert.equal(session.snapshot().release_reason, "pty_worker_error");
   assert.equal(session.snapshot().status, "exited");
   assert.equal(session.snapshot().reconciliation_status, "unknown");
@@ -212,10 +213,10 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     const stopped = ["missing", "terminated", "force_killed"].includes(cleanupResult);
     // 无原生身份的负例不能把替身PID送进真实OS；已交付PID的停止由真实PTY集成覆盖。
     const pid = stopped ? 42002 : null;
-    session.ptyProcess = { pid, startupCleanupResult: cleanupResult, shutdown: () => shutdown.promise };
+    session.lifecycle.ptyProcess = { pid, startupCleanupResult: cleanupResult, shutdown: () => shutdown.promise };
     const states = [];
     session.manager.persist = async () => { states.push(session.toRecord()); };
-    const rejected = assert.rejects(session.failStartup(original), error => error === original);
+    const rejected = assert.rejects(session.lifecycle.failStartup(original), error => error === original);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(original.creationReceipt, undefined, "Worker退出确认前不能签回执");
     assert.equal(states.length, 1);
@@ -224,7 +225,7 @@ for (const cleanupResult of ["missing", "terminated", "force_killed", "still_run
     shutdown.resolve();
     await rejected;
     assert.equal(states.length, 2);
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     assert.equal(session.reconciliationStatus, stopped ? "verified" : "unknown");
     assert.equal(session.status, stopped ? "terminated" : "created");
     if (stopped) {
@@ -241,9 +242,9 @@ test("未取得原生PID的创建不能经管理停止伪造已终止", async t 
   const session = completedSession(t, { status: "created", reconciliation_status: "unknown" });
   let shutdowns = 0;
   const worker = { pid: null, async shutdown() { shutdowns += 1; } };
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   await assert.rejects(session.kill(), /原生创建身份尚未核实/);
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
   assert.equal(session.status, "created");
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(shutdowns, 0);
@@ -255,10 +256,10 @@ for (const cleanupResult of ["force_killed", "still_running", null]) {
     const original = new Error("原启动在身份交付前失败");
     const shutdown = Promise.withResolvers();
     const worker = { pid: null, startupCleanupResult: null, shutdown: () => shutdown.promise };
-    session.ptyProcess = worker;
+    session.lifecycle.ptyProcess = worker;
     const states = [];
     session.manager.persist = async () => { states.push(session.toRecord()); };
-    const rejected = assert.rejects(session.failStartup(original), error => error === original);
+    const rejected = assert.rejects(session.lifecycle.failStartup(original), error => error === original);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(states[0].os_pid, null);
     assert.equal(states[0].reconciliation_status, "unknown");
@@ -273,7 +274,7 @@ for (const cleanupResult of ["force_killed", "still_running", null]) {
     assert.equal(states.at(-1).process_group_id, 42002);
     assert.equal(states.at(-1).process_session_id, 42002);
     assert.equal(states.at(-1).process_start_time, 9123);
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     const stopped = cleanupResult === "force_killed";
     assert.equal(session.status, stopped ? "terminated" : "created");
     assert.equal(session.reconciliationStatus, stopped ? "verified" : "unknown");
@@ -294,7 +295,7 @@ test("正常启动持久化原Worker身份，不重新采样进程启动标记",
     return { pid: this.pid };
   });
   t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
-  await session.start();
+  await session.lifecycle.start();
   assert.equal(session.status, "running");
   assert.equal(session.osPid, identity.pid);
   assert.equal(session.processGroupId, identity.processGroupId);
@@ -307,9 +308,9 @@ test("停止失败落盘包含收尾期间到达的原生身份，保留原异�
   const session = completedSession(t, { status: "created", reconciliation_status: "unknown" });
   const identity = { pid: 42002, processGroupId: 42002, processSessionId: 42002, processStartTime: 9123 };
   const worker = { pid: 42002, processIdentity: undefined };
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   const original = new Error("原停止失败");
-  t.mock.method(session, "_terminateForRelease", async () => {
+  t.mock.method(session.lifecycle, "_terminateForRelease", async () => {
     worker.processIdentity = identity;
     throw original;
   });
@@ -323,8 +324,8 @@ test("停止失败落盘包含收尾期间到达的原生身份，保留原异�
   assert.equal(saved[0].process_start_time, identity.processStartTime);
   assert.equal(saved[0].status, "created");
   assert.equal(saved[0].reconciliation_status, "unknown");
-  assert.equal(session.ptyProcess, worker);
-  assert.equal(session.releasePromise, null);
+  assert.equal(session.lifecycle.ptyProcess, worker);
+  assert.equal(session.lifecycle.releasePromise, null);
 });
 
 for (const failSave of [false, true]) {
@@ -338,13 +339,13 @@ for (const failSave of [false, true]) {
       this.processIdentity = identity;
       throw cleanup;
     } };
-    session.ptyProcess = worker;
+    session.lifecycle.ptyProcess = worker;
     const attempts = [];
     session.manager.persist = async () => {
       attempts.push(session.toRecord());
       if (failSave && attempts.length === 2) throw disk;
     };
-    await assert.rejects(session.failStartup(original), error => {
+    await assert.rejects(session.lifecycle.failStartup(original), error => {
       assert(error instanceof AggregateError);
       assert.equal(error.cause, original);
       assert.equal(error.errors[0], original);
@@ -362,7 +363,7 @@ for (const failSave of [false, true]) {
     assert.equal(attempts[1].process_session_id, identity.processSessionId);
     assert.equal(attempts[1].process_start_time, identity.processStartTime);
     assert.equal(attempts[1].reconciliation_status, "unknown");
-    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.lifecycle.ptyProcess, worker);
     assert.equal(session.status, "created");
     assert.equal(original.creationReceipt, undefined);
   });
@@ -371,8 +372,8 @@ for (const failSave of [false, true]) {
 test("未实际执行停止时不能把原未知记录签为创建失败回执", async t => {
   const session = completedSession(t, { status: "exited", reconciliation_status: "unknown", os_pid: 42002 });
   const original = new Error("原Worker已丢失");
-  await assert.rejects(session.failStartup(original), error => error === original);
-  assert.equal(session.ptyProcess, null);
+  await assert.rejects(session.lifecycle.failStartup(original), error => error === original);
+  assert.equal(session.lifecycle.ptyProcess, null);
   assert.equal(session.status, "exited");
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(original.creationReceipt, undefined);
@@ -385,7 +386,7 @@ for (const status of ["created", "completed", "exited", "terminated", "deleted"]
       process_session_id: 42002, process_start_time: 123,
     });
     const original = new Error("原持久身份拒绝，禁止发送任何信号");
-    const verify = t.mock.method(session, "verifyPersistedProcessIdentity", async () => { throw original; });
+    const verify = t.mock.method(session.lifecycle, "verifyPersistedProcessIdentity", async () => { throw original; });
     const signals = t.mock.method(process, "kill", () => assert.fail("核验失败不得发送信号"));
     const saved = [];
     session.manager.persist = async () => { saved.push(session.toRecord()); };
@@ -393,13 +394,13 @@ for (const status of ["created", "completed", "exited", "terminated", "deleted"]
     assert.equal(verify.mock.callCount(), 1);
     assert.deepEqual(verify.mock.calls[0].arguments, [42002]);
     assert.equal(signals.mock.callCount(), 0);
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     assert.equal(session.status, status);
     assert.equal(session.reconciliationStatus, "unknown");
     assert.equal(session.osPid, 42002);
     assert.equal(session.processSessionId, 42002);
     assert.equal(session.processStartTime, 123);
-    assert.equal(session.releasePromise, null);
+    assert.equal(session.lifecycle.releasePromise, null);
     assert.equal(saved.length, 1);
     assert.equal(saved[0].reconciliation_status, "unknown");
   });
@@ -440,16 +441,16 @@ test("启动收尾失败保留原Worker句柄、未知记录及两份异常", as
   const cleanup = new Error("Worker未确认退出");
   t.mock.method(process.stderr, "write", () => {});
   const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() { throw cleanup; } };
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   const states = [];
   session.manager.persist = async () => { states.push(session.toRecord()); };
-  await assert.rejects(session.failStartup(original), error => {
+  await assert.rejects(session.lifecycle.failStartup(original), error => {
     assert(error instanceof AggregateError);
     assert.deepEqual(error.errors, [original, cleanup]);
     assert.equal(error.cause, original);
     return true;
   });
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(states.length, 1);
   assert.equal(original.creationReceipt, undefined);
@@ -461,13 +462,13 @@ for (const failedSave of [1, 2]) {
     const original = new Error("原启动失败");
     const disk = new Error("结果落盘失败");
     const worker = { pid: 42002, startupCleanupResult: "terminated", async shutdown() {} };
-    session.ptyProcess = worker;
+    session.lifecycle.ptyProcess = worker;
     let saves = 0;
     session.manager.persist = async () => { if (++saves === failedSave) throw disk; };
-    await assert.rejects(session.failStartup(original), error => error === disk);
+    await assert.rejects(session.lifecycle.failStartup(original), error => error === disk);
     assert.equal(saves, failedSave);
     assert.equal(original.creationReceipt, undefined);
-    if (failedSave === 1) assert.equal(session.ptyProcess, worker);
+    if (failedSave === 1) assert.equal(session.lifecycle.ptyProcess, worker);
   });
 }
 
@@ -478,10 +479,10 @@ test("退出清理失败只广播阶段，原始异常只留在诊断", async (t
   const events = [];
   t.mock.method(session, "broadcast", (event) => events.push(event));
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => ({ pid: null }));
-  t.mock.method(session, "handlePtyExit", async () => { throw original; });
+  t.mock.method(session.lifecycle, "handlePtyExit", async () => { throw original; });
   try {
-    await session.start();
-    session.ptyProcess._emitExit({ exitCode: -1, signal: 0, workerExit: true });
+    await session.lifecycle.start();
+    session.lifecycle.ptyProcess._emitExit({ exitCode: -1, signal: 0, workerExit: true });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(session.toRecord().release_reason, "pty_exit_cleanup_failed");
     assert.equal(session.snapshot().status, "exited");
@@ -499,9 +500,9 @@ test("Worker诊断次错保留原原因与未知身份，交由原退出回调�
   const original = new Error(`EIO: ${session.cwd}/private-worker`);
   const diagnosticError = new Error(`日志失败: ${session.cwd}/private-log`);
   const worker = {};
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
-  await assert.rejects(session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
+  await assert.rejects(session.lifecycle.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
     assert(error instanceof AggregateError);
     assert.deepEqual(error.errors, [original, diagnosticError]);
     assert.equal(error.cause, original);
@@ -510,7 +511,7 @@ test("Worker诊断次错保留原原因与未知身份，交由原退出回调�
   assert.equal(session.status, "exited");
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(session.releaseReason, "pty_worker_error");
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
 });
 
 test("Worker诊断和原停止信号同时失败时保留全部原因", { skip: process.platform !== "linux" }, async (t) => {
@@ -521,7 +522,7 @@ test("Worker诊断和原停止信号同时失败时保留全部原因", { skip: 
   t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
   // 当前进程只提供真实可读身份；所有信号均在系统调用前拒绝，不向OS发送任何信号。
   const signals = t.mock.method(process, "kill", () => { throw cleanupError; });
-  await assert.rejects(session.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
+  await assert.rejects(session.lifecycle.handlePtyExit({ exitCode: -1, signal: 0, workerExit: true, error: original }), (error) => {
     assert.equal(error.message, `终端退出清理及诊断失败: terminal_id=${session.id}`);
     const [diagnosticFailure, secondary] = error.errors;
     assert.equal(error.cause, diagnosticFailure);
@@ -543,7 +544,7 @@ async function startedExitCallback(t, session) {
   t.mock.method(IsolatedPtyProcess.prototype, "onExit", (handler) => { onExit = handler; });
   t.mock.method(IsolatedPtyProcess.prototype, "start", async () => ({ pid: null }));
   t.after(() => session.dispose());
-  await session.start();
+  await session.lifecycle.start();
   assert.equal(typeof onExit, "function");
   return onExit;
 }
@@ -551,7 +552,7 @@ async function startedExitCallback(t, session) {
 test("PTY自发退出等待原Worker确认后才释放句柄", async (t) => {
   const session = completedSession(t);
   const onExit = await startedExitCallback(t, session);
-  const worker = session.ptyProcess;
+  const worker = session.lifecycle.ptyProcess;
   worker.workerState = "running";
   const entered = Promise.withResolvers();
   const exit = Promise.withResolvers();
@@ -567,20 +568,20 @@ test("PTY自发退出等待原Worker确认后才释放句柄", async (t) => {
   try {
     await entered.promise;
     assert.equal(finished, false);
-    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.lifecycle.ptyProcess, worker);
   } finally {
     exit.resolve();
     await pending;
   }
   assert.equal(shutdown.mock.callCount(), 1);
-  assert.equal(session.ptyProcess, null);
+  assert.equal(session.lifecycle.ptyProcess, null);
 });
 
 for (const action of ["kill", "delete"]) {
   test(`PTY退出等待Worker期间${action}不得提前成功或被迟到退出覆盖`, async (t) => {
     const session = completedSession(t);
     const onExit = await startedExitCallback(t, session);
-    const worker = session.ptyProcess;
+    const worker = session.lifecycle.ptyProcess;
     worker.workerState = "running";
     const entered = Promise.withResolvers();
     const exit = Promise.withResolvers();
@@ -597,12 +598,12 @@ for (const action of ["kill", "delete"]) {
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(finished, false);
       assert.equal(session.reconciliationStatus, "unknown");
-      assert.equal(session.ptyProcess, worker);
+      assert.equal(session.lifecycle.ptyProcess, worker);
     } finally {
       exit.resolve();
       await Promise.all([pendingExit, pendingManagement]);
     }
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     assert.equal(session.reconciliationStatus, "verified");
     assert.equal(session.status, action === "kill" ? "terminated" : "deleted");
     assert.equal(session.releaseReason, action === "kill" ? "terminal_cancel" : "terminal_delete");
@@ -612,7 +613,7 @@ for (const action of ["kill", "delete"]) {
 test("PTY自发退出后Worker停止失败保留unknown及原句柄，同一管理链可重试", async (t) => {
   const session = completedSession(t);
   const onExit = await startedExitCallback(t, session);
-  const worker = session.ptyProcess;
+  const worker = session.lifecycle.ptyProcess;
   worker.workerState = "running";
   const failure = new Error("原Worker退出未确认");
   const diagnostic = t.mock.method(process.stderr, "write", () => {});
@@ -625,12 +626,12 @@ test("PTY自发退出后Worker停止失败保留unknown及原句柄，同一管�
   await onExit({ exitCode: 0, signal: 0, workerExit: false });
   assert.equal(session.status, "exited");
   assert.equal(session.reconciliationStatus, "unknown");
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
   assert.equal(session.releaseReason, "pty_exit_cleanup_failed");
   assert(diagnostic.mock.calls[0].arguments[0].includes(inspect(failure)));
   assert.equal(await session.kill(), true);
   assert.equal(shutdown.mock.callCount(), 2);
-  assert.equal(session.ptyProcess, null);
+  assert.equal(session.lifecycle.ptyProcess, null);
   assert.equal(session.status, "terminated");
   assert.equal(session.reconciliationStatus, "verified");
 });
@@ -646,8 +647,8 @@ for (const [failPrimaryLog, failPersist, failPersistLog] of [
     const primaryLogError = new Error(`原退出诊断失败: ${session.cwd}/private-log`);
     const persistLogError = new Error(`原存储诊断失败: ${session.cwd}/private-log`);
     const onExit = await startedExitCallback(t, session);
-    const worker = session.ptyProcess;
-    t.mock.method(session, "handlePtyExit", async () => { throw original; });
+    const worker = session.lifecycle.ptyProcess;
+    t.mock.method(session.lifecycle, "handlePtyExit", async () => { throw original; });
     const diagnostics = t.mock.method(process.stderr, "write", (chunk) => {
       if (chunk.includes("退出清理失败") && failPrimaryLog) throw primaryLogError;
       if (chunk.includes("退出失败状态持久化失败") && failPersistLog) throw persistLogError;
@@ -669,7 +670,7 @@ for (const [failPrimaryLog, failPersist, failPersistLog] of [
       assert.equal(finished, false, "状态发布完成前不能提前结算退出失败");
       assert.equal(session.status, "exited");
       assert.equal(session.lastCommandStatus, "exited");
-      assert.equal(session.ptyProcess, worker, "未取得Worker退出确认不能因诊断失败丢弃句柄");
+      assert.equal(session.lifecycle.ptyProcess, worker, "未取得Worker退出确认不能因诊断失败丢弃句柄");
       assert.equal(session.reconciliationStatus, "unknown");
       assert.equal(events.length, 1);
       assert.equal(events[0].error, "pty_exit_cleanup_failed");
@@ -711,7 +712,7 @@ test("退出广播再次失败仍保留原退出及日志异常", async (t) => {
   const diagnosticError = new Error("原退出诊断失败");
   const broadcastError = new Error("原退出广播失败");
   const onExit = await startedExitCallback(t, session);
-  t.mock.method(session, "handlePtyExit", async () => { throw original; });
+  t.mock.method(session.lifecycle, "handlePtyExit", async () => { throw original; });
   t.mock.method(process.stderr, "write", () => { throw diagnosticError; });
   t.mock.method(session, "broadcast", () => { throw broadcastError; });
   await assert.rejects(onExit({ exitCode: -1, signal: 0, workerExit: true }), (error) => {
@@ -812,7 +813,7 @@ test("restore 用工作区根 + 相对路径在调用栈内重推导 PTY cwd", a
   });
   t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
   try {
-    await session.start();
+    await session.lifecycle.start();
     assert.equal(workerCwd, path.join(workspaceRoot, "src"));
   } finally {
     await session.dispose();
@@ -946,7 +947,7 @@ test("多行粘贴仅以最后有效行更新输入标签，PTY仍收到完整�
   t.mock.method(IsolatedPtyProcess.prototype, "write", (data) => writes.push(data));
   t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
   const session = completedSession(t, { last_command: null, last_command_status: null });
-  await session.start();
+  await session.lifecycle.start();
   try {
     const paste = `${"  旧行中🙂  \r\n".repeat(50000)}  echo 新正文🙂  \r\n\t\u00a0`;
     session.write(paste, { source: "user" });
@@ -980,10 +981,10 @@ test("没有运行中的模型命令时，PTY输出保留正文与序号但不�
   });
   for (const commandStatus of [null, "completed", "exited", "terminated"]) {
     const session = completedSession(t, { last_command: null, last_command_status: commandStatus });
-    await session.start();
+    await session.lifecycle.start();
     try {
       const output = "\x1b[31m交互正文 中😀\x1b[0m\n__BOXTEAM_CMD_DONE_deadbeef__:9\n";
-      for (const receive of session.ptyProcess.ptyOutputHandlers) receive(output);
+      for (const receive of session.lifecycle.ptyProcess.ptyOutputHandlers) receive(output);
       assert.equal(session.buffer, output);
       assert.equal(session.outputMultiplexer.readAfter(0).output, output);
       assert.equal(session.outputSequence, 1);
@@ -1001,9 +1002,9 @@ test("模型命令仍解析跨块和ANSI标记，完成后停止扫描且只释�
   t.mock.method(IsolatedPtyProcess.prototype, "write", () => {});
   t.mock.method(IsolatedPtyProcess.prototype, "shutdown", async () => {});
   const session = completedSession(t, { last_command: null, last_command_status: null, completion_event_id: null });
-  await session.start();
+  await session.lifecycle.start();
   const released = [];
-  t.mock.method(session, "terminateForRelease", async (options) => { released.push(options); return true; });
+  t.mock.method(session.lifecycle, "terminateForRelease", async (options) => { released.push(options); return true; });
   const exec = RegExp.prototype.exec;
   let scans = 0;
   t.mock.method(RegExp.prototype, "exec", function (input) {
@@ -1014,7 +1015,7 @@ test("模型命令仍解析跨块和ANSI标记，完成后停止扫描且只释�
     session.write("__BOXTEAM_CMD_START_cafe__\n__BOXTEAM_CMD_DONE_cafe__", { source: "agent", command: "exit 7" });
     const outputs = ["旧标记 __BOXTEAM_CMD_DONE_deadbeef__:9\n\x1b]0;旧标题\x1b\\", "\x1b[31m__BOXTEAM_CMD_DONE_ca", "fe__\x1b[0m:7\r\n\x1b]0;新标题\x1b\\", "尾部正文 __BOXTEAM_CMD_DONE_cafe__:8\n"];
     for (const [index, output] of outputs.entries()) {
-      for (const receive of session.ptyProcess.ptyOutputHandlers) receive(output);
+      for (const receive of session.lifecycle.ptyProcess.ptyOutputHandlers) receive(output);
       if (index < 2) assert.equal(session.lastCommandStatus, "running");
     }
     assert.equal(scans, 3);
@@ -1037,21 +1038,21 @@ for (const action of ["kill", "delete"]) {
     let shutdowns = 0;
     // 这里只验证句柄和回执顺序；不向宿主进程发信号。
     const worker = { pid: null, async shutdown() { if (++shutdowns === 1) throw failure; } };
-    session.ptyProcess = worker;
+    session.lifecycle.ptyProcess = worker;
     const saved = [];
     session.manager.persist = async () => { saved.push(session.toRecord()); };
     const events = [];
     t.mock.method(session, "broadcast", (event) => events.push(event));
     await assert.rejects(session[action](), error => error === failure);
-    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.lifecycle.ptyProcess, worker);
     assert.equal(session.reconciliationStatus, "unknown");
     assert.equal(saved.at(-1).reconciliation_status, "unknown");
     assert.equal(session.status, "running");
-    assert.equal(session.releasePromise, null);
+    assert.equal(session.lifecycle.releasePromise, null);
     assert.equal(events.length, 0);
     await session[action]();
     assert.equal(shutdowns, 2);
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     assert.equal(session.reconciliationStatus, "verified");
     assert.equal(session.status, action === "kill" ? "terminated" : "deleted");
   });
@@ -1063,7 +1064,7 @@ test("停止必须等待同一次 Worker 确认与最终写盘，不能提前发
   const saved = Promise.withResolvers();
   const saveStarted = Promise.withResolvers();
   let shutdowns = 0;
-  session.ptyProcess = { pid: null, async shutdown() { shutdowns += 1; await workerExit.promise; } };
+  session.lifecycle.ptyProcess = { pid: null, async shutdown() { shutdowns += 1; await workerExit.promise; } };
   session.manager.persist = async () => { saveStarted.resolve(); await saved.promise; };
   const events = [];
   t.mock.method(session, "broadcast", (event) => events.push(event));
@@ -1091,20 +1092,20 @@ for (const action of ["kill", "delete"]) {
     const disk = new Error("受控终态写盘失败");
     let shutdowns = 0;
     const worker = { pid: null, async shutdown() { shutdowns += 1; } };
-    session.ptyProcess = worker;
+    session.lifecycle.ptyProcess = worker;
     let writes = 0;
     session.manager.persist = async () => { if (++writes === 1) throw disk; };
     const events = [];
     t.mock.method(session, "broadcast", (event) => events.push(event));
     await assert.rejects(session[action](), error => error === disk);
-    assert.equal(session.ptyProcess, worker);
+    assert.equal(session.lifecycle.ptyProcess, worker);
     assert.equal(session.reconciliationStatus, "unknown");
     assert.equal(events.length, 0);
     assert.equal(writes, 2, "原失败后必须尝试持久化 unknown");
     await session[action]();
     assert.equal(shutdowns, 2);
     assert.equal(session.reconciliationStatus, "verified");
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     assert.equal(events.length, 1);
   });
 }
@@ -1114,7 +1115,7 @@ test("停止与未知状态落盘都失败时保留原句柄与两份错误", as
   const cleanup = new Error("原停止失败");
   const disk = new Error("未知状态落盘失败");
   const worker = { pid: null, async shutdown() { throw cleanup; } };
-  session.ptyProcess = worker;
+  session.lifecycle.ptyProcess = worker;
   session.manager.persist = async () => { throw disk; };
   await assert.rejects(session.kill(), error => {
     assert(error instanceof AggregateError);
@@ -1122,7 +1123,7 @@ test("停止与未知状态落盘都失败时保留原句柄与两份错误", as
     assert.equal(error.cause, cleanup);
     return true;
   });
-  assert.equal(session.ptyProcess, worker);
+  assert.equal(session.lifecycle.ptyProcess, worker);
   assert.equal(session.reconciliationStatus, "unknown");
   assert.equal(session.status, "running");
 });

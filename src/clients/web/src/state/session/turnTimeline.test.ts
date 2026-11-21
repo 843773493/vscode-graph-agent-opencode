@@ -27,6 +27,28 @@ const SESSION_ID = "ses_turns";
 const THREAD_ID = "thr_018f0000000070008000000000000001";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;
 
+test("正文窗口释放远处摘要和详情，保留身份与游标；同版本补读可恢复正文", () => {
+  const originals = Array.from({ length: 12 }, (_, index) => ({ ...summary(`body-${index}`, index + 1),
+    response_preview: "旧正文".repeat(20_000) }));
+  let timeline = upsertTurns(createSessionTurnTimeline(SCOPE_KEY), originals);
+  timeline = { ...timeline, beforeCursor: "signed-before", afterCursor: "signed-after", bodyWindowTurnIds: ["body-0"] };
+  const store = (value: typeof timeline) => writeTurnTimelineCache(new Map(), SCOPE_KEY, value).get(SCOPE_KEY)!;
+  const compacted = store(timeline);
+  expect(compacted.orderedTurnIds).toEqual(timeline.orderedTurnIds);
+  expect(compacted.beforeCursor).toBe("signed-before");
+  expect(compacted.afterCursor).toBe("signed-after");
+  expect(compacted.turnsById["body-0"].response_preview).toBe(originals[0].response_preview);
+  expect(compacted.turnsById["body-1"].bodyEvicted).toBe(true);
+  expect(compacted.turnsById["body-1"].response_preview).toBeUndefined();
+  expect(compacted.summaryTurnsById["body-1"]).toBeUndefined();
+  expect(compacted.turnsById["body-11"].response_preview).toBe(originals[11].response_preview);
+  const restored = store(upsertTurns({ ...compacted, bodyWindowTurnIds: ["body-1"] }, [originals[1]]));
+  expect(restored.turnsById["body-1"].bodyEvicted).toBeUndefined();
+  expect(restored.turnsById["body-1"].response_preview).toBe(originals[1].response_preview);
+  const active = { ...detail("active", 13), status: "running" };
+  expect(store(upsertTurns(restored, [active])).turnsById.active).toEqual(active);
+});
+
 function summary(
   turnId: string,
   ordinal: number,

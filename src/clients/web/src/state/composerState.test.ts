@@ -45,12 +45,11 @@ function state(): AppState {
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),
     turnTimelinesBySession: new Map(),
-    traceEvents: [],
   } as unknown as AppState;
 }
 
 describe("Composer 独立状态快照", () => {
-  test("Turn 和 Trace delta 不改变 Composer 订阅快照身份", () => {
+  test("Turn 更新不改变 Composer 订阅快照身份", () => {
     const initial = state();
     const first = reuseComposerStateSnapshot(
       null,
@@ -58,7 +57,6 @@ describe("Composer 独立状态快照", () => {
     );
     const timelineUpdated = {
       ...initial,
-      traceEvents: [{ event_id: "delta" }],
       turnTimelinesBySession: new Map([
         ["workspace::session", { phase: "ready" }],
       ]),

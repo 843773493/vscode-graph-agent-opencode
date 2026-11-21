@@ -1,0 +1,651 @@
+import path from "node:path";
+import {
+  existsSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { once } from "node:events";
+import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";
+
+import {
+  spawnDetachedProcess,
+  terminateDetachedProcess,
+} from "../../../packages/launcher/src/detached-process.mjs";
+import {
+  resolveServiceLogPath,
+} from "../../../packages/launcher/src/logging/service-log.mjs";
+import { requestGatewayHandoff } from "../../../packages/launcher/src/gateway/supervisor.mjs";
+import {
+  assertDevelopmentPortsBindable,
+  remainingOccupiedPorts,
+  resolveDevelopmentLayout,
+  resolveBackendWorkspaceId,
+} from "./environment.mjs";
+
+import { waitForDetachedReady, waitForHttpOk } from "./readiness.mjs";
+import { prepareDevelopmentPlugins } from "./bundled-plugins.mjs";
+
+// 冷启动包含完整 Workbench 资源构建和 Vite 源码预热；此期限不用于普通 API。
+const FRONTEND_START_TIMEOUT_MS = 300_000;
+
+const cliArguments = process.argv.slice(2);
+const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
+const {
+  projectRoot,
+  frontendRoot,
+  boxteamHome,
+  defaultWorkspaceRoot,
+  portOffset,
+  ports,
+} = developmentLayout;
+const logContract = loadRuntimeLogContract();
+const webRoot = path.join(frontendRoot, "src", "clients", "workbench");
+const workbenchArguments = ["run", "dev",
+  "--outdir", path.join(boxteamHome, "state", "workbench-assets", "dist"),
+  "--cache", path.join(boxteamHome, "state", "vite-cache")];
+const launcherEntry = path.join(
+  projectRoot,
+  "packages",
+  "launcher",
+  "bin",
+  "boxteam.mjs",
+);
+const pythonBin = path.resolve(
+  process.env.BOXTEAM_PYTHON_BIN ??
+    path.join(
+      projectRoot,
+      ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    ),
+);
+const nodeBin =
+  process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
+const onlyLaunch = cliArguments.includes("--only-launch");
+const serviceArgumentIndex = cliArguments.findIndex(
+  (argument) => argument === "--service" || argument.startsWith("--service="),
+);
+const serviceArgument =
+  serviceArgumentIndex === -1
+    ? null
+    : cliArguments[serviceArgumentIndex] === "--service"
+      ? cliArguments[serviceArgumentIndex + 1] ?? null
+      : cliArguments[serviceArgumentIndex].slice("--service=".length);
+const serviceMode = serviceArgument ?? "all";
+if (!["all", "backend", "gateway", "web"].includes(serviceMode)) {
+  throw new Error(
+    `--service 必须是 all、backend、gateway 或 web，实际为 ${String(serviceMode)}`,
+  );
+}
+if (onlyLaunch && serviceMode !== "all") {
+  throw new Error("--only-launch 只能与 --service=all 一起使用");
+}
+const restartDelayArgument = cliArguments.find((argument) =>
+  argument.startsWith("--restart-delay-ms="),
+);
+const restartDelayMs = restartDelayArgument
+  ? Number(restartDelayArgument.slice("--restart-delay-ms=".length))
+  : 0;
+if (
+  !Number.isInteger(restartDelayMs) ||
+  restartDelayMs < 0 ||
+  restartDelayMs > 10_000
+) {
+  throw new Error(
+    `--restart-delay-ms 必须是 0 到 10000 的整数，实际为 ${String(restartDelayMs)}`,
+  );
+}
+const detachedReadyFile = process.env.BOXTEAM_DEV_READY_FILE ?? null;
+const host = "127.0.0.1";
+// 默认只绑定本机回环；隔离的容器或远程目标需要跨机访问时才显式放开。
+const listenHost = process.env.BOXTEAM_DEV_LISTEN_HOST?.trim() || host;
+function requirePath(targetPath, label) {
+  if (!existsSync(targetPath)) {
+    throw new Error(`${label}不存在: ${targetPath}`);
+  }
+}
+
+function selectedPorts() {
+  if (serviceMode === "backend") return [ports.backend];
+  if (serviceMode === "gateway") return [ports.gateway];
+  if (serviceMode === "web") return [ports.frontend];
+  return Object.values(ports);
+}
+
+function spawnProcess(command, args, cwd, environment) {
+  return Bun.spawn([command, ...args], {
+    cwd,
+    env: environment,
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+}
+
+function installDevelopmentConfiguration(environment, bundledPlugins) {
+  const result = Bun.spawnSync(
+    [
+      pythonBin,
+      "-m",
+      "configs.boxteam",
+      "install-source-development",
+      "--bundled-plugins",
+      JSON.stringify(bundledPlugins),
+      "--project-root",
+      projectRoot,
+    ],
+    {
+      cwd: projectRoot,
+      env: environment,
+      stdout: "inherit",
+      stderr: "inherit",
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `源码开发配置安装失败: exit=${String(result.exitCode)}`,
+    );
+  }
+}
+
+function installNodeDebugFixture() {
+  const sourcePath = path.join(
+    projectRoot,
+    "scripts",
+    "launch",
+    "development",
+    "fixtures",
+    "node-debug-fixture.mjs",
+  );
+  const targetPath = path.join(
+    defaultWorkspaceRoot,
+    "debug",
+    "node-debug-fixture.mjs",
+  );
+  requirePath(sourcePath, "Node 调试测试脚本");
+  if (!existsSync(targetPath)) {
+    mkdirSync(path.dirname(targetPath), { recursive: true });
+    copyFileSync(sourcePath, targetPath);
+  }
+}
+
+function writeDevelopmentManifest(bundledPlugins) {
+  const runtimeRoot = path.join(boxteamHome, "state");
+  const version = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
+  if (typeof version !== "string" || !version.trim()) {
+    throw new Error(`后端 package.json 缺少有效 version: ${projectRoot}`);
+  }
+  mkdirSync(runtimeRoot, { recursive: true });
+  const manifestPath = path.join(runtimeRoot, "runtime-manifest.json");
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        distribution: "source-development",
+        version,
+        python_executable: pythonBin,
+        application_root: projectRoot,
+        config_resources: {
+          gateway_inline: path.join(projectRoot, "configs", "gateway_inline.jsonc"),
+          gateway_schema: path.join(projectRoot, "configs", "gateway_schema.jsonc"),
+          workspace_inline: path.join(projectRoot, "configs", "workspace_inline.jsonc"),
+          workspace_schema: path.join(projectRoot, "configs", "workspace_schema.jsonc"),
+        },
+        skill_resources: path.join(projectRoot, "resources", "skills"),
+        bundled_plugins: bundledPlugins,
+        web_assets: null,
+        chromium_executable:
+          process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
+        node: {
+          source: "launcher",
+          executable: null,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return manifestPath;
+}
+
+async function launchDetachedManager() {
+  const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
+  mkdirSync(runtimeRoot, { recursive: true });
+  const readyFile = path.join(runtimeRoot, "detached-ready.json");
+  const logPath = resolveServiceLogPath(boxteamHome, process.env, logContract);
+  rmSync(readyFile, { force: true });
+
+  const child = await spawnDetachedProcess({
+    command: process.execPath,
+    args: [path.join(frontendRoot, "scripts", "launch", "development", "services.mjs")],
+    cwd: frontendRoot,
+    environment: {
+      ...process.env,
+      BOXTEAM_PROJECT_ROOT: projectRoot,
+      BOXTEAM_FRONTEND_ROOT: frontendRoot,
+      BOXTEAM_DEV_READY_FILE: readyFile,
+    },
+    logPath,
+    contract: logContract,
+  });
+  if (!Number.isInteger(child.pid)) {
+    throw new Error(`无法取得 detached dev manager pid，日志: ${logPath}`);
+  }
+
+  const spawnError = once(child, "error").then(([error]) => {
+    throw error;
+  });
+  try {
+    await Promise.race([
+      waitForDetachedReady({ child, readyFile, logPath }),
+      spawnError,
+    ]);
+  } catch (error) {
+    try {
+      terminateDetachedProcess(child.pid);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "detached dev manager 启动失败，终止请求也失败",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  child.unref();
+  process.stdout.write(
+    `[dev] detached services ready: pid=${child.pid}, log=${logPath}\n`,
+  );
+}
+
+function readUnixListenerPidsByPort(targetPorts) {
+  // 只清理本地监听者；连接这些端口的客户端不属于开发服务。
+  const command = ["lsof", "-nP", "-a", `-iTCP:${targetPorts.join(",")}`, "-sTCP:LISTEN", "-Fpn"];
+  const lsof = Bun.spawnSync(command, {
+    cwd: projectRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = new TextDecoder().decode(lsof.stdout).trim();
+  const stderr = new TextDecoder().decode(lsof.stderr).trim();
+  const signalCode = lsof.signalCode ?? null;
+  const pidsByPort = new Map(targetPorts.map((port) => [port, []]));
+  if (lsof.exitCode === 1 && signalCode === null && stdout === "" && stderr === "") return pidsByPort;
+  if (lsof.exitCode !== 0 || signalCode !== null) {
+    throw new Error(
+      `检查 Unix 开发端口失败: ${command.join(" ")} exit=${String(lsof.exitCode)} ` +
+      `signal=${signalCode ?? "none"}${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  let currentPid;
+  let listenerCount = 0;
+  for (const field of stdout.split(/\r?\n/)) {
+    if (field.startsWith("p") && /^[1-9]\d*$/.test(field.slice(1))) {
+      currentPid = field.slice(1);
+    } else if (field.startsWith("n") && currentPid !== undefined) {
+      const port = Number(field.slice(field.lastIndexOf(":") + 1));
+      if (!pidsByPort.has(port)) {
+        throw new Error(`Unix 开发端口查询返回无效监听地址: ${command.join(" ")} field=${JSON.stringify(field)}`);
+      }
+      const pids = pidsByPort.get(port);
+      if (!pids.includes(currentPid)) pids.push(currentPid);
+      listenerCount++;
+    } else {
+      throw new Error(`Unix 开发端口查询返回无效监听记录: ${command.join(" ")} field=${JSON.stringify(field)}`);
+    }
+  }
+  if (listenerCount === 0) {
+    throw new Error(`Unix 开发端口查询返回无效监听记录: ${command.join(" ")} stdout=${JSON.stringify(stdout)}`);
+  }
+  return pidsByPort;
+}
+
+function readWindowsListenerPidsByPort(targetPorts) {
+  const command = ["netstat", "-ano", "-p", "tcp"];
+  const netstat = Bun.spawnSync(command, {
+    cwd: projectRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = new TextDecoder().decode(netstat.stdout);
+  const stderr = new TextDecoder().decode(netstat.stderr).trim();
+  const signalCode = netstat.signalCode ?? null;
+  if (netstat.exitCode !== 0 || signalCode !== null) {
+    throw new Error(
+      `检查 Windows 开发端口失败: ${command.join(" ")} exit=${String(netstat.exitCode)} ` +
+      `signal=${signalCode ?? "none"}${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  const pidsByPort = new Map(targetPorts.map((port) => [port, []]));
+  for (const line of stdout.split(/\r?\n/)) {
+    const columns = line.trim().split(/\s+/);
+    if (columns[0]?.toUpperCase() !== "TCP" || columns[3]?.toUpperCase() !== "LISTENING") continue;
+    const port = Number(columns[1]?.split(":").at(-1));
+    if (!pidsByPort.has(port)) continue;
+    const pid = columns.at(-1);
+    if (!/^[1-9]\d*$/.test(pid)) {
+      throw new Error(`Windows 开发端口查询返回无效 PID: port=${port} line=${JSON.stringify(line)}`);
+    }
+    pidsByPort.get(port).push(pid);
+  }
+  return pidsByPort;
+}
+
+function assertDevelopmentPortsFree(targetPorts, listenerPids) {
+  const occupied = remainingOccupiedPorts(targetPorts, listenerPids);
+  if (occupied.length === 0) return;
+  const details = occupied
+    .map(({ port, pids }) => `${port}(pid=${pids.join(",")})`)
+    .join("、");
+  throw new Error(
+    "开发端口已有监听者，无法确认属于当前实例，拒绝启动且不会终止这些进程: " +
+      details +
+      "；请检查监听进程，或改用 BOXTEAM_DEV_PORT_OFFSET 选择空闲端口",
+  );
+}
+
+function assertDevelopmentPortsAvailable() {
+  const targetPorts = selectedPorts();
+  if (process.platform === "win32") {
+    const listeners = readWindowsListenerPidsByPort(targetPorts);
+    assertDevelopmentPortsFree(targetPorts, (port) => listeners.get(port));
+    return;
+  }
+  const listeners = readUnixListenerPidsByPort(targetPorts);
+  assertDevelopmentPortsFree(targetPorts, (port) => listeners.get(port));
+}
+
+function launcherLockPid() {
+  const lockPath = path.join(boxteamHome, "state", "launcher.lock");
+  if (!existsSync(lockPath)) return null;
+  const payload = JSON.parse(readFileSync(lockPath, "utf8"));
+  return Number.isInteger(payload.pid) && payload.pid > 0 ? payload.pid : null;
+}
+
+function assertNoExistingLauncher() {
+  const pid = launcherLockPid();
+  if (pid === null) return;
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error?.code === "ESRCH") return;
+    throw error;
+  }
+  throw new Error(
+    `BOXTEAM_HOME 的 Launcher 仍在运行: home=${boxteamHome} pid=${pid}；` +
+      "请先使用对应实例的 workspace stop 命令停止，再启动",
+  );
+}
+
+async function main() {
+  for (const [targetPath, label] of [
+    [pythonBin, "Python 解释器"],
+    [webRoot, "浏览器前端目录"],
+    [launcherEntry, "BoxTeam Launcher"],
+  ]) {
+    requirePath(targetPath, label);
+  }
+  mkdirSync(defaultWorkspaceRoot, { recursive: true });
+  if (serviceMode === "all" || serviceMode === "gateway") assertNoExistingLauncher();
+  assertDevelopmentPortsAvailable();
+  await assertDevelopmentPortsBindable(selectedPorts(), listenHost);
+
+  const bundledPlugins = serviceMode === "all" || serviceMode === "gateway"
+    ? await prepareDevelopmentPlugins({ projectRoot, pythonExecutable: pythonBin,
+      nodeExecutable: Bun.which(nodeBin), bunExecutable: process.execPath }) : [];
+  const runtimeManifest = writeDevelopmentManifest(bundledPlugins);
+  const environment = {
+    ...process.env,
+    BOXTEAM_PROJECT_ROOT: projectRoot,
+    BOXTEAM_FRONTEND_ROOT: frontendRoot,
+    BOXTEAM_HOME: boxteamHome,
+    BOXTEAM_RUNTIME_MANIFEST: runtimeManifest,
+    BOXTEAM_DEVELOPMENT_RESTART_RUNNER: process.execPath,
+    BOXTEAM_DEVELOPMENT_RESTART_SCRIPT: path.join(
+      frontendRoot,
+      "scripts",
+      "launch",
+      "dev.mjs",
+    ),
+    BOXTEAM_DEVELOPMENT_RESTART_CWD: frontendRoot,
+    BOXTEAM_PYTHON_BIN: pythonBin,
+    BOXTEAM_NODE_BIN: nodeBin,
+    BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
+    BOXTEAM_DEV_PORT_OFFSET: String(portOffset),
+    BOXTEAM_DEV_FRONTEND_PORT: String(ports.frontend),
+    BOXTEAM_DEV_LISTEN_HOST: listenHost,
+    BOXTEAM_GATEWAY_PORT: String(ports.gateway),
+    BOXTEAM_DEFAULT_BACKEND_PORT: String(ports.backend),
+    BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
+  };
+  process.stdout.write(
+    `[dev] profile=source-development port_offset=${String(portOffset)} ` +
+      `frontend=http://${host}:${ports.frontend} ` +
+      `gateway=http://${host}:${ports.gateway} ` +
+      `frontend_root=${frontendRoot} backend_root=${projectRoot} ` +
+      `boxteam_home=${boxteamHome}\n`,
+  );
+  installDevelopmentConfiguration(environment, bundledPlugins);
+  const backendWorkspaceId =
+    serviceMode === "backend" || serviceMode === "all"
+      ? resolveBackendWorkspaceId({
+          environment, projectRoot, workspaceRoot: defaultWorkspaceRoot,
+          pythonExecutable: pythonBin,
+        })
+      : null;
+  if (backendWorkspaceId !== null) {
+    environment.BOXTEAM_WORKSPACE_ID = backendWorkspaceId;
+    environment.BOXTEAM_BACKEND_GENERATION = `development_backend_${process.pid}`;
+    environment.BOXTEAM_MOUNTED_WORKSPACES = JSON.stringify([
+      {
+        workspace_id: backendWorkspaceId,
+        workspace_root: defaultWorkspaceRoot,
+        config_candidate_ref: null,
+        config_generation: null,
+        config_fencing_token: null,
+      },
+    ]);
+  }
+  const processes = [];
+  const pendingGatewayRestart = Boolean(
+    environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim(),
+  );
+  let gatewayProcess = null;
+  if (serviceMode === "backend") {
+    process.stdout.write("[dev] backend 日志: stdout-only（当前入口未托管文件）\n");
+    processes.push(
+      spawnProcess(
+        pythonBin,
+        [
+          "-m",
+          "app.runtime.http_server",
+          "app.main:app",
+          "--host",
+          host,
+          "--port",
+          String(ports.backend),
+          "--reload",
+        ],
+        projectRoot,
+        environment,
+      ),
+    );
+  } else if (serviceMode === "web") {
+    processes.push(spawnProcess("bun", workbenchArguments, webRoot, environment));
+  } else {
+    if (serviceMode === "all") installNodeDebugFixture();
+    gatewayProcess = spawnProcess(
+      nodeBin,
+      [
+        launcherEntry,
+        "start",
+        "--runtime-manifest",
+        runtimeManifest,
+        "--no-open",
+      ],
+      projectRoot,
+      environment,
+    );
+    processes.push(gatewayProcess);
+  }
+
+  let gatewayReady = serviceMode === "backend" || serviceMode === "web";
+  try {
+    if (serviceMode === "backend") {
+      await waitForHttpOk({
+        url: `http://${host}:${ports.backend}/api/v1/health`,
+        label: "backend",
+        headers: { "X-BoxTeam-Workspace-Id": backendWorkspaceId },
+      });
+    } else if (serviceMode === "web") {
+      await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend", timeoutMs: FRONTEND_START_TIMEOUT_MS });
+    } else {
+      await waitForHttpOk({
+        url: `http://${host}:${ports.gateway}/api/gateway/health`,
+        label: "gateway",
+        processHandle: gatewayProcess,
+      });
+      gatewayReady = true;
+      if (serviceMode === "all") {
+        const frontend = spawnProcess("bun", workbenchArguments, webRoot, environment);
+        processes.push(frontend);
+        await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend", timeoutMs: FRONTEND_START_TIMEOUT_MS });
+      }
+    }
+    if (detachedReadyFile !== null) {
+      writeFileSync(
+        detachedReadyFile,
+        `${JSON.stringify({
+          pid: process.pid,
+          ready_at: new Date().toISOString(),
+          project_root: projectRoot,
+          frontend_root: frontendRoot,
+          boxteam_home: boxteamHome,
+        })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    }
+  } catch (error) {
+    if (pendingGatewayRestart && !gatewayReady && gatewayProcess !== null) {
+      process.stdout.write(
+        `[dev] pending Gateway 启动失败，尝试恢复 active snapshot: ${String(error)}\n`,
+      );
+      try {
+        if (
+          gatewayProcess.exitCode === null &&
+          gatewayProcess.signalCode === null
+        ) {
+          gatewayProcess.kill();
+        }
+        await gatewayProcess.exited;
+        const fallbackEnvironment = { ...environment };
+        for (const variable of [
+          "BOXTEAM_CONFIG_CANDIDATE_REF",
+          "BOXTEAM_CONFIG_GENERATION",
+          "BOXTEAM_CONFIG_FENCING_TOKEN",
+        ]) {
+          delete fallbackEnvironment[variable];
+        }
+        const fallbackGatewayProcess = spawnProcess(
+          nodeBin,
+          [
+            launcherEntry,
+            "start",
+            "--runtime-manifest",
+            runtimeManifest,
+            "--no-open",
+          ],
+          projectRoot,
+          fallbackEnvironment,
+        );
+        processes[processes.indexOf(gatewayProcess)] = fallbackGatewayProcess;
+        gatewayProcess = fallbackGatewayProcess;
+        await waitForHttpOk({
+          url: `http://${host}:${ports.gateway}/api/gateway/health`,
+          label: "gateway active fallback",
+          processHandle: fallbackGatewayProcess,
+        });
+        gatewayReady = true;
+      } catch (fallbackError) {
+        for (const child of processes) {
+          try {
+            child.kill();
+          } catch {
+            // 失败进程可能已经退出；其余进程仍必须继续清理。
+          }
+        }
+        await Promise.allSettled(processes.map((child) => child.exited));
+        throw new Error(
+          `Gateway pending 启动失败，且 active fallback 也失败: ${String(fallbackError)}`,
+        );
+      }
+    } else {
+      for (const child of processes) {
+        try {
+          child.kill();
+        } catch {
+          // 失败进程可能已经退出；其余进程仍必须继续清理。
+        }
+      }
+      await Promise.allSettled(processes.map((child) => child.exited));
+      throw error;
+    }
+  }
+
+  let stopping = false;
+  const stopAll = async (exitCode) => {
+    if (stopping) return;
+    stopping = true;
+    for (const child of processes) {
+      try {
+        child.kill();
+      } catch (error) {
+        process.stderr.write(
+          `[dev] 停止子进程失败: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        );
+      }
+    }
+    await Promise.allSettled(processes.map((child) => child.exited));
+    process.exit(exitCode);
+  };
+  for (const child of processes) {
+    child.exited
+      .then((code) => void stopAll(code))
+      .catch((error) => {
+        process.stderr.write(`${String(error)}\n`);
+        void stopAll(1);
+      });
+  }
+  process.on("SIGINT", () => void stopAll(130));
+  process.on("SIGTERM", () => void stopAll(143));
+  await Promise.race(processes.map((child) => child.exited));
+}
+
+if (onlyLaunch) {
+  if (restartDelayMs > 0) {
+    await Bun.sleep(restartDelayMs);
+  }
+  if (process.env.BOXTEAM_CONFIG_CANDIDATE_REF?.trim()) {
+    const handoff = await requestGatewayHandoff({
+      boxteamHome,
+      environment: process.env,
+    });
+    if (handoff.handled) {
+      process.stdout.write(
+        `[dev] Gateway pending handoff 已交给现有 supervisor: ` +
+          `${JSON.stringify(handoff.data)}\n`,
+      );
+      process.exitCode = 0;
+      process.exit();
+    }
+  }
+  await launchDetachedManager();
+} else {
+  await main();
+}

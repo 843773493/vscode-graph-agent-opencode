@@ -1,12 +1,8 @@
 import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
-import {
-  readProcessStat,
-  terminateProcessTree,
-} from "@boxteam/plugin-sdk/process-lifecycle";
-import { stat } from "node:fs/promises";
 import path from "node:path";
-import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
+import { TerminalPtyLifecycle, nowIso } from "./processes/terminalPtyLifecycle.js";
+import { resolveShell, shellArgs } from "./processes/terminalEnvironment.js";
 import { TerminalOutputMultiplexer } from "./output/terminalOutputMultiplexer.js";
 import { splitTerminalOutputChunks, trimTerminalBuffer } from "./output/terminalUtf8Output.js";
 import {
@@ -17,43 +13,6 @@ import {
 } from "../shared/commandText.js";
 
 const logger = createRuntimeLogger("terminal", "terminal.terminalSession");
-
-function recordTerminalFailure(error, ...diagnostics) {
-  try {
-    logger.error(...diagnostics);
-  } catch (diagnosticError) {
-    return new AggregateError([error, diagnosticError], error.message, { cause: error });
-  }
-  return error;
-}
-
-export function nowIso() {
-  return new Date().toISOString();
-}
-
-// 终端工作目录唯一解析入口：把持久记录里的工作区内相对路径（或调用方传入的
-// 相对/绝对路径）还原为本次调用栈内的绝对路径。绝对路径 MUST NOT 落盘。
-export async function resolveTerminalCwd(workspaceRoot, cwdRelative) {
-  const rawCwd = typeof cwdRelative === "string" && cwdRelative.trim() !== ""
-    ? cwdRelative.trim()
-    : ".";
-  const resolved = path.resolve(workspaceRoot, rawCwd);
-  let directoryStat;
-  try {
-    directoryStat = await stat(resolved);
-  } catch (error) {
-    const cause = recordTerminalFailure(error, "[terminal-session] 终端工作目录检查失败", { cwd: resolved }, error);
-    const message = new Set(["ENOENT", "ENOTDIR"]).has(error.code)
-      ? "终端工作目录不存在或不是目录"
-      : "终端工作目录检查失败";
-    throw new Error(message, { cause });
-  }
-  if (!directoryStat.isDirectory()) {
-    throw recordTerminalFailure(new Error("终端工作目录不存在或不是目录"),
-      "[terminal-session] 终端工作目录不是目录", { cwd: resolved });
-  }
-  return resolved;
-}
 
 const RECONCILIATION_STATUSES = new Set([
   "verified",
@@ -89,20 +48,6 @@ export function validateTerminalRecord(record, workspaceId) {
     }
   }
   return record;
-}
-
-export function resolveShell() {
-  if (process.platform === "win32") {
-    return process.env.COMSPEC || "cmd.exe";
-  }
-  return process.env.SHELL || "/bin/bash";
-}
-
-export function shellArgs() {
-  if (process.platform === "win32") {
-    return [];
-  }
-  return ["-i"];
 }
 
 /**
@@ -173,8 +118,7 @@ export class TerminalSession {
     this.lastInput = inferredLastInput || null;
     this.lastInputSource = record.last_input_source || (inferredLastInput ? "interactive" : null);
     this.lastInputAt = record.last_input_at || (inferredLastInput ? this.updatedAt : null);
-    this.ptyProcess = null;
-    this.releasePromise = null;
+    this.lifecycle = new TerminalPtyLifecycle(this);
     this.outputMultiplexer = new TerminalOutputMultiplexer({
       terminalId: this.id,
       getSequence: () => this.outputSequence,
@@ -189,200 +133,41 @@ export class TerminalSession {
     }
   }
 
-  async start() {
-    if (this.ptyProcess) {
-      return;
-    }
-
-    const isolatedPty = new IsolatedPtyProcess();
-    this.ptyProcess = isolatedPty;
-    isolatedPty.onData((data) => {
-      this.buffer = trimTerminalBuffer(this.buffer + data);
-      const outputReceivedAt = nowIso();
-      for (const chunk of splitTerminalOutputChunks(data)) {
-        this.outputSequence += 1;
-        this.outputMultiplexer.recordAndBroadcast({
-          type: "output",
-          terminalId: this.id,
-          sequence: this.outputSequence,
-          data: chunk,
-          timestamp: outputReceivedAt,
-        });
-      }
-      const exitCode = this.lastCommandStatus === "running"
-        ? latestCommandExitCode(this.buffer, this.lastCommandDoneMarker)
-        : null;
-      if (exitCode !== null) {
-        this.lastCommandStatus = "completed";
-        this.lastCommandExitCode = exitCode;
-        this.lastCommandCompletedAt = nowIso();
-        this.completionEventId =
-          this.completionEventId || `terminal_completed:${this.id}:${this.outputSequence}`;
-        void this.terminateForRelease({
-          status: "completed",
-          commandStatus: "completed",
-          reason: "command_completed",
-        }).catch((error) => {
-          logger.error(
-            `[terminal-session] 命令完成后释放隐藏 PTY 失败: terminal_id=${this.id}`,
-            error,
-          );
-        });
-      }
-      this.touch();
-      void this.manager.persist();
-    });
-    isolatedPty.onExit((event) => this.handlePtyExit(event).catch(async (error) => {
-      this.status = "exited";
-      this.endedAt = nowIso();
-      this.markReconciliationStatus("unknown");
-      if (this.ptyProcess?.workerState === "exited") this.ptyProcess = null;
-      this.releaseReason = "pty_exit_cleanup_failed";
-      if (this.lastCommandStatus === "running") {
-        this.lastCommandStatus = "exited";
-        this.lastCommandCompletedAt = this.endedAt;
-      }
-      this.touch();
-      const failure = recordTerminalFailure(error,
-        `[terminal-session] PTY 退出清理失败: terminal_id=${this.id}`,
-        error,
-      );
-      try {
-        this.broadcast({
-          type: "exit",
-          terminalId: this.id,
-          exitCode: event.exitCode,
-          signal: event.signal,
-          error: this.releaseReason,
-          timestamp: this.endedAt,
-        });
-      } catch (broadcastError) {
-        throw new AggregateError([failure, broadcastError],
-          `终端退出失败状态广播失败: terminal_id=${this.id}`, { cause: error });
-      }
-      try {
-        await this.manager.persist();
-      } catch (persistError) {
-        const persistFailure = recordTerminalFailure(persistError,
-          `[terminal-session] PTY 退出失败状态持久化失败: terminal_id=${this.id}`,
-          persistError,
-        );
-        if (failure !== error || persistFailure !== persistError) {
-          throw new AggregateError([failure, persistFailure],
-            `终端退出状态持久化及诊断失败: terminal_id=${this.id}`, { cause: error });
-        }
-      }
-      if (failure !== error) throw failure;
-    }));
-    let resolvedCwd = null;
-    try {
-      resolvedCwd = await resolveTerminalCwd(this.manager.workspaceRoot, this.cwdRelative);
-      await isolatedPty.start({
-        command: this.command,
-        args: this.args,
-        options: {
-          name: "xterm-256color",
-          cwd: resolvedCwd,
-          cols: this.cols,
-          rows: this.rows,
-          env: {
-            ...process.env,
-            TERM: "xterm-256color",
-          },
-        },
+  handlePtyOutput(data) {
+    this.buffer = trimTerminalBuffer(this.buffer + data);
+    const outputReceivedAt = nowIso();
+    for (const chunk of splitTerminalOutputChunks(data)) {
+      this.outputSequence += 1;
+      this.outputMultiplexer.recordAndBroadcast({
+        type: "output",
+        terminalId: this.id,
+        sequence: this.outputSequence,
+        data: chunk,
+        timestamp: outputReceivedAt,
       });
-    } catch (error) {
-      const cause = recordTerminalFailure(error,
-        `[terminal-session] 终端 PTY 启动失败: terminal_id=${this.id}`,
-        { cwd: resolvedCwd ?? this.cwd, command: this.command },
-        error,
-      );
-      throw new Error(
-        `终端 PTY 启动失败: terminal_id=${this.id}`,
-        { cause },
-      );
     }
-    this.status = "running";
-    this.startedAt = this.startedAt || nowIso();
-    this.capturePtyIdentity(isolatedPty);
-    this.markReconciliationStatus("verified");
-    this.touch();
-    await this.manager.persist();
-  }
-
-  async handlePtyExit({
-    exitCode,
-    signal,
-    workerExit,
-    cleanupResult = null,
-    error,
-  }) {
-    if (this.releasePromise) {
-      this.exitCode = exitCode;
-      this.signal = signal;
-      return;
-    }
-    const wasRunning = this.status === "running";
-    if (this.status !== "terminated" && this.status !== "deleted") {
-      this.status = "exited";
-    }
-    this.exitCode = exitCode;
-    this.signal = signal;
-    this.endedAt = nowIso();
-    if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
-      this.markReconciliationStatus("unknown");
-      let diagnosticFailure = null;
-      if (error) {
-        const failure = recordTerminalFailure(error, `[terminal-session] PTY Worker 失败: terminal_id=${this.id}`, error);
-        if (failure !== error) diagnosticFailure = failure;
-      }
-      this.releaseReason = error
-        ? "pty_worker_error"
-        : workerExit
-          ? "pty_worker_exit"
-          : `pty_cleanup_${cleanupResult}`;
-      if (wasRunning && this.osPid) {
-        try {
-          const managerCleanupResult = await terminateProcessTree({
-            pid: this.osPid,
-            processSessionId: this.processSessionId,
-            processStartTime: this.processStartTime,
-          });
-          if (managerCleanupResult === "still_running") {
-            throw new Error(
-              `PTY Worker 退出后进程树仍在运行: terminal_id=${this.id}, pid=${this.osPid}`,
-            );
-          }
-        } catch (cleanupError) {
-          if (diagnosticFailure) {
-            throw new AggregateError([diagnosticFailure, cleanupError],
-              `终端退出清理及诊断失败: terminal_id=${this.id}`, { cause: diagnosticFailure });
-          }
-          throw cleanupError;
-        }
-      }
-      if (diagnosticFailure) throw diagnosticFailure;
-    }
-    // PTY退出观察不证明隔离宿主已退出；失败时仍由原管理停止链持有句柄。
-    const reconciliationStatus = this.reconciliationStatus;
-    this.markReconciliationStatus("unknown");
-    await this.ptyProcess?.shutdown({ terminatePty: false });
-    if (this.releasePromise) return;
-    this.markReconciliationStatus(reconciliationStatus);
-    this.ptyProcess = null;
-    if (this.lastCommandStatus === "running") {
-      this.lastCommandStatus = this.status === "terminated" ? "terminated" : "exited";
-      this.lastCommandCompletedAt = this.endedAt;
+    const exitCode = this.lastCommandStatus === "running"
+      ? latestCommandExitCode(this.buffer, this.lastCommandDoneMarker)
+      : null;
+    if (exitCode !== null) {
+      this.lastCommandStatus = "completed";
+      this.lastCommandExitCode = exitCode;
+      this.lastCommandCompletedAt = nowIso();
+      this.completionEventId =
+        this.completionEventId || `terminal_completed:${this.id}:${this.outputSequence}`;
+      void this.lifecycle.terminateForRelease({
+        status: "completed",
+        commandStatus: "completed",
+        reason: "command_completed",
+      }).catch((error) => {
+        logger.error(
+          `[terminal-session] 命令完成后释放隐藏 PTY 失败: terminal_id=${this.id}`,
+          error,
+        );
+      });
     }
     this.touch();
-    this.broadcast({
-      type: "exit",
-      terminalId: this.id,
-      exitCode,
-      signal,
-      timestamp: this.endedAt,
-    });
-    await this.manager.persist();
+    void this.manager.persist();
   }
 
   async attach(client, { afterSequence = null, grant } = {}) {
@@ -437,7 +222,7 @@ export class TerminalSession {
 
   write(data, { source = "user", command = null } = {}) {
     this.assertPtyConnected("write");
-    if (!this.ptyProcess || this.status !== "running" || this.releasePromise) {
+    if (!this.lifecycle.ptyProcess || this.status !== "running" || this.lifecycle.releasePromise) {
       throw new Error(`终端未运行: terminal_id=${this.id}, status=${this.status}`);
     }
     if (command) {
@@ -463,7 +248,7 @@ export class TerminalSession {
         this.lastInputAt = nowIso();
       }
     }
-    this.ptyProcess.write(data);
+    this.lifecycle.ptyProcess.write(data);
     this.touchUsage();
     this.broadcast({
       type: "input",
@@ -479,7 +264,7 @@ export class TerminalSession {
     if (this.cols === cols && this.rows === rows) {
       return false;
     }
-    const hasLivePty = this.ptyProcess && this.status === "running" && !this.releasePromise;
+    const hasLivePty = this.lifecycle.ptyProcess && this.status === "running" && !this.lifecycle.releasePromise;
     if (!hasLivePty && this.reconciliationStatus !== "verified") {
       throw new Error(
         `终端尚待 owner 核实，不能调整尺寸: terminal_id=${this.id}, reconciliation_status=${this.reconciliationStatus}`,
@@ -488,126 +273,10 @@ export class TerminalSession {
     this.cols = cols;
     this.rows = rows;
     if (hasLivePty) {
-      this.ptyProcess.resize(cols, rows);
+      this.lifecycle.ptyProcess.resize(cols, rows);
     }
     this.touch();
     return true;
-  }
-
-  async terminateForRelease({ status, commandStatus, reason }) {
-    if (this.releasePromise) {
-      return await this.releasePromise;
-    }
-    const hasPersistedIdentity = Number.isSafeInteger(this.osPid) && this.osPid > 0
-      && this.processSessionId && this.processStartTime !== null;
-    const retainedRelease = (this.ptyProcess || hasPersistedIdentity) && this.reconciliationStatus !== "verified"
-      && new Set(["created", "completed", "exited", "terminated", "deleted"]).has(this.status);
-    if (this.status !== "running" && !retainedRelease) {
-      return false;
-    }
-    const releasePromise = this._terminateForRelease({
-      status,
-      commandStatus,
-      reason,
-    });
-    this.releasePromise = releasePromise;
-    try {
-      return await releasePromise;
-    } catch (error) {
-      this.capturePtyIdentity(this.ptyProcess);
-      this.markReconciliationStatus("unknown");
-      try {
-        await this.manager.persist();
-      } catch (persistError) {
-        throw new AggregateError([error, persistError],
-          `终端停止失败且未知状态持久化失败: terminal_id=${this.id}`, { cause: error });
-      }
-      throw error;
-    } finally {
-      if (this.releasePromise === releasePromise) {
-        this.releasePromise = null;
-      }
-    }
-  }
-
-  async _terminateForRelease({ status, commandStatus, reason }) {
-    const pid = this.osPid || this.ptyProcess?.pid;
-    const isolatedPty = this.ptyProcess;
-    if (this.status === "created" && (!Number.isSafeInteger(pid) || pid <= 0)) {
-      throw new Error(`终端原生创建身份尚未核实: terminal_id=${this.id}`);
-    }
-    if (!isolatedPty) {
-      await this.verifyPersistedProcessIdentity(pid);
-    }
-    const result = await terminateProcessTree({
-      pid,
-      processSessionId: this.processSessionId,
-      processStartTime: this.processStartTime,
-    });
-    if (result === "still_running") {
-      this.markReconciliationStatus("unknown");
-      throw new Error(
-        `终端进程树清理失败: terminal_id=${this.id}, pid=${pid}`,
-      );
-    }
-    if (!new Set(["terminated", "force_killed", "missing"]).has(result)) {
-      this.markReconciliationStatus("unknown");
-      throw new Error(
-        `终端进程停止结果无法核实: terminal_id=${this.id}, result=${result}`,
-      );
-    }
-    // 核实 Worker 退出及终态落盘前保留原句柄，失败重试仍操作同一个执行。
-    await isolatedPty?.shutdown({ terminatePty: false });
-    this.markReconciliationStatus("verified");
-    this.status = status;
-    this.endedAt = nowIso();
-    this.signal = result === "force_killed" ? "SIGKILL" : "SIGTERM";
-    this.releaseReason = reason;
-    if (this.lastCommandStatus === "running") {
-      this.lastCommandStatus = commandStatus;
-      this.lastCommandCompletedAt = this.endedAt;
-    }
-    await this.manager.persist();
-    this.ptyProcess = null;
-    this.closeTransports("terminal stopped");
-    this.broadcast({
-      type: status === "deleted" ? "deleted" : "exit",
-      terminalId: this.id,
-      exitCode: this.exitCode,
-      signal: this.signal,
-      timestamp: this.endedAt,
-      snapshot: this.snapshot(),
-    });
-    return true;
-  }
-
-  async verifyPersistedProcessIdentity(pid) {
-    if (
-      !Number.isInteger(pid)
-      || !this.processSessionId
-      || this.processStartTime === null
-    ) {
-      this.markReconciliationStatus("unknown");
-      throw new Error(
-        `终端持久进程身份不完整，拒绝停止或删除: terminal_id=${this.id}`,
-      );
-    }
-    const stat = await readProcessStat(pid);
-    // Linux 根退出后仍须沿原 SID 核实后代；缺根不能代替整棵进程树的停止证明。
-    if (!stat && process.platform === "linux" && this.processSessionId === pid && this.processGroupId === pid) {
-      return;
-    }
-    if (
-      !stat
-      || stat.processSessionId !== this.processSessionId
-      || stat.processStartTime !== this.processStartTime
-      || stat.processGroupId !== this.processGroupId
-    ) {
-      this.markReconciliationStatus("unknown");
-      throw new Error(
-        `终端持久进程身份无法核实，拒绝停止或删除: terminal_id=${this.id}, pid=${pid}`,
-      );
-    }
   }
 
   assertPtyConnected(operation) {
@@ -655,102 +324,17 @@ export class TerminalSession {
   }
 
   async dispose({ terminatePty = true } = {}) {
-    if (this.releasePromise) {
-      await this.releasePromise;
+    if (this.lifecycle.releasePromise) {
+      await this.lifecycle.releasePromise;
     }
-    const isolatedPty = this.ptyProcess;
+    const isolatedPty = this.lifecycle.ptyProcess;
     this.outputMultiplexer.dispose();
     await isolatedPty?.shutdown({ terminatePty });
-    this.ptyProcess = null;
-  }
-
-  capturePtyIdentity(isolatedPty) {
-    if (!isolatedPty) return false;
-    const pid = isolatedPty.pid ?? this.osPid;
-    const identity = isolatedPty.processIdentity;
-    const group = identity?.processGroupId ?? this.processGroupId ?? pid;
-    const session = identity?.processSessionId ?? this.processSessionId ?? (process.platform === "linux" ? pid : null);
-    const started = identity?.processStartTime ?? this.processStartTime;
-    const changed = this.osPid !== pid || this.processGroupId !== group
-      || this.processSessionId !== session || this.processStartTime !== started;
-    this.osPid = pid;
-    this.processGroupId = group;
-    this.processSessionId = session;
-    this.processStartTime = started;
-    return changed;
-  }
-
-  async failStartup(error, { notCreated = false } = {}) {
-    if (notCreated) {
-      // 只有仍在场的创建调用能证明尚未调用start；冷记录缺少PID不能套用此结论。
-      this.status = "deleted";
-      this.endedAt = nowIso();
-      this.releaseReason = "terminal_creation_not_dispatched";
-      this.markReconciliationStatus("verified");
-      try {
-        await this.manager.persist();
-      } catch (persistError) {
-        this.status = "created";
-        this.endedAt = null;
-        this.markReconciliationStatus("unknown");
-        throw new AggregateError([error, persistError],
-          `终端未派发创建的收尾持久化失败: terminal_id=${this.id}`, { cause: error });
-      }
-      error.creationReceipt = {
-        resource_id: this.id, workspace_id: this.workspaceId,
-        owner_revision: this.transportOwnerRevision, outcome: "not_created",
-      };
-      throw error;
-    }
-    const isolatedPty = this.ptyProcess;
-    // TODO（5.2）：native 尚未交付 PID 的阻塞仍须由原 owner 接管，不能凭 Worker 退出结清。
-    let stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
-      .has(isolatedPty.startupCleanupResult);
-    this.capturePtyIdentity(isolatedPty);
-    this.markReconciliationStatus("unknown");
-    this.releaseReason = "terminal_startup_failed";
-    await this.manager.persist();
-    try {
-      if (!stopped && Number.isSafeInteger(this.osPid) && this.osPid > 0) {
-        stopped = await this.terminateForRelease({
-          status: "terminated", commandStatus: "terminated", reason: "terminal_startup_failed",
-        });
-      } else {
-        await this.dispose();
-        // 收尾期间可取得同一Worker迟到的原生身份和正式停止回执。
-        this.capturePtyIdentity(isolatedPty);
-        stopped = isolatedPty !== null && new Set(["missing", "terminated", "force_killed"])
-          .has(isolatedPty.startupCleanupResult);
-      }
-    } catch (cleanupError) {
-      if (this.capturePtyIdentity(isolatedPty)) {
-        try {
-          await this.manager.persist();
-        } catch (persistError) {
-          cleanupError = new AggregateError([cleanupError, persistError],
-            "终端启动清理及迟到身份持久化均失败", { cause: cleanupError });
-        }
-      }
-      const failure = new AggregateError([error, cleanupError], `终端启动失败且清理未完成: terminal_id=${this.id}`, { cause: error });
-      throw recordTerminalFailure(failure, `[terminal-session] 启动失败清理未完成: terminal_id=${this.id}`, cleanupError);
-    }
-    if (stopped && this.status !== "terminated") {
-      this.status = "terminated";
-      this.endedAt = nowIso();
-      this.markReconciliationStatus("verified");
-      await this.manager.persist();
-    } else if (!stopped) {
-      await this.manager.persist();
-    }
-    if (stopped) error.creationReceipt = {
-      resource_id: this.id, workspace_id: this.workspaceId, owner_revision: this.transportOwnerRevision,
-      outcome: "failed", resource: this.snapshot(),
-    };
-    throw error;
+    this.lifecycle.ptyProcess = null;
   }
 
   async kill({ reason = "terminal_cancel" } = {}) {
-    return await this.terminateForRelease({
+    return await this.lifecycle.terminateForRelease({
       status: "terminated",
       commandStatus: "terminated",
       reason,
@@ -761,7 +345,7 @@ export class TerminalSession {
     if (this.status === "deleted" && this.reconciliationStatus === "verified") {
       return;
     }
-    await this.terminateForRelease({
+    await this.lifecycle.terminateForRelease({
       status: "deleted",
       commandStatus: "deleted",
       reason: "terminal_delete",
@@ -909,7 +493,7 @@ export class TerminalSession {
     return {
       ...record,
       reconciliation_status: this.creationCancellationPending ? "unknown" : this.reconciliationStatus,
-      pty_worker_pid: this.ptyProcess?.workerPid ?? null,
+      pty_worker_pid: this.lifecycle.ptyProcess?.workerPid ?? null,
       client_count: this.outputMultiplexer.clientCount,
     };
   }

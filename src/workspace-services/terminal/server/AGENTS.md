@@ -9,7 +9,9 @@ server/
 ├── terminalManager.js            工作区终端集合、容量与持久化协调
 ├── workspaceIdentity.js          UUID格式与权威工作区身份文件核对
 ├── terminalSession.js            单个终端的交互及状态转换
-├── processes/                    操作系统进程与隔离PTY宿主
+├── processes/                    PTY启停协调、操作系统进程与隔离PTY宿主
+│   ├── terminalPtyLifecycle.js    PTY启停、身份核实与失败收尾
+│   ├── terminalEnvironment.js     cwd解析、shell选择与启停诊断
 │   ├── isolatedPtyProcess.js      后端持有的worker句柄与IPC
 │   ├── ptyWorker.js               worker内的PTY与逐包背压
 │   └── *.test.js                 宿主关闭及进程元数据解析
@@ -24,7 +26,7 @@ server/
 
 ## 职责边界
 
-单终端行为归 Session，跨终端策略归 Manager；系统进程是否仍在执行由进程层判断。Linux 僵尸进程已停止执行，父进程尚未回收不构成终端停止失败。
+单终端业务记录、命令和传输授权归 Session，PTY启停由其组合的 TerminalPtyLifecycle 协调；后者只持有PTY句柄和唯一在途停止任务，不复制业务状态。跨终端策略归 Manager；系统进程是否仍在执行由进程层判断。Linux 僵尸进程已停止执行，父进程尚未回收不构成终端停止失败。
 
 普通列表统一使用 Session 摘要，保留状态、命令、版本和输出游标，不携带 `buffer` 或 `display_buffer`，也不为列表过滤完整输出。原始缓冲仍由同一 Session 持有并持久化；单条详情、增量读取和 WebSocket 快照继续提供正文。
 
@@ -74,7 +76,7 @@ Manager创建在首次等待前登记原容量队尾；关闭先停止新准入�
 
 唯一cwd解析使用异步stat，Manager和Session调用方全部等待同一实现。路径解析、原始诊断及cause、工作区外绝对路径和持久相对表达保持原合同；不另建同步兼容入口。线程池排队不会证明原生文件操作已取消，完整shutdown总期限与未知进程接管仍按OpenSpec后续验收。
 
-cwd检查、PTY启动及启动失败清理的四个诊断出口共用文件私有`recordTerminalFailure`；日志正常返回原错误，writer次错按发生顺序保留原错误和诊断异常。普通文件cwd拒绝仍保留原公开说明且不构造自引用cause；启动／清理双错作为内层原因整体保留。原unknown落盘、进程树停止证明、worker句柄及创建回执顺序保持。
+cwd检查、PTY启动及启动失败清理的四个诊断出口共用`terminalEnvironment.js`的`recordTerminalFailure`；日志正常返回原错误，writer次错按发生顺序保留原错误和诊断异常。普通文件cwd拒绝仍保留原公开说明且不构造自引用cause；启动／清理双错作为内层原因整体保留。原unknown落盘、进程树停止证明、worker句柄及创建回执顺序保持。
 
 Worker退出诊断也复用同一函数，日志次错延至原进程树停止尝试之后再传播，停止若也失败保留全部原因。原退出失败回调在日志次错时仍广播并等待状态保存，再让未能记录的诊断故障进入既有致命处理器；存储或广播再次失败保留各原异常。正常日志继续沿原后台处理合同，不新增错误队列、状态writer或恢复链；不以本片证明未知进程接管、所有异步事件或整个生命周期的错误闭包。
 
@@ -92,7 +94,7 @@ Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；
 
 就绪前失败已取得原生PID时，Session先保留unknown和原身份，再复用`terminateForRelease`核实整棵进程树、worker退出及终态持久化；全部成功才签正式failed创建回执。停止失败保留原句柄，created/unknown可由原管理kill入口重试；没有PID的created不能伪报已终止，native未交付身份的接管仍为TODO。
 
-Manager在调用Session.start前先经原writer发布created/unknown意图；就绪后沿原身份捕获和持久化链转为verified。首条意图写入失败时，只有原创建调用确认start尚未派发，才能将同一身份关闭为deleted/verified并签not_created；收尾也写入失败保留unknown与两份原错、不签回执。冷Manager缺少PID不能使用该原调用证明，也不能因缺少就绪记录将资源判为不存在。
+Manager在调用Session.lifecycle.start前先经原writer发布created/unknown意图；就绪后沿原身份捕获和持久化链转为verified。首条意图写入失败时，只有原创建调用确认start尚未派发，才能将同一身份关闭为deleted/verified并签not_created；收尾也写入失败保留unknown与两份原错、不签回执。冷Manager缺少PID不能使用该原调用证明，也不能因缺少就绪记录将资源判为不存在。
 
 历史配额只裁剪deleted/verified记录；unknown或reconcile_required即使已标deleted仍保留原身份、版本和恢复记录，不占已核实历史的256条配额。冷启动和新建之前共用此裁剪入口，不能借裁剪消除待核实操作或重新使用其资源身份。
 

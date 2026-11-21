@@ -948,7 +948,9 @@ class JobService:
     async def submission_dispatch(self, record: ExecutionQueueRecord) -> JobDispatchSnapshotDTO:
         """只读原操作的执行事实；查回执不得重新启动已领取或已结束的执行。"""
         admission = record.cursor.admission
-        async with self._dispatch_lock:
+        # 等原 Thread 完成登记与队列发布；只读查询不重新开启消息准入。
+        async with (self._thread_input_admission.hold(admission.session_id, admission.thread_id),
+                    self._dispatch_lock):
             job = self._jobs.get(admission.job_id)
             if job is not None:
                 return self._existing_dispatch_snapshot(job)

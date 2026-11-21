@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -101,6 +102,14 @@ def matrix_case(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Matr
         "command": [sys.executable, "-c", WORKER, "leader", mode, str(tmp_path), WORKER],
     }]}
     (matrix_directory / "matrix.jsonc").write_text(json.dumps(matrix), encoding="utf-8")
+    builder = tmp_path / "sdk/node/build.mjs"
+    builder.parent.mkdir(parents=True)
+    builder.write_text("// 仅验证进程清理，真实 SDK 构建由独立集成测试覆盖。\n", encoding="utf-8")
+    # 隔离运行器也要具备现有采样和报告依赖，避免把基础设施缺失当作清理失败。
+    for name in ("resources.py", "report.py"):
+        destination = tmp_path / "tests/harness/performance" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / "tests/harness/performance" / name, destination)
     with ExitStack() as lifetime:
         unrelated = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(45)"],
@@ -163,6 +172,6 @@ def test_matrix_exit_stops_only_its_owned_process_group(matrix_case: MatrixCase,
     assert result["unrelated_process_alive"], "矩阵入口影响了另一个隔离进程组"
     if case.mode == "timeout":
         output = (case.artifacts / "stdout.log").read_text(encoding="utf-8")
-        receipt = json.loads(output.strip())
+        receipt = json.loads(output.strip().splitlines()[-1])
         assert receipt["status"] == "TIMEOUT"
         assert receipt["timeoutMs"] == 500

@@ -9,7 +9,6 @@ import {
   writeDispatchActiveJob,
 } from "../../state/conversations";
 import {
-  appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   buildTraceEvent,
   tracePayloadString,
@@ -19,7 +18,7 @@ import {
   dispatchWorkspaceFileChanges,
   fileChangesFromTraceEvents,
 } from "../../state/workspaceFileTreeEvents";
-import type { JobDispatchSnapshot, SessionStreamEvent } from "../../types/backend";
+import type { JobDispatchSnapshot, SessionStreamEvent, TraceEvent } from "../../types/backend";
 import {
   refreshSessionMetadata,
 } from "./sessionRefresh";
@@ -34,6 +33,18 @@ export interface SessionStreamBatchContext {
   sessionCacheKey: string;
   setState: SetAppState;
   signal?: AbortSignal;
+}
+
+/** 同一 Job 的结束事件复用已保留正文，字段和原始 payload 保持不变。 */
+function shareCompletedTraceText(event: TraceEvent, retained: readonly TraceEvent[]): TraceEvent {
+  if (event.type !== "text_end" && event.type !== "agent_end" && event.type !== "job_completed") return event;
+  const content = retained.find(candidate => candidate.session_id === event.session_id
+    && candidate.thread_id === event.thread_id && candidate.job_id === event.job_id
+    && candidate.content === event.content)?.content ?? event.content;
+  const payload = Object.fromEntries(Object.entries(rawTracePayload(event)).map(([key, value]) =>
+    [key, typeof value === "string" && value === content ? content : value]));
+  return { ...event, content, payload,
+    raw: event.raw ? { ...event.raw, payload } : event.raw };
 }
 
 function updateCurrentSessionFromEvents(
@@ -56,28 +67,34 @@ function updateCurrentSessionFromEvents(
       return previous;
     }
     const next = cloneMaps(previous);
-    next.traceEvents = appendBoundedLiveTraceEvents(next.traceEvents, traceEvents);
+    const retained = (previous.eventQueuesBySession.get(context.sessionCacheKey) ?? [])
+      .flatMap(item => item.kind === "trace" ? [item.event] : []);
+    const sharedTraceEvents = traceEvents.map(event => {
+      const shared = shareCompletedTraceText(event, retained);
+      retained.push(shared);
+      return shared;
+    });
     updateAttachmentSummariesFromTraces(
       next.sessionAttachmentSummaries,
       context.sessionId,
       context.sessionCacheKey,
-      traceEvents,
+      sharedTraceEvents,
     );
     appendReceivedEvents(
       next.eventQueuesBySession,
       context.sessionId,
-      traceEvents,
+      sharedTraceEvents,
       "sse",
       context.sessionCacheKey,
     );
     appendTraceEventsToPendingConversations(
       next.pendingConversations,
       context.sessionId,
-      traceEvents,
+      sharedTraceEvents,
       context.sessionCacheKey,
       true,
     );
-    for (const event of traceEvents) {
+    for (const event of sharedTraceEvents) {
       if (event.type !== "job_started") continue;
       const dispatch = rawTracePayload(event).dispatch as JobDispatchSnapshot | undefined;
       if (!dispatch || dispatch.session_id !== context.sessionId || dispatch.thread_id !== (context.threadId ?? previous.currentSession.thread_id) || dispatch.job_id !== event.job_id) {

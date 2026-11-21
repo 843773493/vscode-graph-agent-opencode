@@ -13,7 +13,6 @@ import type { AppState } from "../../types/frontend";
 export function resetSessionScopedFields(state: AppState): AppState {
   return {
     ...state,
-    traceEvents: [],
     llmRequestLogs: [],
     llmRequestLogsLoadedAt: null,
     llmRequestLogsLoading: false,

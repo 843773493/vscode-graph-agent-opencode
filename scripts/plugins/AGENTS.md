@@ -24,3 +24,5 @@
 - `build-sdk.mjs` 独立构建 Node tarball/Python wheel；归档按内容摘要保留，日志合同从唯一源带入。`prepare-product-sdk.mjs` 同步两种 SDK 的版本、产品 Bun workspace／uv editable 来源与生成日志资源，不为普通源码编辑构建归档。`--check` 只核一致性，不改清单、锁或生成资源，不构建 SDK。不导入应用或待安装 SDK。
 - `export-python-requirements.mjs` 为产品发行导出锁定依赖，排除 Backend 本地 editable 项并加入当前 SDK wheel 及真实摘要；不改变插件安装规则，不让开发目录进入产品制品。
 - 两个 packer 共享目录构建，SDK 放在 `vendor/sdk/<sha256>/`，Bun/uv 正常更新锁后准备依赖；缓存输入与制品身份分开，纯业务源码变化不重装依赖。开发加载完整目录，发行只打 ZIP。
+
+- Node SDK 归档共用 `sdk/node/build.mjs`：发行严格检查并生成声明，开发插件用 `development: true` 构建运行归档并跳过 SDK 手写模块的声明生成，两者均保留原不可变归档与安装规则。指纹和 staging 使用同一份已读取的输入，编译只读 staging；临时依赖链接在归档前删除。编译工具和根锁属于构建输入，开发不反复生成声明；Python 仍使用标准 wheel 构建。

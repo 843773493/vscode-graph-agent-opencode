@@ -374,10 +374,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         )
         if client is not None:
             kwargs.setdefault("client", client)
-        if self.api_key == "" and self.custom_llm_provider == "openai" and not self._uses_http_handler:
-            from openai import Omit
-
-            kwargs["extra_headers"] = {**kwargs.get("extra_headers", {}), "Authorization": Omit()}
         if self.invocation_purpose == "model_test":
             kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
@@ -409,10 +405,6 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         )
         if client is not None:
             kwargs.setdefault("client", client)
-        if self.api_key == "" and self.custom_llm_provider == "openai" and not self._uses_http_handler:
-            from openai import Omit
-
-            kwargs["extra_headers"] = {**kwargs.get("extra_headers", {}), "Authorization": Omit()}
         if self.invocation_purpose == "model_test":
             kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:

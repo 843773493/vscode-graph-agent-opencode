@@ -1,3 +1,5 @@
+import { nowIso } from "./processes/terminalPtyLifecycle.js";
+import { resolveShell, resolveTerminalCwd, shellArgs } from "./processes/terminalEnvironment.js";
 import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import path from "node:path";
@@ -5,10 +7,6 @@ import { randomBytes } from "node:crypto";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
 import { readProcessStat } from "@boxteam/plugin-sdk/process-lifecycle";
 import {
-  nowIso,
-  resolveShell,
-  resolveTerminalCwd,
-  shellArgs,
   TerminalSession,
   validateTerminalRecord,
 } from "./terminalSession.js";
@@ -332,10 +330,10 @@ export class TerminalManager {
       // 原生创建前先发布原恢复记录；硬退出后不能留下没有资源身份的PTY。
       await this.persist();
       startDispatched = true;
-      await session.start();
+      await session.lifecycle.start();
     } catch (error) {
       // 保留原身份与恢复记录；原owner核实进程树、Worker退出及终态落盘后才结清创建。
-      await session.failStartup(error, { notCreated: !startDispatched });
+      await session.lifecycle.failStartup(error, { notCreated: !startDispatched });
     }
     await this.persist();
     return session.snapshot();

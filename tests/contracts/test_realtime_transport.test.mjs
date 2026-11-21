@@ -16,7 +16,7 @@ async function sources(root) {
 test('常驻业务事件连接只能由统一实时入口创建，有限请求流与专用协议显式登记', async () => {
   const roots = ['src/clients/web/src', 'src/clients/workbench/src', 'src/workspace-services/terminal/client'];
   // DAP 与终端字节是专用协议；它们不能被误算成业务事件连接。
-  const dedicatedSockets = new Set(['src/clients/workbench/src/debug/adapter.ts', 'src/workspace-services/terminal/client/main.js']);
+  const dedicatedSockets = new Set(['src/clients/workbench/src/debug/adapter.ts', 'src/workspace-services/terminal/client/terminalConnection.js']);
   const finiteStreams = new Set(['api/configSources.ts', 'api/stream/federatedSearch.ts', 'api/stream/realtime.ts']);
   const failures = [];
   for (const file of (await Promise.all(roots.map(sources))).flat()) {

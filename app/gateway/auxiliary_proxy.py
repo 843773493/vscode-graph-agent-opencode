@@ -17,6 +17,7 @@ def _terminal_asset(path: str) -> FileResponse:
         "": client / "index.html", "index.html": client / "index.html",
         "main.js": client / "main.js", "styles.css": client / "styles.css",
         "terminalUserActions.js": client / "terminalUserActions.js",
+        "terminalConnection.js": client / "terminalConnection.js",
         "terminalShortcuts.js": client / "terminalShortcuts.js",
         "shared/commandText.js": root / "src/workspace-services/terminal/shared/commandText.js",
         "shared/realtime.js": root / "src/shared/realtime.js",
@@ -35,7 +36,7 @@ def _terminal_asset(path: str) -> FileResponse:
     target = fixed.get(path)
     if target is None:
         if path.startswith("protocol/generated/"):
-            source = root / "node_modules/@boxteam/plugin-sdk/src/generated"
+            source = root / "node_modules/@boxteam/plugin-sdk/dist/generated"
             relative = path.removeprefix("protocol/generated/")
         elif path.startswith("@bufbuild/protobuf/"):
             source = root / "node_modules/@bufbuild/protobuf/dist/esm"
@@ -83,7 +84,7 @@ def _browser_asset(path: str) -> FileResponse:
     target = fixed.get(path)
     if target is None:
         if path.startswith("protocol/generated/"):
-            source = root / "node_modules/@boxteam/plugin-sdk/src/generated"
+            source = root / "node_modules/@boxteam/plugin-sdk/dist/generated"
             relative = path.removeprefix("protocol/generated/")
         elif path.startswith("@bufbuild/protobuf/"):
             source = root / "node_modules/@bufbuild/protobuf/dist/esm"

@@ -3,8 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { assertName, assertNoLinkedParents, atomicJson, commitFor, git, gitText, metadataPath, readMetadata, registeredWorktrees } from "./repository.mjs";
 import { copyLocalConfiguration, setupWorktree } from "./configuration.mjs";
-import { developmentSystemdUnitName, parseDevelopmentPortOffset, resolveDevelopmentLayout } from "../dev-environment.mjs";
-import { readUnitState } from "../dev-systemd.mjs";
+import { developmentSystemdUnitName, parseDevelopmentPortOffset, resolveDevelopmentLayout } from "../development/environment.mjs";
+import { readUnitState } from "../development/systemd.mjs";
 
 export function assertSystemdUnitIdle(target, metadata, { readState = readUnitState, platform = process.platform } = {}) {
   if (platform !== "linux") return null;

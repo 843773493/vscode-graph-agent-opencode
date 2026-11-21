@@ -92,7 +92,7 @@ test("迟到就绪仍进入同一关闭；重复信号观察不重复启动或�
     assert.equal(created.terminal_id, options.terminalId);
     const session = manager.get(options.terminalId);
     assert.equal(session.status, "running");
-    assert.equal(session.ptyProcess, null);
+    assert.equal(session.lifecycle.ptyProcess, null);
     const record = (await manager.stateStore.readRecords())[0];
     assert.equal(record.reconciliation_status, "reconcile_required");
     assert.equal(record.release_reason, "original");
@@ -132,7 +132,7 @@ test("首错不释放仍在途的整批关闭；全部排空后才允许重试�
       terminal_id: intent(manager).terminalId, workspace_id: manager.workspaceId,
       transport_owner_revision: 3, reconciliation_status: "verified", cwd_relative: ".", status: "running",
     } });
-    session.ptyProcess = { async shutdown(options) {
+    session.lifecycle.ptyProcess = { async shutdown(options) {
       assert.deepEqual(options, { terminatePty: false });
       counts[index] += 1;
       if (index === 0 && counts[index] === 1) throw failure;
@@ -152,7 +152,7 @@ test("首错不释放仍在途的整批关闭；全部排空后才允许重试�
     await assert.rejects(original, (error) => error === failure);
     await manager.shutdown("explicit_retry");
     assert.deepEqual(counts, [2, 1]);
-    assert.equal(sessions.every((session) => session.ptyProcess === null), true);
+    assert.equal(sessions.every((session) => session.lifecycle.ptyProcess === null), true);
   } finally {
     release.resolve();
     await manager.shutdownPromise?.catch(() => {});
@@ -167,7 +167,7 @@ test("整批关闭与最终写盘均失败时保留原顺序及 cause，显式�
     transport_owner_revision: 3, reconciliation_status: "verified", cwd_relative: ".", status: "running",
   } });
   let stops = 0, writes = 0;
-  session.ptyProcess = { async shutdown() { if (++stops === 1) throw stopFailure; } };
+  session.lifecycle.ptyProcess = { async shutdown() { if (++stops === 1) throw stopFailure; } };
   manager.terminalsById.set(session.id, session);
   const writer = manager.stateStore.write.bind(manager.stateStore);
   t.mock.method(manager.stateStore, "write", async (payload) => { if (++writes === 1) throw writeFailure; await writer(payload); });
@@ -180,7 +180,7 @@ test("整批关闭与最终写盘均失败时保留原顺序及 cause，显式�
   await manager.shutdown();
   assert.equal(stops, 2);
   assert.equal(writes, 2);
-  assert.equal(session.ptyProcess, null);
+  assert.equal(session.lifecycle.ptyProcess, null);
 });
 
 for (const phase of ["creations", "resources", "persist"]) {

@@ -180,8 +180,17 @@ async function runSuite(suite, overrides) {
     );
     return 2;
   }
-  const timeoutMs = suite.timeoutMs ?? defaultTimeoutMs;
   const collection = collectionOptions(suite, overrides);
+  // 编译同样受外部内存和超时保护；失败时不启动任何消费者测试。
+  const prepared = Bun.spawnSync(buildSuiteCommand({ command: [
+    process.env.NODE_BIN ?? "node", path.join(projectRoot, "sdk/node/build.mjs"),
+  ] }, suite.dataLimitKb ?? defaultDataLimitKb), {
+    cwd: projectRoot, stdout: "inherit", stderr: "inherit", timeout: 60_000,
+  });
+  if (prepared.exitCode !== 0 || prepared.signalCode) {
+    throw new Error(`测试 SDK 构建失败: exit=${prepared.exitCode} signal=${prepared.signalCode ?? "none"}`);
+  }
+  const timeoutMs = suite.timeoutMs ?? defaultTimeoutMs;
   const run = await beginPerformance(projectRoot, suite, collection);
   process.stdout.write(`性能运行: ${run.directory}\n`);
   const command = buildSuiteCommand(suite, suite.dataLimitKb ?? defaultDataLimitKb);
@@ -192,6 +201,7 @@ async function runSuite(suite, overrides) {
       BOXTEAM_TEST_SUITE: suite.id,
       BOXTEAM_TEST_RUN_ID: process.env.BOXTEAM_TEST_RUN_ID ?? `${Date.now()}-${process.pid}`,
       ...run.env,
+      BOXTEAM_TEST_PREPARED_NODE_SDK_ROOT: projectRoot,
     },
     stdin: "inherit",
     stdout: "pipe",

@@ -443,20 +443,6 @@ def _legacy_payload() -> dict[str, object]:
     return {**payload, "config_version": 1, "logger": {"level": "info", "pretty": True}}
 
 
-def test_workspace_config_rejects_old_web_embedding_before_execution() -> None:
-    from configs.runtime import validate_config_payload
-
-    payload = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
-    schema = read_jsonc_object(Path.cwd() / "configs/workspace_schema.jsonc")
-    validate_config_payload(payload, schema=schema)
-    tool = next(tool for tool in payload["agents"]["default"]["tools"]["custom"]
-                if tool["tool_id"] == "fetch_webpage")
-    embedding = tool["options"]["embedding"]
-    embedding["provider_id"] = embedding.pop("model_ref")["provider_id"]
-    with pytest.raises(ValueError, match="配置验证失败"):
-        validate_config_payload(payload, schema=schema)
-
-
 def test_superseded_candidate_keeps_original_without_blocking_startup(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
 ) -> None:

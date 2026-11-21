@@ -106,7 +106,7 @@ function precompilePythonBytecode(pythonExecutable, applicationRoot) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  writeApplicationNodeManifest(projectRoot, applicationRoot);
+  writeApplicationNodeManifest(projectRoot, applicationRoot, { nodeExecutable });
   const installArguments = ["install", "--production", "--exact", "--ignore-scripts"];
   if (crossBuild) {
     // 这里只准备目标依赖；完整插件原生制品仍由 packer 校验，不能用 Linux 构建代替。
