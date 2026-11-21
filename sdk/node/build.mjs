@@ -1,6 +1,6 @@
 // 开发只转换运行 JS；类型检查与发行声明使用同一份 TypeScript 源码。
 import { build, context } from "esbuild";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
@@ -49,7 +49,9 @@ export async function buildNodeSdk({ projectRoot = process.cwd(), outputDirector
     const loaded = ts.readConfigFile(configPath, ts.sys.readFile);
     const host = { getCurrentDirectory: () => projectRoot, getCanonicalFileName: file => file, getNewLine: () => "\n" };
     const config = ts.parseJsonConfigFileContent(loaded.config, ts.sys, root,
-      { outDir: output, noEmit: check, emitDeclarationOnly: false }, configPath);
+      { outDir: output, noEmit: check, emitDeclarationOnly: false,
+        // Windows junction 中的相对包链接须从真实依赖目录解析。
+        typeRoots: [realpathSync(path.join(root, "node_modules/@types"))] }, configPath);
     const outputs = release ? assetContents(assets().files) : null;
     const program = ts.createProgram(config.fileNames, config.options);
     const diagnostics = [...(loaded.error ? [loaded.error] : []), ...config.errors, ...ts.getPreEmitDiagnostics(program)];
