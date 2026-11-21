@@ -45,7 +45,7 @@ def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator
     prepared_root = request.config.getoption("--prepared-developer-tools-package", default=None)
     if prepared_root:
         root = Path(prepared_root).resolve(strict=True)
-        installed = PluginPackageStore(root.parent.parent).get("boxteam.developer-tools", "0.1.0")
+        installed = PluginPackageStore(root.parent.parent).get("boxteam.developer-tools", "0.1.1")
         if installed.root != root:
             raise ValueError("预备开发工具包路径与安装记录不一致")
         manifest = installed.manifest

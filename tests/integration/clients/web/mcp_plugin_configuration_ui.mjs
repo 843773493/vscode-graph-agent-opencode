@@ -78,7 +78,7 @@ try {
   result.phase = 'plugin-service-add';
   await start('ui-plugin');
   await pick('已就绪的 MCP 插件服务');
-  await pick('boxteam.mcp-stdio@0.1.0');
+  await pick('boxteam.mcp-stdio@0.1.1');
   await quick.getByText('启用此 Server', { exact: true }).click();
   const pluginSave = page.waitForResponse(response => response.request().method() === 'PUT'
     && new URL(response.url()).pathname.endsWith('/config/sources/workspace_root_mutable_override'));
@@ -362,7 +362,7 @@ try {
   const schemaStart = result.managementReads.length;
   await pluginParameters.click();
   await expect(quick).toContainText('查看参数 schema');
-  await expect(quick).toContainText('boxteam.mcp-stdio/stdio@0.1.0');
+  await expect(quick).toContainText('boxteam.mcp-stdio/stdio@0.1.1');
   await quick.locator('input').first().press('Escape');
   await expect(quick).not.toBeVisible();
   assert.deepEqual(result.managementReads.slice(schemaStart).filter(item => item.kind === 'schemas').map(item => item.target), [{
@@ -385,7 +385,7 @@ try {
   await quick.locator('input').first().press('Escape');
   assert.equal(result.writes.length, 2, '查看及取消管理入口不能提交配置');
   result.mcpManagementEntries = { owner: { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId },
-    parameterScope: fixture.scope, exactVersion: '0.1.0', cancelledWithoutWrite: true, resourcesTemplatesUnavailable: true };
+    parameterScope: fixture.scope, exactVersion: '0.1.1', cancelledWithoutWrite: true, resourcesTemplatesUnavailable: true };
 
   result.phase = 'download-source-management';
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);

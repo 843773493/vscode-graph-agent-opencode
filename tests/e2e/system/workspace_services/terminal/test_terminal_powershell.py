@@ -28,7 +28,7 @@ def e2e_workspace_root_path() -> str:
 def _terminal_api_url(gateway: TerminalPluginGateway, suffix: str) -> str:
     return (
         f"{gateway.http_service_url}{suffix}?"
-        + urlencode({"package_version": "0.1.0", "workspace_id": gateway.workspace_id})
+        + urlencode({"package_version": "0.1.1", "workspace_id": gateway.workspace_id})
     )
 
 

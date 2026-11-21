@@ -105,7 +105,7 @@ async def result_client(
     )
     definitions = result_server_receipts_path.with_name("definitions.json")
     plugin_configuration = {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                                    "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
@@ -117,7 +117,7 @@ async def result_client(
     await _publish(target, {"plugins": plugin_configuration, "mcp": {"servers": {"result": {
         "enabled": True, "transport": "plugin", "service": {
             "gateway_id": gateway_id, "workspace_id": workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "service_id": "mcp",
         },
     }}}}, f"mcp-result-plugin-{request.node.name}")

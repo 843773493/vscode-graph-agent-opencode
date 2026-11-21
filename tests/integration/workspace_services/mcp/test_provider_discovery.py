@@ -131,7 +131,7 @@ async def provider_case(
                     expected_digest=hashlib.sha256(package.read_bytes()).hexdigest(),
                 )
                 await _publish(plugin_target, {"plugins": {
-                    "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                    "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                                                "plugin_id": "stdio", "enabled": True}]},
                     "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
                         "command": sys.executable,
@@ -142,7 +142,7 @@ async def provider_case(
                 }, "mcp": {"servers": {"schema": {
                     "enabled": True, "transport": "plugin", "service": {
                         "gateway_id": gateway_id, "workspace_id": workspace_id,
-                        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                         "plugin_id": "stdio", "service_id": "mcp",
                     },
                 }}}}, "mcp-provider-discovery-plugin")

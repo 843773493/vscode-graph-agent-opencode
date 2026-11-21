@@ -57,7 +57,7 @@ def logging_case(
     config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
     config.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [
-        {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": plugin_id, "enabled": True}
+        {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": plugin_id, "enabled": True}
         for plugin_id in ("terminal", "browser")
     ]
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")

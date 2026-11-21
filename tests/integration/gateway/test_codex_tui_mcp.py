@@ -174,14 +174,14 @@ async def test_agent_uses_codex_tui_mcp_through_gateway_plugin(
         "gateway_id": case.gateway_id,
         "workspace_id": case.workspace_id,
         "package_id": "boxteam.mcp-stdio",
-        "package_version": "0.1.0",
+        "package_version": "0.1.1",
         "plugin_id": "stdio",
         "service_id": "mcp",
     }
     await _publish(case, {
         "plugins": {
             "runtime": {"entries": [{
-                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                 "plugin_id": "stdio", "enabled": True,
             }]},
             "configuration": {"values": {"boxteam.mcp-stdio": {

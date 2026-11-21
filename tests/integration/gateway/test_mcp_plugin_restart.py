@@ -40,7 +40,7 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     definitions, receipts = artifacts / "definitions.json", artifacts / "receipts.jsonl"
     definitions.write_text('{"probe":{"type":"object"},"second":{"type":"object"}}', encoding="utf-8")
     await _publish(case, {"plugins": {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": True}]},
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
             "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"), str(definitions), str(receipts)],
@@ -51,7 +51,7 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     await _publish(case, {"mcp": {"servers": {"probe": {
         "enabled": True, "transport": "plugin", "service": {
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "service_id": "mcp",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "service_id": "mcp",
         },
     }}}}, "restart-plugin-connect")
     old_catalog = await _catalog(case)
@@ -60,7 +60,7 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     processes = [process, *process.children(recursive=True)]
     response = await case.client.post("/api/gateway/service-plugins/restart", json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio",
+        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio",
         "revision": previous["revision"],
     })
     response.raise_for_status()
@@ -70,7 +70,7 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     _, alive = await asyncio.to_thread(psutil.wait_procs, processes, timeout=5)
     assert not alive, [item.pid for item in alive]
     old_route = (f"/api/gateway/service-plugins/boxteam.mcp-stdio/stdio/instances/{old_instance['instance_id']}/services/mcp/"
-                 f"?package_version=0.1.0&workspace_id={case.workspace_id}")
+                 f"?package_version=0.1.1&workspace_id={case.workspace_id}")
     response = await case.client.post(old_route, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert response.status_code == 409, response.text
     # 旧 session 已先退出时返回失败快照；刷新撞上断线时返回原刷新错误，均不能改投新实例。

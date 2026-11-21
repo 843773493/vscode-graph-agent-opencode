@@ -52,7 +52,7 @@ from tests.support.workspaces import (
 )
 
 SECTION8_NODE_PORT_OFFSETS = (0, 10, 40)
-MCP_PLUGIN_VERSION = "0.1.0"
+MCP_PLUGIN_VERSION = "0.1.1"
 
 
 def _section8_mcp_plugin_package(path: Path, server_id: str, prepared_package: Path) -> str:

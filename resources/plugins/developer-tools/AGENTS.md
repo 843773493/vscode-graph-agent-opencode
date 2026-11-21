@@ -15,7 +15,7 @@
 
 # 规范
 
-- 包身份固定为 `boxteam.developer-tools@0.1.0`；Terminal、Browser、Debug 均使用 workspace scope。
+- 包 ID 固定为 `boxteam.developer-tools`，版本以 `plugin.jsonc` 为准；包内容或内嵌 SDK 变化时递增版本；Terminal、Browser、Debug 均使用 workspace scope。
 - 依赖以 `bun.lock` 为准；发布 ZIP 由 `scripts/plugins/pack-developer-tools.mjs` 从仓库根目录组装。
 - 包源码路径保持与仓库源目录相同，打包显式文件清单由真实标准插件 ZIP 启动验收验证入口可运行。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

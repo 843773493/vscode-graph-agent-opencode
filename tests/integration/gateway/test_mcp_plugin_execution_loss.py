@@ -54,7 +54,7 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
     await install_plugin_async(lambda path, payload: case.client.post(path, json=payload),
         gateway_id=case.gateway_id, path=str(prepared_mcp_stdio_package))
     await _publish(case, {"plugins": {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
@@ -66,7 +66,7 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
     await _publish(case, {"mcp": {"servers": {"probe": {
         "enabled": True, "transport": "plugin", "service": {
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "service_id": "mcp",
         },
     }}}}, f"loss-connect-{boundary}")
@@ -174,14 +174,14 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
         assert failed["binding"]["enabled"] is True
         assert failed["instance"] == original_plugin["instance"]
         old_route = (f"/api/gateway/service-plugins/boxteam.mcp-stdio/stdio/instances/"
-            f"{original_plugin['instance']['instance_id']}/services/mcp/?package_version=0.1.0"
+            f"{original_plugin['instance']['instance_id']}/services/mcp/?package_version=0.1.1"
             f"&workspace_id={case.workspace_id}")
         rejected = await case.client.post(old_route, json={"jsonrpc": "2.0", "id": "old-instance", "method": "tools/list"})
         assert rejected.status_code == 409, rejected.text
         assert (await _plugin(case, state="failed"))["instance"] == original_plugin["instance"], "状态或业务访问不能重启插件"
         restarted_plugin = await case.client.post("/api/gateway/service-plugins/restart", json={
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio",
             "revision": failed["revision"],
         })
         restarted_plugin.raise_for_status()
@@ -240,7 +240,7 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
             assembly.validate_hashes()
     await _publish(case, {"mcp": {"servers": {}}, "plugins": {"runtime": {"entries": []}}}, "loss-unbind")
     response = await case.client.post("/api/gateway/service-plugins/uninstall", json={
-        "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
     })
     response.raise_for_status()
     assert receipts.is_file(), "物理卸载不能删除业务收据"

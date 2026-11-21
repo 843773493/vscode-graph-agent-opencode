@@ -58,7 +58,7 @@ async def bind_gateway_mcp(case: McpPluginCase, *, enabled: bool = True) -> dict
     source.setdefault("plugins", {}).update({
         # 此隔离装具只安装 MCP 测试包，不继承产品默认的开发工具包绑定。
         "workspace_defaults": {"entries": []},
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "enabled": enabled}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             key: str(artifacts / f"shared-{key}.jsonl") for key in ("definitions", "receipts", "calls")}}}},
@@ -107,7 +107,7 @@ async def test_gateway_mcp_shares_process_without_merging_workspace_sessions(
                                  timeout=90, trust_env=False) as client:
         sibling = replace(case, client=client, workspace_id=second_id, workspace_root=second)
         service = {"gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio",
-            "package_version": "0.1.0", "plugin_id": "stdio", "service_id": "mcp"}
+            "package_version": "0.1.1", "plugin_id": "stdio", "service_id": "mcp"}
         for index, owner in enumerate((case, sibling)):
             await _publish(owner, {"mcp": {"servers": {"probe": {
                 "enabled": True, "transport": "plugin", "service": service}}}}, f"shared-connect-{index}")

@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "package_id": "boxteam.mcp-stdio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "name": "BoxTeam MCP stdio bridge",
   "description": "在 Gateway 管理的插件实例中运行 stdio MCP server，并通过 Streamable HTTP 提供服务。",
   "extension_contract_version": 1,

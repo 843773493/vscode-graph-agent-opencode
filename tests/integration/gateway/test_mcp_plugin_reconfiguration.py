@@ -55,7 +55,7 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
     )
 
     await _publish(case, {"plugins": {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                                    "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
@@ -69,20 +69,20 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
     restarted = await case.client.post("/api/gateway/service-plugins/restart", json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "package_id": "boxteam.mcp-stdio", "plugin_id": "stdio",
-        "package_version": "0.1.0", "revision": slot_revision,
+        "package_version": "0.1.1", "revision": slot_revision,
     })
     restarted.raise_for_status()
     assert restarted.json()["data"]["state"] == "ready", restarted.text
     stale = await case.client.post("/api/gateway/service-plugins/restart", json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "package_id": "boxteam.mcp-stdio", "plugin_id": "stdio",
-        "package_version": "0.1.0", "revision": enabled_plugin["revision"] + "-stale",
+        "package_version": "0.1.1", "revision": enabled_plugin["revision"] + "-stale",
     })
     assert stale.status_code == 409, stale.text
     await _publish(case, {"mcp": {"servers": {"probe": {
         "enabled": True, "transport": "plugin", "service": {
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "service_id": "mcp",
         },
     }}}}, f"mcp-plugin-reconfigure-connect-{uuid4().hex}")
@@ -137,7 +137,7 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
     definitions.write_text(json.dumps({"probe": {"type": "invalid-schema-type"}}), encoding="utf-8")
     failed_key = f"mcp-plugin-bad-directory-{uuid4().hex}"
     failed_publish = await _publish_expect_failure(case, {"plugins": {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
                                    "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
@@ -208,7 +208,7 @@ async def test_close_cancels_mcp_candidate_without_waiting_for_catalog(
         path=str(archive), expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
     )
     await _publish(case, {"plugins": {
-        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "enabled": True}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
             "command": sys.executable,
@@ -221,7 +221,7 @@ async def test_close_cancels_mcp_candidate_without_waiting_for_catalog(
     await _publish(case, {"mcp": {"servers": {"probe": {
         "enabled": True, "transport": "plugin", "service": {
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
             "plugin_id": "stdio", "service_id": "mcp",
         },
     }}}}, f"mcp-close-connect-{uuid4().hex}")

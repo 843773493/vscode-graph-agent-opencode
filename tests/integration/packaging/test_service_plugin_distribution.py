@@ -419,7 +419,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         # 正式自带包真正加载 node-pty 原生模块并创建 PTY，而不止探针 ready。
         developer_tools = distribution / "application/resources/plugins/developer-tools.zip"
         install(developer_tools)
-        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.1",
             "plugin_id": "terminal", "enabled": True}], scope="workspace")
         terminal = _wait_for_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id, state="ready")
         assert terminal["state"] == "ready"
@@ -429,7 +429,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "cwd_relative": ".", "cols": 100, "rows": 30}).raise_for_status().json()["data"]
         grant = exchange("POST", f"/api/v1/resources/{resource['resource_id']}/transport-grant",
             {"expected_revision": resource["owner_revision"]}).raise_for_status().json()["data"]
-        query = urlencode({"workspace_id": workspace_id, "package_version": "0.1.0",
+        query = urlencode({"workspace_id": workspace_id, "package_version": "0.1.1",
             "token": client.headers["X-Local-Token"], "target_gateway_id": gateway_id})
         socket_url = str(client.base_url).rstrip("/").replace("http://", "ws://") + (
             f"/api/gateway/service-plugins/boxteam.developer-tools/terminal/instances/"
@@ -448,7 +448,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         exchange("POST", f"/api/v1/resources/{resource['resource_id']}/stop",
             {"expected_revision": latest["owner_revision"]}).raise_for_status()
         # 同一发行包的 Debug 插件也必须在空 PATH 下真实启动目标，不能只验管理 ready。
-        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.1",
             "plugin_id": "debugging", "enabled": True}], scope="workspace")
         require_exited({"terminal": terminal})
         debug_plugin: dict | None = None
@@ -484,7 +484,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         stopped = exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "stop"}).raise_for_status().json()["data"]
         assert stopped["status"] == "exited" and not psutil.pid_exists(run["pid"]), stopped
         restarted = exchange("POST", "/api/gateway/service-plugins/restart", {"gateway_id": gateway_id,
-            "package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "debugging",
+            "package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "debugging",
             "workspace_id": workspace_id, "revision": debug_plugin["revision"]}).raise_for_status().json()["data"]
         assert restarted["state"] == "ready"
         assert restarted["instance"]["instance_id"] != debug_plugin["instance"]["instance_id"]
@@ -497,7 +497,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         evidence.append({"debug_runs": [run["run_id"], second_run["run_id"]],
             "debug_pids_exited": [run["pid"], second_run["pid"]],
             "debug_instances": [debug_plugin["instance"]["instance_id"], restarted["instance"]["instance_id"]]})
-        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.1",
             "plugin_id": "browser", "enabled": True}], scope="workspace")
         require_exited({"debugging": restarted})
         deadline = time.monotonic() + 30
@@ -586,10 +586,10 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         bind([], scope="workspace")
         require_exited({"browser": browser_plugin})
         blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
-            "package_id": "boxteam.developer-tools", "package_version": "0.1.0"})
+            "package_id": "boxteam.developer-tools", "package_version": "0.1.1"})
         assert blocked.status_code == 409, "新建工作区模板仍引用自带包，不能卸载"
         bind([], scope="defaults")
-        uninstall("boxteam.developer-tools", "0.1.0")
+        uninstall("boxteam.developer-tools", "0.1.1")
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:
         (context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -46,7 +46,7 @@ from tests.support.processes.workspace import ensure_local_port_available
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
 PACKAGE_ID = "boxteam.developer-tools"
-PACKAGE_VERSION = "0.1.0"
+PACKAGE_VERSION = "0.1.1"
 PLUGIN_ID = "terminal"
 PLUGIN_IDS = frozenset({"terminal", "browser", "debugging"})
 

@@ -44,7 +44,7 @@ export async function verifyBrowserResource(requestJson, { gatewayId, workspaceI
   );
   config.plugins.runtime.entries.push({
     package_id: "boxteam.developer-tools",
-    package_version: "0.1.0",
+    package_version: "0.1.1",
     plugin_id: "browser",
     enabled: true,
   });

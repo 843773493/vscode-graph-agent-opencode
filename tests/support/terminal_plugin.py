@@ -18,14 +18,14 @@ def copy_prepared_developer_tools_package(package_root: Path, boxteam_home: Path
 
     source = package_root.resolve(strict=True)
     source_store = PluginPackageStore(source.parent.parent)
-    installed = source_store.get("boxteam.developer-tools", "0.1.0")
+    installed = source_store.get("boxteam.developer-tools", "0.1.1")
     if installed.root != source:
         raise ValueError("预备开发工具包路径与安装记录不一致")
     target_store = PluginPackageStore(boxteam_home / "plugins" / "packages")
-    target = target_store.root / "boxteam.developer-tools" / "0.1.0"
+    target = target_store.root / "boxteam.developer-tools" / "0.1.1"
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target)
-    return target_store.get("boxteam.developer-tools", "0.1.0").root
+    return target_store.get("boxteam.developer-tools", "0.1.1").root
 
 
 async def enable_developer_tools_plugins(
@@ -58,7 +58,7 @@ async def enable_developer_tools_plugins(
     selected = set(plugin_ids)
     entries[:] = [entry for entry in entries if entry["package_id"] != "boxteam.developer-tools"
                   or entry["plugin_id"] not in selected]
-    entries.extend({"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+    entries.extend({"package_id": "boxteam.developer-tools", "package_version": "0.1.1",
                     "plugin_id": plugin_id, "enabled": True} for plugin_id in plugin_ids)
     saved = await client.put(source_path, headers=headers, json={
         "gateway_id": gateway_id, "workspace_id": workspace_id,

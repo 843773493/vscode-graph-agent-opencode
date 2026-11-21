@@ -26,7 +26,7 @@ from tests.support.terminal_plugin import (
 )
 
 PACKAGE = "boxteam.developer-tools"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 
 async def test_developer_plugins_isolate_resources_and_release_package_references(

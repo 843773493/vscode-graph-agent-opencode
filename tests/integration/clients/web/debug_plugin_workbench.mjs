@@ -90,7 +90,7 @@ try {
       idempotency_key: idempotencyKey } }, target);
     assert.equal(saved.edit.state, 'active');
   };
-  await bindDebugger(owner, '0.1.0', 'debug-ui-enable');
+  await bindDebugger(owner, '0.1.1', 'debug-ui-enable');
   let ready;
   await expect.poll(async () => {
     const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
@@ -108,7 +108,7 @@ try {
   const sibling = registered.items.find(item => item.gateway_id === owner.gatewayId && item.name === 'Debug sibling workspace');
   assert(sibling); assert.notEqual(sibling.workspace_id, owner.workspaceId);
   const otherOwner = { gatewayId: owner.gatewayId, workspaceId: sibling.workspace_id };
-  await bindDebugger(otherOwner, '0.1.0', 'debug-ui-enable-sibling');
+  await bindDebugger(otherOwner, '0.1.1', 'debug-ui-enable-sibling');
   let siblingReady;
   await expect.poll(async () => {
     const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
@@ -210,7 +210,7 @@ try {
     const currentDeclaration = await declaration(owner), siblingDeclaration = await declaration(otherOwner);
     assert.equal(currentDeclaration.package_version, '0.2.0'); assert.equal(currentDeclaration.label, 'Node.js v2');
     assert.deepEqual(currentDeclaration.configuration_schema.properties.v2Only, { type: 'string' });
-    assert.equal(siblingDeclaration.package_version, '0.1.0'); assert.equal(siblingDeclaration.label, 'Node.js');
+    assert.equal(siblingDeclaration.package_version, '0.1.1'); assert.equal(siblingDeclaration.label, 'Node.js');
     assert.equal(siblingDeclaration.configuration_schema.properties.v2Only, undefined);
     result.targetDeclarations = { current: currentDeclaration, sibling: siblingDeclaration };
     const rejected = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/debug/node/start');
@@ -679,7 +679,7 @@ try {
   } finally { await page.unroute(lostLaunchPattern, dropLaunchResponse); }
   await bindDebugger(otherOwner, null, 'debug-ui-unbind-sibling');
   result.uninstalled = [];
-  for (const version of ['0.1.0', '0.2.0']) {
+  for (const version of ['0.1.1', '0.2.0']) {
     const removed = await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {
       gateway_id: owner.gatewayId, package_id: 'boxteam.developer-tools', package_version: version,
     } });

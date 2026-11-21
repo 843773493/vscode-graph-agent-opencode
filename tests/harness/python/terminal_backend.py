@@ -21,7 +21,7 @@ from tests.support.processes.workspace import (
 )
 
 PACKAGE_ID = "boxteam.developer-tools"
-PACKAGE_VERSION = "0.1.0"
+PACKAGE_VERSION = "0.1.1"
 PLUGIN_ID = "terminal"
 
 

@@ -149,7 +149,7 @@ async def _enable_remote_developer_tools_plugins(
     runtime["entries"] = [item for item in entries
         if not (item.get("package_id") == "boxteam.developer-tools" and item.get("plugin_id") in selected)]
     runtime["entries"].extend({
-        "package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+        "package_id": "boxteam.developer-tools", "package_version": "0.1.1",
         "plugin_id": plugin_id, "enabled": True,
     } for plugin_id in plugin_ids)
     saved = _gateway_response_data(await client.put(source_path, headers=headers, json={
@@ -958,7 +958,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             assert browser_service == {
                 "gateway_id": remote_gateway_id,
                 "package_id": "boxteam.developer-tools",
-                "package_version": "0.1.0",
+                "package_version": "0.1.1",
                 "plugin_id": "browser",
                 "instance_id": browser_instance["instance_id"],
                 "service_id": "socket",
@@ -969,7 +969,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 f"{browser_service['instance_id']}/services/socket/browser"
             )
             browser_ws_query = urlencode({
-                "package_version": "0.1.0", "workspace_id": workspace_id,
+                "package_version": "0.1.1", "workspace_id": workspace_id,
                 "target_gateway_id": remote_gateway_id, "token": "local-dev-token",
             })
             browser_ws_url = f"ws://127.0.0.1:{gateway.port}{browser_ws_path}?{browser_ws_query}"
@@ -996,7 +996,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             assert terminal_service == {
                 "gateway_id": remote_gateway_id,
                 "package_id": "boxteam.developer-tools",
-                "package_version": "0.1.0",
+                "package_version": "0.1.1",
                 "plugin_id": "terminal",
                 "instance_id": terminal_instance["instance_id"],
                 "service_id": "socket",
@@ -1005,7 +1005,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             terminal_ws_url = (
                 f"ws://127.0.0.1:{gateway.port}/api/gateway/service-plugins/"
                 f"boxteam.developer-tools/terminal/instances/{terminal_service['instance_id']}"
-                f"/services/socket/terminal?package_version=0.1.0&workspace_id={workspace_id}"
+                f"/services/socket/terminal?package_version=0.1.1&workspace_id={workspace_id}"
                 f"&target_gateway_id={remote_gateway_id}&token=local-dev-token"
             )
             async with websockets.connect(terminal_ws_url, additional_headers=remote_headers) as websocket:

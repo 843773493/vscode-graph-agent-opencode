@@ -95,7 +95,7 @@ def test_debug_plugin_runs_from_prepared_offline_package(
             config = commentjson.loads(document["jsonc"])
             config.setdefault("plugins", {})["runtime"] = {"entries": [{
                 "package_id": "boxteam.developer-tools",
-                "package_version": "0.1.0",
+                "package_version": "0.1.1",
                 "plugin_id": "debugging",
                 "enabled": True,
             }]}

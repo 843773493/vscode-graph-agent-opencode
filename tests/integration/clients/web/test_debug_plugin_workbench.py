@@ -176,7 +176,7 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         assert not psutil.pid_exists(receipt["staleLaunch"]["oldPluginPid"])
         assert not psutil.pid_exists(receipt["instance"]["process_id"])
         assert len(receipt["uninstalled"]) == 2
-        for version in ("0.1.0", "0.2.0"):
+        for version in ("0.1.1", "0.2.0"):
             assert not (gateway_home / "plugins/packages/boxteam.developer-tools" / version).exists()
         assert isinstance(receipt["pid"], int) and not psutil.pid_exists(receipt["pid"]), receipt
         assert not psutil.pid_exists(receipt["parallelThread"]["pid"]), receipt

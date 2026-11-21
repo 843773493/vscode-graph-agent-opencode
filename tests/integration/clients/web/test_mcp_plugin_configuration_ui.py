@@ -90,7 +90,7 @@ async def test_add_plugin_service_and_http_from_original_workbench(
         await bind_gateway_mcp(case)
     else:
         await _publish(case, {"plugins": {
-            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": True}]},
+            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "enabled": True}]},
             "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
                 "command": sys.executable,
                 "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"), str(definitions), str(receipts)],
@@ -134,7 +134,7 @@ async def test_add_plugin_service_and_http_from_original_workbench(
         assert len({item["operation_id"] for item in observed["mcpOperations"]}) == 2
         assert observed["mcpManagementEntries"] == {
             "owner": {"gatewayId": case.gateway_id, "workspaceId": case.workspace_id},
-            "parameterScope": scope, "exactVersion": "0.1.0", "cancelledWithoutWrite": True,
+            "parameterScope": scope, "exactVersion": "0.1.1", "cancelledWithoutWrite": True,
             "resourcesTemplatesUnavailable": True,
         }
         entries = [{"source_id": "management-disabled", "protocol_version": 1, "enabled": False}]

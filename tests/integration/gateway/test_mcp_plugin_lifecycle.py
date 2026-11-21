@@ -261,7 +261,7 @@ async def _catalog(case: McpPluginCase) -> dict:
     assert "provider_definition" not in server
     assert server["service"] == {
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
         "plugin_id": "stdio", "service_id": "mcp",
     }
     assert {tool["remote_name"] for tool in server["tools"]} == {"probe", "second"}
@@ -348,7 +348,7 @@ async def _agent_call(case: McpPluginCase, *, phase: str, load_skill: bool = Fal
             skill = skill_catalog.entries[SKILL_NAME]
             assert skill.body.strip() == "Frozen probe instructions."
             assert skill.plugin is not None and skill.plugin.workspace_id == case.workspace_id
-            assert skill.plugin.package_id == "boxteam.mcp-stdio" and skill.plugin.package_version == "0.1.0"
+            assert skill.plugin.package_id == "boxteam.mcp-stdio" and skill.plugin.package_version == "0.1.1"
         items = cold._storage.storage.read_items(session, thread)
         for mode, call in zip(("success", "error"), tool_calls[1:], strict=True):
             matching = [item for item in items if item.semantic_kind == "tool_result"
@@ -409,7 +409,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     definitions = artifacts / "definitions.json"
     receipts = case.workspace_root / ".boxteam/mcp-tool-receipts.jsonl"
     home = case.context.boxteam_home_for_node(request.node.nodeid)
-    package_root = home / "plugins/packages/boxteam.mcp-stdio/0.1.0"
+    package_root = home / "plugins/packages/boxteam.mcp-stdio/0.1.1"
 
     def installed_content() -> dict[str, str]:
         return {path.relative_to(package_root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -428,7 +428,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     package_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     tool_source: dict[str, object] = {
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id, "package_id": "boxteam.mcp-stdio",
-        "plugin_id": "stdio", "package_version": "0.1.0", "package_digest": package_digest,
+        "plugin_id": "stdio", "package_version": "0.1.1", "package_digest": package_digest,
         "service_id": "mcp", "contract_version": 1,
     }
     try:
@@ -441,7 +441,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         original_content = installed_content()
         assert "guides/probe/SKILL.md" in original_content
         await _publish(case, {"plugins": {
-            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": True}]},
+            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "enabled": True}]},
             "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
                 "command": sys.executable, "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"), str(definitions), str(receipts), "--page-size", "1"],
                 "cwd": str(Path.cwd()),
@@ -452,7 +452,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         await _publish(case, {"mcp": {"servers": {"probe": {
             "enabled": True, "transport": "plugin", "service": {
                 "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "service_id": "mcp",
+                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "service_id": "mcp",
             },
         }}}}, "mcp-plugin-connect")
         before = await _catalog(case)
@@ -523,7 +523,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         # 显式重启只替换原插件实例；原 MCP owner 必须显式重连后再执行。
         response = await case.client.post("/api/gateway/service-plugins/restart", json={
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio",
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio",
             "revision": after_plugin["revision"],
         })
         response.raise_for_status()
@@ -596,11 +596,11 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
             # 先沿产品入口结清连接，再关闭外部 HTTP 资产。
             await _publish(case, {"mcp": {"servers": {}}}, "mcp-disconnect-external")
         await _publish(case, {"plugins": {
-            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": False}]},
+            "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "enabled": False}]},
         }, "mcp": {"servers": {"probe": {
             "enabled": False, "transport": "plugin", "service": {
                 "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
-                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "service_id": "mcp",
+                "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1", "plugin_id": "stdio", "service_id": "mcp",
             },
         }}}}, "mcp-disabled-offline-config")
         stopped = await _plugin(case, state="stopped")
@@ -612,19 +612,19 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         disabled, = response.json()["data"]
         assert disabled["status"] != "ready" and disabled["tools"] == []
         old_route = (f"/api/gateway/service-plugins/boxteam.mcp-stdio/stdio/instances/{instance['instance_id']}/services/mcp/"
-                     f"?package_version=0.1.0&workspace_id={case.workspace_id}")
+                     f"?package_version=0.1.1&workspace_id={case.workspace_id}")
         response = await case.client.post(old_route, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         assert response.status_code == 409, response.text
         assert (await _plugin(case))["instance"] is None, "普通读取和失效调用不得重新启动插件"
         assert installed_content() == original_content, "运行、Skill加载、工具调用及重启不能改写安装内容"
         assert not (case.workspace_root / ".boxteam/plugins").exists(), "工作区不安装插件副本"
         blocked = await case.client.post("/api/gateway/service-plugins/uninstall", json={
-            "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
         })
         assert blocked.status_code == 409 and "configuration" in blocked.text
         await _publish(case, {"plugins": {"runtime": {"entries": []}}, "mcp": {"servers": {}}}, "mcp-plugin-unbind")
         response = await case.client.post("/api/gateway/service-plugins/uninstall", json={
-            "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "gateway_id": case.gateway_id, "package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",
         })
         response.raise_for_status()
         assert not package_root.exists() and receipts.is_file()

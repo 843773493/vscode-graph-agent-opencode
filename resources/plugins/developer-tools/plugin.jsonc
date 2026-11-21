@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "package_id": "boxteam.developer-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "name": "BoxTeam Developer Tools",
   "description": "BoxTeam workspace developer tools.",
   "extension_contract_version": 1,

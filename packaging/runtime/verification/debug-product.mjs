@@ -58,7 +58,7 @@ export async function verifyDebugProduct(requestJson, { gatewayId, workspaceId, 
   config.plugins.runtime.entries = (config.plugins.runtime.entries ?? []).filter(
     (entry) => entry.package_id !== "boxteam.developer-tools" || entry.plugin_id !== "debugging",
   );
-  config.plugins.runtime.entries.push({ package_id: "boxteam.developer-tools", package_version: "0.1.0",
+  config.plugins.runtime.entries.push({ package_id: "boxteam.developer-tools", package_version: "0.1.1",
     plugin_id: "debugging", enabled: true });
   const updated = await requestJson(sourcePath, { method: "PUT", headers, body: JSON.stringify({
     gateway_id: gatewayId, workspace_id: workspaceId, source_key: "workspace_root_mutable_override",
@@ -151,7 +151,7 @@ export async function verifyDebugProduct(requestJson, { gatewayId, workspaceId, 
   await waitForProcessExit(startPayload.pid);
   const restart = (await requestJson("/api/gateway/service-plugins/restart", { method: "POST",
     body: JSON.stringify({ gateway_id: gatewayId, package_id: "boxteam.developer-tools",
-      package_version: "0.1.0", plugin_id: "debugging", workspace_id: workspaceId,
+      package_version: "0.1.1", plugin_id: "debugging", workspace_id: workspaceId,
       revision: plugin.revision }) })).data;
   if (restart.state !== "ready" || restart.instance?.instance_id === plugin.instance?.instance_id) {
     throw new Error(`发行 Debug 插件显式重启失败: ${JSON.stringify(restart)}`);

@@ -5,9 +5,9 @@
     "sources": {"entries": []}, // TODO：接自有在线目录；空源不发网络请求。
     "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
     "workspace_defaults": {"entries": [
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "terminal", "enabled": true},
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "browser", "enabled": true},
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "debugging", "enabled": true}
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "terminal", "enabled": true},
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "browser", "enabled": true},
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "debugging", "enabled": true}
     ]} // 新工作区创建时冻结；启动不覆盖用户开关。
   },
   "logging": {
