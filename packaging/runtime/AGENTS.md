@@ -2,6 +2,8 @@
 
 本目录维护自包含平台运行时的 staging、npm 包组装、构建输入指纹和下载实现；安装验收实现位于 `verification/`，发布命令入口位于 `scripts/release/`。
 
+产品 Python 依赖通过 `scripts/plugins/export-python-requirements.mjs` 导出锁定依赖并加入带摘要的 SDK wheel；Backend 开发的 editable 来源不能进入发行依赖或运行时目录。SDK 的 setuptools `build/` 与 `src/*.egg-info/` 是本地安装生成物，不计入构建输入指纹，真实 SDK 源码和包资源仍须计入。
+
 ```text
 runtime/
 ├── versions.mjs                   发布版本及第三方固定资源清单
@@ -103,7 +105,7 @@ out/tests/packaging/runtime/
 输入与观察先分开，同一运行ID、平台和场景连接两者；场景名说明默认目录、独立下载根、缓存、续传或故障目的。`result.json`保存准确命令、cwd、子进程上限及真实退出原因；外层测试仍需进程外内存与超时保护。现场不是可发布runtime或可复用业务工作区；复查原件时不在原目录重跑以覆盖归档状态。
 
 
-`application-sources.mjs`统一Linux与Windows runtime的源码复制清单，显式接收项目根和application目录，不从文件位置推导根目录；复制`app/`、`configs/`、`resources/`、Terminal／Browser attach客户端与各自protocol、`terminal/shared/`客户端相对导入模块、`src/shared/`跨进程协议与服务端日志模块、共享protocol及`pyproject.toml`，过滤任意层级的`__pycache__`和`.pyc`。`application-sources.test.mjs`验证最小源码树的文件字节、中文和空格路径、源树不变及过滤；快照键统一使用`/`，真实读写路径仍遵循宿主规则，同一已读快照供相关断言复用。Windows依赖接线测试继续执行真实复制至依赖owner边界。测试不下载、安装依赖或执行发行构建。
+`application-sources.mjs`统一Linux与Windows runtime的源码复制清单，显式接收项目根和application目录，不从文件位置推导根目录；复制`app/`、`configs/`、`resources/`、Terminal／Browser attach客户端与各自protocol、`terminal/shared/`客户端相对导入模块、`src/shared/`跨进程协议及`pyproject.toml`，过滤任意层级的`__pycache__`和`.pyc`。`application-sources.test.mjs`验证最小源码树的文件字节、中文和空格路径、源树不变及过滤；快照键统一使用`/`，真实读写路径仍遵循宿主规则，同一已读快照供相关断言复用。Windows依赖接线测试继续执行真实复制至依赖owner边界。测试不下载、安装依赖或执行发行构建。
 
 ```text
 out/tests/packaging/runtime/application-sources/
@@ -153,3 +155,5 @@ out/tests/packaging/runtime/windows-python-dependencies/
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
 Terminal／Browser attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 将目标 OS、架构、系统基线及 Node/Python 版本与 ABI 传给 developer-tools 和 MCP stdio 两个 ZIP 打包器；两份 ZIP 均随 runtime 交付。插件打包脚本参与构建输入指纹。
+
+公共日志与生成协议由正常安装的 SDK 提供，不再复制旧公共入口。应用 Node 清单携带 `vendor/sdk/<sha256>/` 归档，Python 发行依赖安装锁定 wheel；先核对当前 SDK 来源，再按标准锁安装依赖，最后执行应用合同门。

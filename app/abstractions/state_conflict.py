@@ -7,7 +7,7 @@
 - API 适配层据此按**类型**落 409，绝不按消息字符串匹配（字符串匹配脆弱且禁止）。
 
 为什么继承 ``RuntimeError``：本仓既有服务层统一用 ``RuntimeError`` 表达这类可恢复
-冲突（``RuntimeService`` 的生命周期守卫、``ToolTestService`` 的重复启动、
+冲突（``WorkspaceRuntimeLifecycleService`` 的生命周期守卫、``ToolTestService`` 的重复启动、
 ``SessionCatalogService`` 的 cursor/索引冲突等），而同一批服务也可能抛出**真正的**
 服务端完整性故障 ``RuntimeError``（账本损坏、索引分叉、父节点缺失）。让本类型继承
 ``RuntimeError`` 是**类型细化后的向后兼容基类**，不是双轨：

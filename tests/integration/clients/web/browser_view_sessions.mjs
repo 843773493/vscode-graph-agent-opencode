@@ -5,6 +5,7 @@ import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import { gatewayWorkspaceKey } from "../../../../src/clients/web/src/api/workspaceIdentity.ts";
 import { browserViewKey } from "../../../../src/clients/web/src/state/browserViewStore.ts";
+import { newOperationId } from "../../../support/operation_ids.mjs";
 
 function required(name) {
   const value = process.env[name];
@@ -76,7 +77,7 @@ function observe(page, name) {
 
 async function initialize(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.deepEqual(workspaces.active_workspace, { gateway_id: gatewayId, workspace_id: workspaceId });
   assert.equal((await api(page, "/api/v1/workspace")).workspace_id, workspaceId);
@@ -160,10 +161,12 @@ async function verifyHistoryBootstrap(page, expectCache, open) {
     let cachedControlCount = 0;
     if (expectCache) {
       await expect(cached).toBeVisible();
-      await expect(cached.locator(".native-thread-status")).toHaveText("已显示上次历史缓存，正在同步会话…");
+      await expect(cached.locator('[data-thread-history-sync]')).toBeVisible();
+      await expect(cached.locator('[data-thread-history-sync]')).toContainText("同步中");
+      assert.equal(await cached.locator(".native-thread-status").count(), 0, "同步状态不插入 transcript 顶部");
       // Playwright 的 disabled matcher 只识别表单控件，不识别 fieldset 自身。
       await expect(cached.locator("fieldset")).toHaveJSProperty("disabled", true);
-      const controls = await cached.locator("button, input, select, textarea").evaluateAll(nodes =>
+      const controls = await cached.locator("fieldset button, fieldset input, fieldset select, fieldset textarea").evaluateAll(nodes =>
         nodes.map(node => ({ tag: node.tagName, disabled: node.matches(":disabled") })));
       cachedControlCount = controls.length;
       assert.ok(cachedControlCount > 0, "缓存正文必须包含真实操作控件，不能用空集合证明只读");
@@ -275,7 +278,7 @@ try {
   await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
   const accepted = await api(pageB, `/api/v1/sessions/${unopenedSessionId}/threads/${unopenedThreadId}/messages`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { role: "user", content: "后台完成通知测试" }, run: { mode: "single_agent", agent_id: "default" } }),
+    body: JSON.stringify({ operation_id: newOperationId(), message: { role: "user", content: "后台完成通知测试" }, run: { mode: "single_agent", agent_id: "default" } }),
   });
   assert.equal(accepted.thread_id, unopenedThreadId);
   let job;
@@ -291,7 +294,7 @@ try {
   await pageB.bringToFront();
   let releaseRead;
   const readReleased = new Promise(resolve => { releaseRead = resolve; });
-  const matchesRead = url => url.pathname === `/api/v1/sessions/${unopenedSessionId}/main-thread`;
+  const matchesRead = url => url.pathname === `/api/v1/sessions/${unopenedSessionId}`;
   await pageB.route(matchesRead, async route => {
     const request = route.request();
     if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId
@@ -305,7 +308,7 @@ try {
   });
   try {
     await pageB.locator(`button[data-session-id="${unopenedSessionId}"]`).dblclick();
-    await waitUntil(() => unreadReadProof.heldRequests.length > 0, "未读会话的真实 main-thread 查询进入延迟点");
+    await waitUntil(() => unreadReadProof.heldRequests.length > 0, "未读会话携带主 Thread 身份的真实 Session 查询进入延迟点");
     await expect(threadB.getByTestId("composer-input")).toBeVisible();
     await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
     const openingRow = pageB.locator(`button[data-session-id="${unopenedSessionId}"]`);
@@ -355,6 +358,7 @@ try {
     assert.equal(response.status(), 200, await response.text());
     const payload = await response.json();
     assert.equal(payload.data.session_id, unopenedSessionId);
+    assert.equal(payload.data.workspace_id, workspaceId);
     assert.equal(payload.data.thread_id, unopenedThreadId);
     assert.ok(payload.request_id);
     assert.equal(response.headers()["x-request-id"], payload.request_id);

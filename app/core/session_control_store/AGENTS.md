@@ -53,6 +53,9 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
 - 表 DDL 与列清单常量的唯一定义点在其所属族模块；`_schema.py` 只编排建表顺序，不复制 DDL。GraphBinding 的唯一运行时 authority 是 thread_catalog 四字段，旧 JSON 不读、不迁移。
 - 任务版本化恢复描述、首次checkpoint和既有operation owner的任务lease在本Store同一事务提交后才执行，不留孤立lease或另一套补偿writer；time emitter输出消息与任务checkpoint也在同一写事务提交。收集工具返回batch不等于消费提交，ack依据真实canonical提交及稳定identity恢复对账，不从正文或内存返回值推断。外部执行不得持有写事务或lifecycle gate；未知外部效果保`reconcile_required`，不能盲重放。任务活跃lease和迟到callback归既有residency/generation owner，本包不复制graph或idle策略。
 - 协作mutation、event和fanout在同事务冻结generation/revision/hash/recipient集合；逐recipient投递及Registry发布归编排owner，本Store不加载cold runtime。禁止JSON board或分步event旁路；当前schema严格拒绝旧开发形态，不迁移或懒补DDL。
+- 协作快照只冻结成员摘要及登记时提取的 team_id、work_mode，不复制 task_seed；普通列表不重算全部任务输入的 preimage，执行、发布及启动恢复仍完整核验。Thread 的投递凭据保存各 facet 的 hash，不再复制整个 ledger 正文。
+- 后台任务结果单独保存在 result_json，列表只读摘要和轻量 metadata；完整句柄读取时组装原 metadata.result。启动只恢复活跃任务和原 lease 尚未结算的终态任务，不重读已结算历史正文。
+- 邮箱消费只冻结原消息的 sequence 范围、条数、期限和完成状态；正文仍由不可变 mailbox 唯一持有，终态返回或重放时按范围组装。无新消息的轮询不更新消费记录，ack 仍以 canonical ToolResult 提交为准。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动
   或语义冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
 - 编写源码执行目标静态分析；按完整受影响调用闭包完成真实事务/schema/恢复验证，测试使用进程外保护。批次内复用未变检查，不因每个文件修改重复整组测试。

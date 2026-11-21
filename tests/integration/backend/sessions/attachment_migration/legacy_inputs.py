@@ -17,7 +17,9 @@ from uuid import uuid4
 import pytest
 
 from app.core.path_utils import build_session_catalog_components, catalog_provider_scope
-from app.core.session_catalog_store.upgrade_v10 import convert_catalog_v10
+from app.core.session_catalog_store.migrations.v10_sqlite_to_v11_sqlite import (
+    convert_catalog_v10,
+)
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.rollout_context.storage.schema import (

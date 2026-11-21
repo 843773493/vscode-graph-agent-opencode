@@ -14,8 +14,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.errors import ItemSchemaError
@@ -677,7 +677,7 @@ class V2ItemCommitCoordinator:
                 "subject_id, idempotency_key, outcome, metadata_json) VALUES "
                 "(?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    uuid4().hex if transaction_id is None else transaction_id,
+                    create_uuid_hex() if transaction_id is None else transaction_id,
                     first_message_sequence,
                     last_message_sequence,
                     current_offset,

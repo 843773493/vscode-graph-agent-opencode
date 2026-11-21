@@ -549,6 +549,24 @@ describe("useSessionResourceTreeNavigation 拖拽悬停判定", () => {
 });
 
 describe("useSessionResourceTreeNavigation 打开会话", () => {
+  test("同步打开失败也报告原错误并结束加载", async () => {
+    const failure = new Error("打开目标已失效");
+    const errors: unknown[] = [];
+    const { renderer, handle } = createHarness({
+      navigationNodes: [],
+      explorer: {},
+      handleError: (_prefix, error) => { errors.push(error); },
+      onSelectSession: () => { throw failure; },
+    });
+    try {
+      await act(async () => {
+        handle.navigation.openSessionNode("gw_1", "ses_1", "gw_1:ses_1");
+      });
+      expect(errors).toEqual([failure]);
+      expect(handle.navigation.openingSession).toBeNull();
+    } finally { act(() => renderer.unmount()); }
+  });
+
   test("打开会话成功后清除进行中状态", async () => {
     const { handle } = createHarness({
       navigationNodes: [],

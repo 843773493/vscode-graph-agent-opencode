@@ -1,8 +1,11 @@
+import { useRealtimeSocket } from "../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { gatewayWorkspaceKey } from "./workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   HttpRequestError,
+  getGatewayToken,
   invalidateGatewayToken,
 
   onGatewayTokenInvalidated,
@@ -121,7 +124,7 @@ function installRotatingCredentialBackend(options: {
 
 const emptySseStream = () => new Response(": heartbeat\n\n", {
   status: 200,
-  headers: { "content-type": "text/event-stream" },
+  headers: { "content-type": "text/event-stream", "X-Workspace-File-Cursor": "0", "X-Message-Stream-ID": "stream_message_test" },
 });
 
 describe("统一请求屏障 requestGatewayResponse", () => {
@@ -224,8 +227,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     await streamSessionEvents(48_621, "ses_a", { workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) });
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/workspace/observations/stream#stale-token",
-      "/api/v1/workspace/observations/stream#fresh-token",
+      "/api/v1/sessions/ses_a/traces/stream#stale-token",
+      "/api/v1/sessions/ses_a/traces/stream#fresh-token",
     ]);
   });
 
@@ -238,8 +241,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
           }, {});
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/workspace/observations/stream#stale-token",
-      "/api/v1/workspace/observations/stream#fresh-token",
+      "/api/v1/session-catalog/events/stream#stale-token",
+      "/api/v1/session-catalog/events/stream#fresh-token",
     ]);
   });
 
@@ -249,8 +252,8 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     await streamWorkspaceFileEvents(48_623, ["/tmp/a.ts"], { workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) });
 
     expect(backend.businessRequests).toEqual([
-      "/api/v1/workspace/observations/stream#stale-token",
-      "/api/v1/workspace/observations/stream#fresh-token",
+      "/api/v1/workspace/files/events#stale-token",
+      "/api/v1/workspace/files/events#fresh-token",
     ]);
   });
 });
@@ -278,6 +281,7 @@ describe("原始响应入口的响应头等待有界", () => {
     async (_label, run) => {
       const port = 48_640 + rawEntryPoints.findIndex(([label]) => label === _label);
       installNeverRespondingBackend(port);
+      await getGatewayToken(port);
 
       const result = await runWithCompressedTimers(() => run(port));
 

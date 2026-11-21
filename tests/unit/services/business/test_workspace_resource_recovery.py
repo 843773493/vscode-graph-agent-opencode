@@ -58,12 +58,12 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
     original = bundle.transport.list_resources
     calls = 0
 
-    async def blocked_listing() -> list[dict[str, object]]:
+    async def blocked_listing(**query) -> list[dict[str, object]]:
         nonlocal calls
         calls += 1
         entered.set()
         await release.wait()
-        return await original()
+        return await original(**query)
 
     monkeypatch.setattr(bundle.transport, "list_resources", blocked_listing)
     before = owner._store.get(rid)
@@ -148,10 +148,10 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
     original_sync = bundle.transport.sync_owner_revision
     revisions: list[tuple[str, int]] = []
 
-    async def listing() -> list[dict[str, object]]:
+    async def listing(**query) -> list[dict[str, object]]:
         listed.set()
         await release_listing.wait()
-        return await original_list()
+        return await original_list(**query)
 
     async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
         revisions.append((resource_id, revision))
@@ -209,7 +209,7 @@ async def test_transport_timeout_is_preserved_without_becoming_a_budget_expiry(
     owner = bundle.restart()
     failure = TimeoutError("原transport读取超时")
 
-    async def failed_listing() -> list[dict[str, object]]:
+    async def failed_listing(**query) -> list[dict[str, object]]:
         raise failure
 
     monkeypatch.setattr(bundle.transport, "list_resources", failed_listing)
@@ -233,8 +233,8 @@ async def test_slow_initial_listing_does_not_block_peer_or_replace_its_frozen_ve
     revisions: list[tuple[str, int]] = []
     failure = ConnectionError("首次清单回执丢失")
 
-    async def receiving() -> list[dict[str, object]]:
-        snapshot = await listing()
+    async def receiving(**query) -> list[dict[str, object]]:
+        snapshot = await listing(**query)
         task = asyncio.current_task()
         assert task is not None
         if task.get_name() == "slow-cold-listing":

@@ -9,18 +9,19 @@ from typing import Any, NoReturn
 from unittest.mock import AsyncMock
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables.config import ensure_config, var_child_runnable_config
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command, Durability
 
+from app.abstractions.session_changes import ObservedFileEdit
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
-from app.core.lifecycle import LifetimeScope
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
     model_tool_invocation_scope,
@@ -54,8 +55,10 @@ from app.services.orchestration.event_stream.processor import (
 from app.services.orchestration.event_stream.tool_events import (
     activity_result_detail,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 
 
 @pytest.fixture
@@ -1054,7 +1057,6 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
     started = [call.args[1] for call in writer.commit.await_args_list
                if call.args[0] == "tool.started"]
     assert [payload["tool_call_id"] for payload in started] == [scoped_ids[index] for index in order]
-    assert runtime._tool_call_arguments_by_id == dict(zip(scoped_ids, arguments, strict=True))
     shown_args = [payload["args"] for event, payload in published
                   if event == EventType.TOOL_CALL_START]
     assert shown_args == [arguments[index] for index in order]
@@ -2030,6 +2032,11 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
     assert len(changes.recorded) == 1
     assert changes.recorded[0]["tool_call_id"] == "call_write"
     assert changes.recorded[0]["execution_id"] == "run_write"
+    edit = changes.recorded[0]["edit"]
+    assert isinstance(edit, ObservedFileEdit)
+    assert (edit.before_exists, edit.before_content, edit.after_exists, edit.after_content) == (
+        False, "", True, "ok",
+    )
     assert published[0][1]["part_id"] == "run_write"
     assert published[0][1]["execution_id"] == "run_write"
     assert published[1][1]["tool_call_id"] == "call_write"

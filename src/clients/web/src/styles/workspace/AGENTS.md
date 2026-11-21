@@ -6,8 +6,7 @@
 workspace/
 ├── gatewayDiagnostics.css      # Gateway 诊断日志和状态
 ├── gatewayConnections.css      # 本机、远程连接与设备授权
-├── gatewayConsole.css          # Gateway 控制台外壳、路由和主题设置
-├── portForwardPanel.css        # 端口转发面板
+├── gatewayConsole.css          # Gateway 设置内容、连接对话框与背景资源
 ├── resourcePanel.css           # 后台资源树
 ├── sessionResourceExplorer.css # 会话资源浏览器
 └── workspace.css               # 工作区文件与预览区域

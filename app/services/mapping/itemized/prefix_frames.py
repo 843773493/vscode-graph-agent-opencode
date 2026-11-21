@@ -142,7 +142,8 @@ def project_sealed_prefix(
         if frame.role == "system":
             if root is None or frame.content != root.content:
                 raise ValueError("source-mismatch: system frame 缺少精确 compiled root")
-            messages.append(SystemMessage(content=root.content, id=ref.ref_id))
+            messages.append(SystemMessage(content=root.content, id=ref.ref_id,
+                                          response_metadata={"context_source_protocol": frame.source_protocol}))
             continue
         if ref.ref_type == "source_item":
             blocks = parse_source_blocks(frame.content, expected_version=frame.source_protocol) if frame.source_protocol is not None else ()
@@ -228,7 +229,7 @@ def project_sealed_prefix(
                         )
             messages.append(HumanMessage(
                 content=content,
-                id=ref.ref_id, response_metadata={"internal": True},
+                id=ref.ref_id, response_metadata={"internal": True, "context_source_protocol": frame.source_protocol},
             ))
             used.add(("request_only", ref.ref_id, plan.thread_id))
             continue

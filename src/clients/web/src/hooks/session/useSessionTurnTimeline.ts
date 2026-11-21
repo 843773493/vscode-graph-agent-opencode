@@ -48,11 +48,17 @@ export function useSessionJobTurnLoader({
     ? state.turnTimelinesBySession.get(sessionCacheKey) : undefined;
   const needsActiveTurn = Boolean(activeTurnId && timeline?.phase === "ready"
     && timeline.scopeKey === sessionCacheKey && !timeline.turnsById[activeTurnId]);
+  // model.started 在派发登记提交后发布；快照也携带当前调用，不等待首个输出。
+  const activeModelCallId = [...(state.messageStreamsByTurnStream?.values() ?? [])]
+    .find(stream => stream.sessionCacheKey === sessionCacheKey && stream.turnId === activeTurnId
+      && stream.threadId === timeline?.threadId)?.currentModelCallId;
+  const activeReadIdentity = activeTurnId && (needsActiveTurn || activeModelCallId)
+    ? `active-turn:${activeTurnId}:${activeModelCallId ?? "root"}` : null;
   useEffect(() => {
-    if (!needsActiveTurn || !activeTurnId) return;
+    if (!activeReadIdentity || !activeTurnId) return;
     let cancelled = false;
     // 读取根消息的正式附件引用，不让上传前的临时 ID 留在活动回合；不刷新整段历史。
-    void loadTurnDetails([activeTurnId], `active-turn:${activeTurnId}`, false, ["metadata", "user"])
+    void loadTurnDetails([activeTurnId], activeReadIdentity, false, ["metadata", "user"])
       .catch((error: unknown) => {
         if (cancelled) return;
         setState((previous) => ({
@@ -61,7 +67,7 @@ export function useSessionJobTurnLoader({
         }));
       });
     return () => { cancelled = true; };
-  }, [activeTurnId, loadTurnDetails, needsActiveTurn, sessionCacheKey, setState]);
+  }, [activeTurnId, activeReadIdentity, loadTurnDetails, sessionCacheKey, setState]);
   return useCallback(
     async (jobId: string) => {
       if (!sessionCacheKey) return;

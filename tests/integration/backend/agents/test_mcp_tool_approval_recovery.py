@@ -26,7 +26,7 @@ from tests.integration.backend.agents.test_mcp_tool_approval import (
 from tests.integration.backend.agents.test_mcp_tool_approval import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 本文件正式隔离工作区
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原真实 MCP
@@ -47,10 +47,10 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
         session = await create_session(client, "审批等待中硬重启")
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         planned, calls = approval_plan(replay, session, thread, complete=False)
-        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "调用两个 probe，等待我的审批。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         job = accepted.json()["data"]["job_id"]
         approval, = await read_approvals(client, job)
@@ -91,10 +91,10 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
         # 新用户输入必须产生独立执行与新连接资格，不能恢复丢失的旧审批。
         new_plan, new_calls = approval_plan(replay, session, thread, call_offset=3)
         assert new_plan[0] == next_call
-        new_message = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        new_message = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "重新发起独立 probe，这次只执行第一项。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert new_message.status_code == 200, new_message.text
         new_job = new_message.json()["data"]["job_id"]
         assert new_job != job

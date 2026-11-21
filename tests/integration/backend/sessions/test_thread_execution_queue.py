@@ -18,10 +18,10 @@ from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
@@ -48,7 +48,7 @@ class QueueCase:
     thread_id: str
     saver: RolloutCheckpointSaver
     messages: MessageService
-    store: PendingRequestStore
+    store: ExecutionQueueService
     jobs: JobService
     executor: HeldExecutor
 
@@ -61,7 +61,7 @@ class QueueCase:
         )
         frozen = ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy=policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
+            model=None, delivery_policy=policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
         )
         self.messages.accept_user_message(message, execution_identity=identity, queue_input=frozen)
         return message, identity
@@ -90,11 +90,11 @@ async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
                               workspace_root=workspace.workspace_root)
-    store = PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+    store = ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
                                 input_reader=lambda reference: messages.accepted_job_message(reference, display=False))
     executor = HeldExecutor()
     jobs = JobService(job_event_bus=JobEventBus(), job_executor=executor, input_owner=messages,
-                      pending_request_store=store, terminal_status_writer=saver,
+                      execution_queue_service=store, terminal_status_writer=saver,
                       session_lifecycle_guard=workspace.resolver.resolve_session_node_for_runtime)
     case = QueueCase(workspace, session_id, thread_id, saver, messages, store, jobs, executor)
     try:
@@ -213,8 +213,8 @@ async def test_delete_cancels_durable_entries_before_discarding_jobs(queue_case:
         await case.start(*first)
         assert await asyncio.wait_for(case.executor.started.get(), 5) == first[1].job_id
     second = case.accept("尚未调用 start_job")
-    deleted = await case.jobs.run_session_delete_operation(
-        case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+    deleted = await case.jobs.run_session_control_operation(
+        case.session_id, lambda: case.jobs.stop_session_jobs(case.session_id),
         deadline=asyncio.get_running_loop().time() + 30,
     )
     assert deleted == 2
@@ -250,11 +250,11 @@ async def test_delete_queue_write_failure_keeps_active_task_and_remaining_fifo(
 
     monkeypatch.setattr(case.saver, "mark_job_terminal_status", fail_tail)
     with pytest.raises(OSError, match="injected delete queue terminal failure"):
-        await case.jobs.run_session_delete_operation(
-            case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+        await case.jobs.run_session_control_operation(
+            case.session_id, lambda: case.jobs.stop_session_jobs(case.session_id),
             deadline=asyncio.get_running_loop().time() + 30,
         )
-    assert case.session_id not in case.jobs._deleting_sessions
+    assert case.session_id not in case.jobs._closed_sessions
     assert active.status == original_status and active.cancellation_reason is None
     assert active.task is task and task is not None and not task.done()
     assert case.jobs._thread_current_job[(case.session_id, case.thread_id)] == first[1].job_id
@@ -268,8 +268,8 @@ async def test_delete_queue_write_failure_keeps_active_task_and_remaining_fifo(
     assert case.executor.started.empty()
 
     monkeypatch.setattr(case.saver, "mark_job_terminal_status", original_writer)
-    assert await case.jobs.run_session_delete_operation(
-        case.session_id, lambda: case.jobs.delete_session_jobs(case.session_id),
+    assert await case.jobs.run_session_control_operation(
+        case.session_id, lambda: case.jobs.stop_session_jobs(case.session_id),
         deadline=asyncio.get_running_loop().time() + 30,
     ) == 3
     assert case.saver.execution_queue_snapshot(case.session_id, case.thread_id).records == ()

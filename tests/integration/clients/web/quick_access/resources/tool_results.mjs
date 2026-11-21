@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../../support/operation_ids.mjs';
 
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`缺少 ${name}`); return value; };
 const base = required('BOXTEAM_BROWSER_BASE_URL'), resultPath = required('BOXTEAM_BROWSER_RESULT_PATH');
@@ -87,7 +88,7 @@ try {
   await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: mainThread,
     interactions: [fixture.seedInteraction] });
   const seed = await api(`/api/v1/sessions/${session.session_id}/threads/${mainThread}/messages`, owner,
-    { message: { content: '准备上下文分支。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '准备上下文分支。' }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${seed.job_id}`, owner);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
@@ -136,7 +137,7 @@ try {
   result.phase = 'execute-child-tool';
   await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: threadId, interactions: fixture.interactions });
   const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${threadId}/messages`, owner,
-    { message: { content: '请真实调用工具并返回结果。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '请真实调用工具并返回结果。' }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

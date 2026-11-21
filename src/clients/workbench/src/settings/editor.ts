@@ -1,10 +1,12 @@
 import { t } from '../../../shared/core/i18n/index.js';
+import type { ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import { settingsGroupLabel } from './categories.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
-import { parse, type ParseError } from '../../upstream/src/vs/base/common/json.js';
+import { parse, parseTree, findNodeAtLocation, type ParseError } from '../../upstream/src/vs/base/common/json.js';
 import { applyEdits, setProperty } from '../../upstream/src/vs/base/common/jsonEdit.js';
-import { Disposable, DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { ConfigurationTarget, IConfigurationService, type IConfigurationValue } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { ConfigurationScope } from '../../upstream/src/vs/platform/configuration/common/configurationRegistry.js';
@@ -18,6 +20,7 @@ import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream
 import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextFileService, type ITextFileEditorModel, type ITextFileEditorModelManager } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -50,7 +53,8 @@ export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
 }
 
 /** 原目标选择只读来源目录，不再发现或准备 Extension Host 的 profile/view。 */
-export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')):
+export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: Pick<ManagementTarget, 'gateway_id' | 'gateway_connection_id' | 'name'> = managementGateway('settings'),
+  explicit?: { workspace_id?: string; source_key?: string; source_layer?: 'user' | 'workspace' }):
 Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefined> {
   const quick = parent.invokeFunction(accessor => accessor.get(IQuickInputService));
   const frozen = { ...target };
@@ -68,23 +72,37 @@ Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefin
     if (refreshed.error) throw new Error(refreshed.error);
     if (refreshed.loading || !refreshed.gatewayId) throw new Error(t('settings.editor.targetsNotRefreshed'));
     const workspaces = refreshed.workspaces;
-    const scope = await quick.pick([{ label: t('settings.editor.gatewayConfiguration'), description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
+    const scopes = [{ label: t('settings.editor.gatewayConfiguration'), description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
       ...workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
-        description: t('settings.editor.workspacePrefix') + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
-    { title: t('settings.editor.chooseTarget'), prompt: `Gateway ${frozen.gateway_id}`, placeHolder: t('settings.editor.readSourceBoundary') }, cancellation.token);
+        description: t('settings.editor.workspacePrefix') + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))];
+    const scope = explicit ? scopes.find(scope => scope.workspaceId === explicit.workspace_id) : await quick.pick(scopes,
+      { title: t('settings.editor.chooseTarget'), prompt: `Gateway ${frozen.gateway_id}`, placeHolder: t('settings.editor.readSourceBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
+    if (explicit && !scope) throw new Error(t('workbench.settings.targetOffline'));
     if (!scope) return;
+    if (scope.workspaceId) {
+      const workspace = requireGatewayWorkspaceRequestTarget(workspaces, { gatewayId: frozen.gateway_id, workspaceId: scope.workspaceId });
+      if (workspace.status !== 'ready') throw new Error(t('settings.editor.workspaceUnavailable', workspace.name, workspace.status));
+    }
     const owner = new ConfigurationSourceOwner({ gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id, workspace_id: scope.workspaceId });
     const listed = await owner.list(controller.signal);
     controller.signal.throwIfAborted();
-    const selected = await quick.pick(listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
-      description: t('settings.editor.layerPresencePriority', source.layer, source.presence, source.precedence), detail: source.uri ?? undefined })),
-    { title: t('settings.editor.chooseFormalSource'), prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: t('settings.editor.sourceAccessBoundary') }, cancellation.token);
+    const sources = listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
+      description: t('settings.editor.layerPresencePriority', source.layer, source.presence, source.precedence), detail: source.uri ?? undefined, layer: source.layer }));
+    const selected = explicit?.source_key ? sources.find(source => source.label === explicit.source_key)
+      : explicit?.source_layer ? sources.find(source => source.layer === explicit.source_layer) : await quick.pick(sources,
+      { title: t('settings.editor.chooseFormalSource'), prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: t('settings.editor.sourceAccessBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
+    if ((explicit?.source_key || explicit?.source_layer) && !selected) throw new Error(t('settings.editor.selectedSourceIdentityMissing'));
     if (!selected) return;
     const document = await owner.read(selected.label, undefined, controller.signal);
     controller.signal.throwIfAborted();
-    return { location: { ...owner.target, version: 2, source_key: selected.label, name: scope.label }, document };
+    return { location: { ...owner.target, version: 2, source_key: selected.label,
+      name: selected.layer === 'inline' ? t('workbench.settings.builtInSource')
+        : selected.layer === 'user_local' ? t('workbench.settings.localSource')
+        : selected.layer === 'runtime_override' ? t('workbench.settings.runtimeSource')
+        : selected.layer === 'user' && scope.workspaceId && explicit?.source_layer === 'user'
+          ? t('workbench.settings.backendSettings') : scope.label }, document };
   } finally { release(); releaseContext(); cancelled.dispose(); cancellation.dispose(); controller.abort(); }
 }
 
@@ -96,6 +114,7 @@ class SourceDefaults extends DefaultSettings {
 }
 
 export class SourceSettings extends Disposable {
+  private schemaObservation?: { subscription: MutableDisposable<IDisposable>; observe: () => IDisposable };
   private readonly changed = this._register(new Emitter<boolean>());
   readonly onDidChange = this.changed.event;
   private readonly fields = new Map<string, SourceSetting>();
@@ -106,6 +125,7 @@ export class SourceSettings extends Disposable {
     super();
     this.resource = configSourceEditorUri(location, location.source_key);
     this.buildFields();
+    this._register(configSourceFiles(files).onDidChangeSource(resource => { if (resource.toString() === this.resource.toString()) this.changed.fire(false); }));
     this._register(model.onDidChangeContent(() => this.changed.fire(false)));
     const reload = () => { this.buildFields(); this.changed.fire(true); };
     // 声明由安装事件更新；正式保存／还原只重建当前绑定的字段，不再补读库存。
@@ -118,7 +138,43 @@ export class SourceSettings extends Disposable {
     this.buildFields();
     this.changed.fire(true);
   }
+  bindSchemaObservation(subscription: MutableDisposable<IDisposable>, observe: () => IDisposable): void {
+    this.schemaObservation = { subscription, observe };
+  }
+  setVisible(visible: boolean): void {
+    const observation = this.schemaObservation;
+    if (!observation || this._store.isDisposed) return;
+    if (!visible) observation.subscription.clear();
+    else if (!observation.subscription.value) observation.subscription.value = observation.observe();
+  }
+  invalidateSchemas(): void {
+    this.schemaObservation?.subscription.dispose();
+    this.schemaObservation = undefined;
+    this.replaceSchemas(undefined);
+  }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
+  get pendingSubmission(): string | undefined { return configSourceFiles(this.files).pendingSubmission(this.resource); }
+  preflightDraft(signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+    return configSourceFiles(this.files).preflight(this.resource, this.model.textEditorModel!.getValue(), signal, modelRef);
+  }
+  /** 用真实 JSON 路径定位来源字段，不能把展示用的点分键当作 JSON 属性。 */
+  settingSelection(key: string, edit: boolean) {
+    const text = this.model.textEditorModel;
+    const field = this.fields.get(key);
+    if (!text || !field) return undefined;
+    const value = findNodeAtLocation(parseTree(text.getValue()), field.path);
+    if (!value) return undefined;
+    const node = edit ? value : value.parent?.children?.[0] ?? value;
+    const start = text.getPositionAt(node.offset), end = text.getPositionAt(node.offset + node.length);
+    return { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+  }
+  async querySubmission(): Promise<void> {
+    const version = this.model.textEditorModel!.getVersionId();
+    await configSourceFiles(this.files).query(this.resource);
+    if (this.pendingSubmission) throw new Error(t('settings.editor.originalSaveUnknown', this.pendingSubmission));
+    if (!this.model.isDirty() && this.model.textEditorModel!.getVersionId() === version) await this.model.revert();
+    this.changed.fire(false);
+  }
   unboundPluginParameters(): { packageId: string; pluginId: string; installation: 'declared' | 'unavailable' | 'unknown' }[] | undefined {
     const errors: ParseError[] = [];
     const payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
@@ -164,10 +220,19 @@ export class SourceSettings extends Disposable {
     if (!field) throw new Error(t('settings.editor.fieldOutsideSchema'));
     if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
     if (field.schema.writeOnly === true) throw new Error(t('settings.editor.useProtectedSecretInput'));
-    const text = this.model.textEditorModel!, source = text.getValue(), errors: ParseError[] = [];
-    parse(source, errors);
-    if (errors.length) throw new Error(t('settings.editor.invalidDraftUnchanged'));
-    const edits = setProperty(source, field.path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
+    this.editPath(field.path, value);
+  }
+  readDraft(): Record<string, unknown> {
+    const errors: ParseError[] = [], payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
+    if (errors.length || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(t('settings.editor.invalidDraftForForm'));
+    return payload as Record<string, unknown>;
+  }
+  /** 实体表单与原设置控件只修改同一 JSONC 文本模型，保存继续交原来源 writer。 */
+  editPath(path: (string | number)[], value: unknown): void {
+    if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
+    this.readDraft();
+    const text = this.model.textEditorModel!, source = text.getValue();
+    const edits = setProperty(source, path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
     text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
   }
   private buildFields(): void {
@@ -195,7 +260,9 @@ export class SourceSettings extends Disposable {
     for (const [name, candidate] of Object.entries(object(root.properties))) {
       if (['$schema', 'config_version'].includes(name)) continue;
       const settings: ISetting[] = []; visit(object(candidate), [name], settings, root);
-      if (settings.length) this.groups.push({ id: name, title: name, sections: [{ settings }], range: nullRange, titleRange: nullRange });
+      if (settings.length) this.groups.push({ id: name,
+        title: settingsGroupLabel(name),
+        sections: [{ settings }], range: nullRange, titleRange: nullRange });
     }
     const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
     for (const plugin of this.schemas?.plugins ?? []) {
@@ -233,18 +300,22 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
     const notifications = parent.invokeFunction(accessor => accessor.get(INotificationService));
     const initial = Promise.withResolvers<void>();
     let source: SourceSettings | undefined, schemas: PluginConfigurationSchemasDTO | undefined;
-    const subscription = lifetime.add(configSourceFiles(files).observeConfigurationSchemas(resource, owner, {
+    const subscription = lifetime.add(new MutableDisposable<IDisposable>());
+    const observe = () => configSourceFiles(files).observeConfigurationSchemas(resource, owner, {
       next: value => { schemas = value; source?.replaceSchemas(value); initial.resolve(); },
       error: error => { if (source) { source.replaceSchemas(undefined); notifications.error(error); } else initial.reject(error); },
-    }));
+    });
+    subscription.value = observe();
     const aborted = () => { subscription.dispose(); initial.reject(new CancellationError()); };
     controller.signal.addEventListener('abort', aborted, { once: true });
     try {
       await initial.promise;
       controller.signal.throwIfAborted();
       source = lifetime.add(new SourceSettings(location, model, files, schemas, textFiles));
+      // 原生 Pane 隐藏后释放长连接；恢复时沿同一 owner 取得完整声明快照。
+      source.bindSchemaObservation(subscription, observe);
     } finally { controller.signal.removeEventListener('abort', aborted); }
-    lifetime.add({ dispose: onGatewayTokenInvalidated(0, () => { subscription.dispose(); source?.replaceSchemas(undefined); }) });
+    lifetime.add({ dispose: onGatewayTokenInvalidated(0, () => source?.invalidateSchemas()) });
     return parent.createChild(new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: source }]), lifetime);
   } finally { auth(); context(); cancel.dispose(); controller.abort(); }
 }

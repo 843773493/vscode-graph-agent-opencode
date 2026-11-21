@@ -2,9 +2,10 @@ import { useCallback } from "react";
 import {
   listAgents as apiListAgents,
   setWorkspaceDefaultAgent as apiSetWorkspaceDefaultAgent,
-  setWorkspaceDefaultProvider as apiSetWorkspaceDefaultProvider,
+  setWorkspaceDefaultModel as apiSetWorkspaceDefaultModel,
 } from "../../../api";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { ModelReference } from "../../../types/backend";
 import type { SessionLifecycleContext } from "./sessionLifecycleContext";
 
 export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
@@ -68,8 +69,9 @@ export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
     ],
   );
 
-  const setWorkspaceDefaultProvider = useCallback(
-    async (agentId: string, providerId: string) => {
+  const setWorkspaceDefaultModel = useCallback(
+    async (agentId: string, model: ModelReference) => {
+      const label = `${model.provider_id} / ${model.model_id}`;
       const workspaceId =
         currentSessionGatewayWorkspaceId
         ?? activeGatewayWorkspaceId
@@ -79,19 +81,19 @@ export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
       }
       setState((prev) => ({
         ...prev,
-        status: `正在设置工作区默认模型: ${providerId}`,
+        status: `正在设置工作区默认模型: ${label}`,
       }));
       try {
-        const agents = await apiSetWorkspaceDefaultProvider(
+        const agents = await apiSetWorkspaceDefaultModel(
           apiPort,
           agentId,
-          providerId,
+          model,
           workspaceId,
         );
         setState((prev) => ({
           ...prev,
           agents,
-          status: `已将 ${providerId} 设为 ${agentId} 的工作区默认模型，仅影响新会话`,
+          status: `已将 ${label} 设为 ${agentId} 的工作区默认模型，仅影响新会话`,
         }));
       } catch (error) {
         const message = errorMessage(error);
@@ -124,5 +126,5 @@ export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
     ],
   );
 
-  return { setWorkspaceDefaultAgent, setWorkspaceDefaultProvider };
+  return { setWorkspaceDefaultAgent, setWorkspaceDefaultModel };
 }

@@ -19,12 +19,14 @@ from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.execution_queue import ExecutionQueueService
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.support.background_work import build_background_registry
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
@@ -34,7 +36,7 @@ async def run(root: Path, mode: str, barrier: str) -> None:
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(main_thread_resolver=workspace.resolver.main_thread_id,
                               checkpointer=saver, workspace_root=workspace.workspace_root)
-    store = PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+    store = ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
                                input_reader=lambda reference: messages.accepted_job_message(reference, display=False))
 
     class Executor:
@@ -51,7 +53,7 @@ async def run(root: Path, mode: str, barrier: str) -> None:
             raise asyncio.CancelledError("test_execution_boundary")
 
     jobs = JobService(job_event_bus=JobEventBus(), job_executor=Executor(), input_owner=messages,
-                      pending_request_store=store, terminal_status_writer=saver,
+                      execution_queue_service=store, terminal_status_writer=saver,
                       session_lifecycle_guard=workspace.resolver.resolve_session_node_for_runtime)
     if mode == "produce":
         session = await workspace.create_session("执行队列硬退出")
@@ -64,7 +66,7 @@ async def run(root: Path, mode: str, barrier: str) -> None:
             message = MessageDTO(message_id=create_prefixed_id("msg"), session_id=session, thread_id=thread,
                                  role=MessageRole.user, content=f"不可变输入 {index}", created_at=now, updated_at=now)
             messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-                execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+                execution_binding=identity, message_id=message.message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat()))
             admission = saver.execution_admission_for_job(session, thread_id=thread, job_id=identity.job_id)
             identities.append({"job_id": identity.job_id, "execution_id": admission.execution_id,
@@ -92,11 +94,12 @@ async def run(root: Path, mode: str, barrier: str) -> None:
     else:
         async def checkpoint(_job):
             return None
-        runtime = RuntimeService(workspace_id=workspace.workspace_id, workspace_root=workspace.workspace_root,
-            job_service=jobs, background_task_registry=build_background_registry(workspace.sessions_root),
+        runtime = WorkspaceRuntimeLifecycleService(
+            workspace_id=workspace.workspace_id, job_service=jobs,
+            background_task_registry=build_background_registry(workspace.sessions_root),
             trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
             message_stream_store=MessageStreamStore(path_resolver=workspace.resolver), terminal_status_writer=saver,
-            pending_tool_checkpoint_id=checkpoint, pending_request_store=store)
+            pending_tool_checkpoint_id=checkpoint, execution_queue_service=store)
         with workspace_context(workspace.workspace_id, workspace.workspace_root):
             await runtime.reconcile_stale_executions()
             await jobs.start_restored_executions()

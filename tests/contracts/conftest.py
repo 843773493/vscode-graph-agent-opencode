@@ -6,23 +6,23 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from boxteam.gateway.v2 import plugin_commands_pb2
+from boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
+from boxteam.search.v1 import public_pb2 as search_public_pb2
+from boxteam.workspace.message.v1 import message_stream_pb2
+from boxteam.workspace.v2 import (
+    public_pb2 as workspace_public_pb2,
+)
+from boxteam.workspace.v2 import (
+    skill_sources_pb2,
+)
 from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.generated.boxteam.gateway.v2 import plugin_commands_pb2
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
-from app.protocol.generated.boxteam.gateway.v2 import (
-    skill_sources_pb2 as gateway_skill_sources_pb2,
-)
-from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
-from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
-    public_pb2 as workspace_public_pb2,
-)
-from app.protocol.generated.boxteam.workspace.v2 import (
-    skill_sources_pb2,
-)
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 

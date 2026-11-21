@@ -24,6 +24,7 @@ function emptyPanelProps(onRetryHistory: () => void) {
     historyError: "Turn 投影索引损坏：manifest ordinal 不连续",
     onLoadAroundTurn: async () => {},
     onLoadNewerMessages: async () => {},
+    onLoadLatestMessages: async () => {},
     onLoadOlderMessages: async () => {},
     onLoadTurnDetails: async () => {},
     onLoadAgentStateMessageRawContent: async () => "",

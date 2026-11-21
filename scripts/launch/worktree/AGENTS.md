@@ -15,4 +15,5 @@
 
 - 使用 Bun/ESM 与既有原生文件锁；所有 Git 操作显式绑定 checkout。
 - 测试只在 `out/tests/scripts/launch/worktree/` 下创建 Git fixture，始终有外部超时和内存保护。
+- 仓库内 Node 开发使用 Bun workspace SDK，Backend 开发使用 uv 标准 editable SDK；release 初始化使用 `uv sync --frozen --no-editable`，发行依赖仍由普通 tarball／wheel 提供。
 - 目录及同步冲突先检查后写入；配置只按清单复制，不输出值。

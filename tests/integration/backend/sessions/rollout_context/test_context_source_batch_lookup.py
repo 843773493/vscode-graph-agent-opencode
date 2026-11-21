@@ -6,19 +6,29 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash, payload_content_length
 from app.domain.itemized.epoch.prefix_epoch import AppendedItemRef
 from app.domain.itemized.epoch.root_compilation import CompiledRootSourceProvenance
-from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
-from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
-from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
-from app.services.infrastructure.rollout_context.runtime.context_sources.models import ContextSourceDescriptor
-from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    payload_content_length,
 )
+from app.services.infrastructure.rollout_context.checkpoint.durable import (
+    source_activation,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDescriptor,
+)
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 复用真实 prepare fixture
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)

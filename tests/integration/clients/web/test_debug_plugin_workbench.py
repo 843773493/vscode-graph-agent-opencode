@@ -102,13 +102,15 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     configuration = workspace / ".boxteam/workspace.jsonc"
     source = commentjson.loads(configuration.read_text(encoding="utf-8"))
-    source["llm"]["providers"] = [{"id": "debug-ui", "endpoint": "https://opencode.ai/zen/v1", "model": "debug-ui-model",
-        "api_key": "debug-ui-test-key", "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-            "supports_reasoning": {"reasoning_content": False}}}]
+    source["llm"]["providers"] = {"debug-ui": {
+        "defaults": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "", "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                "supports_reasoning": {"reasoning_content": False}}},
+        "models": {"default": {"model": "debug-ui-model"}},
+    }}
     for agent in source["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "debug-ui", "fallback_providers": []}
+            agent["model"] = {"primary": {"provider_id": "debug-ui", "model_id": "default"}, "fallbacks": []}
         if "custom" in agent["tools"]:
             agent["tools"]["custom"] = [tool for tool in agent["tools"]["custom"]
                 if tool.get("name") in {"get_variables_values", "evaluate_expression"}]

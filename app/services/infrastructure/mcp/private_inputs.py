@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
 
 from pydantic import (
     BaseModel,
@@ -21,6 +20,7 @@ from app.core.file_permissions import (
     require_private_file_access,
     restrict_private_path_access,
 )
+from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.mcp import (
     McpPrivateHeaderRefDTO,
@@ -67,7 +67,7 @@ class McpPrivateInputStore:
     def write(self, *, server_id: str, header_name: str, endpoint: str, value: SecretStr) -> McpPrivateHeaderRefDTO:
         reference = McpPrivateHeaderRefDTO(
             workspace_id=read_workspace_id(self._workspace_root), server_id=server_id,
-            header_name=header_name, endpoint=endpoint, version=uuid4().hex,
+            header_name=header_name, endpoint=endpoint, version=create_uuid_hex(),
         )
         self._publish(reference, value)
         return reference

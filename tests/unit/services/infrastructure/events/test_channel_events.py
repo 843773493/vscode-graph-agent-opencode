@@ -180,7 +180,7 @@ def test_context_source_event_contract() -> None:
             )
         )
     # 轻量红线：把正文/diff 塞进 revision 字段必须显式报错。
-    with pytest.raises(RuntimeError, match="sha256"):
+    with pytest.raises(RuntimeError, match="路径分隔符"):
         ContextSourceEvent(
             source_id="src_1",
             source_kind="skill",
@@ -195,6 +195,27 @@ def test_context_source_event_contract() -> None:
         ContextSourceEvent(source_id="src_1", source_kind="skill", kind="attached")
     with pytest.raises(ValueError):
         ContextSourceEvent(source_id="src_1", source_kind="", kind="committed")
+
+
+@pytest.mark.parametrize("revision", [None, "publication:1", "a" * 64, _digest("sample")])
+def test_context_source_event_keeps_owner_revision(revision: str | None) -> None:
+    event = ContextSourceEvent(
+        source_id="src_1", source_kind="instruction", kind="committed", revision=revision,
+    )
+    assert_context_source_event_is_lightweight(event)
+    assert event.revision == revision
+
+
+@pytest.mark.parametrize("revision", ["", "x" * 513, "v1\nbody", "/host/path"])
+def test_context_source_revision_is_bounded_metadata(revision: str) -> None:
+    with pytest.raises((ValueError, RuntimeError)) as construct_error:
+        ContextSourceEvent(
+            source_id="src_1", source_kind="instruction", kind="committed", revision=revision,
+        )
+    event = ContextSourceEvent(source_id="src_1", source_kind="instruction", kind="committed")
+    with pytest.raises(type(construct_error.value)) as assert_error:
+        assert_context_source_event_is_lightweight(_tamper_revision(event, revision))
+    assert str(construct_error.value) == str(assert_error.value)
 
 
 def test_all_three_channels_can_be_ensured_in_one_service(
@@ -241,7 +262,7 @@ def test_context_source_publisher_publishes_to_named_channel(
     assert deliveries[0].event.kind == "committed"
 
     # 契约违规显式抛出，不静默发布。
-    with pytest.raises(RuntimeError, match="sha256"):
+    with pytest.raises(RuntimeError, match="路径分隔符"):
         publisher.publish(
             ContextSourceEvent(
                 source_id="src_1",
@@ -269,7 +290,7 @@ def test_contracts_reject_smuggled_payloads_in_identity_and_revision() -> None:
     """
     body = "正文内容" * 2000  # 约 8KB，远超摘要长度
     # revision 前缀走私：sha256: + 任意正文。
-    with pytest.raises(RuntimeError, match="sha256"):
+    with pytest.raises(ValueError, match="长度上限"):
         ContextSourceEvent(
             source_id="src_1",
             source_kind="skill",
@@ -288,21 +309,6 @@ def test_contracts_reject_smuggled_payloads_in_identity_and_revision() -> None:
             domain="workspace",
             kind="published",
             revision="sha256:" + body,
-        )
-    # 摘要长度不足/超长同样拒绝（必须恰好 64 位 hex）。
-    with pytest.raises(RuntimeError, match="sha256"):
-        ContextSourceEvent(
-            source_id="src_1",
-            source_kind="skill",
-            kind="committed",
-            revision="sha256:abc",
-        )
-    with pytest.raises(RuntimeError, match="sha256"):
-        ContextSourceEvent(
-            source_id="src_1",
-            source_kind="skill",
-            kind="committed",
-            revision=_digest("sample") + "ff",
         )
     # 超长 identity：把正文塞进 generation/domain 字段。
     with pytest.raises(ValueError, match="长度上限"):
@@ -383,7 +389,7 @@ def test_mcp_catalog_revision_message_differs_between_construction_and_lightweig
 
 
 def test_typed_events_revision_message_matches_across_both_paths() -> None:
-    """反向核对：无 ``assert_checks`` 覆盖的 3 个 typed 事件两条链路消息完全一致。
+    """使用摘要版本的 typed 事件在两条链路中的校验消息一致。
 
     证明 ``assert_checks`` 缺省即复用 ``checks``，两种路径等价；将来只有新增了独立
     ``assert_checks`` 的事件才会出现消息差异。
@@ -425,26 +431,6 @@ def test_typed_events_revision_message_matches_across_both_paths() -> None:
                         domain="workspace",
                         kind="published",
                         revision=_digest("config_lifecycle"),
-                    ),
-                    invalid_revision,
-                )
-            ),
-        ),
-        (
-            "ContextSourceEvent",
-            lambda: ContextSourceEvent(
-                source_id="src_1",
-                source_kind="skill",
-                kind="committed",
-                revision=invalid_revision,
-            ),
-            lambda: assert_context_source_event_is_lightweight(
-                _tamper_revision(
-                    ContextSourceEvent(
-                        source_id="src_1",
-                        source_kind="skill",
-                        kind="committed",
-                        revision=_digest("context_source"),
                     ),
                     invalid_revision,
                 )

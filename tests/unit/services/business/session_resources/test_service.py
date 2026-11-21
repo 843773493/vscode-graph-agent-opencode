@@ -1,0 +1,764 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import portalocker
+import pytest
+from fastapi import HTTPException
+
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
+from app.abstractions.browser_resources import BrowserPluginDisabled
+from app.abstractions.terminal.resources import TerminalPluginDisabled
+from app.api.sessions import list_session_resources
+from app.domain.background_work import BackgroundTaskHandle
+from app.domain.itemized.enums import PayloadKind
+from app.schemas.internal_v2.session import SessionCreateRequest
+from app.services.business.session_navigation.service import SessionCatalogService
+from app.services.business.session_resources.providers import (
+    BackgroundTaskResourceProvider,
+    BrowserResourceProvider,
+    TerminalResourceProvider,
+)
+from app.services.business.session_resources.registry import (
+    SessionResourceProviderRegistry,
+)
+from app.services.business.session_resources.service import SessionResourceService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.mapping.session_resource_mapper import (
+    browser_to_session_resource,
+    terminal_to_session_resource,
+)
+from app.services.orchestration.session_stop import SessionStopService
+from tests.support.background_work import build_background_registry, spawn_waiting_task
+from tests.support.message_service import build_message_service
+from tests.support.resource_owners.browser import build_browser_owner_fixture
+from tests.support.resource_owners.sessions import SESSION_A
+from tests.support.resource_owners.terminal import build_terminal_owner_fixture
+from tests.support.session_navigation.catalog_intents import (
+    create_catalog_intent,
+    submit_catalog_intent,
+)
+from tests.unit.services.business.test_session_service_catalog import (
+    catalog_service as catalog_service,  # noqa: PLC0414 - 真实 Session/catalog 的共享 fixture
+)
+from tests.unit.services.business.test_session_service_catalog import (
+    session_config_service as session_config_service,  # noqa: PLC0414
+)
+
+
+def _owner_snapshot(record: dict[str, object]) -> dict[str, object]:
+    ref = {"session_id": record["session_id"], "thread_id": "thr_018f0000000070008000000000000001"}
+    return {
+        "retention_scope": "thread", "source_thread": ref, "thread_associations": [ref],
+        "owner_revision": 1, "reconciliation_status": "verified", "reclaim_at": None,
+        "error": None, **record,
+    }
+
+
+class FakeTerminalResourceOwner:
+    def __init__(self, terminals: list[dict[str, object]] | None = None) -> None:
+        self.terminals = [_owner_snapshot(record) for record in terminals or []]
+        self.deleted_terminal_ids: list[str] = []
+        self.killed_terminal_ids: list[str] = []
+        self.listed_session_ids: list[str | None] = []
+        self.cleaned_session_ids: list[str] = []
+
+    def attach_url(self, terminal_id: str) -> str:
+        return f"http://127.0.0.1:8013/?terminalId={terminal_id}"
+
+    async def list_resources(
+        self,
+        *,
+        session_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        self.listed_session_ids.append(session_id)
+        return [
+            terminal
+            for terminal in self.terminals
+            if session_id is None or any(
+                ref["session_id"] == session_id for ref in terminal["thread_associations"]
+            )
+        ]
+
+    async def get_resource(self, terminal_id: str) -> dict[str, object]:
+        return next(record for record in self.terminals if record["terminal_id"] == terminal_id)
+
+    async def command(
+        self, resource_id: str, *, action: str, expected_revision: int,
+        holder_id: str, operation_id: str,
+    ) -> dict[str, object]:
+        assert action == "stop"
+        assert holder_id == f"request:{operation_id}"
+        self.killed_terminal_ids.append(resource_id)
+        return {**await self.get_resource(resource_id), "status": "terminated"}
+
+    async def cleanup_session(self, session_id: str, *, action, thread_id=None) -> int:
+        self.cleaned_session_ids.append(session_id)
+        self.deleted_terminal_ids.extend(str(record["terminal_id"]) for record in self.terminals)
+        return len(self.terminals)
+
+
+class FakeBrowserResourceOwner:
+    def __init__(self, browsers: list[dict[str, object]] | None = None) -> None:
+        self.browsers = [_owner_snapshot(browser) for browser in (browsers or [])]
+        self.deleted_browser_ids: list[str] = []
+        self.woken_browser_ids: list[str] = []
+
+    async def list_resources(self, *, session_id: str) -> list[dict[str, object]]:
+        return [browser for browser in self.browsers if browser["status"] != "deleted"
+                and any(ref["session_id"] == session_id for ref in browser["thread_associations"])]
+
+    async def get_resource(self, resource_id: str) -> dict[str, object]:
+        return next(browser for browser in self.browsers if browser["browser_id"] == resource_id)
+
+    async def command(self, resource_id: str, *, action: str, **arguments: object) -> dict[str, object]:
+        assert action == "stop"
+        return {**await self.get_resource(resource_id), "status": "closed"}
+
+    async def perform(self, resource_id: str, *, action: str, **arguments: object) -> dict[str, object]:
+        assert action == "wake"
+        self.woken_browser_ids.append(resource_id)
+        return {"browser": {**await self.get_resource(resource_id), "status": "running",
+                "resource_state": "active", "title": "Restored page", "url": "https://example.com/restored"}}
+
+    async def cleanup_session(self, session_id: str, *, action, thread_id=None) -> int:
+        resources = await self.list_resources(session_id=session_id)
+        self.deleted_browser_ids.extend(browser["browser_id"] for browser in resources)
+        return len(resources)
+
+
+class FakeSessionService:
+    @asynccontextmanager
+    async def session_read_admission(self, session_id: str):
+        yield
+
+    async def get(self, session_id: str) -> object:
+        return {"session_id": session_id}
+
+
+class FakeJobService:
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.deleted_session_id: str | None = None
+
+    async def stop_session_jobs(self, session_id: str) -> int:
+        self.deleted_session_id = session_id
+        return self.count
+
+
+class _EmptyBackgroundTaskRegistry:
+    def list_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
+        return []
+
+    def list_summaries(self, _session_id: str, *, include_history: bool):
+        return []
+
+    def get_handle(
+        self,
+        _session_id: str,
+        _task_id: str,
+    ) -> BackgroundTaskHandle | None:
+        return None
+
+    async def cancel(
+        self,
+        _session_id: str,
+        task_id: str,
+    ) -> BackgroundTaskHandle:
+        raise AssertionError(f"空后台任务 registry 不应取消任务: {task_id}")
+
+    async def delete(
+        self,
+        _session_id: str,
+        task_id: str,
+    ) -> BackgroundTaskHandle:
+        raise AssertionError(f"空后台任务 registry 不应删除任务: {task_id}")
+
+    async def delete_session(self, _session_id: str) -> int:
+        return 0
+
+
+@pytest.fixture
+def empty_background_task_registry() -> BackgroundTaskRegistryProtocol:
+    return _EmptyBackgroundTaskRegistry()
+
+
+@pytest.mark.asyncio
+async def test_resource_list_holds_read_admission_until_providers_finish(catalog_service, monkeypatch):
+    sessions, workspace = catalog_service
+    session = await sessions.create(SessionCreateRequest(title="读取期间删除"))
+    session_id = session.session_id
+    source = workspace.resolver.resolve_session_node(session_id)
+    entered, release, deleting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    registry = SessionResourceProviderRegistry()
+
+    async def held_list(owner_id, *, include_history):
+        assert owner_id == session_id and include_history is True
+        entered.set()
+        await release.wait()
+        assert source.is_dir(), "已准入资源读取完成前，删除不得隔离 Session 目录"
+        return []
+
+    async def observe(_operation_id, phase, **_details):
+        if phase == "deletion.catalog_deleting":
+            deleting.set()
+
+    monkeypatch.setattr(registry, "list_resources", held_list)
+    monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+    resources = SessionResourceService(session_service=sessions, provider_registry=registry)
+    catalog = SessionCatalogService(session_service=sessions)
+    reading = asyncio.create_task(resources.list(session_id))
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        lock_path = sessions._session_lifecycle_gate.gates_root / f"{session_id}.lock"
+        with lock_path.open("a+b") as lock_file, pytest.raises(portalocker.AlreadyLocked):
+            portalocker.lock(lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        intent = create_catalog_intent(catalog, "delete_session", target_node_id=session_id)
+        deletion = asyncio.create_task(submit_catalog_intent(catalog, intent))
+        await asyncio.wait_for(deleting.wait(), 2)
+        assert source.is_dir()
+        assert not deletion.done()
+        release.set()
+        result = await asyncio.wait_for(reading, 2)
+        assert result.session_id == session_id and result.items == []
+        receipt = await asyncio.wait_for(deletion, 2)
+        assert receipt.state == "committed" and receipt.settlement == "settled"
+        assert not source.exists()
+    finally:
+        release.set()
+        await asyncio.gather(reading, *([deletion] if deletion is not None else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_resource_list_api_rejects_deleting_session_before_provider_reads(catalog_service, monkeypatch):
+    sessions, _workspace = catalog_service
+    session = await sessions.create(SessionCreateRequest(title="删除后拒绝资源读取"))
+    deleting, release = asyncio.Event(), asyncio.Event()
+    registry = SessionResourceProviderRegistry()
+    provider_calls = []
+
+    async def observed_list(owner_id, *, include_history):
+        provider_calls.append(owner_id)
+        return []
+
+    async def observe(_operation_id, phase, **_details):
+        if phase == "deletion.catalog_deleting":
+            deleting.set()
+            await release.wait()
+
+    monkeypatch.setattr(registry, "list_resources", observed_list)
+    monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+    resources = SessionResourceService(session_service=sessions, provider_registry=registry)
+    catalog = SessionCatalogService(session_service=sessions)
+    intent = create_catalog_intent(catalog, "delete_session", target_node_id=session.session_id)
+    deletion = asyncio.create_task(submit_catalog_intent(catalog, intent))
+    try:
+        await asyncio.wait_for(deleting.wait(), 2)
+        with pytest.raises(HTTPException) as caught:
+            await list_session_resources(session.session_id, _="local", request_id="resource-delete-read",
+                                         include_history=True, session_resource_service=resources)
+        assert caught.value.status_code == 409
+        assert "session_deletion_pending" in caught.value.detail
+        assert session.session_id in caught.value.detail
+        assert provider_calls == []
+    finally:
+        release.set()
+        await asyncio.wait_for(deletion, 2)
+
+
+def _provider_registry(
+    *,
+    task_registry: BackgroundTaskRegistryProtocol,
+    terminal_owner: FakeTerminalResourceOwner,
+    browser_owner: FakeBrowserResourceOwner,
+) -> SessionResourceProviderRegistry:
+    return SessionResourceProviderRegistry(
+        [
+            BackgroundTaskResourceProvider(task_registry=task_registry),
+            TerminalResourceProvider(terminal_owner=terminal_owner),
+            BrowserResourceProvider(browser_owner=browser_owner),
+        ]
+    )
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("has_session_record", [False, True])
+async def test_disabled_resource_plugin_only_suppresses_empty_session_owner(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    has_session_record: bool,
+) -> None:
+    bundle = (
+        build_terminal_owner_fixture(tmp_path)
+        if kind == "terminal"
+        else build_browser_owner_fixture(tmp_path)
+    )
+    resource = await bundle.create() if has_session_record else None
+    owner = bundle.restart()
+    plugin_error = (
+        TerminalPluginDisabled("Terminal 插件关闭")
+        if kind == "terminal"
+        else BrowserPluginDisabled("Browser 插件关闭")
+    )
+
+    async def disabled_listing(**query) -> list[dict[str, object]]:
+        raise plugin_error
+
+    monkeypatch.setattr(bundle.transport, "list_resources", disabled_listing)
+    provider = (
+        TerminalResourceProvider(terminal_owner=owner)
+        if kind == "terminal"
+        else BrowserResourceProvider(browser_owner=owner)
+    )
+    if not has_session_record:
+        assert await provider.list_resources(SESSION_A) == []
+        return
+
+    assert resource is not None
+    before = owner._store.get(str(resource["resource_id"]))
+    leases_before = bundle.leases.leases_for_resource(str(resource["resource_id"]))
+    with pytest.raises(type(plugin_error)) as caught:
+        await provider.list_resources(SESSION_A)
+    assert caught.value is plugin_error
+    assert owner._store.get(str(resource["resource_id"])) == before
+    assert bundle.leases.leases_for_resource(str(resource["resource_id"])) == leases_before
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_session_resource_provider_preserves_regular_cold_listing_errors(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    bundle = (
+        build_terminal_owner_fixture(tmp_path)
+        if kind == "terminal"
+        else build_browser_owner_fixture(tmp_path)
+    )
+    owner = bundle.restart()
+    failure = ConnectionError("首次资源清单未取得回执")
+
+    async def failed_listing(**query) -> list[dict[str, object]]:
+        raise failure
+
+    monkeypatch.setattr(bundle.transport, "list_resources", failed_listing)
+    provider = (
+        TerminalResourceProvider(terminal_owner=owner)
+        if kind == "terminal"
+        else BrowserResourceProvider(browser_owner=owner)
+    )
+    with pytest.raises(ConnectionError) as caught:
+        await provider.list_resources(SESSION_A)
+    assert caught.value is failure
+    assert owner._recovery._pending is None
+
+
+def test_deleted_terminal_resource_explains_historical_status():
+    terminal = {
+        "terminal_id": "term_123",
+        "session_id": "ses_123",
+        "status": "deleted",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "ended_at": "2026-07-05T01:02:05+00:00",
+    }
+    resource = terminal_to_session_resource(
+        _owner_snapshot(terminal),
+        available_actions=[],
+    )
+
+    assert resource.status == "deleted"
+    assert resource.available_actions == []
+    assert "终端已删除" in str(resource.metadata["status_note"])
+
+
+def test_running_browser_resource_maps_identity_and_actions():
+    browser = {
+        "browser_id": "browser_123",
+        "session_id": "ses_123",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "started_at": "2026-07-05T01:02:03+00:00",
+        "title": "Example",
+        "url": "https://example.com",
+    }
+    resource = browser_to_session_resource(
+        _owner_snapshot(browser),
+        available_actions=["cancel"],
+    )
+
+    assert resource.kind == "browser"
+    assert resource.status == "running"
+    assert resource.metadata["page_id"] == "browser_123"
+    assert "attach_url" not in resource.metadata
+    assert resource.available_actions == ["cancel"]
+
+
+def test_terminal_resource_projection_excludes_real_path():
+    """负向断言（6.3）：API 投影 MUST NOT 携带真实文件系统路径。"""
+    terminal = {
+        "terminal_id": "term_real_path",
+        "session_id": "ses_123",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "cwd": "/home/user/secret-workspace/app",
+        "cwd_relative": "app",
+    }
+    resource = terminal_to_session_resource(
+        _owner_snapshot(terminal),
+        available_actions=[],
+    )
+
+    assert resource.metadata["cwd_relative"] == "app"
+    assert "cwd" not in resource.metadata
+    assert "/home/user/secret-workspace" not in resource.model_dump_json()
+
+
+def test_browser_resource_projection_excludes_checkpoint_real_path():
+    """负向断言（6.3）：检查点真实路径不得上浮到 API 响应体。"""
+    browser = {
+        "browser_id": "browser_checkpoint_path",
+        "session_id": "ses_123",
+        "status": "lost",
+        "resource_state": "discarded",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "checkpoint": {
+            "version": 1,
+            "path": "/home/user/secret-workspace/.boxteam/browser-manager/checkpoints/browser_checkpoint_path.json",
+        },
+    }
+    resource = browser_to_session_resource(
+        _owner_snapshot(browser),
+        available_actions=[],
+    )
+
+    assert resource.metadata["checkpoint_available"] is True
+    assert "checkpoint" not in resource.metadata
+    assert "/home/user/secret-workspace" not in resource.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_lost_browser_has_no_action_even_with_checkpoint():
+    browser = {
+        "browser_id": "browser_cold",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
+        "status": "lost",
+        "resource_state": "discarded",
+        "checkpoint": {"version": 1, "browser_id": "browser_cold"},
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    provider = BrowserResourceProvider(
+        browser_owner=FakeBrowserResourceOwner(browsers=[browser]),
+    )
+
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b")
+    resource = resources[0]
+
+    assert resource.available_actions == []
+    assert "可以重新打开" in str(resource.metadata["status_note"])
+
+
+@pytest.mark.asyncio
+async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
+    terminal = {
+        "terminal_id": "term_live",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    terminated_terminal = {
+        **terminal,
+        "terminal_id": "term_closed",
+        "status": "terminated",
+    }
+    provider = TerminalResourceProvider(
+        terminal_owner=FakeTerminalResourceOwner(
+            terminals=[terminal, terminated_terminal]
+        ),
+    )
+
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
+
+    assert [resource.resource_id for resource in resources] == ["term_live"]
+    assert resources[0].status == "running"
+    assert provider._owner.listed_session_ids == [
+        "ses_019b94653e71714b8d406f83ab3d2b3b"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_control_rejects_resource_outside_session_owner_list() -> None:
+    terminal_owner = FakeTerminalResourceOwner(
+        terminals=[
+            {
+                "terminal_id": "term_other_session",
+                "session_id": "ses_other",
+                "status": "running",
+            }
+        ]
+    )
+    provider = TerminalResourceProvider(terminal_owner=terminal_owner)
+
+    for action in ("cancel", "delete"):
+        with pytest.raises(ValueError, match="不属于当前 Session"):
+            await provider.control(
+                session_id="ses_current",
+                resource_id="term_other_session",
+                action=action,
+                operation_id="request-resource-test",
+            )
+
+    assert terminal_owner.listed_session_ids == []
+    assert terminal_owner.killed_terminal_ids == []
+    assert terminal_owner.deleted_terminal_ids == []
+
+
+@pytest.mark.asyncio
+async def test_browser_fast_listing_excludes_closed_state_records() -> None:
+    browser = {
+        "browser_id": "browser_live",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
+        "status": "running",
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+        "title": "Live",
+        "url": "https://example.com",
+    }
+    closed_browser = {
+        **browser,
+        "browser_id": "browser_closed",
+        "status": "closed",
+    }
+    provider = BrowserResourceProvider(
+        browser_owner=FakeBrowserResourceOwner(
+            browsers=[browser, closed_browser]
+        ),
+    )
+
+    resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b", include_history=False)
+
+    assert [resource.resource_id for resource in resources] == ["browser_live"]
+
+
+@pytest.mark.asyncio
+async def test_browser_provider_resumes_cold_recycled_browser():
+    browser = {
+        "browser_id": "browser_cold",
+        "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
+        "status": "running",
+        "resource_state": "discarded",
+        "checkpoint": {"version": 1, "browser_id": "browser_cold"},
+        "created_at": "2026-07-05T01:02:03+00:00",
+        "updated_at": "2026-07-05T01:02:04+00:00",
+    }
+    browser_owner = FakeBrowserResourceOwner(browsers=[browser])
+    provider = BrowserResourceProvider(browser_owner=browser_owner)
+
+    result = await provider.control(
+        session_id="ses_019b94653e71714b8d406f83ab3d2b3b",
+        resource_id="browser_cold",
+        action="resume",
+        operation_id="request-resource-test",
+    )
+
+    assert result.status == "running"
+    assert result.resource is not None
+    assert result.resource.available_actions == ["cancel"]
+    assert browser_owner.woken_browser_ids == ["browser_cold"]
+
+
+@pytest.mark.asyncio
+async def test_browser_provider_excludes_deleted_records(
+    empty_background_task_registry: BackgroundTaskRegistryProtocol,
+):
+    session_id = "ses_019bb7ec49017d8cac52d5b674fa1b7e"
+    browser_owner = FakeBrowserResourceOwner(
+        browsers=[
+            {
+                "browser_id": "browser_deleted",
+                "session_id": session_id,
+                "status": "deleted",
+                "created_at": "2026-07-05T01:02:03+00:00",
+                "updated_at": "2026-07-05T01:02:04+00:00",
+            }
+        ]
+    )
+    service = SessionResourceService(
+        session_service=FakeSessionService(),
+        provider_registry=_provider_registry(
+            task_registry=empty_background_task_registry,
+            terminal_owner=FakeTerminalResourceOwner(),
+            browser_owner=browser_owner,
+        ),
+    )
+
+    result = await service.list(session_id)
+
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_list_includes_closed_background_task_history(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_019c7618ac207a1e89d845aa0622881f"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    registry = build_background_registry(sessions_dir)
+
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
+    await registry.cancel(session_id, handle.task_id)
+    service = SessionResourceService(
+        session_service=FakeSessionService(),
+        provider_registry=_provider_registry(
+            task_registry=registry,
+            terminal_owner=FakeTerminalResourceOwner(),
+            browser_owner=FakeBrowserResourceOwner(),
+        ),
+    )
+
+    result = await service.list(session_id)
+
+    assert len(result.items) == 1
+    assert result.items[0].resource_id == handle.task_id
+    assert result.items[0].status == "cancelled"
+    assert result.items[0].available_actions == ["delete"]
+
+
+@pytest.mark.asyncio
+async def test_list_excludes_deleted_background_task_history(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_019beb2ad93f78668af7471f0ac9538c"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    registry = build_background_registry(sessions_dir)
+
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
+    await registry.delete(session_id, handle.task_id)
+    service = SessionResourceService(
+        session_service=FakeSessionService(),
+        provider_registry=_provider_registry(
+            task_registry=registry,
+            terminal_owner=FakeTerminalResourceOwner(),
+            browser_owner=FakeBrowserResourceOwner(),
+        ),
+    )
+
+    result = await service.list(session_id)
+
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_019b7fe1fe727dcf8650ad9c92cb293e"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    registry = build_background_registry(sessions_dir)
+
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
+    terminal_owner = FakeTerminalResourceOwner(
+        terminals=[
+            {
+                "terminal_id": "term_cleanup",
+                "session_id": session_id,
+            }
+        ],
+    )
+    browser_owner = FakeBrowserResourceOwner(
+        browsers=[
+            {
+                "browser_id": "browser_cleanup",
+                "session_id": session_id,
+                "status": "running",
+                "created_at": "2026-07-05T01:02:03+00:00",
+                "updated_at": "2026-07-05T01:02:04+00:00",
+            }
+        ],
+    )
+    job_service = FakeJobService(count=2)
+    service = SessionStopService(
+        sessions=FakeSessionService(), jobs=job_service, interrupt=None,
+        resources=_provider_registry(
+            task_registry=registry, terminal_owner=terminal_owner, browser_owner=browser_owner,
+        ), debug=SimpleNamespace(drain_session=AsyncMock()), policy=None,
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
+    )
+
+    assert await service.drain_for_deletion(session_id) is None
+    assert job_service.deleted_session_id == session_id
+    assert registry.list_handles(session_id) == []
+    assert terminal_owner.deleted_terminal_ids == ["term_cleanup"]
+    assert terminal_owner.cleaned_session_ids == [session_id]
+    assert browser_owner.deleted_browser_ids == ["browser_cleanup"]
+    deleted = registry.get_handle(session_id, handle.task_id)
+    assert deleted is not None and deleted.status == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_cancel_background_task_does_not_inject_monitor_reminder(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_019c74e9583b7f338610345dcba9c87a"
+    sessions_dir = tmp_path / ".boxteam" / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
+    owner = saver.forks.source.resolve_main_thread_owner(session_id)
+    saver.accept_turn(
+        session_id, thread_id=owner.thread_id, accepted_ingress_id="request-cancel-monitor",
+        acceptance_idempotency_key="acceptance-cancel-monitor", job_id="job-cancel-monitor",
+        admission_idempotency_key="admission-cancel-monitor", payload="请监控另一个会话的最终回复",
+        payload_kind=PayloadKind.TEXT, turn_id="turn-cancel-monitor",
+        root_item_id="item-cancel-monitor", initial_execution_id="execution-cancel-monitor",
+    )
+
+    registry = build_background_registry(sessions_dir)
+
+    handle = await spawn_waiting_task(registry, sessions_dir, session_id)
+    message_service = build_message_service(sessions_dir, checkpointer=saver)
+    service = SessionResourceService(
+        session_service=FakeSessionService(),
+        provider_registry=_provider_registry(
+            task_registry=registry,
+            terminal_owner=FakeTerminalResourceOwner(),
+            browser_owner=FakeBrowserResourceOwner(),
+        ),
+    )
+
+    result = await service.control(
+        session_id=session_id,
+        kind="background_task",
+        resource_id=handle.task_id,
+        action="cancel",
+        operation_id="request-resource-test",
+    )
+
+    assert result.status == "cancelled"
+    state = await message_service.get_agent_state_messages(session_id)
+    records = [
+        json.loads(line)
+        for line in state.jsonl.splitlines()
+        if line.strip()
+    ]
+    # 有界等待不产生可取消监控后台任务；普通后台任务取消不注入监控提醒。
+    assert all("resource_cancel" not in str(record.get("response_metadata", {})) for record in records)

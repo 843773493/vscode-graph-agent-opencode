@@ -36,9 +36,9 @@ from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.workspaces_managed import router as managed_workspaces_router
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -142,19 +142,18 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
         )
         config = commentjson.loads(config_path.read_text())
-        for provider in config["llm"]["providers"]:
-            provider.update({
-                "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1", "model": "e2e-stub-model",
-                "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
-                "api_mode": {
-                    "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                    "supports_reasoning": {"reasoning_content": False},
-                },
-            })
-            provider.pop("auth", None)
-            provider.pop("request_options", None)
+        provider = config["llm"]["providers"]["primary"]
+        provider["defaults"] = {
+            "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1",
+            "api_key": "", "custom_llm_provider": "openai",
+            "api_mode": {
+                "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                "supports_reasoning": {"reasoning_content": False},
+            },
+        }
+        provider["models"]["default"]["model"] = "e2e-stub-model"
         for agent in config["agents"].values():
-            agent["model"]["fallback_providers"] = []
+            agent["model"]["fallbacks"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
     with ExitStack() as resources, model_stream_replay(
@@ -238,7 +237,7 @@ async def root_binding_relay_client(
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
     app.state.registry = registry
-    app.state.port_forward_manager = SshPortForwardManager(
+    app.state.port_forward_manager = PortForwardManager(
         registry=registry, storage_path=source_root / "port-forwards.json", log_dir=source_root / "logs",
     )
     app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(

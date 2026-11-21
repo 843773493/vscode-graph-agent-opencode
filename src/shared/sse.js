@@ -2,6 +2,13 @@
  * 标准 SSE 帧解析与流消费器。这里只处理传输语义，不解释业务 DTO。
  */
 
+export class SseProtocolError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = 'SseProtocolError';
+  }
+}
+
 export function defineSseEvent(decode, handle) {
   return { decode, handle };
 }
@@ -11,8 +18,9 @@ export function decodeJsonSseData(data, frame) {
     return JSON.parse(data);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
+    throw new SseProtocolError(
       `SSE JSON 无法解析: event=${frame.event} id=${frame.id ?? ''} error=${detail}`,
+      { cause: error },
     );
   }
 }
@@ -92,12 +100,12 @@ function readStreamChunk(reader, { idleTimeoutMs, idleTimeoutError, signal }, re
 function assertEventStreamResponse(response) {
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('text/event-stream')) {
-    throw new Error(
+    throw new SseProtocolError(
       `SSE 响应 Content-Type 错误: ${contentType || '<missing>'}`,
     );
   }
   if (!response.body) {
-    throw new Error('SSE 响应缺少可读 body');
+    throw new SseProtocolError('SSE 响应缺少可读 body');
   }
 }
 
@@ -107,14 +115,18 @@ function yieldBetweenEvents() {
   });
 }
 
+const EVENT_BATCH_TIME_MS = 8;
+
 export async function consumeSseResponse(response, options) {
   assertEventStreamResponse(response);
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
-  let buffer = '';
+  const frameParts = [];
+  let pendingLineFeed = false;
   let pendingCarriageReturn = false;
   let reachedEnd = false;
   let readFailed = false;
+  let yieldDeadline = performance.now() + EVENT_BATCH_TIME_MS;
   const readError = (cause) => {
     readFailed = true;
     return options.readError?.(cause) ?? cause;
@@ -132,14 +144,17 @@ export async function consumeSseResponse(response, options) {
       ? options.events[frame.event]
       : options.events['*'];
     if (!definition) {
-      throw new Error(`未注册的 SSE 事件类型: ${frame.event}`);
+      throw new SseProtocolError(`未注册的 SSE 事件类型: ${frame.event}`);
     }
     definition.handle(definition.decode(frame.data, frame), frame);
   };
 
   try {
     while (true) {
+      const readStarted = performance.now();
       const { done, value } = await readStreamChunk(reader, options, readError);
+      // 网络等待不消耗处理时间片；已缓冲的多个网络 chunk 共用同一预算。
+      yieldDeadline += performance.now() - readStarted;
       if (value && value.byteLength > 0) {
         options.onActivity?.();
       }
@@ -156,29 +171,42 @@ export async function consumeSseResponse(response, options) {
         decoded += '\r';
         pendingCarriageReturn = false;
       }
-      const normalizedChunk = decoded.includes('\r')
+      let chunk = decoded.includes('\r')
         ? decoded.replace(/\r\n|\r/g, '\n')
         : decoded;
-      buffer += normalizedChunk;
+      // 只扫描新片段；跨片段仅携带末尾换行，完整帧交付时再合并正文。
+      if (pendingLineFeed) {
+        chunk = `\n${chunk}`;
+      }
 
       let frameStart = 0;
-      let boundaryIndex = buffer.indexOf('\n\n');
-      while (boundaryIndex !== -1) {
-        dispatchBlock(buffer.slice(frameStart, boundaryIndex));
+      let boundaryIndex = chunk.indexOf('\n\n');
+      while (boundaryIndex !== -1 && !options.signal?.aborted) {
+        frameParts.push(chunk.slice(frameStart, boundaryIndex));
+        dispatchBlock(frameParts.join(''));
+        frameParts.length = 0;
         frameStart = boundaryIndex + 2;
-        boundaryIndex = buffer.indexOf('\n\n', frameStart);
-        if (boundaryIndex !== -1 && options.yieldBetweenEvents) {
-          buffer = buffer.slice(frameStart);
-          boundaryIndex -= frameStart;
-          frameStart = 0;
-          await yieldBetweenEvents();
+        boundaryIndex = chunk.indexOf('\n\n', frameStart);
+        if (options.yieldBetweenEvents) {
+          // 逐帧保留微任务交接，长批次才让出主线程，避免每帧触发浏览器 4ms 定时器限制。
+          if (performance.now() >= yieldDeadline) {
+            await yieldBetweenEvents();
+            yieldDeadline = performance.now() + EVENT_BATCH_TIME_MS;
+          } else if (boundaryIndex !== -1) {
+            await Promise.resolve();
+          }
         }
       }
-      if (frameStart > 0) {
-        buffer = buffer.slice(frameStart);
+      if (options.signal?.aborted) return;
+      pendingLineFeed = frameStart < chunk.length && chunk.endsWith('\n');
+      const remainder = chunk.slice(frameStart, pendingLineFeed ? -1 : undefined);
+      if (remainder) {
+        frameParts.push(remainder);
       }
       if (done) {
         reachedEnd = true;
+        if (pendingLineFeed) frameParts.push('\n');
+        const buffer = frameParts.join('');
         if (buffer.trim()) {
           dispatchBlock(buffer);
         }

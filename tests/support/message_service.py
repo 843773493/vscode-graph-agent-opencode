@@ -36,7 +36,7 @@ def accept_queued_message(service: MessageService, message: MessageDTO) -> None:
         admission_idempotency_key=create_prefixed_id("adm"),
     )
     service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-        execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+        execution_binding=identity, message_id=message.message_id, agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=message.created_at.isoformat(),
     ))
 

@@ -42,7 +42,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     _plugin,
     _publish,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.plugin_package import install_plugin_async
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -91,10 +91,10 @@ async def provider_case(
     _save(definitions, {"probe": _SCHEMA})
     config_path = Path(integration_workspace_config_path)
     config = cast(dict, read_jsonc_object(config_path))
-    provider = next(value for value in config["llm"]["providers"] if value["id"] == "backup_3")
-    config["llm"]["providers"] = [provider]
+    provider = config["llm"]["providers"]["backup_3"]
+    config["llm"]["providers"] = {"backup_3": provider}
     for agent in config["agents"].values():
-        agent["model"] = {"primary_provider": "backup_3", "fallback_providers": []}
+        agent["model"] = {"primary": {"provider_id": "backup_3", "model_id": "default"}, "fallbacks": []}
     # 保留既有 Provider 请求设置；测试不增加采样、reasoning 或输出限制。
     config["agents"]["default"]["tools"]["custom"] = [{"tool_id": "connections.manage"}]
     config["agents"]["default"]["tools"]["confirmation_required"] = []
@@ -237,9 +237,9 @@ async def test_real_provider_discovers_complete_schema_and_records_cache_usage(p
         ("继续使用刚才已发现的 probe 完整定义，再分别调用 lane=left 和 lane=right 各一次。"
         "收到两份真实回执后只回复 MCP_PROVIDER_REUSE_OK。"),
     ), 1):
-        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         entry = response.json()["data"]
         jobs.append(entry["job_id"])

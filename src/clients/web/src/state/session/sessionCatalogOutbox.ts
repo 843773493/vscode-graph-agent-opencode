@@ -30,7 +30,7 @@ export type CatalogOutboxLocalState = "pending_local" | "persisted" | "accepted"
 export type CatalogOutboxOperationState = CatalogOutboxLocalState | NavigationMutationState;
 
 export interface CatalogOutboxPartition {
-  /** 稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。 */
+  /** 资源所属 Gateway 的稳定身份，不使用监听端口或登记入口代替。 */
   gatewayId: string;
   workspaceId: string;
   /** 持久分区：当前使用 `local`；旧账户分区保留原件，不接管或重放。 */

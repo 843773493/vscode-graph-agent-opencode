@@ -30,7 +30,10 @@ from tests.integration.workspace_services.test_resource_release import (
 )
 from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
-from tests.support.workspaces import render_test_workspace_config
+from tests.support.workspaces import (
+    clear_test_provider_api_keys,
+    render_test_workspace_config,
+)
 
 
 @pytest.fixture
@@ -41,10 +44,7 @@ def resource_workspace(
     # 此测试不调用模型，仅覆盖资源入口；隔离配置不能依赖个人 Provider 凭据。
     config_path = root / ".boxteam/workspace.jsonc"
     config = json.loads(render_test_workspace_config(config_path.read_text(encoding="utf-8")))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "resource-record-unused-key"
-        provider["endpoint"] = "http://127.0.0.1:1/v1"
-        provider.pop("auth", None)
+    clear_test_provider_api_keys(config, endpoint="http://127.0.0.1:1/v1")
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     return browser_client
 

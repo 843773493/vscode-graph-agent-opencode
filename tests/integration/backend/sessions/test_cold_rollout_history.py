@@ -17,14 +17,13 @@ from pathlib import Path
 import httpx
 import portalocker
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
-from app.api import jobs, messages, search, session_turns
+from app.api import jobs, messages, search, session_turns, sessions
 from app.api.deps import (
-    get_event_service,
     get_job_service,
     get_message_service,
-    get_request_id,
     get_session_orchestrator,
     get_session_service,
     get_session_turn_history_service,
@@ -46,7 +45,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     _RolloutFileLock,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _child,
@@ -54,10 +53,18 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     _session,
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    recording_runtime_case as recording_runtime_case,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case as runner_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
+)
+from tests.support.api_helpers import (
+    read_job_trace,
+    running_job_dispatch_snapshot,
+    with_message_run_operation_id,
 )
 
 
@@ -68,16 +75,16 @@ async def history_client(runtime_case: RuntimeCase) -> AsyncIterator[httpx.Async
     application.include_router(search.router, prefix="/api/v1")
     application.include_router(messages.router, prefix="/api/v1")
     application.include_router(jobs.router, prefix="/api/v1")
+    application.include_router(sessions.router, prefix="/api/v1")
     container = runtime_case.runner.container
     application.dependency_overrides[get_job_service] = lambda: container.job_service
-    application.dependency_overrides[get_event_service] = lambda: container.event_service
     application.dependency_overrides[get_session_service] = lambda: container.session_service
     application.dependency_overrides[get_workspace_search_service] = lambda: container.workspace_search_service
     application.dependency_overrides[get_message_service] = lambda: container.message_service
     application.dependency_overrides[get_session_orchestrator] = lambda: container.session_orchestrator
     application.dependency_overrides[get_session_turn_replay_service] = lambda: container.session_turn_replay_service
     application.dependency_overrides[get_session_turn_history_service] = (
-        lambda: runtime_case.runner.container.session_turn_history_service
+        lambda: container.session_turn_history_service
     )
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     application.dependency_overrides[get_request_id] = lambda: "request-cold-history"
@@ -101,9 +108,9 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
         for thread_id in (main, child):
             for index in range(2):
                 endpoint = base + ("" if thread_id == main else f"/threads/{thread_id}")
-                response = await history_client.post(endpoint + "/messages", json={
+                response = await history_client.post(endpoint + "/messages", json=with_message_run_operation_id({
                     "message": {"content": f"{thread_id} 第 {index + 1} 条真实输入"}, "run": {},
-                })
+                }))
                 assert response.status_code == 200, response.text
                 data = response.json()["data"]
                 assert data["thread_id"] == thread_id
@@ -116,7 +123,14 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
         # 此 runner fixture 不安装 Trace sink；为已完成的真实 child Job 写入游标见证。
         await container.trace_event_store.append(session_id, JobStartedEvent(
             event_id="evt_thread_bootstrap_witness", job_id=accepted[child][-1]["job_id"],
-            timestamp=datetime.now(UTC), payload=JobStartedPayload(session_id=session_id, thread_id=child),
+            timestamp=datetime.now(UTC), payload=JobStartedPayload(
+                session_id=session_id,
+                thread_id=child,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, child, accepted[child][-1]["job_id"],
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
         bootstrap = await history_client.get(base + "/bootstrap")
         assert bootstrap.status_code == 200, bootstrap.text
@@ -199,10 +213,10 @@ async def materialized_history_owner(runtime_case: RuntimeCase) -> tuple[str, st
 
 
 async def test_public_pending_and_job_control_preserve_real_thread_owner(
-    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+    recording_runtime_case: RuntimeCase, history_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """真实 main/child 并行执行时，队列聚合、定点修改与取消保持原 owner。"""
-    case = runtime_case
+    case = recording_runtime_case
     container = case.runner.container
     session_id, main = await _session(case.runner)
     child = await _child(case, session_id)
@@ -235,7 +249,7 @@ async def test_public_pending_and_job_control_preserve_real_thread_owner(
 
     async def send(thread: str, content: str):
         endpoint = base + ("" if thread == main else f"/threads/{thread}") + "/messages"
-        response = await history_client.post(endpoint, json={"message": {"content": content}, "run": {}})
+        response = await history_client.post(endpoint, json=with_message_run_operation_id({"message": {"content": content}, "run": {}}))
         assert response.status_code == 200, response.text
         data = response.json()["data"]
         assert data["thread_id"] == data["dispatch"]["thread_id"] == thread
@@ -291,7 +305,7 @@ async def test_public_pending_and_job_control_preserve_real_thread_owner(
                 job_id = active[thread]["job_id"]
                 detail = await request("GET", f"/api/v1/jobs/{job_id}")
                 assert (detail["session_id"], detail["thread_id"], detail["job_id"]) == (session_id, thread, job_id)
-                events = await request("GET", f"/api/v1/jobs/{job_id}/events")
+                events = await read_job_trace(history_client, session_id, job_id)
                 assert events and {event["job_id"] for event in events} == {job_id}
                 owners = [event["payload"] for event in events if event["type"] in {"job_created", "job_started"}]
                 assert owners and {(row["session_id"], row["thread_id"]) for row in owners} == {(session_id, thread)}

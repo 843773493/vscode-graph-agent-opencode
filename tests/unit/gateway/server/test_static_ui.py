@@ -1,3 +1,4 @@
+import gzip
 import json
 import logging
 from collections.abc import Iterator
@@ -7,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.gateway.auxiliary_proxy import router as attach_router
 from app.gateway.server.static_ui import install_static_web_ui
 
 
@@ -39,6 +41,40 @@ def test_static_ui_serves_assets_and_spa_fallback(
     assert static_ui_client.get("/").text == "<main>BoxTeam UI</main>"
     assert static_ui_client.get("/assets/main.js").text == "globalThis.boxteam=true;"
     assert static_ui_client.get("/sessions/ses_test").text == "<main>BoxTeam UI</main>"
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("split_frontend", [False, True])
+def test_attach_assets_follow_selected_frontend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, split_frontend: bool,
+) -> None:
+    backend = tmp_path / "backend"
+    frontend = tmp_path / "frontend" if split_frontend else backend
+    for root in {backend, frontend}:
+        root.mkdir()
+        (root / "pyproject.toml").touch()
+    monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(backend))
+    if split_frontend:
+        monkeypatch.setenv("BOXTEAM_FRONTEND_ROOT", str(frontend))
+    else:
+        monkeypatch.delenv("BOXTEAM_FRONTEND_ROOT", raising=False)
+    files = {
+        "index.html": frontend / f"src/workspace-services/{kind}/client/index.html",
+        "vendor/codicon/codicon.css": frontend / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
+        "vendor/codicon/codicon.ttf": frontend / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
+    }
+    if kind == "terminal":
+        files["vendor/xterm/addon-unicode11.js"] = frontend / "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"
+    for asset, file in files.items():
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(f"selected frontend {asset}", encoding="utf-8")
+    app = FastAPI()
+    app.include_router(attach_router)
+    with TestClient(app) as client:
+        for asset in files:
+            response = client.get(f"/api/gateway/attach/{kind}/{asset}")
+            assert response.status_code == 200
+            assert response.text == f"selected frontend {asset}"
 
 
 def test_static_ui_normalizes_backslash_mount_paths(
@@ -125,3 +161,30 @@ def test_oauth_callback_is_not_cached_and_access_log_omits_private_query(
     assert '"GET /mcp-oauth-callback.html HTTP/1.1" 200' in caplog.text
     assert "private-code" not in caplog.text and "private-state" not in caplog.text
     assert "/api/gateway/workspaces?view=details" in caplog.text
+
+
+@pytest.mark.parametrize("encoding,compressed", [("gzip, deflate, br", True), ("identity", False), ("gzip;q=0, *;q=1", False)])
+def test_precompressed_asset_preserves_body_and_cache_variants(tmp_path: Path, encoding: str, compressed: bool) -> None:
+    write_assets(tmp_path)
+    name = "assets/chunk-ABC12345.js"
+    body = b"globalThis.boxteam=true;" * 100
+    (tmp_path / name).write_bytes(body)
+    packed = gzip.compress(body)
+    (tmp_path / f"{name}.gz").write_bytes(packed)
+    (tmp_path / "immutable-assets.json").write_text(json.dumps([name, f"{name}.gz"]))
+    app = FastAPI()
+    install_static_web_ui(app, assets_root=tmp_path)
+    with TestClient(app) as client:
+        response = client.get(f"/{name}", headers={"Accept-Encoding": encoding})
+        assert response.content == body
+        assert response.headers.get("content-encoding") == ("gzip" if compressed else None)
+        assert response.headers["content-type"].startswith(("text/javascript", "application/javascript"))
+        assert response.headers["content-length"] == str(len(packed) if compressed else len(body))
+        assert response.headers["vary"] == "Accept-Encoding"
+        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert client.head(f"/{name}", headers={"Accept-Encoding": encoding}).headers["content-length"] == response.headers["content-length"]
+        unchanged = client.get(f"/{name}", headers={"Accept-Encoding": encoding, "If-None-Match": response.headers["etag"]})
+        assert unchanged.status_code == 304 and unchanged.content == b""
+        assert unchanged.headers["vary"] == "Accept-Encoding"
+        other = client.get(f"/{name}", headers={"Accept-Encoding": "identity" if compressed else "gzip", "If-None-Match": response.headers["etag"]})
+        assert other.status_code == 200 and other.content == body

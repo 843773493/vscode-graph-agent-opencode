@@ -30,7 +30,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 两轮执行共用真实应用 lifespan。
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 原预览异常触发真实 ENOTDIR。
@@ -98,10 +98,10 @@ async def test_failed_preview_keeps_uri_through_execution_and_cold_history(
     )
     first_call, = await case.plan(session_id, [{"content": "已检查附件。"}])
     with caplog.at_level(logging.ERROR, logger="app.core.failures"):
-        response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
             "message": {"content": "请检查附件", "attachments": [attachment.model_dump(mode="json")]},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         accepted = MessageRunAccepted.model_validate(response.json()["data"])

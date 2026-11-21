@@ -2,7 +2,9 @@
 
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.storage.schema import (
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
 )
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
@@ -34,6 +36,14 @@ def test_schema24_upgrade_preserves_sealed_bytes_and_current_skill(epoch_case):
     storage.migrate_schema(
         case.owner.thread_id, session_id=case.owner.session_id, to_version=26,
         migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
+    storage.migrate_schema(
+        case.owner.thread_id, session_id=case.owner.session_id, to_version=27,
+        migration_name="execution_queue_026_027", migration_sql=EXECUTION_SCHEDULING_MIGRATION_SQL,
+    )
+    storage.migrate_schema(
+        case.owner.thread_id, session_id=case.owner.session_id, to_version=28,
+        migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
     )
     assert path.read_bytes() == old_jsonl
     assert canonical_json_bytes(case.snapshot({"assembly_id": original.assembly_id}).to_dict()) == old_bytes

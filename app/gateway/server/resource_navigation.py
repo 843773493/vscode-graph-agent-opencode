@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 
@@ -14,7 +15,6 @@ from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
 )
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,
@@ -30,13 +30,13 @@ from app.gateway.federation.errors import (
     FEDERATION_TARGET_OWNER_REJECTED,
     FederationError,
 )
-from app.gateway.federation.grants import ResourceNavigationGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
     _registry,
 )
+from app.schemas.gateway.federation_targets import ResourceNavigationGrantTarget
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ResourceNavigationRelayRequest
 from app.schemas.internal_v2.resource_navigation import (

@@ -466,7 +466,7 @@ class CreationJournalMixin:
                 session_id, workspace_id, parent_node_id, display_name,
                 created_at, locator, main_thread_id, title_source,
                 current_agent_id=metadata["current_agent_id"],
-                current_provider_id=metadata["current_provider_id"],
+                current_model_json=metadata["current_model_json"],
                 session_kind=metadata["kind"],
                 context_source_session_id=metadata["context_source_session_id"],
                 generation_origin_json=(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from shutil import rmtree
@@ -30,17 +31,18 @@ from app.api.deps import (
     get_thread_residency_tracker,
 )
 from app.api.sessions import list_session_child_threads, router
+from app.core.path_utils import SessionCatalogComponents, workspace_context
 from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.schemas.internal_v2.team import TeamListDTO
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.mapping.itemized.thread_seed import frozen_thread_seed
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
@@ -48,17 +50,15 @@ from app.services.orchestration.owner_thread_creation_factory import (
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
-WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 SUBAGENT_TYPE = "general-purpose"
 
 
 @pytest.fixture()
 def catalog_workspace_context(tmp_path: Path):
-    workspace_context = build_catalog_workspace(tmp_path, workspace_id=WORKSPACE_ID)
-    try:
-        yield workspace_context
-    finally:
-        workspace_context.close()
+    with build_catalog_workspace(tmp_path, workspace_id=load_or_create_workspace_id(tmp_path / "workspace")) as context:
+        components = SessionCatalogComponents(context.sessions_root, context.resolver, context.creation_service)
+        with workspace_context(context.workspace_id, context.workspace_root, session_catalog=components):
+            yield context
 
 
 @pytest.fixture()
@@ -68,7 +68,7 @@ def session_service(catalog_workspace_context) -> SessionService:
         trace_event_store=TraceEventStore(
             sessions_dir=catalog_workspace_context.sessions_root
         ),
-        workspace_id=WORKSPACE_ID,
+        workspace_id=catalog_workspace_context.workspace_id,
         path_resolver=catalog_workspace_context.resolver,
         creation_service=catalog_workspace_context.creation_service,
     )
@@ -87,7 +87,7 @@ def checkpoint_saver(catalog_workspace_context) -> RolloutCheckpointSaver:
 @pytest.fixture
 def team_coordination_service() -> AsyncMock:
     team_service_mock = AsyncMock(spec=TeamCoordinationService)
-    team_service_mock.list_teams.return_value = TeamListDTO(items=[])
+    team_service_mock.list_summaries.return_value = []
     return team_service_mock
 
 
@@ -97,7 +97,7 @@ def owner_thread_creation_factory(
 ) -> OwnerThreadCreationFactory:
     owner_factory = OwnerThreadCreationFactory(
         sessions_root=catalog_workspace_context.sessions_root,
-        workspace_id=WORKSPACE_ID,
+        workspace_id=catalog_workspace_context.workspace_id,
         path_resolver=catalog_workspace_context.resolver,
     )
     return owner_factory
@@ -238,7 +238,7 @@ async def test_child_threads_api_returns_thread_payload(
     assert data.parent_session_id == parent_session_id
     assert data.total == 1
     assert data.teams == []
-    team_coordination_service.list_teams.assert_awaited_once_with(
+    team_coordination_service.list_summaries.assert_awaited_once_with(
         requester_session_id=parent_session_id,
         requester_thread_id=await session_service.resolve_main_thread(
             parent_session_id
@@ -446,7 +446,9 @@ async def test_child_threads_pending_read_does_not_materialize_rollout(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_read", [False, True])
 async def test_child_thread_report_read_blocks_real_delete_until_response_is_complete(
+    cancel_read: bool,
     catalog_workspace_context,
     session_service: SessionService,
     owner_thread_creation_factory: OwnerThreadCreationFactory,
@@ -474,36 +476,44 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         )
     query_paused, continue_query = asyncio.Event(), asyncio.Event()
     delete_attempted, delete_admitted = asyncio.Event(), asyncio.Event()
-    original_exclusive = catalog_workspace_context.delete_service._gate.exclusive
+    original_exclusive = catalog_workspace_context.delete_service._session_gate.exclusive
 
     @asynccontextmanager
-    async def observe_delete_admission():
+    async def observe_delete_admission(session_id):
         delete_attempted.set()
-        async with original_exclusive():
+        async with original_exclusive(session_id):
             delete_admitted.set()
             yield
 
     async def pause_teams(**kwargs):
         query_paused.set()
         await continue_query.wait()
-        return TeamListDTO(items=[])
+        return []
 
     original_outcome = checkpoint_saver.runtime_execution_outcome
     report_reads = []
+    report_started = asyncio.Event()
+    resume_report = threading.Event()
+    loop = asyncio.get_running_loop()
 
     def read_report(session_id, current_thread_id, execution_id):
         assert not delete_admitted.is_set()
         assert final_dir.is_dir()
         report_reads.append((session_id, current_thread_id, execution_id))
+        loop.call_soon_threadsafe(report_started.set)
+        if not resume_report.wait(timeout=3):
+            raise TimeoutError("测试报告读取屏障未释放")
+        assert not delete_admitted.is_set()
+        assert final_dir.is_dir()
         return original_outcome(session_id, current_thread_id, execution_id)
 
     monkeypatch.setattr(
-        catalog_workspace_context.delete_service._gate,
+        catalog_workspace_context.delete_service._session_gate,
         "exclusive",
         observe_delete_admission,
     )
     monkeypatch.setattr(checkpoint_saver, "runtime_execution_outcome", read_report)
-    team_coordination_service.list_teams.side_effect = pause_teams
+    team_coordination_service.list_summaries.side_effect = pause_teams
     query = asyncio.create_task(
         list_session_child_threads(
             parent_id,
@@ -526,10 +536,22 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         )
         await asyncio.wait_for(delete_attempted.wait(), timeout=3)
         assert not delete_admitted.is_set()
-        assert catalog_workspace_context.node(parent_id).state == "active"
+        assert catalog_workspace_context.node(parent_id).state == "deleting"
         continue_query.set()
-        response = await asyncio.wait_for(query, timeout=3)
-        assert response.data.items[0].admission_state == "bound"
+        await asyncio.wait_for(report_started.wait(), timeout=3)
+        if cancel_read:
+            query.cancel()
+        # 磁盘读取未结束时事件循环仍可前进；取消不能提前放行删除。
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(query), timeout=0.05)
+        assert not delete_admitted.is_set()
+        resume_report.set()
+        if cancel_read:
+            with pytest.raises(asyncio.CancelledError):
+                await query
+        else:
+            response = await asyncio.wait_for(query, timeout=3)
+            assert response.data.items[0].admission_state == "bound"
         assert report_reads == [(parent_id, thread_id, intent.execution_binding_id)]
         await asyncio.wait_for(delete, timeout=3)
         assert delete_admitted.is_set()
@@ -537,6 +559,7 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         with pytest.raises(KeyError):
             catalog_workspace_context.node(parent_id)
     finally:
+        resume_report.set()
         continue_query.set()
         for task in (query, delete):
             if task is not None and not task.done():

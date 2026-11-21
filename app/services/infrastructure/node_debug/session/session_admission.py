@@ -41,7 +41,7 @@ class NodeDebugSessionAdmission:
         """在整个 owner 操作期间只持有目标 Session 的写准入 gate。"""
         owner_yielded = False
         try:
-            async with self._session_service.session_write_admission(session_id):
+            async with self._session_service.session_write_admission(session_id, new_operation=True):
                 await self._session_service.get(session_id)
                 try:
                     resolved_thread_id = (

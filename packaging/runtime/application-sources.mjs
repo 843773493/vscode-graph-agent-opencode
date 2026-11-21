@@ -1,5 +1,6 @@
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { buildPluginSdk } from "../../scripts/plugins/build-sdk.mjs";
 
 const PYTHON_CACHE_DIRECTORY_PATH = `${path.sep}__pycache__${path.sep}`;
 
@@ -53,11 +54,6 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
     copyOptions,
   );
   cpSync(
-    path.join(projectRoot, "src", "workspace-services", "protocol"),
-    path.join(applicationRoot, "src", "workspace-services", "protocol"),
-    copyOptions,
-  );
-  cpSync(
     path.join(projectRoot, "pyproject.toml"),
     path.join(applicationRoot, "pyproject.toml"),
   );
@@ -67,10 +63,21 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
     "node_modules/@xterm/xterm/lib/xterm.js",
     "node_modules/@xterm/addon-fit/lib/addon-fit.js",
     "node_modules/@xterm/addon-search/lib/addon-search.js",
+    "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js",
     "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
     "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
   ]) {
     mkdirSync(path.dirname(path.join(applicationRoot, relative)), { recursive: true });
     cpSync(path.join(projectRoot, relative), path.join(applicationRoot, relative));
   }
+}
+
+export function writeApplicationNodeManifest(projectRoot, applicationRoot) {
+  const sdk = buildPluginSdk({ projectRoot, language: "node" });
+  const relative = `vendor/sdk/${sdk.digest}/${path.basename(sdk.archive)}`;
+  mkdirSync(path.dirname(path.join(applicationRoot, relative)), { recursive: true });
+  cpSync(sdk.archive, path.join(applicationRoot, relative));
+  const manifest = JSON.parse(readFileSync(path.join(projectRoot, "packaging/runtime/node-package.json"), "utf8"));
+  manifest.dependencies["@boxteam/plugin-sdk"] = `file:${relative}`;
+  writeFileSync(path.join(applicationRoot, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
 }

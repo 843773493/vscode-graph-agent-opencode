@@ -56,6 +56,7 @@ from app.core.thread_creation import (
     validate_thread_session_metadata,
     verify_node_directory,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import thread_id_for_name_at
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
@@ -171,7 +172,7 @@ async def owner(
             "delegation": None,
             "generation_origin": None,
             "current_agent_id": "default",
-            "current_provider_id": "default_provider",
+            "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
             "context_source_session_id": None,
         },
     )

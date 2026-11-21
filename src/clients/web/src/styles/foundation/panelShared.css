@@ -1,4 +1,5 @@
 .panel-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -7,19 +8,21 @@
 }
 
 .panel-view .panel-header {
-  min-height: 40px;
+  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 12px;
+  padding: 0 8px;
   border-bottom: var(--bt-surface-border);
   flex: 0 0 auto;
   min-width: 0;
 }
 
 .panel-view .panel-title {
-  font-size: 12px;
+  flex-shrink: 0;
+  max-width: 50%;
+  font-size: var(--bt-font-size);
   font-weight: 700;
   min-width: 0;
   overflow: hidden;
@@ -35,7 +38,8 @@
   gap: 8px;
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
+  font-weight: 400;
 }
 
 .panel-view .panel-header-meta,
@@ -44,7 +48,7 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   max-width: 100%;
-  line-height: 1.35;
+  line-height: var(--bt-line-height-small);
 }
 
 .panel-view .panel-header-meta span,
@@ -60,7 +64,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 10px 10px 220px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -71,7 +75,7 @@
   border: var(--bt-surface-border);
   border-radius: 8px;
   background: var(--bt-input-background);
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -91,7 +95,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   font-weight: 700;
 }
 
@@ -102,7 +106,7 @@
   padding: 2px 6px;
   background: var(--bt-badge-background);
   color: var(--bt-badge-foreground);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   font-weight: 600;
 }
 
@@ -115,7 +119,7 @@
 
 .panel-view .panel-meta {
   flex-wrap: wrap;
-  line-height: 1.4;
+  line-height: var(--bt-line-height-small);
 }
 
 .panel-view .panel-meta span {
@@ -134,7 +138,7 @@
   cursor: pointer;
   padding: 6px 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   user-select: none;
 }
 
@@ -153,6 +157,21 @@
     "Liberation Mono",
     monospace
   );
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   line-height: 1.5;
 }
+
+/* 临时反馈脱离正文布局；刷新和错误不能改变列表、编辑器或终端的可用尺寸。 */
+.panel-feedback-host { position: relative; }
+.panel-feedback {
+  position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px;
+  box-sizing: border-box; max-height: min(40%, 120px); overflow: auto;
+  padding: 4px 8px; margin: 0; font-size: var(--bt-font-size-small); line-height: 20px;
+  overflow-wrap: anywhere; white-space: pre-wrap;
+  background: var(--vscode-editorWidget-background, var(--bt-surface-background));
+  color: var(--vscode-descriptionForeground, var(--bt-text-muted));
+  border: 1px solid var(--vscode-editorWidget-border, var(--bt-panel-border));
+}
+.panel-feedback[role="alert"], .panel-feedback [role="alert"] { color: var(--vscode-errorForeground, var(--bt-status-danger)); }
+.panel-feedback > p { margin: 0; }
+.panel-feedback:empty { display: none; }

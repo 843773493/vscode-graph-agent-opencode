@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -36,8 +36,8 @@ from app.domain.itemized.serde.runtime import (
     execution_record_to_dict,
 )
 from app.prompting.factory import PromptSection, internal_message_factory
-from app.services.business.system_reminder_checkpoint_service import (
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -73,6 +73,39 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
     )
 
 
+@pytest.mark.parametrize("invalid_input,error", [
+    ("missing_metadata", "缺少 structured_prompt metadata"),
+    ("missing_version", "schema version: None"),
+    ("bare_content", "不是合法标记结构"),
+])
+def test_internal_admission_rejects_unregistered_input_before_publishing(
+    saver: RolloutCheckpointSaver, invalid_input: str, error: str,
+) -> None:
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
+    intent = InternalExecutionIntent(message_id="msg-invalid", execution_id="exe-invalid",
+                                     admission_idempotency_key="admission-invalid")
+    message = _internal_notice(intent.message_id)
+    if invalid_input == "missing_metadata":
+        message.response_metadata.pop("message_metadata")
+        message.response_metadata["internal"] = True
+    elif invalid_input == "missing_version":
+        message.response_metadata["message_metadata"].pop("structured_prompt_schema_version")
+    else:
+        message.content = "未封装的新内部正文"
+    with pytest.raises(ValueError, match=error):
+        saver.admit_internal_execution(
+            SESSION_ID, thread_id=thread_id, job_id="job-invalid", intent=intent, message=message,
+        )
+    # 同一身份随后可正确准入，非法输入没有抢占幂等键或发布 notice。
+    accepted = saver.admit_internal_execution(
+        SESSION_ID, thread_id=thread_id, job_id="job-valid", intent=intent,
+        message=_internal_notice(intent.message_id),
+    )
+    assert accepted.job_id == "job-valid"
+    stored, = saver._storage.storage.read_items(SESSION_ID, thread_id, item_ids=(intent.notice_item_id,))
+    assert stored.payload["prompt"] == _internal_notice(intent.message_id).content
+
+
 @pytest.fixture
 def notice_turn_factory(saver: RolloutCheckpointSaver) -> Callable[[str], ExecutionAdmission]:
     def accept(suffix: str) -> ExecutionAdmission:
@@ -104,7 +137,7 @@ def test_pending_notice_selection_preserves_acceptance_cut_and_internal_owner(
     source_id = f"checkpoint:{kind}:notice-fence"
     notice_id = f"item-{source_id}"
     if timing == "prior_before_acceptance":
-        submit_checkpoint_reminder(
+        submit_runtime_reminder(
             checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
             reminder="真实接纳游标前的来源", response_metadata={"source": kind},
             checkpoint_source=kind, event_identity="notice-fence", execution_id=previous.execution_id,
@@ -119,7 +152,7 @@ def test_pending_notice_selection_preserves_acceptance_cut_and_internal_owner(
     )
     current = notice_turn_factory("current")
     if timing != "prior_before_acceptance":
-        submit_checkpoint_reminder(
+        submit_runtime_reminder(
             checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
             reminder="真实接纳游标后的来源", response_metadata={"source": kind},
             checkpoint_source=kind, event_identity="notice-fence",
@@ -246,11 +279,14 @@ def test_pending_runtime_wakeups_keep_admission_order_after_restart(
         remaining, = restarted.execution_queue_snapshot(SESSION_ID, thread_id).records
         assert remaining.cursor.admission.job_id == accepted[1].job_id
         assert remaining.cursor.commit_id == cursors[1]
-        assert restarted.runtime_execution_progress(cancelled).outcome == "cancelled"
-        progress = restarted.runtime_execution_progress(accepted[1])
+        assert restarted.execution_progress(cancelled.session_id, cancelled.thread_id, job_id=cancelled.job_id,
+                                             execution_id=cancelled.execution_id).outcome == "cancelled"
+        progress = restarted.execution_progress(accepted[1].session_id, accepted[1].thread_id,
+                                                job_id=accepted[1].job_id, execution_id=accepted[1].execution_id)
         assert progress.outcome == "unknown" and progress.total_tokens == 0
         with pytest.raises(RuntimeError, match="原准入 identity"):
-            restarted.runtime_execution_progress(replace(accepted[1], execution_id="another-execution"))
+            restarted.execution_progress(accepted[1].session_id, accepted[1].thread_id,
+                                         job_id=accepted[1].job_id, execution_id="another-execution")
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(

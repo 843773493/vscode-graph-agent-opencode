@@ -1,12 +1,14 @@
 """历史消息查询与独立定位的业务约束；公开结构以 proto 为准。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.internal_v2.llm_request_log import LLMRequestLogMatchDTO
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultDTO,
 )
+from app.schemas.internal_v2.trace_search import TraceMatchDTO
 
 
 class TurnMessageSearchRequest(BaseModel):
@@ -104,3 +106,70 @@ class ThreadToolResultListDTO(BaseModel):
     next_after: int | None = None
     source_view_id: str | None
     source_view_revision: int
+
+
+class CanonicalContextContentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["item"] = "item"
+    item_id: str = Field(min_length=1, max_length=256)
+
+
+class SealedContextContentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["sealed_contribution"] = "sealed_contribution"
+    session_id: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=256)
+    assembly_id: str = Field(min_length=1, max_length=256)
+    contribution_id: str = Field(min_length=1, max_length=256)
+
+
+ContextContentReference = Annotated[
+    CanonicalContextContentReference | SealedContextContentReference, Field(discriminator="kind"),
+]
+
+
+class ThreadItemInspectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_id: str | None = Field(default=None, min_length=1, max_length=256)
+    message_id: str | None = Field(default=None, min_length=1, max_length=256)
+    operation: Literal["location", "content_metadata", "content", "request", "trace"]
+    content_ref: ContextContentReference | None = None
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "ThreadItemInspectionRequest":
+        if sum(value is not None for value in (self.item_id, self.message_id, self.content_ref)) != 1:
+            raise ValueError("必须且只能提供一个真实 Item、消息 ID 或冻结内容引用")
+        if isinstance(self.content_ref, SealedContextContentReference) and self.operation != "content":
+            raise ValueError("冻结 contribution 引用仅用于读取来源正文")
+        return self
+
+
+class ThreadItemLocationDTO(BaseModel):
+    item_id: str
+    turn_id: str | None = None
+    execution_id: str | None = None
+    job_id: str | None = None
+    model_call_id: str | None = None
+    message_id: str | None = None
+    semantic_kind: str
+    content_hash: str
+    byte_length: int = Field(ge=0)
+
+
+class ThreadItemContentDTO(BaseModel):
+    name: str
+    language: str
+    content: str | None = None
+    uri: str | None = None
+    mime_type: str | None = None
+    encoding: Literal["utf-8", "base64"] | None = None
+
+
+class ThreadItemInspectionDTO(BaseModel):
+    location: ThreadItemLocationDTO | None = None
+    contents: list[ThreadItemContentDTO] = Field(default_factory=list)
+    request_log: "LLMRequestLogMatchDTO | None" = None
+    trace: "TraceMatchDTO | None" = None
+    content_ref: ContextContentReference | None = None

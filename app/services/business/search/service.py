@@ -5,8 +5,9 @@ import sqlite3
 from collections.abc import Awaitable, Callable, Coroutine
 from time import time
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.failures import failure_detail
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.search import (
     SearchProviderCapabilityDTO,
     WorkspaceSearchCapabilitiesDTO,

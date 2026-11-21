@@ -15,6 +15,7 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.orchestration import owner_thread_creation_factory as factory_module
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
@@ -68,7 +69,7 @@ async def _create_sessions(sessions_root: Path, count: int) -> list[str]:
                 "delegation": None,
                 "generation_origin": None,
                 "current_agent_id": "default",
-                "current_provider_id": "default_provider",
+                "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
                 "context_source_session_id": None,
             },
         )

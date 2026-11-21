@@ -44,6 +44,7 @@ from tests.harness.python.terminal_plugin import (
     TerminalPluginGateway,
     browser_plugin_gateway_for_workspace,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -280,7 +281,7 @@ def browser_context(browser_runtime: WorkspaceToolRuntime) -> CustomToolFactoryC
         session_id=session_id, agent_id="default", sender_agent_id="default",
         workspace_root=container.workspace_root,
         background_task_registry=container.background_task_registry,
-        background_message_bus=container.background_message_bus, job_event_bus=container.job_event_bus,
+        background_message_bus=container.background_mailbox, job_event_bus=container.job_event_bus,
         job_service=container.job_service, session_context_query_service=container.session_context_query_service,
         workspace_session_context_client=container.agent_execution_service._dependency_provider.get_workspace_session_context_client(),
         session_orchestrator=container.session_orchestrator, config_service=container.config_service,
@@ -863,12 +864,12 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
 
     message_response = await integration_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": "你看看当前后台连接的浏览器网站是什么。"
             },
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]
@@ -2645,7 +2646,7 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
                 prior_session, prior_thread, prior_job = previous
                 settled = container.checkpointer.execution_queue_record(prior_session, prior_thread, prior_job)
                 assert (settled.phase, settled.outcome) == ("terminal", "cancelled")
-                assert await container.pending_request_store.records(session_id=prior_session) == ()
+                assert await container.execution_queue_service.records(session_id=prior_session) == ()
             facts.append({"session_id": session_id, "thread_id": thread_id, "job_id": admission.job_id,
                           "message_id": record.input.message_id, "claim_generation": record.claim_generation})
             previous = session_id, thread_id, admission.job_id

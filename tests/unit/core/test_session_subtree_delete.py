@@ -18,6 +18,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -35,7 +37,7 @@ from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
     SubtreeDeleteResult,
 )
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.orchestration.session_stop import SessionStopService
 from tests.support.canonical_id_at import session_id_at, thread_id_at
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
@@ -587,23 +589,24 @@ async def test_resource_cleanup_reads_deleting_session_before_physical_isolation
             return object()
 
     class ObservingJobService:
-        async def delete_session_jobs(self, session_id: str) -> None:
+        async def stop_session_jobs(self, session_id: str) -> None:
             events.append(("jobs", session_id))
 
     class ObservingProviderRegistry:
-        async def cleanup_session(self, session_id: str) -> dict[str, int]:
+        async def cleanup_session(self, session_id: str, *, policy, thread_id=None) -> dict[str, int]:
             events.append(("providers", session_id))
             return {}
 
-    resource_service = SessionResourceService(
-        session_service=ObservingSessionService(),
-        job_service=ObservingJobService(),
-        provider_registry=ObservingProviderRegistry(),
+    resource_service = SessionStopService(
+        sessions=ObservingSessionService(), jobs=ObservingJobService(),
+        resources=ObservingProviderRegistry(), interrupt=None, policy=None,
+        debug=SimpleNamespace(drain_session=AsyncMock()),
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
     )
 
     async def composite_drain(session_id: str) -> None:
         events.append(("node_debug", session_id))
-        await resource_service.cleanup_session(session_id)
+        await resource_service.drain_for_deletion(session_id)
         events.append(("resource_done", session_id))
 
     service.set_session_drain_callback(composite_drain)

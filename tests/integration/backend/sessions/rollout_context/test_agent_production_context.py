@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain.agents.factory import _chain_model_call_handlers
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, SystemMessage
@@ -16,22 +17,23 @@ from langchain_core.tools import StructuredTool
 from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import agent_factory
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.policy import ToolPolicyResolver
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.prompting.validation import parse_root_section
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -66,8 +68,8 @@ from app.services.orchestration.resource_activation.contracts import (
     set_current_execution_resource_activation,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 由当前测试路径隔离真实工作区
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 _SKILL_BODY = "仅显式加载后可见的集成样本正文：production-context-skill-body"
@@ -127,26 +129,26 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     config.get_agent_runtime_config.return_value = {
         "system_prompt": "配置基础说明",
         "runtime_identity_description": "集成测试的路径说明",
-        "providers": [{
-            "id": "fixture", "model": "openai/gpt-4.1",
+        "models": [{
+            "provider_id": "fixture", "model_id": "default", "model": "openai/gpt-4.1",
             "api_key": "factory-fixture-key", "endpoint": "http://127.0.0.1:1/v1",
             "custom_llm_provider": "openai",
             "api_mode": {"protocol": protocol},
         }],
     }
-    agent_runtime = agent_factory.build_runtime_for_agent("default", config)
-    model = agent_runtime["model"]
+    model_setup = prepare_agent_model("default", config)
+    model = model_setup.model
     captured["model"] = model
     tools = [StructuredTool.from_function(
         lambda value: value, name=name, description="受信注册工具",
     ) for name in ("create_team", "send_session_message")]
     sessions = MagicMock()
     sessions.session_context_control_admission.side_effect = lambda *_args, **_kwargs: nullcontext()
-    graph = agent_factory.create_my_deep_agent(
-        model=model, instruction_producers=agent_runtime["instruction_producers"],
+    graph = agent_factory.assemble_deep_agent(
+        model=model, instruction_producers=model_setup.instruction_producers,
         tool_selection_reader=selection, checkpointer=saver,
         session_id=session, thread_id=thread, agent_id="default", tools=tools,
-        background_task_registry=MagicMock(), background_message_bus=MagicMock(),
+        background_task_registry=MagicMock(), background_mailbox=MagicMock(),
         job_event_bus=MagicMock(), job_service=MagicMock(), message_service=MagicMock(),
         session_service=sessions, session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(), session_context_query_service=MagicMock(),
@@ -420,7 +422,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
         assert original_body not in json.dumps(receipt, ensure_ascii=False)
         outbound = dispatch("skill-body-selected")
         texts = [message.content for message in outbound.messages if isinstance(message.content, str)]
-        loaded = json.loads(outbound.messages[-1].content)["sources"][0]
+        loaded = parse_root_section(outbound.messages[-1].content, tag="context_sources")["sources"][0]
         assert loaded["source_identity"] == "skill:" + frozen.entries["example"].entry_identity
         assert loaded["body"] == original_body
         assert all("新的 live 正文" not in text for text in texts)

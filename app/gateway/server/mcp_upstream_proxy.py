@@ -5,11 +5,10 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id, verify_local_control_request
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.runtime_control import verify_local_control_request
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,

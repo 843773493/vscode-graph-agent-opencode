@@ -239,8 +239,13 @@ test("真实 Markdown 管线保留原生路径的空格、中文和字面百分�
         + "\n\n[普通链接](running) [外部链接](https://example.com/file.ts)"} />
     </WorkspaceFileReferenceProvider>);
   });
-  expect(observed.contentPaths).toEqual(targets);
+  expect(observed.contentPaths).toEqual([]);
   expect(observed.listingPaths).toEqual([]);
-  expect(renderer.root.findAllByProps({ className: "chat-file-reference" })).toHaveLength(targets.length);
+  const links = renderer.root.findAllByProps({ className: "chat-file-reference" });
+  expect(links).toHaveLength(targets.length);
+  for (const link of links) {
+    await act(async () => { link.props.onClick(); });
+  }
+  expect(observed.contentPaths).toEqual(targets);
   renderer.unmount();
 });

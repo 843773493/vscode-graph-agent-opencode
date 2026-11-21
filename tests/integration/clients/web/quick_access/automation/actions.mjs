@@ -70,7 +70,7 @@ try {
   }
   await api(`/api/gateway/workspaces/${a.workspace_id}/activate`, a, {});
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const writes = value => result.writes.filter(item => item.phase === value);
   const current = async (owner, id) => (await api('/api/v1/persistent-tasks', owner)).items.find(item => item.task_id === id);

@@ -3,6 +3,7 @@ import { t } from "../../../../../shared/core/i18n/index.js";
 import { useMemo, useState } from "react";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
+import { HttpRequestError } from "../../../api/http";
 
 export interface GatewayBackendRuntimeActions {
   onStart: (id: string) => Promise<void>;
@@ -12,8 +13,8 @@ export interface GatewayBackendRuntimeActions {
 }
 
 export default function GatewayBackendRuntimePanel({
-  workspaces, onStart, onStop, onSafeRestart, onForceRestart,
-}: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[] }) {
+  workspaces, workspaceKey, onStart, onStop, onSafeRestart, onForceRestart,
+}: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[]; workspaceKey?: string }) {
   const [memberSelection, setMemberSelection] = useState<{
     backendGeneration: string;
     targetWorkspaceId: string;
@@ -64,16 +65,23 @@ export default function GatewayBackendRuntimePanel({
       };
     });
   }, [managedWorkspaces, workspaceById]);
-  const runRuntimeAction = async (runtimeAction: () => Promise<void>) => {
+  const visibleGroups = runtimeGroups.filter(group => !workspaceKey || group.memberWorkspaceIds.some(id =>
+    gatewayWorkspaceKey({ gateway_id: group.groupTarget.gateway_id, workspace_id: id }) === workspaceKey));
+  const runRuntimeAction = async (target: GatewayWorkspace, runtimeAction: () => Promise<void>) => {
     setActionBusy(true);
     setActionError(null);
     try { await runtimeAction(); setMemberSelection(null); }
-    catch (failure) { setActionError(errorMessage(failure)); }
+    catch (failure) {
+      const detail = failure instanceof HttpRequestError && failure.requestId
+        ? `${errorMessage(failure)} · request_id=${failure.requestId}` : errorMessage(failure);
+      setActionError(t("gateway.runtime.actionFailedForGroup", target.gateway_id, target.workspace_id, detail));
+    }
     finally { setActionBusy(false); }
   };
   return <section aria-label={t("gateway.runtime.section")}>
+    <p>{t("gateway.runtime.lifecycleImpact")}</p>
     {actionError ? <div className="gateway-console-alert" role="alert">{actionError}</div> : null}
-    {runtimeGroups.map((runtimeGroup) => {
+    {visibleGroups.map((runtimeGroup) => {
       const {
         groupKey,
         groupTarget,
@@ -96,11 +104,16 @@ export default function GatewayBackendRuntimePanel({
       return <article className="gateway-connection-section" key={groupKey}>
         <h2>{memberWorkspaces.map((workspace, index) => workspace?.name ?? memberWorkspaceIds[index]).join(t("gateway.runtime.memberSeparator"))}</h2>
         <p>{allMembersReady ? t("gateway.runtime.running") : t("gateway.runtime.offlineOrError")} · {t("gateway.runtime.sharedWorkspaceCount", memberWorkspaceIds.length)}</p>
+        <p>{t("gateway.runtime.owner")} <code>{groupTarget.gateway_id}</code> · {t("gateway.runtime.generation")} <code>{groupTarget.backend_generation ?? t("gateway.runtime.notStarted")}</code></p>
+        <ul aria-label={t("gateway.runtime.currentMembers")}>{memberWorkspaceIds.map((id, index) => <li key={id}>
+          <strong>{memberWorkspaces[index]?.name ?? id}</strong> <code>{id}</code>
+        </li>)}</ul>
+        {hasProtectedMember ? <p>{t("gateway.runtime.protectedMember")}</p> : null}
         <div className="gateway-control-actions">
-          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.startGroup")}</button>
-          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.stopGroup")}</button>
-          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.safeRestart")}</button>
-          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.forceRestart")}</button>
+          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(groupTarget, () => onStart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.startGroup")}</button>
+          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(groupTarget, () => onStop(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.stopGroup")}</button>
+          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(groupTarget, () => onSafeRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.safeRestart")}</button>
+          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(groupTarget, () => onForceRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.forceRestart")}</button>
           <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => setMemberSelection(
             isMemberSelectionOpen ? null : {
               backendGeneration: groupTarget.backend_generation!,
@@ -123,12 +136,12 @@ export default function GatewayBackendRuntimePanel({
               })} /> {workspace.name}{workspace.system_default ? t("gateway.runtime.defaultWorkspaceSuffix") : ""}
           </label>)}
           <p>{t("gateway.runtime.memberChangeDetail")}</p>
-          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersSafeRestart") : t("gateway.runtime.drainAndExitAll")}</button>
-          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersForceRestart") : t("gateway.runtime.interruptAndExitAll")}</button>
+          <button type="button" onClick={() => void runRuntimeAction(groupTarget, () => onSafeRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersSafeRestart") : t("gateway.runtime.drainAndExitAll")}</button>
+          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(groupTarget, () => onForceRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersForceRestart") : t("gateway.runtime.interruptAndExitAll")}</button>
         </fieldset> : null}
       </article>;
     })}
-    {managedWorkspaces.length === 0 ? <p>{t("gateway.runtime.noManagedWorkspaces")}</p> : null}
+    {visibleGroups.length === 0 ? <p>{t("gateway.runtime.noManagedWorkspaces")}</p> : null}
     {actionBusy ? <p role="status">{t("gateway.runtime.waitForGroup")}</p> : null}
   </section>;
 }

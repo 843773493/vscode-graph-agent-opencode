@@ -4,9 +4,10 @@ import base64
 import json
 
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 from pydantic import ValidationError
 
-from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
+from app.core.logging_layout import get_runtime_log_root
 from app.gateway.control.diagnostic_logs import (
     locate_diagnostic_log,
     query_diagnostic_logs,

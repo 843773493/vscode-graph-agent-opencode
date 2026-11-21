@@ -20,7 +20,7 @@ import { Registry } from '../../upstream/src/vs/platform/registry/common/platfor
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO, SessionChangesetListDTO, ThreadAttachmentListDTO, ThreadToolResultListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
 import type { GatewaySkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/skill_sources.js';
@@ -39,7 +39,7 @@ import type { ComposerResourceTarget } from '../composerActions.js';
 import { sourceDocumentUri } from '../sourceDocuments.js';
 import { resourceActionCommand, resourceFocusCommand } from './runtimeActions.js';
 import { openWorkspaceMcpServerCommand } from '../mcp/commands.js';
-import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceOwner.js';
+import { ConfigurationSourceOwner } from '../settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
 interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string; resource?: URI; resourceOwner?: ResourceReferenceOwner }
@@ -174,7 +174,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const highlights = matchesFuzzy(filter, item.filterLabel);
       return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...candidate, highlights: { label: highlights ?? undefined } }];
     });
-    if (run.loading) picks.push({ id: 'source-pending', label: t('quickAccess.sources.loading'), disabled: true });
+
     return picks.length ? picks : [{ id: 'no-sources', label: t('quickAccess.sources.noResults') }];
   }
 
@@ -269,7 +269,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         }, destination.id);
       })());
     };
-    const configurationPicks = async (target: SourceTarget, name: string): Promise<SourcePick[]> => {
+    const configurationPicks = async (target: GatewayRequestTarget, name: string): Promise<SourcePick[]> => {
       run.signal.throwIfAborted();
       const owner = new ConfigurationSourceOwner(target), result = await owner.list(run.signal);
       return result.sources.flatMap(source => {
@@ -308,15 +308,47 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       this.assertAccess(run);
       const routes = await gateway.workspaces(false, run.signal);
       const registeredOwners = run.owners.filter(owner => routes.items.some(target => target.gateway_id === owner.gatewayId && target.workspace_id === owner.workspaceId));
+      const ownerTargets: [WorkspaceOwner, (typeof routes.items)[number] | undefined, unknown?][] = [];
+      for (const owner of run.owners) {
+        try {
+          const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
+          if (target.status !== 'ready') throw new Error(t('quickAccess.sources.workspaceUnavailable', target.name, target.status));
+          ownerTargets.push([owner, target]);
+        } catch (cause) { ownerTargets.push([owner, undefined, cause]); }
+      }
+      const mcpPicks = ownerTargets.map(([owner, target]) => target && !run.referencesOnly
+        ? limiter.queue(async () => {
+          run.signal.throwIfAborted();
+          const result = await getMcpCatalog(0, target, { refresh: false, signal: run.signal });
+          const frozenTarget = { gateway_id: target.gateway_id, workspace_id: target.workspace_id, backend_id: target.backend_id };
+          return result.data.map(server => {
+            const commandTarget = { target: frozenTarget, serverId: server.server_id };
+            return {
+              id: `${gatewayWorkspaceKey(target)}/mcp/${server.server_id}`, label: server.server_id, filterLabel: server.server_id,
+              description: `MCP · ${target.name} · ${server.status}`,
+              detail: `${owner.gatewayId} · ${owner.workspaceId}${server.unavailable_reason ? ` · ${server.unavailable_reason}` : ''}`,
+              accept: () => {
+                this.assertAccess(run);
+                this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, commandTarget));
+              },
+              buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: t('quickAccess.sources.moreMcpActions') }],
+              trigger: () => {
+                this.assertAccess(run);
+                this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, { ...commandTarget, showOptions: true }));
+                return TriggerAction.NO_ACTION;
+              },
+            };
+          });
+        }).catch(cause => failed(owner, 'MCP ', cause)) : Promise.resolve([]));
       const gatewayConfigurations = [...new Map(registeredOwners.map(owner => [owner.gatewayId, owner])).values()].map(owner =>
         limiter.queue(() => configurationPicks({ gateway_id: owner.gatewayId }, 'Gateway'))
           .catch(cause => failed(owner, 'Gateway 配置 ', cause)));
-      const results = run.owners.map(async owner => {
+      const results = ownerTargets.map(async ([owner, target, ownerError], index) => {
+        if (!target) { await collect(Promise.resolve(failed(owner, '', ownerError))); return; }
         try {
           run.signal.throwIfAborted();
-          const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
-          if (target.status !== 'ready') throw new Error(t('quickAccess.sources.workspaceUnavailable', target.name, target.status));
           const key = gatewayWorkspaceKey(target);
+          const mcp = mcpPicks[index];
           const configuration = limiter.queue(() => configurationPicks({ gateway_id: target.gateway_id, workspace_id: target.workspace_id }, target.name))
             .catch(cause => failed(owner, '配置 ', cause));
           const attachmentPicks = async (after = ''): Promise<SourcePick[]> => {
@@ -449,29 +481,6 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          const mcp = run.referencesOnly ? Promise.resolve([]) : limiter.queue(async () => {
-            run.signal.throwIfAborted();
-            const result = await getMcpCatalog(0, target, { refresh: false, signal: run.signal });
-            const frozenTarget = { gateway_id: target.gateway_id, workspace_id: target.workspace_id, backend_id: target.backend_id };
-            return result.data.map(server => {
-              const commandTarget = { target: frozenTarget, serverId: server.server_id };
-              return {
-                id: `${key}/mcp/${server.server_id}`, label: server.server_id, filterLabel: server.server_id,
-                description: `MCP · ${target.name} · ${server.status}`,
-                detail: `${owner.gatewayId} · ${owner.workspaceId}${server.unavailable_reason ? ` · ${server.unavailable_reason}` : ''}`,
-                accept: () => {
-                  this.assertAccess(run);
-                  this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, commandTarget));
-                },
-                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: t('quickAccess.sources.moreMcpActions') }],
-                trigger: () => {
-                  this.assertAccess(run);
-                  this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, { ...commandTarget, showOptions: true }));
-                  return TriggerAction.CLOSE_PICKER;
-                },
-              };
-            });
-          }).catch(cause => failed(owner, 'MCP ', cause));
           await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, attachments, tools, changes, ...runtime, mcp].map(collect));
         } catch (cause) { await collect(Promise.resolve(failed(owner, '', cause))); }
       });
@@ -520,6 +529,7 @@ registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.quickAccess.resources', title: { value: t('quickAccess.sources.actionTitle'), original: actionTitles['quickAccess.sources.actionTitle'] }, f1: true }); }
   run(accessor: ServicesAccessor, owner?: WorkspaceOwner): void {
     const providerOptions: SearchInvocationOptions | undefined = owner ? { searchOwner: owner } : undefined;
-    accessor.get(IQuickInputService).quickAccess.show(ResourceQuickAccess.PREFIX, { providerOptions });
+    const quickAccess = accessor.get(IQuickInputService).quickAccess;
+    queueMicrotask(() => quickAccess.show(ResourceQuickAccess.PREFIX, { providerOptions }));
   }
 });

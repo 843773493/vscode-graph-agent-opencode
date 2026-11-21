@@ -235,6 +235,19 @@ def select_view_prefix(
                     connection, stream, sequence=sequence, offset=offset, length=length,
                 )
                 connection.execute("UPDATE fork_selected_items SET visited=1 WHERE item_id=?", (item_id,))
+                if item.wire_role == "tool":
+                    # 结果的原声明也是历史配对依赖；即使已被另一 sink 替代，
+                    # 仍作为 backing 保留，不能把它重新选入目标可见前缀。
+                    connection.execute(
+                        "INSERT OR IGNORE INTO fork_selected_items(item_id) "
+                        "SELECT item.item_id FROM messages result JOIN tool_calls call "
+                        "ON call.result_message_sequence=result.message_sequence "
+                        "JOIN messages assistant ON assistant.message_sequence=call.assistant_message_sequence "
+                        "JOIN item_catalog item ON item.jsonl_offset=assistant.jsonl_offset "
+                        "AND item.jsonl_length=assistant.jsonl_length "
+                        "WHERE result.jsonl_offset=? AND result.jsonl_length=?",
+                        (offset, length),
+                    )
                 source = validate_message_revision_source(connection, item)
                 if source is not None:
                     connection.execute(

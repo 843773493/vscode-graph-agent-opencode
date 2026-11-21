@@ -19,6 +19,8 @@ import type {
   ToolSelectionChange,
   ToolTestRun,
 } from "../../types/toolTesting";
+import type { Agent, ModelReference } from "../../types/backend";
+import { sameModel } from "../../utils/modelReference";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import {
@@ -49,13 +51,20 @@ export default function ComposerToolControl({
   agentId,
   workspaceId,
   onStatus,
+  inline = false,
+  models,
+  active = true,
 }: {
   apiPort: number;
   agentId: string;
   workspaceId: string | null;
   onStatus: (text: string) => void;
+  inline?: boolean;
+  models: Agent["models"];
+  active?: boolean;
 }): React.ReactNode {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(inline);
+  const observationActive = open && active;
   const [tools, setTools] = useState<ToolCatalogItem[]>([]);
   const [runs, setRuns] = useState<Map<string, ToolTestRun>>(new Map());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -63,8 +72,15 @@ export default function ComposerToolControl({
   const [savingToolIds, setSavingToolIds] = useState<Set<string>>(new Set());
   const [testingTools, setTestingTools] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [testDialog, setTestDialog] = useState<ToolCatalogItem | null>(null);
+  const [selectedModels, setSelectedModels] = useState<ModelReference[]>([]);
+  const [repetitions, setRepetitions] = useState(0);
+  const [testCostAcknowledged, setTestCostAcknowledged] = useState(false);
   const controlRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const mountedRef = useRef(false);
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
   // 加载归属代次：agentId/workspaceId 变化会重新加载，旧请求晚到时必须被丢弃，
   // 否则界面会稳定显示上一个 Agent 的工具开关。
   const loadGenerationRef = useRef(0);
@@ -73,8 +89,18 @@ export default function ComposerToolControl({
   const pollScopeKey = `${apiPort}:${agentId}:${workspaceId ?? ""}`;
   const pollScopeKeyRef = useRef(pollScopeKey);
   pollScopeKeyRef.current = pollScopeKey;
+  const observeRunsRef = useRef(observationActive);
+  observeRunsRef.current = observationActive;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!observationActive) setTestingTools((current) => current.size ? new Set() : current);
+  }, [observationActive]);
 
   const load = useCallback(async () => {
+    const requestScopeKey = pollScopeKey;
     const generation = ++loadGenerationRef.current;
     setLoading(true);
     setError(null);
@@ -83,28 +109,39 @@ export default function ComposerToolControl({
         getToolCatalog(apiPort, agentId, workspaceId),
         listToolTestRuns(apiPort, workspaceId),
       ]);
-      if (loadGenerationRef.current !== generation) return;
+      if (loadGenerationRef.current !== generation || pollScopeKeyRef.current !== requestScopeKey
+        || !observeRunsRef.current || !mountedRef.current) return;
       setTools(catalog);
-      setRuns(latestRunsByTool(history));
+      const latestRuns = latestRunsByTool(history);
+      runsRef.current = latestRuns;
+      setRuns(latestRuns);
+      setTestingTools(new Set([...latestRuns.values()]
+        .filter((run) => run.status === "queued" || run.status === "running")
+        .map((run) => run.tool_name)));
     } catch (loadError) {
       // 失败始终向上抛出，不静默吞掉；只有当前代次才写本地错误态。
-      if (loadGenerationRef.current === generation) {
+      if (loadGenerationRef.current === generation && pollScopeKeyRef.current === requestScopeKey
+        && observeRunsRef.current && mountedRef.current) {
         setError(errorMessage(loadError));
       }
       throw loadError;
     } finally {
-      if (loadGenerationRef.current === generation) setLoading(false);
+      if (loadGenerationRef.current === generation && pollScopeKeyRef.current === requestScopeKey
+        && mountedRef.current) setLoading(false);
     }
-  }, [agentId, apiPort, workspaceId]);
+  }, [agentId, apiPort, pollScopeKey, workspaceId]);
 
   useEffect(() => {
-    if (!open) {
+    if (!observationActive) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void load().catch(() => {
-      onStatus(t("composer.tools.loadFailed"));
+      if (mountedRef.current && observeRunsRef.current && pollScopeKeyRef.current === requestScopeKey) {
+        onStatus(t("composer.tools.loadFailed"));
+      }
     });
-  }, [load, onStatus, open]);
+  }, [load, onStatus, observationActive]);
 
   useEffect(() => {
     if (testingTools.size === 0) {
@@ -119,8 +156,11 @@ export default function ComposerToolControl({
         }
         void getToolTestRun(apiPort, run.run_id, workspaceId)
           .then((nextRun) => {
-            if (pollScopeKeyRef.current !== requestScopeKey) return;
-            setRuns((current) => new Map(current).set(toolName, nextRun));
+            if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey
+              || runsRef.current.get(toolName)?.run_id !== run.run_id) return;
+            const nextRuns = new Map(runsRef.current).set(toolName, nextRun);
+            runsRef.current = nextRuns;
+            setRuns(nextRuns);
             if (nextRun.status === "completed" || nextRun.status === "failed") {
               setTestingTools((current) => {
                 const next = new Set(current);
@@ -130,7 +170,8 @@ export default function ComposerToolControl({
             }
           })
           .catch((pollError: unknown) => {
-            if (pollScopeKeyRef.current !== requestScopeKey) return;
+            if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey
+              || runsRef.current.get(toolName)?.run_id !== run.run_id) return;
             setError(t("composer.tools.progressFailed", errorMessage(pollError)));
           });
       }
@@ -141,6 +182,14 @@ export default function ComposerToolControl({
   useEffect(() => {
     // owner 变化后旧的进行中测试不再属于当前上下文：清空以免用新 owner 复查旧 run。
     setTestingTools((current) => (current.size === 0 ? current : new Set()));
+    setTools([]);
+    const nextRuns = new Map<string, ToolTestRun>();
+    runsRef.current = nextRuns;
+    setRuns(nextRuns);
+    setTestDialog(null);
+    setSavingToolIds((current) => current.size === 0 ? current : new Set());
+    setError(null);
+    if (!observationActive) setLoading(false);
   }, [pollScopeKey]);
 
   const groups = useMemo<ToolGroup[]>(() => {
@@ -172,6 +221,8 @@ export default function ComposerToolControl({
     changes: ToolSelectionChange[],
     successMessage: string,
   ) => {
+    const requestScopeKey = pollScopeKey;
+    const isCurrentOwner = () => mountedRef.current && pollScopeKeyRef.current === requestScopeKey;
     const previousTools = tools;
     const changedIds = new Set(changes.map((change) => change.tool_id));
     setSavingToolIds((current) => new Set([...current, ...changedIds]));
@@ -184,41 +235,46 @@ export default function ComposerToolControl({
         changes,
         workspaceId,
       );
+      if (!isCurrentOwner()) return;
       const updatedById = new Map(
         updatedTools.map((tool) => [tool.tool_id, tool]),
       );
-      setTools((current) => current.map(
-        (tool) => updatedById.get(tool.tool_id) ?? tool,
-      ));
+      setTools((current) => isCurrentOwner() ? current.map((tool) => updatedById.get(tool.tool_id) ?? tool) : current);
       onStatus(successMessage);
     } catch (saveError) {
+      if (!isCurrentOwner()) throw saveError;
       const message = errorMessage(saveError);
       setError(t("composer.tools.saveFailedDetail", message));
       try {
         const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
-        setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
+        if (isCurrentOwner()) setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
       } catch (refreshError) {
-        setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
-        const refreshMessage = errorMessage(refreshError);
-        setError(t("composer.tools.saveAndRefreshFailed", message, refreshMessage));
+        if (isCurrentOwner()) {
+          setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
+          const refreshMessage = errorMessage(refreshError);
+          setError(t("composer.tools.saveAndRefreshFailed", message, refreshMessage));
+        }
       }
       throw saveError;
     } finally {
-      setSavingToolIds((current) => {
-        const next = new Set(current);
-        for (const toolId of changedIds) {
-          next.delete(toolId);
-        }
-        return next;
-      });
+      if (isCurrentOwner()) {
+        setSavingToolIds((current) => {
+          const next = new Set(current);
+          for (const toolId of changedIds) {
+            next.delete(toolId);
+          }
+          return next;
+        });
+      }
     }
   };
 
   const toggleToolExecution = (toolId: string) => {
     const tool = tools.find((item) => item.tool_id === toolId);
-    if (!tool || savingToolIds.has(toolId)) {
+    if (!tool || savingToolIds.has(toolId) || tool.execution_locked) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void saveChanges(
       [{
         tool_id: toolId,
@@ -227,15 +283,16 @@ export default function ComposerToolControl({
       }],
       t("composer.tools.saved", tool.name),
     ).catch(() => {
-      onStatus(t("composer.tools.saveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.saveFailed"));
     });
   };
 
   const toggleToolModelVisibility = (toolId: string) => {
     const tool = tools.find((item) => item.tool_id === toolId);
-    if (!tool || savingToolIds.has(toolId) || !tool.execution_enabled) {
+    if (!tool || savingToolIds.has(toolId) || tool.model_visibility_locked || !tool.execution_enabled) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void saveChanges(
       [{
         tool_id: toolId,
@@ -244,7 +301,7 @@ export default function ComposerToolControl({
       }],
       t("composer.tools.visibilitySaved", tool.name),
     ).catch(() => {
-      onStatus(t("composer.tools.saveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.saveFailed"));
     });
   };
 
@@ -252,15 +309,17 @@ export default function ComposerToolControl({
     group: ToolGroup,
     capability: "execution" | "model",
   ) => {
-    if (group.items.some((tool) => savingToolIds.has(tool.tool_id))) {
+    const editableItems = group.items.filter((tool) => capability === "execution"
+      ? !tool.execution_locked : !tool.model_visibility_locked);
+    if (editableItems.length === 0 || editableItems.some((tool) => savingToolIds.has(tool.tool_id))) {
       return;
     }
     const enableGroup = capability === "execution"
-      ? group.items.some((tool) => !tool.execution_enabled)
-      : group.items.some(
+      ? editableItems.some((tool) => !tool.execution_enabled)
+      : editableItems.some(
           (tool) => tool.execution_enabled && !tool.model_visible,
         );
-    const changes = group.items.map((tool) => ({
+    const changes = editableItems.map((tool) => ({
       tool_id: tool.tool_id,
       execution_enabled: capability === "execution"
         ? enableGroup
@@ -269,20 +328,43 @@ export default function ComposerToolControl({
         ? (enableGroup ? tool.model_visible : false)
         : (tool.execution_enabled && enableGroup),
     }));
+    const requestScopeKey = pollScopeKey;
     void saveChanges(changes, t("composer.tools.groupSaved", group.name)).catch(() => {
-      onStatus(t("composer.tools.groupSaveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.groupSaveFailed"));
     });
   };
 
   const runTest = (tool: ToolCatalogItem) => {
+    setSelectedModels([]);
+    setRepetitions(0);
+    setTestCostAcknowledged(false);
+    setTestDialog(tool);
+  };
+
+  const confirmTest = () => {
+    const tool = testDialog;
+    if (!tool || selectedModels.length === 0 || repetitions < 1 || !testCostAcknowledged) return;
+    const requestScopeKey = pollScopeKey;
     setError(null);
     setTestingTools((current) => new Set(current).add(tool.tool_id));
-    void startToolTest(apiPort, tool.tool_id, agentId, workspaceId)
+    setTestDialog(null);
+    void startToolTest(apiPort, tool.tool_id, agentId, workspaceId, selectedModels, repetitions)
       .then((run) => {
-        setRuns((current) => new Map(current).set(tool.tool_id, run));
+        if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
+        const nextRuns = new Map(runsRef.current).set(tool.tool_id, run);
+        runsRef.current = nextRuns;
+        setRuns(nextRuns);
+        if (run.status === "completed" || run.status === "failed") {
+          setTestingTools((current) => {
+            const next = new Set(current);
+            next.delete(tool.tool_id);
+            return next;
+          });
+        }
         onStatus(t("composer.tools.testStarted", tool.name));
       })
       .catch((testError: unknown) => {
+        if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
         const message = errorMessage(testError);
         setError(t("composer.tools.testStartFailed", message));
         setTestingTools((current) => {
@@ -295,30 +377,10 @@ export default function ComposerToolControl({
 
   const executionCount = tools.filter((tool) => tool.execution_enabled).length;
   const modelVisibleCount = tools.filter((tool) => tool.model_visible).length;
+  const availableModels = models.filter((model) => model.available && !model.configuration_error?.trim());
 
-  return (
-    <div className="composer-tool-control" ref={controlRef}>
-      <button
-        ref={buttonRef}
-        type="button"
-        className={`composer-icon-button composer-tool-button${open ? " active" : ""}`}
-        title={t("composer.tools.select")}
-        aria-label={t("composer.tools.select")}
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="codicon codicon-settings" aria-hidden="true" />
-      </button>
-      <AnchoredOverlay
-        open={open}
-        anchorRef={buttonRef}
-        placement="top-end"
-        onClose={() => setOpen(false)}
-      >
-        <section
-          className="composer-tool-menu"
-          aria-label={t("composer.tools.menu")}
-        >
+  const menu = (
+        <section className={`composer-tool-menu${inline ? " composer-tool-menu-inline" : ""}`} aria-label={t("composer.tools.menu")}>
           <header className="composer-tool-menu-header">
             <div>
               <strong>{t("composer.tools.title")}</strong>
@@ -329,7 +391,7 @@ export default function ComposerToolControl({
               </span>
             </div>
             <div className="composer-tool-menu-header-actions">
-              <button
+              {!inline ? <button
                 type="button"
                 className="composer-tool-refresh"
                 title={t("composer.tools.refresh")}
@@ -338,8 +400,8 @@ export default function ComposerToolControl({
                 onClick={() => void load()}
               >
                 <span className="codicon codicon-refresh" aria-hidden="true" />
-              </button>
-              <button
+              </button> : null}
+              {!inline ? <button
                 type="button"
                 className="composer-tool-close"
                 title={t("composer.tools.close")}
@@ -347,7 +409,7 @@ export default function ComposerToolControl({
                 onClick={() => setOpen(false)}
               >
                 <span className="codicon codicon-close" aria-hidden="true" />
-              </button>
+              </button> : null}
             </div>
           </header>
           {error ? <div className="composer-tool-error">{error}</div> : null}
@@ -357,6 +419,7 @@ export default function ComposerToolControl({
             savingToolIds={savingToolIds}
             runs={runs}
             testingTools={testingTools}
+            canRunTests={availableModels.length > 0}
             collapsedGroups={collapsedGroups}
             onToggleCollapsed={(groupId) => setCollapsedGroups((current) => {
               const next = new Set(current);
@@ -369,8 +432,39 @@ export default function ComposerToolControl({
             onToggleToolModelVisibility={toggleToolModelVisibility}
             onRunTest={runTest}
           />
+          {testDialog ? <div className="composer-tool-test-confirm" role="dialog" aria-modal="true" aria-label={t("composer.tools.test")}
+            onClick={(event) => { if (event.target === event.currentTarget) setTestDialog(null); }}>
+            <section>
+              <strong>{t("composer.tools.testNamed", testDialog.name)}</strong>
+              <p>{t("composer.tools.testCostNotice")}</p>
+              {availableModels.map((model) => <label key={JSON.stringify(model.model_ref)}>
+                <input type="checkbox" checked={selectedModels.some(ref => sameModel(ref, model.model_ref))}
+                  onChange={(event) => setSelectedModels((current) => event.target.checked
+                    ? [...current, model.model_ref] : current.filter(ref => !sameModel(ref, model.model_ref)))} />
+                {model.model_ref.provider_id} / {model.model_ref.model_id} · {model.model}
+              </label>)}
+              <label>{t("composer.tools.testRepetitions")}
+                <input type="number" min={1} max={20} value={repetitions || ""} onChange={(event) => setRepetitions(Math.min(20, Number(event.target.value) || 0))} />
+              </label>
+              <label><input type="checkbox" checked={testCostAcknowledged} onChange={(event) => setTestCostAcknowledged(event.target.checked)} />{t("composer.tools.testCostAcknowledge")}</label>
+              <button type="button" onClick={() => setTestDialog(null)}>{t("composer.tools.close")}</button>
+              <button type="button" disabled={selectedModels.length === 0 || repetitions < 1 || !testCostAcknowledged} onClick={confirmTest}>{t("composer.tools.testConfirm")}</button>
+            </section>
+          </div> : null}
         </section>
-      </AnchoredOverlay>
+  );
+  return (
+    <div className={inline ? "composer-tool-control composer-tool-control-inline" : "composer-tool-control"} ref={controlRef}>
+      {!inline ? <button
+        ref={buttonRef}
+        type="button"
+        className={`composer-icon-button composer-tool-button${open ? " active" : ""}`}
+        title={t("composer.tools.select")}
+        aria-label={t("composer.tools.select")}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      ><span className="codicon codicon-settings" aria-hidden="true" /></button> : null}
+      {inline ? menu : <AnchoredOverlay open={open} anchorRef={buttonRef} placement="top-end" onClose={() => setOpen(false)}>{menu}</AnchoredOverlay>}
     </div>
   );
 }

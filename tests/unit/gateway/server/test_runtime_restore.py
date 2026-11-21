@@ -105,6 +105,28 @@ def restore_state_store(request: pytest.FixtureRequest, startup_case: StartupCas
         yield None
 
 
+@pytest.mark.asyncio
+async def test_default_workspace_freezes_template_once_and_preserves_completed_creation(startup_case):
+    binding = {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "terminal", "enabled": True}
+    config = GatewayConfig(revision="builtin-v1", payload={"plugins": {"workspace_defaults": {"entries": [binding]}}})
+    registry = await bootstrap.create_registry(gateway_config=config)
+    target = next(target for target in registry.targets() if target.system_default)
+    frozen = target.plugin_creation
+    assert frozen is not None and frozen["revision"] == "builtin-v1"
+    assert frozen["bindings"] == [dict(binding, workspace_id=None)]
+    registry.close()
+
+    # 重启沿用原 intent；模板变化不能改写已冻结或已完成的工作区。
+    changed = replace(config, revision="builtin-v2", payload={"plugins": {"workspace_defaults": {"entries": []}}})
+    registry = await bootstrap.create_registry(gateway_config=changed)
+    assert registry.resolve(target.workspace_id).plugin_creation == frozen
+    registry.complete_plugin_creation(target.workspace_id, frozen["intent_id"])
+    registry.close()
+    registry = await bootstrap.create_registry(gateway_config=config)
+    assert registry.resolve(target.workspace_id).plugin_creation is None
+    registry.close()
+
+
 @pytest.fixture
 def persisted_targets(startup_case: StartupCase, managed_backend_factory, restore_state_store):
     case = startup_case

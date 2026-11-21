@@ -70,7 +70,7 @@ __all__ = [
 ]
 
 # 删除执行器：以确定性 operation_id 进入**共享**子树删除流。生产装配注入保持
-# JobService 删除 admission 与后台任务预检的版本；未注入时退回 resolver 的共享
+# JobService 准入关闭与统一停止排空的版本；未注入时使用 resolver 的共享
 # ``delete_subtree``（同一删除流，无第二套实现）。
 DeleteRunner = Callable[
     [str, str, CatalogTransactionHook, CatalogTransactionHook],

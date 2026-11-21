@@ -1,11 +1,11 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AgentSessionsPanel from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
+import AgentSessionsPanel, { type SessionNavigationActions } from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
 import WarmConfirmProvider, { useWarmConfirm } from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import SessionNameDialog from '../../../web/src/components/overlays/SessionNameDialog.js';
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
-import GatewayControlCenter from '../../../web/src/components/workspace/gateway/GatewayControlCenter.js';
+import type { WorkspaceDetailsTarget } from '../../../web/src/components/workspace/WorkspaceDetailsDialog.js';
 import { useSessionCatalogActions } from '../../../web/src/hooks/shell/useSessionCatalogActions.js';
 import { useSessionInformationClipboard } from '../../../web/src/hooks/session/useSessionInformationClipboard.js';
 import { useWorkspaceInformationClipboard } from '../../../web/src/hooks/workspace/useWorkspaceInformationClipboard.js';
@@ -13,11 +13,8 @@ import { resolveAgentSessionsPreferences } from '../../../web/src/state/uiSettin
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getSession } from '../../../web/src/api.js';
-import { HttpRequestError } from '../../../web/src/api/http.js';
-import type { Session } from '../../../web/src/types/backend.js';
-import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, type AppearanceBackground } from '../../../web/src/theme/theme.js';
-import { readWorkbenchBackground } from '../theme.js';
-import { IConfigurationService, ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import type { AddRemoteGatewayConnectionRequest, GatewayRuntimeGroupRequest, GatewayWorkspace, Session } from '../../../web/src/types/backend.js';
 import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { EditorsOrder, type IEditorIdentifier } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
@@ -26,9 +23,8 @@ import { IStorageService, WillSaveStateReason } from '../../upstream/src/vs/plat
 import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { DeferredPromise } from '../../upstream/src/vs/base/common/async.js';
 import { ThreadInput } from '../threadInput.js';
-import { gateway } from '../agentApi.js';
+import { ThreadPane, type ThreadEditorOptions } from '../threadPane.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { notifyPluginCommandGatewayReconnected } from '../extensions/pluginCommands.js';
 import { ReactSurface } from './surface.js';
 import { productStyles } from './productStyles.js';
 import { useNavigationRuntime } from './useNavigationRuntime.js';
@@ -36,32 +32,31 @@ import { useManagedBackendConfirmation } from '../../../web/src/hooks/gatewayWor
 import { sessionScopeKey } from '../../../web/src/state/session/sessionScope.js';
 import style from './navigationView.css?text';
 import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourceExplorer/useCatalogReveal.js';
-import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHandlers } from '../search/workspaceActions.js';
 import { sessionActionCommands, type SessionAction, type SessionActionHandlers } from '../search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
 
-function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, configuration, catalogReveal, diagnosticLocation }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, bindGatewayActions, bindNavigationActions, catalogReveal }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
   bindWorkspaceActions: (actions?: WorkspaceActionHandlers) => void;
   bindSessionActions: (actions?: SessionActionHandlers) => void;
-  configuration: IConfigurationService;
+  bindGatewayActions: (actions?: GatewayNavigationActions) => void;
+  bindNavigationActions: (actions?: SessionNavigationActions) => void;
   catalogReveal?: CatalogRevealRequest;
-  diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
 }) {
   const confirm = useWarmConfirm();
-  const [gatewayOpen, setGatewayOpen] = useState(false);
-  const [dismissedLocation, setDismissedLocation] = useState<GatewayDiagnosticLogLocateRequest>();
-  const logLocation = diagnosticLocation !== dismissedLocation ? diagnosticLocation : undefined;
-  useEffect(() => {
-    if (diagnosticLocation) setGatewayOpen(true);
-  }, [diagnosticLocation]);
+  const [workspaceDetails, setWorkspaceDetails] = useState<WorkspaceDetailsTarget | null>(null);
   const [diagnostic, setDiagnostic] = useState<{ title: string; detail: string } | null>(null);
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
+  const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(() => {
+    const input = editors.activeEditor;
+    return input instanceof ThreadInput && input.owner.workspaceKey
+      ? sessionScopeKey(input.owner.workspaceKey, input.owner.sessionId) : null;
+  });
   const gesture = useRef({ pinned: false, sideBySide: false });
-  const openRequests = useRef(new Map<number, number>());
+  const openRequests = useRef(new Map<number, symbol>());
   const created = useCallback(async (session: Session, workspaceKey: string | null) => {
     if (!workspaceKey || !session.thread_id) throw new Error(t('navigation.sessions.createdReceiptMissing'));
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
@@ -105,28 +100,65 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     ? sessionScopeKey(activeEditor.owner.workspaceKey, activeEditor.owner.sessionId) : null;
   const runtime = useNavigationRuntime(created, notifyError, refreshEditors, activeSessionCacheKey);
   const { state, setStatus, reportError, setActiveSession, clearActiveSession } = runtime;
+  const showWorkspaceDetails = useCallback(async (workspaceKey: string) => {
+    requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, workspaceKey);
+    if (!state.browserViewScope) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
+    setWorkspaceDetails({ workspaceKey, entryGatewayId: state.browserViewScope });
+  }, [state.gatewayWorkspaces, state.browserViewScope]);
+  useEffect(() => onGatewayTokenInvalidated(0, () => {
+    setWorkspaceDetails(null);
+  }), []);
+  useEffect(() => {
+    if (workspaceDetails && state.browserViewScope !== workspaceDetails.entryGatewayId) setWorkspaceDetails(null);
+  }, [state.browserViewScope, workspaceDetails]);
   const backendActions = useManagedBackendConfirmation({ apiPort: 0,
     onStart: runtime.startManagedGatewayWorkspaceBackend, onStop: runtime.stopManagedGatewayWorkspaceBackend,
     onSafeRestart: runtime.safeRestartManagedGatewayWorkspaceBackend, onForceRestart: runtime.forceRestartManagedGatewayWorkspaceBackend,
     onRefresh: runtime.refreshGatewayState });
   useEffect(() => {
-    bindWorkspaceActions({ activate: runtime.activateGatewayWorkspace, reconnect: runtime.reconnectGatewayWorkspace, start: backendActions.start });
+    bindWorkspaceActions({ activate: id => runtime.activateGatewayWorkspace(id), reconnect: runtime.reconnectGatewayWorkspace, start: backendActions.start,
+      stop: backendActions.stop, safeRestart: backendActions.safeRestart, forceRestart: backendActions.forceRestart, details: showWorkspaceDetails });
     return () => bindWorkspaceActions();
-  }, [bindWorkspaceActions, runtime.activateGatewayWorkspace, runtime.reconnectGatewayWorkspace, backendActions.start]);
+  }, [bindWorkspaceActions, runtime.activateGatewayWorkspace, runtime.reconnectGatewayWorkspace, backendActions.start, backendActions.stop, backendActions.safeRestart, backendActions.forceRestart, showWorkspaceDetails]);
+  useEffect(() => {
+    bindGatewayActions({ addRemoteGatewayConnection: runtime.addRemoteGatewayConnection, refresh: runtime.refreshGatewayState });
+    return () => bindGatewayActions();
+  }, [bindGatewayActions, runtime.addRemoteGatewayConnection, runtime.refreshGatewayState]);
   const activateWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.activate, workspaceOwnerFromKey(id)), [commands]);
   const reconnectWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.reconnect, workspaceOwnerFromKey(id)), [commands]);
   const startWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.start, workspaceOwnerFromKey(id)), [commands]);
+  const detailsWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.details, workspaceOwnerFromKey(id)), [commands]);
+  const openWorkspaceSettings = async (workspace: GatewayWorkspace, connectionId?: string) => {
+    const current = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, gatewayWorkspaceOwner(workspace));
+    if (current.connection_kind === 'remote_gateway' && !current.remote_gateways.some(connection => connection.gateway_connection_id === connectionId)) {
+      throw new Error(t('workbench.workspaceAction.identityChanged'));
+    }
+    await commands.executeCommand('boxteam.settings.openTarget', { gateway_id: current.gateway_id, name: current.name,
+      connection_kind: current.connection_kind, gateway_connection_id: connectionId }, { workspace_id: current.workspace_id });
+  };
+  const openWorkspaceLogs = async (workspace: GatewayWorkspace, connectionId?: string) => {
+    const current = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, gatewayWorkspaceOwner(workspace));
+    if (current.connection_kind === 'remote_gateway' && !current.remote_gateways.some(connection => connection.gateway_connection_id === connectionId)) {
+      throw new Error(t('workbench.workspaceAction.identityChanged'));
+    }
+    await commands.executeCommand('boxteam.gateway.diagnostics', { gateway_id: current.gateway_id, gateway_connection_id: connectionId,
+      name: current.name, connection_kind: current.connection_kind }, current.workspace_id);
+  };
   useEffect(() => { if (state.status) console.info(t('navigation.statusPrefix'), state.status); }, [state.status]);
   const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
+    // 树选择是展示态；点击即反馈，读取失败时仍保留选择，不伪造业务 Session。
+    setSelectedSessionKey(sessionScopeKey(workspaceKey, sessionId));
     // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
     const group = options.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
-    const request = (openRequests.current.get(group) ?? 0) + 1;
+    const request = Symbol();
     openRequests.current.set(group, request);
     const session = await setActiveSession(workspaceKey, sessionId);
-    const main = await gateway.mainThread(workspaceKey, sessionId);
+    // Session DTO 已携带 catalog 冻结的 main Thread，不再串行查询同一身份。
+    if (session.session_id !== sessionId || !session.thread_id) throw new Error(t('workbench.session.mainThreadOwnerMismatch'));
     if (openRequests.current.get(group) !== request) return;
+    const editorOptions: ThreadEditorOptions = { pinned: options.pinned, boxteamSession: session };
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
-      sessionId, threadId: main.thread_id, title: session.title }), { pinned: options.pinned }, group);
+      sessionId, threadId: session.thread_id, title: session.title }), editorOptions, group);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
     let selection: { group: number; editor: typeof editors.activeEditor } | undefined;
@@ -135,14 +167,18 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       const group = groups.activeGroup.id;
       // 恢复编辑器也会再次发出活动事件；只有实际 Tab／分组改变才取消目录打开。
       if (selection?.group === group && selection.editor === input) return;
-      selection = { group, editor: input };
+      selection = undefined;
       setActiveEditor(input);
+      setSelectedSessionKey(input instanceof ThreadInput && input.owner.workspaceKey
+        ? sessionScopeKey(input.owner.workspaceKey, input.owner.sessionId) : null);
       openRequests.current.clear();
       clearActiveSession();
-      if (input instanceof ThreadInput) void input.resolveOwner().then(owner => {
-        if (editors.activeEditor !== input || groups.activeGroup.id !== group || selection?.editor !== input || selection.group !== group) return;
-        return setActiveSession(owner.workspaceKey, owner.sessionId);
-      }).catch(cause => {
+      const pane = editors.activeEditorPane;
+      // 冷恢复先撤销旧打开意图，等所属 Pane 完成后才使用已解析的路由。
+      if (input instanceof ThreadInput && (!(pane instanceof ThreadPane) || pane.threadTarget?.input !== input)) return;
+      selection = { group, editor: input };
+      // 原版在 ThreadPane.setInput 完成后发布活动事件，owner 已由所属 Pane 解析。
+      if (input instanceof ThreadInput) void setActiveSession(input.owner.workspaceKey, input.owner.sessionId).catch(cause => {
         if (editors.activeEditor === input && groups.activeGroup.id === group) reportError(String(cause));
       });
     };
@@ -150,19 +186,8 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     const listener = editors.onDidActiveEditorChange(update);
     return () => listener.dispose();
   }, [editors, groups, setActiveSession, clearActiveSession, reportError]);
-  const [background, setBackground] = useState<AppearanceBackground>(DEFAULT_BACKGROUND);
-  useEffect(() => {
-    const read = () => {
-      try { setBackground(readWorkbenchBackground(configuration.getValue(BACKGROUND_SETTING))); }
-      // 非法配置由唯一外观贡献报告；设置页清除旧镜像，避免重复通知。
-      catch { setBackground(DEFAULT_BACKGROUND); }
-    };
-    read();
-    const listener = configuration.onDidChangeConfiguration(event => { if (event.affectsConfiguration(BACKGROUND_SETTING)) read(); });
-    return () => listener.dispose();
-  }, [configuration]);
   const actions = useSessionCatalogActions({ apiPort: 0, activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
-    activeSessionId: state.currentSession?.session_id ?? null, sessionsByWorkspace: state.sessionsByWorkspace,
+    activeSessionId: state.currentSession?.session_id ?? null,
     gatewayWorkspaces: state.gatewayWorkspaces, confirm, setStatus, onError: reportError, sessionCatalogOutboxRuntime: runtime.catalog, activateGatewayWorkspace: runtime.activateGatewayWorkspace,
     createSession: runtime.createSession, openWorkspaceSession: openSession, removeGatewayWorkspace: runtime.removeGatewayWorkspace,
     deleteSession: runtime.deleteSession, renameSession: runtime.renameSession, forkSessionContext: runtime.forkSessionContext,
@@ -185,8 +210,9 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       .catch(cause => reportError(String(cause)));
   };
   return <div className="native-session-navigation" onClickCapture={event => { gesture.current = { pinned: event.detail > 1, sideBySide: event.altKey }; }}>
-    <AgentSessionsPanel catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
+    <AgentSessionsPanel onActionsChange={bindNavigationActions} catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
       currentSessionWorkspaceId={state.currentSessionWorkspaceId}
+      selectedSessionKey={selectedSessionKey}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={(...args) => runSessionAction('rename', ...args)} onDeleteSession={(...args) => runSessionAction('delete', ...args)} onSetSessionParent={actions.changeSessionParent}
       onForkSessionContext={(workspaceKey, sessionId) => commands.executeCommand(sessionActionCommands.fork, { owner: workspaceOwnerFromKey(workspaceKey), sessionId })}
@@ -195,7 +221,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       activeGatewayWorkspaceId={state.activeGatewayWorkspaceId} removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
       workspaceSwitching={state.workspaceSwitching} onActivateWorkspace={activateWorkspace} onSetWorkspaceParent={runtime.setWorkspaceParent}
       onRefreshWorkspaceSessions={runtime.refreshGatewayWorkspaceSessions} onRemoveWorkspace={actions.removeWorkspace}
-      onAddWorkspace={runtime.addManagedGatewayWorkspace} onOpenGatewayControl={() => setGatewayOpen(true)}
+      onAddWorkspace={runtime.addManagedGatewayWorkspace} onOpenGatewayControl={() => {
+        void commands.executeCommand('boxteam.gateway.connections').catch(cause => reportError(String(cause)));
+      }}
+      workspaceDetails={workspaceDetails} onCloseWorkspaceDetails={() => setWorkspaceDetails(current => current === workspaceDetails ? null : current)}
+      onOpenWorkspaceDetails={detailsWorkspace} onOpenWorkspaceSettings={openWorkspaceSettings} onOpenWorkspaceLogs={openWorkspaceLogs}
       onReconnectWorkspace={reconnectWorkspace} onStartWorkspace={startWorkspace}
       onStopWorkspace={backendActions.stop} onRenameWorkspace={runtime.renameGatewayWorkspace}
       onCopySessionInformation={copySession} onCopyWorkspaceInformation={copyWorkspace} onSelectWorkspaceSession={openSession}
@@ -205,7 +235,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       onCreateSession={actions.createSessionInCatalog} onCreateSessionInFolder={actions.createSessionInFolder}
       onCreateSessionFolder={actions.createSessionFolder} onSessionFolderDeleted={async workspaceKey => {
         await runtime.refreshGatewayWorkspaceSessions(workspaceKey); actions.invalidateSessionCatalog(workspaceKey);
-      }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog} catalogSyncKeys={actions.sessionCatalogSyncKeys}
+      }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog}
       catalogRefreshVersions={actions.sessionCatalogRefreshVersions} sessionCatalogOutboxRuntime={runtime.catalog}
       sessionCatalogOutboxSnapshot={runtime.catalogSnapshot} flexRatio={1}
       preferences={resolveAgentSessionsPreferences(state.uiSettings)} onPreferencesChange={updater => {
@@ -214,17 +244,6 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     <SessionNameDialog open={actions.nameDialog !== null} title={t('navigation.sessions.rename')} label={t('navigation.sessions.name')} initialValue={actions.nameDialog?.initialTitle ?? ''}
       confirmText={t('navigation.save')} submitting={actions.nameDialogSubmitting} error={actions.nameDialogError} onCancel={actions.closeNameDialog} onSubmit={actions.submitNameDialog} />
     <SessionContextForkDialog state={actions.forkDialog} onCancel={actions.closeForkDialog} onSubmit={actions.submitForkDialog} onSelectionChange={actions.updateForkDialogSelection} />
-    {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label={t('navigation.workspace.gatewayControl')}>
-      <button type="button" className="sidebar-icon-button" aria-label={t('navigation.workspace.closeGatewayControl')} onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
-      <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
-        onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
-        onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
-        onStart={startWorkspace} onStop={backendActions.stop}
-        onSafeRestart={backendActions.safeRestart} onForceRestart={backendActions.forceRestart}
-        background={background} onUpdateBackground={value => configuration.updateValue(BACKGROUND_SETTING, readWorkbenchBackground(value), {}, ConfigurationTarget.USER, { donotNotifyError: true })}
-        onSelectColorTheme={async () => { setGatewayOpen(false); await commands.executeCommand('workbench.action.selectTheme'); }}
-        diagnosticLocation={logLocation} onCloseDiagnosticLocation={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }} />
-    </div> : null}
     {diagnostic ? <div className="native-navigation-dialog" role="dialog" aria-label={diagnostic.title}>
       <button type="button" className="sidebar-icon-button" aria-label={t('navigation.diagnostic.close')} onClick={() => setDiagnostic(null)}><span className="codicon codicon-close" /></button>
       <h3>{diagnostic.title}</h3><pre>{diagnostic.detail}</pre>
@@ -232,15 +251,24 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   </div>;
 }
 
+export interface GatewayNavigationActions {
+  addRemoteGatewayConnection: (payload: AddRemoteGatewayConnectionRequest) => Promise<void>;
+  refresh: () => Promise<void>;
+}
+
 export class NavigationSurface {
+  private navigationActions?: SessionNavigationActions;
+  private catalogReveal?: CatalogRevealRequest;
   private readonly surface: ReactSurface;
-  private readonly render: (request?: CatalogRevealRequest, diagnostic?: GatewayDiagnosticLogLocateRequest) => void;
+  private readonly render: (request?: CatalogRevealRequest) => void;
+  private gatewayActions?: GatewayNavigationActions;
+  private gatewayReady?: DeferredPromise<GatewayNavigationActions>;
   private reveal?: AbortController;
   private workspaceActions?: WorkspaceActionHandlers;
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
   private sessionActions?: SessionActionHandlers;
   private sessionActionsReady?: DeferredPromise<SessionActionHandlers>;
-  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService, configuration: IConfigurationService) {
+  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService) {
     this.surface = new ReactSurface(container, [...productStyles, style]);
     const bindWorkspaceActions = (actions?: WorkspaceActionHandlers) => {
       this.workspaceActions = actions;
@@ -250,19 +278,34 @@ export class NavigationSurface {
       this.sessionActions = actions;
       if (actions && this.sessionActionsReady) { void this.sessionActionsReady.complete(actions); this.sessionActionsReady = undefined; }
     };
-    this.render = (catalogReveal, diagnosticLocation) => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
-      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} bindSessionActions={bindSessionActions} catalogReveal={catalogReveal} diagnosticLocation={diagnosticLocation}
-      configuration={configuration} /></WarmConfirmProvider>);
+    const bindGatewayActions = (actions?: GatewayNavigationActions) => {
+      this.gatewayActions = actions;
+      if (actions && this.gatewayReady) { void this.gatewayReady.complete(actions); this.gatewayReady = undefined; }
+    };
+    const bindNavigationActions = (actions?: SessionNavigationActions) => { this.navigationActions = actions; };
+    this.render = (catalogReveal = this.catalogReveal) => { this.catalogReveal = catalogReveal; this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
+      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} bindSessionActions={bindSessionActions}
+      bindGatewayActions={bindGatewayActions} bindNavigationActions={bindNavigationActions} catalogReveal={catalogReveal} /></WarmConfirmProvider>); };
     this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }
-  async runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void): Promise<void> {
+  async runNavigationAction(action: keyof SessionNavigationActions): Promise<void> {
+    if (!this.navigationActions) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+    await this.navigationActions[action]();
+  }
+  async runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void, request?: GatewayRuntimeGroupRequest): Promise<void> {
     if (!this.workspaceActions) await (this.actionsReady ??= new DeferredPromise<WorkspaceActionHandlers>()).p;
     assertAccess();
     if (!this.workspaceActions) throw new Error(t('navigation.workspace.navigationClosedAction'));
-    await this.workspaceActions[action](workspaceKey);
+    await this.workspaceActions[action](workspaceKey, request);
   }
-  revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void { this.render(undefined, request); }
+  async runGatewayAction(action: 'refresh' | AddRemoteGatewayConnectionRequest, assertAccess: () => void): Promise<void> {
+    if (!this.gatewayActions) await (this.gatewayReady ??= new DeferredPromise<GatewayNavigationActions>()).p;
+    assertAccess();
+    if (!this.gatewayActions) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+    if (action === 'refresh') await this.gatewayActions.refresh();
+    else await this.gatewayActions.addRemoteGatewayConnection(action);
+  }
   async runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.sessionActions) await (this.sessionActionsReady ??= new DeferredPromise<SessionActionHandlers>()).p;
     assertAccess();
@@ -281,9 +324,12 @@ export class NavigationSurface {
     });
   }
   dispose(): void {
+    this.navigationActions = undefined;
     this.reveal?.abort(new Error(t('navigation.sessions.navigationClosed')));
     if (this.actionsReady) void this.actionsReady.error(new Error(t('navigation.workspace.navigationClosedAction')));
     if (this.sessionActionsReady) void this.sessionActionsReady.error(new Error(t('navigation.sessions.navigationClosedAction')));
+    if (this.gatewayReady) void this.gatewayReady.error(new Error(t('workbench.workspaceAction.navigationUnavailable')));
+    this.gatewayActions = undefined;
     this.sessionActions = undefined;
     this.workspaceActions = undefined;
     this.surface.dispose();

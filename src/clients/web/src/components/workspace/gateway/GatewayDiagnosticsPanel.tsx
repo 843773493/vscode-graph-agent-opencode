@@ -1,12 +1,11 @@
-import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getGatewayDiagnostics } from "../../../gatewayApi";
+import { getGatewayDiagnostics, type GatewayLogTarget } from "../../../gatewayApi";
+import type { GatewayRequestTarget } from "../../../api/workspaceIdentity";
+import { HttpRequestError } from "../../../api/http";
 import type {
   GatewayDiagnostics,
-  GatewayWorkspace,
 } from "../../../types/backend";
-import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import { formatByteSize, formatLocalTimestamp } from "../../../utils/format";
 import {
   diagnosticLogStatusLabel,
@@ -14,10 +13,13 @@ import {
 } from "../../panels/gatewayLogPresentation";
 import { errorMessage } from "../../../utils/errorMessage";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import GatewayRuntimeObservation from "./GatewayRuntimeObservation";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
-  workspaces: GatewayWorkspace[];
+  target?: GatewayRequestTarget;
+  onOpenRetention?: (target: GatewayRequestTarget) => Promise<void>;
+  onOpenLog: (target: GatewayLogTarget & { log_id: string }) => Promise<void>;
 }
 
 function formatTime(value: string | null): string {
@@ -34,11 +36,13 @@ function diagnosticsStatusLabel(status: GatewayDiagnostics["status"]): string {
 
 export default function GatewayDiagnosticsPanel({
   apiPort,
-  workspaces,
+  target,
+  onOpenRetention,
+  onOpenLog,
 }: GatewayDiagnosticsPanelProps) {
-  const groups = useMemo(() => groupGatewayWorkspaces(workspaces), [workspaces]);
-  const [gatewayConnectionId, setGatewayConnectionId] = useState<string | null>(null);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const gatewayId = target?.gateway_id;
+  const gatewayConnectionId = target?.gateway_connection_id;
+  const workspaceId = target?.workspace_id;
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,67 +50,52 @@ export default function GatewayDiagnosticsPanel({
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   // 诊断范围可被连续切换；只有最后一次发起的响应才允许写入展示态，否则先发后到的
   // 旧范围响应会覆盖新范围，用户看到与当前选择不符的工作区/日志。
-  const requestRevisionRef = useRef(0);
-  // 上一次渲染的诊断范围。范围一变化必须在同一提交内作废旧快照：仅靠 revision
-  // 只能丢弃先发后到的旧响应，但「新范围选择 + 旧 diagnostics」仍会让 selectedLog
+  const requestRef = useRef<AbortController | null>(null);
+  // 上一次渲染的诊断范围。范围一变化必须在同一提交内作废旧快照：仅取消请求
+  // 只能阻止旧响应发布，但「新范围选择 + 旧 diagnostics」仍会让 selectedLog
   // 回退到 diagnostics.logs[0]，在新响应到达前继续渲染旧工作区/旧日志入口的 tail。
-  const lastScopeRef = useRef(`${gatewayConnectionId ?? ""}:${workspaceId}`);
-  const scopeKey = `${gatewayConnectionId ?? ""}:${workspaceId}`;
+  const scopeKey = JSON.stringify([gatewayId, gatewayConnectionId, workspaceId]);
+  const lastScopeRef = useRef(scopeKey);
   if (lastScopeRef.current !== scopeKey) {
     lastScopeRef.current = scopeKey;
-    requestRevisionRef.current += 1;
+    requestRef.current?.abort();
     setDiagnostics(null);
     setSelectedLogId(null);
     setError(null);
     setLoading(true);
   }
 
-  const selectedGroup = useMemo(
-    () =>
-      groups.find(
-        (group) =>
-          (gatewayConnectionId === null && group.key === "local") ||
-          group.key === `remote:${gatewayConnectionId}`,
-      ),
-    [gatewayConnectionId, groups],
-  );
-
   const loadDiagnostics = useCallback(
     async (logId?: string | null) => {
-      const revision = requestRevisionRef.current + 1;
-      requestRevisionRef.current = revision;
+      requestRef.current?.abort();
+      const controller = new AbortController();
+      requestRef.current = controller;
       setLoading(true);
       setError(null);
       try {
         const next = await getGatewayDiagnostics(apiPort, {
-          gatewayConnectionId,
-          workspaceId: workspaceId || null,
+          target: gatewayId ? { gateway_id: gatewayId, gateway_connection_id: gatewayConnectionId, workspace_id: workspaceId } : undefined,
           logId: logId ?? null,
           tailLines: 300,
+          signal: controller.signal,
         });
-        if (requestRevisionRef.current !== revision) return;
+        if (controller.signal.aborted) return;
         setDiagnostics(next);
         setSelectedLogId(next.selected_log_id);
       } catch (loadError) {
-        if (requestRevisionRef.current !== revision) return;
-        setError(errorMessage(loadError));
+        if (controller.signal.aborted) return;
+        setError(loadError instanceof HttpRequestError && loadError.requestId
+          ? `${errorMessage(loadError)}\nrequest_id=${loadError.requestId}` : errorMessage(loadError));
       } finally {
-        if (requestRevisionRef.current === revision) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
-    }, [apiPort, gatewayConnectionId, workspaceId],
+    }, [apiPort, gatewayId, gatewayConnectionId, workspaceId],
   );
 
   useEffect(() => {
     void loadDiagnostics();
+    return () => requestRef.current?.abort();
   }, [loadDiagnostics]);
-
-  useEffect(() => {
-    if (!selectedGroup) return;
-    const stillExists = selectedGroup.workspaces.some(
-      (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
-    );
-    if (workspaceId && !stillExists) setWorkspaceId("");
-  }, [selectedGroup, workspaceId]);
 
   const selectedLog = useMemo(() => {
     if (!diagnostics) return null;
@@ -116,34 +105,6 @@ export default function GatewayDiagnosticsPanel({
 
   const availableLogCount = diagnostics?.logs.filter((log) => log.status === "available").length ?? 0;
   const offlineWorkspaceCount = diagnostics?.workspaces.filter((item) => item.status === "offline").length ?? 0;
-  const diagnosticWorkspacesById = useMemo(() => {
-    const workspacesById = new Map<string, GatewayDiagnostics["workspaces"][number]>();
-    for (const item of diagnostics?.workspaces ?? []) {
-      if (!workspacesById.has(item.workspace_id)) {
-        workspacesById.set(item.workspace_id, item);
-      }
-    }
-    return workspacesById;
-  }, [diagnostics?.workspaces]);
-
-  const diagnosticWorkspaceFor = (workspace: GatewayWorkspace) => {
-    const diagnosticWorkspaceId = workspace.workspace_id;
-    return diagnosticWorkspacesById.get(diagnosticWorkspaceId);
-  };
-
-  const selectGateway = (value: string) => {
-    setGatewayConnectionId(value || null);
-    setWorkspaceId("");
-    setSelectedLogId(null);
-    setCopyNotice(null);
-  };
-
-  const selectWorkspace = (value: string) => {
-    setWorkspaceId(value);
-    setSelectedLogId(null);
-    setCopyNotice(null);
-  };
-
   const copySelectedLog = async () => {
     if (!selectedLog?.tail) return;
     // 复制统一走 utils/clipboard 的唯一实现：非安全上下文下 navigator.clipboard 真实
@@ -156,35 +117,34 @@ export default function GatewayDiagnosticsPanel({
     }
   };
 
+  const copyDiagnosticSummary = async () => {
+    if (!diagnostics) return;
+    // 默认复制只选身份与状态；原始日志仍由用户在单独的“复制”操作中明确取得。
+    const summary = {
+      gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id,
+      selected_workspace_id: diagnostics.selected_workspace_id, checked_at: diagnostics.checked_at, status: diagnostics.status,
+      processes: diagnostics.processes.map(process => ({ service: process.service, workspace_ids: process.workspace_ids,
+        output_mode: process.output_mode, has_error: Boolean(process.error),
+        state: process.state ? { pid: process.state.pid, runtime_instance_id: process.state.runtime_instance_id,
+          applied_revision: process.state.applied_revision, level: process.state.level, pretty: process.state.pretty } : undefined })),
+      logs: diagnostics.logs.map(log => ({ log_id: log.log_id, workspace_id: log.workspace_id, service: log.service,
+        status: log.status, truncated: log.truncated, line_count: log.line_count, size_bytes: log.size_bytes, has_error: Boolean(log.error) })),
+    };
+    try {
+      await copyTextToClipboard(JSON.stringify(summary, null, 2));
+      setCopyNotice(t("gateway.diagnostics.summaryCopied"));
+    } catch (copyError) { setCopyNotice(errorMessage(copyError)); }
+  };
+
   return (
     <div className="gateway-diagnostics-panel" data-testid="gateway-diagnostics-panel">
       <section className="gateway-diagnostics-toolbar" aria-label={t("gateway.diagnostics.scope")}>
-        <label>
-          <span>{t("gateway.diagnostics.gatewayConnection")}</span>
-          <select
-            value={gatewayConnectionId ?? ""}
-            onChange={(event) => selectGateway(event.target.value)}
-          >
-            {groups.map((group) => (
-              <option key={group.key} value={group.key === "local" ? "" : group.key.slice("remote:".length)}>
-                {group.title} · {t("gateway.diagnostics.workspaceCount", group.workspaces.length)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>{t("gateway.diagnostics.workspace")}</span>
-          <select value={workspaceId} onChange={(event) => selectWorkspace(event.target.value)}>
-            <option value="">{t("gateway.diagnostics.allWorkspaces")}</option>
-            {selectedGroup?.workspaces.map((workspace) => (
-              <option key={gatewayWorkspaceKey(workspace)} value={gatewayWorkspaceKey(workspace)}>
-                {workspace.name}{workspace.managed ? t("gateway.diagnostics.managed") : t("gateway.diagnostics.external")}
-              </option>
-            ))}
-          </select>
-        </label>
         <div className="gateway-diagnostics-toolbar-actions">
           <span className="gateway-diagnostics-readonly"><span className="codicon codicon-lock" aria-hidden="true" />{t("gateway.diagnostics.readOnly")}</span>
+          <button type="button" className="gateway-compact-button" disabled={!diagnostics || loading}
+            title={t("gateway.diagnostics.copySummaryHint")} onClick={() => void copyDiagnosticSummary()}>
+            {t("gateway.diagnostics.copySummary")}
+          </button>
           <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void loadDiagnostics(selectedLogId)}>
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
             {loading ? t("gateway.diagnostics.loading") : t("gateway.diagnostics.refreshLogs")}
@@ -233,25 +193,21 @@ export default function GatewayDiagnosticsPanel({
             </article>
           </section>
 
-          <section className="gateway-diagnostics-workspace-strip" aria-label={t("gateway.diagnostics.workspaceStatus")}>
-            <div><strong>{t("gateway.diagnostics.workspaceConnectionStatus")}</strong><span>{t("gateway.diagnostics.workspaceProjectionDescription")}</span></div>
-            <div className="gateway-diagnostics-workspace-pills">
-              {selectedGroup?.workspaces.map((workspace) => (
-                <button
-                  type="button"
-                  key={gatewayWorkspaceKey(workspace)}
-                  className={gatewayWorkspaceKey(workspace) === workspaceId ? "active" : undefined}
-                  onClick={() => selectWorkspace(gatewayWorkspaceKey(workspace))}
-                >
-                  <span className={`gateway-diagnostics-status-dot ${diagnosticWorkspaceFor(workspace)?.status ?? workspace.status}`} />
-                  {workspace.name}
-                </button>
-              ))}
-              {selectedGroup?.workspaces.length === 0 ? <span className="gateway-diagnostics-muted">{t("gateway.diagnostics.noWorkspaces")}</span> : null}
-            </div>
-          </section>
+          <details className="gateway-diagnostics-runtime">
+            <summary>{t("gateway.storage.title")}</summary>
+            <p>{t("gateway.storage.controlDirectory")} <code>{diagnostics.control_directory ?? t("gateway.storage.unreported")}</code></p>
+            <p>{t("gateway.storage.logDirectory")} <code>{diagnostics.log_directory ?? t("gateway.storage.unreported")}</code></p>
+            <p>{t("gateway.storage.pathBoundary")}</p>
+            <p>{t("gateway.storage.retentionBoundary")}</p>
+            {onOpenRetention ? <button type="button" className="gateway-compact-button" onClick={() => {
+              void onOpenRetention({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined }).catch(cause => setError(
+                cause instanceof HttpRequestError && cause.requestId
+                  ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause),
+              ));
+            }}>{t("gateway.storage.retentionSettings")}</button> : null}
+          </details>
 
-          <details className="gateway-diagnostics-runtime" open>
+          <details className="gateway-diagnostics-runtime">
             <summary>{t("gateway.diagnostics.processLogSettings")}</summary>
             {diagnostics.processes.map((process) => (
               <div key={`${process.service}:${process.state?.runtime_instance_id ?? process.workspace_ids.join(",")}`}>
@@ -268,6 +224,19 @@ export default function GatewayDiagnosticsPanel({
                 {process.workspace_ids.length ? <p>{t("gateway.diagnostics.mountedWorkspaces")}{process.workspace_ids.join(", ")}</p> : null}
               </div>
             ))}
+          </details>
+
+          <details className="gateway-diagnostics-runtime">
+            <summary>{t("gateway.observation.title")}</summary>
+            <p>{t("gateway.observation.scope", diagnostics.gateway_id)}</p>
+            {diagnostics.observation ? <GatewayRuntimeObservation observation={diagnostics.observation} />
+              : <p>{t("gateway.observation.unavailable")}</p>}
+            {diagnostics.plugin_observations.map((plugin, index) => <div key={plugin.instance?.instance_id ?? index}>
+              {plugin.instance ? <h4>{plugin.instance.package_id}/{plugin.instance.plugin_id}@{plugin.instance.package_version}
+                {` · ${plugin.instance.gateway_id} · ${plugin.instance.workspace_id ?? plugin.instance.instance_scope}`}</h4> : null}
+              {plugin.observation ? <GatewayRuntimeObservation observation={plugin.observation} /> : null}
+              {plugin.error ? <p role="alert">{plugin.error}</p> : null}
+            </div>)}
           </details>
 
           <section className="gateway-diagnostics-log-layout" aria-label={t("gateway.diagnostics.logViewer")}>
@@ -299,9 +268,13 @@ export default function GatewayDiagnosticsPanel({
                     <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>{t("gateway.diagnostics.logUnavailable")}</strong><p>{diagnosticLogUnavailableHint(selectedLog)}</p></div>
                   ) : selectedLog.status === "empty" ? (
                     <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.emptyLog")}</strong><p>{t("gateway.diagnostics.emptyLogDetail")}</p></div>
-                  ) : (
-                    <pre>{selectedLog.tail || t("gateway.diagnostics.noLogContent")}</pre>
-                  )}
+                  ) : null}
+                  <button type="button" disabled={selectedLog.status === 'unavailable'} onClick={() => {
+                    void onOpenLog({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined,
+                      workspace_id: selectedLog.source === 'gateway' ? undefined : selectedLog.workspace_id ?? diagnostics.selected_workspace_id ?? undefined,
+                      log_id: selectedLog.log_id })
+                      .catch(cause => setError(errorMessage(cause)));
+                  }}>{t('gateway.settings.openOutput')}</button>
                 </>
               ) : (
                 <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.noLogEntries")}</strong><p>{t("gateway.diagnostics.noLogEntriesDetail")}</p></div>

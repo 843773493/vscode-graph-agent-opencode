@@ -12,9 +12,9 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated
 
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 
-from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.endpoint import (
@@ -22,9 +22,9 @@ from app.gateway.federation.endpoint import (
     serve_federation_channel,
 )
 from app.gateway.federation.errors import FederationError
-from app.gateway.federation.grants import GrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.federation.rpc import FederationRpcService
+from app.schemas.gateway.federation_targets import GrantTarget
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import (
     CommunicationDiscoveryRequest,

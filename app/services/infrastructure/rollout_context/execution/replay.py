@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import hashlib
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import content_hash as item_content_hash
 from app.domain.itemized.runtime import ProvenanceEdge
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -172,7 +172,7 @@ class RolloutReplayMixin:
                 f"{thread_id}:{source_turn_id}:{acceptance_idempotency_key}".encode()
             ).hexdigest()[:32]
             if acceptance_idempotency_key is not None
-            else uuid4().hex
+            else create_uuid_hex()
         )
         new_turn_id = f"turn-replay-{replay_id}"
         accepted_ingress_id = f"replay-ingress:{thread_id}:{replay_id}"

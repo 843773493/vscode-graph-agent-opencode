@@ -37,7 +37,7 @@ export default function AgentStatePanel({
   }, [jsonl]);
 
   return (
-    <section className="agent-state-panel">
+    <section className="agent-state-panel panel-feedback-host" aria-busy={loading}>
       <div className="context-inspection-mode" aria-label={t("inspection.state.mode")}>
         <button type="button" aria-pressed={!frozen} onClick={() => setFrozen(false)}>{t("inspection.state.current")}</button>
         <button type="button" aria-pressed={frozen} onClick={() => setFrozen(true)}>{t("inspection.context.request")}</button>
@@ -81,14 +81,13 @@ export default function AgentStatePanel({
           </details>
         </div>
       ) : null}
-      {loading ? (
-        <div className="empty-state">{t("inspection.state.loading")}</div>
-      ) : error ? (
-        <div className="empty-state error-state">
+      {error ? (
+        <div className="panel-feedback" role="alert">
           <div className="error-title">{t("inspection.state.failed")}</div>
           <div className="error-message">{error}</div>
         </div>
-      ) : displayJsonl ? (
+      ) : null}
+      {displayJsonl ? (
         <details className="agent-state-raw">
           <summary>{t("inspection.state.raw")}</summary>
           <pre
@@ -98,9 +97,9 @@ export default function AgentStatePanel({
             {displayJsonl}
           </pre>
         </details>
-      ) : (
+      ) : !loading && !error ? (
         <div className="empty-state">{t("inspection.state.empty")}</div>
-      )}
+      ) : null}
       </>}
     </section>
   );

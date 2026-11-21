@@ -1,6 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
+import { discardSessionAttachment, uploadSessionAttachment, MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
 import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerAttachments, useComposerDraft, writeComposerAttachments, type ComposerDraftController } from "../../hooks/composer/useComposerDraft";
@@ -23,11 +24,14 @@ import {
   fileToSelectedAttachment,
   MEDIA_ONLY_PROMPT,
   mediaFilesFromClipboard,
+  type SelectedAttachment,
 } from "../../utils/media/mediaAttachments";
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
 import ComposerModelControl from "./ComposerModelControl";
+import type { ModelPickerRequest } from "../../state/modelPicker";
 import ComposerAttachmentTray from "./ComposerAttachmentTray";
+import MessageSubmissionRecovery from "./MessageSubmissionRecovery";
 import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerToolControl from "./ComposerToolControl";
 import ComposerViewControl from "./ComposerViewControl";
@@ -47,6 +51,8 @@ import {
   parseGoalSlashAction,
 } from "../../state/sessionGoal";
 import { errorMessage } from "../../utils/errorMessage";
+import ThreadStatusBar, { type ThreadStatusBarProps } from "./ThreadStatusBar";
+import { ComposerDiagnosticsContext } from "./ComposerDiagnosticsContext";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -71,7 +77,11 @@ function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
   return "after_turn";
 }
 
-function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void }) {
+function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, status }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void;
+  status?: Omit<ThreadStatusBarProps, "submission" | "syncError" | "activeJobId">;
+  onManageConfiguration?: (kind: 'providers' | 'agents', id: string, modelId?: string) => void;
+  onPickModel?: (request: ModelPickerRequest) => Promise<void> }) {
+  const reportDiagnostic = useContext(ComposerDiagnosticsContext);
   const {
     state,
     setStatus,
@@ -85,12 +95,13 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     switchModel,
     refreshAgents,
     setWorkspaceDefaultAgent,
-    setWorkspaceDefaultProvider,
+    setWorkspaceDefaultModel,
     switchContentView,
     createSession,
     renameSession,
     updateUiSettings,
     getLatestAssistantContent,
+    refreshTurnHistory,
   } =
     useComposerState();
   const [selectedBrowserElements, setSelectedBrowserElements] = useState<
@@ -98,9 +109,9 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   >([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
+  const [stopPendingFor, setStopPendingFor] = useState<string | null>(null);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
@@ -111,7 +122,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   // 同一份输入内容的重入闸门。产品明确支持「生成中继续排队下一条消息」
-  // （见 composerHint：「正在生成，可继续发送下一条或点击停止」），因此不能
+  // （运行状态显示在输入区上方），因此不能
   // 禁用发送或整个会话级加锁——那会一并挡掉合法的排队。这里只挡「同一次提交
   // 被瞬时重复触发」：Enter 提交会同步 setInput("")，但同一事件循环内的
   // 重复触发仍可能读到尚未刷新的旧 input，导致同一 payload 被提交两次。
@@ -119,7 +130,6 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   // 失败回填后也会被清空以允许重试。
   const inFlightSubmissionRef = useRef<{ content: string; policy: DeliveryPolicy } | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
-  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const currentWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -144,10 +154,16 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。
   const currentScopeKeyRef = useRef(currentSessionCacheKey);
   currentScopeKeyRef.current = currentSessionCacheKey;
+  const attachmentScope = useMemo(() => ({ active: false, pending: new Map<string, AbortController>() }), [currentSessionCacheKey]);
+  useEffect(() => {
+    attachmentScope.active = true;
+    return () => { attachmentScope.active = false; for (const controller of attachmentScope.pending.values()) controller.abort(); attachmentScope.pending.clear(); };
+  }, [attachmentScope]);
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
     ? state.currentGoal
     : null;
+  useEffect(() => { if (attachmentError) reportDiagnostic(attachmentError); }, [reportDiagnostic, attachmentError]);
 
   const hasContent = input.trim().length > 0
     || attachments.length > 0
@@ -159,28 +175,16 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const currentAgentConfig = state.agents.find(
     (agent) => agent.agent_id === currentAgent,
   );
-  const currentProviders = currentAgentConfig?.providers ?? [];
-  const currentProviderId =
-    state.currentSession?.current_provider_id
-    ?? currentProviders.find((provider) => provider.workspace_default)?.provider_id
-    ?? currentProviders[0]?.provider_id
-    ?? currentAgentConfig?.model
-    ?? "model";
+  const currentModels = currentAgentConfig?.models ?? [];
+  const currentModel = state.currentSession
+    ? state.currentSession.current_model ?? null
+    : currentModels.find((model) => model.workspace_default)?.model_ref ?? null;
   const defaultDeliveryPolicy =
     state.uiSettings.layout.delivery_policy_default ?? "after_turn";
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
   const showInterrupt = Boolean(state.currentActiveJobId);
-  const queuedCount = state.queuedPendingCount;
-  const composerHint = useMemo(() => {
-    if (showInterrupt) {
-      return queuedCount > 0
-        ? t("composer.queued", queuedCount)
-        : t("composer.generating");
-    }
-    return t("composer.sendHint");
-  }, [queuedCount, showInterrupt]);
 
   useEffect(() => {
     resizeTextarea(textareaRef.current);
@@ -195,7 +199,6 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     setAttachmentError("");
     setComposerNotice("");
     setAgentMenuOpen(false);
-    setModelMenuOpen(false);
     setViewMenuOpen(false);
     setSlashCommandIndex(0);
     setRenameDialogOpen(false);
@@ -341,7 +344,11 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     if (!targetThreadId) throw new Error("Goal 目标会话缺少 main Thread 身份");
     await runGoalMutation(
       () => updateGoal(
-        { objective, status: "active", replace: true },
+        {
+          objective, status: "active", replace: true,
+          expected_control_revision: targetSession.session_id === state.currentSession?.session_id
+            ? state.currentGoalControlRevision : 0,
+        },
         { sessionId: targetSession.session_id, threadId: targetThreadId, workspaceId: targetWorkspaceId },
       ),
       t("composer.goalStarted"),
@@ -352,32 +359,24 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     if (!visibleGoal || visibleGoal.status !== "active") {
       throw new Error(t("composer.goalPauseInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "paused" }), t("composer.goalPaused"));
+    await runGoalMutation(() => updateGoal({ status: "paused", expected_control_revision: visibleGoal.control_revision }), t("composer.goalPaused"));
   };
 
   const resumeGoal = async () => {
     if (!visibleGoal || !goalCanResume(visibleGoal.status)) {
       throw new Error(t("composer.goalResumeInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "active" }), t("composer.goalResumed"));
+    await runGoalMutation(() => updateGoal({ status: "active", expected_control_revision: visibleGoal.control_revision }), t("composer.goalResumed"));
   };
 
-  const clearCurrentGoal = async (requireConfirmation: boolean) => {
+  const clearCurrentGoal = async () => {
     if (!visibleGoal) {
       throw new Error(t("composer.goalMissing"));
     }
-    if (requireConfirmation) {
-      const confirmed = await confirm({
-        title: t("composer.clearGoal"),
-        message: t("composer.clearGoalDetail", visibleGoal.objective),
-        confirmText: t("composer.clearGoalConfirm"),
-        danger: true,
-      });
-      if (!confirmed) {
-        return;
-      }
-    }
-    await runGoalMutation(clearGoal, t("composer.goalCleared"));
+    await runGoalMutation(() => clearGoal({
+      sessionId: visibleGoal.session_id, threadId: visibleGoal.thread_id,
+      workspaceId: currentWorkspaceId,
+    }, visibleGoal.control_revision), t("composer.goalCleared"));
   };
 
   const runGoalCommand = (args: string) => {
@@ -408,7 +407,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
           await resumeGoal();
           return;
         case "clear":
-          await clearCurrentGoal(false);
+          await clearCurrentGoal();
           return;
         case "create":
           await createGoal(action.objective);
@@ -442,7 +441,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     compactLoading: state.compactLoading,
     getLatestAssistantContent,
     setInput,
-    setAttachments,
+    clearAttachments: () => { for (const attachment of attachments) handleRemoveAttachment(attachment.file_id); },
     setAttachmentError,
     setComposerNotice,
     setAgentMenuOpen,
@@ -464,6 +463,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
 
   const handleSend = (deliveryPolicy: DeliveryPolicy = defaultDeliveryPolicy) => {
     if (submitSlashInput(slashCommandIndex)) {
+      return;
+    }
+    if (attachments.some(attachment => attachment.uploadState)) {
+      setAttachmentError(t("composer.attachments.waitForUpload"));
       return;
     }
 
@@ -505,6 +508,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       content,
       sentAttachments.map((attachment) => ({
         file_id: attachment.file_id,
+        directory_uri: attachment.directory_uri,
         name: attachment.name,
         content_type: attachment.content_type,
         data_url: attachment.data_url,
@@ -513,6 +517,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     ).catch((error: unknown) => {
       if (inFlightSubmissionRef.current === submission) {
         inFlightSubmissionRef.current = null;
+      }
+      if (error instanceof MessageSubmissionUnknownError || error instanceof MessageSubmissionRejectedError) {
+        if (currentScopeKeyRef.current === submission.scopeKey) setAttachmentError(error.message);
+        return;
       }
       if (currentScopeKeyRef.current === submission.scopeKey) {
         // 只填空输入：发送在途期间用户可能已经写下下一条内容，失败回填绝不能
@@ -547,18 +555,51 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     fileInputRef.current?.click();
   };
 
+  const uploadAttachment = async (attachment: SelectedAttachment, file: Blob) => {
+    if (!attachmentScope.active || attachmentScope.pending.has(attachment.file_id)) return;
+    const targetThread = threadId ?? state.currentSession?.thread_id;
+    if (!currentWorkspaceId || !currentSessionId || !targetThread) {
+      setAttachmentError(t("composer.attachments.missingOwner"));
+      setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "failed" } : item));
+      return;
+    }
+    const controller = new AbortController();
+    attachmentScope.pending.set(attachment.file_id, controller);
+    setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "uploading" } : item));
+    try {
+      const uploaded = await uploadSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT,
+        currentSessionId, targetThread, currentWorkspaceId, file, attachment.name ?? "attachment",
+        attachment.content_type ?? "application/octet-stream", controller.signal);
+      if (controller.signal.aborted || !attachmentScope.active) {
+        await discardSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT,
+          currentSessionId, targetThread, currentWorkspaceId, uploaded.file_id)
+          .catch(error => reportDiagnostic(t("composer.attachments.removeFailed", errorMessage(error))));
+        return;
+      }
+      setAttachments(current => current.map(item => item.file_id === attachment.file_id
+        ? { ...uploaded, mediaKind: attachment.mediaKind, previewUrl: attachment.previewUrl } : item));
+    } catch (error) {
+      if (!controller.signal.aborted && attachmentScope.active) {
+        setAttachments(current => current.map(item => item.file_id === attachment.file_id ? { ...item, uploadState: "failed" } : item));
+        setAttachmentError(t("composer.attachments.uploadFailed", errorMessage(error)));
+      }
+    } finally {
+      if (attachmentScope.pending.get(attachment.file_id) === controller) attachmentScope.pending.delete(attachment.file_id);
+    }
+  };
+
   const appendFilesToAttachments = async (files: File[]) => {
     if (files.length === 0) {
       return;
     }
 
-    const results = await Promise.allSettled(
-      files.map((file, index) =>
-        fileToSelectedAttachment(file, attachments.length + index),
-      ),
-    );
+    const results = await Promise.allSettled(files.map(async (file, index) => {
+      if (file.size > 30 * 1024 * 1024) throw new Error(t("composer.attachments.tooLarge"));
+      return { file, attachment: { ...await fileToSelectedAttachment(file, attachments.length + index), uploadState: "uploading" as const } };
+    }));
+    if (!attachmentScope.active) return;
     const nextAttachments = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
+      result.status === "fulfilled" ? [result.value.attachment] : [],
     );
     const errors = results.flatMap((result) =>
       result.status === "rejected"
@@ -568,6 +609,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
 
     if (nextAttachments.length > 0) {
       setAttachments((current) => [...current, ...nextAttachments]);
+      for (const result of results) if (result.status === "fulfilled") void uploadAttachment(result.value.attachment, result.value.file);
     }
     if (errors.length > 0) {
       setAttachmentError(errors.join("；"));
@@ -594,6 +636,14 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   };
 
   const handleRemoveAttachment = (fileId: string) => {
+    attachmentScope.pending.get(fileId)?.abort();
+    const attachment = attachments.find(item => item.file_id === fileId);
+    const targetThread = threadId ?? state.currentSession?.thread_id;
+    const scopeKey = currentSessionCacheKey;
+    if (attachment?.directory_uri && currentSessionId && currentWorkspaceId && targetThread) {
+      void discardSessionAttachment(state.apiPort ?? DEFAULT_BACKEND_PORT, currentSessionId, targetThread, currentWorkspaceId, fileId)
+        .catch(error => { if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.attachments.removeFailed", errorMessage(error))); });
+    }
     setAttachments((current) =>
       current.filter((attachment) => attachment.file_id !== fileId),
     );
@@ -603,6 +653,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
 
   const handleClear = () => {
     setInput("");
+    for (const attachment of attachments) handleRemoveAttachment(attachment.file_id);
     setAttachments([]);
     setSelectedBrowserElements([]);
     setAttachmentError("");
@@ -610,15 +661,16 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   };
 
   const handleInterrupt = () => {
-    if (!showInterrupt) {
+    if (!showInterrupt || stopPendingFor === currentSessionCacheKey) {
       return;
     }
 
     setAttachmentError("");
     const scopeKey = currentSessionCacheKey;
+    setStopPendingFor(scopeKey);
     void interruptSession().catch((error: unknown) => {
       if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.interruptFailed", errorMessage(error)));
-    });
+    }).finally(() => setStopPendingFor(current => current === scopeKey ? null : current));
   };
 
   const handleViewSelect = (view: ConversationContentView) => {
@@ -647,33 +699,32 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     });
   };
 
-  const handleModelSelect = (providerId: string) => {
-    setModelMenuOpen(false);
+  const handleModelPicker = (anchor?: HTMLButtonElement) => {
+    const scopeKey = currentSessionCacheKey;
     setAttachmentError("");
-    void switchModel(providerId).catch((error: unknown) => {
-      setAttachmentError(
-        t("composer.modelFailed", errorMessage(error)),
-      );
-    });
-  };
-
-  const handleModelMenuToggle = () => {
-    const nextOpen = !modelMenuOpen;
-    setModelMenuOpen(nextOpen);
-    if (!nextOpen || !currentWorkspaceId) {
-      return;
-    }
-    void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
-      setAttachmentError(t("composer.refreshModelsFailed", errorMessage(error)));
-    });
-  };
-
-  const handleWorkspaceDefaultProvider = (providerId: string) => {
-    setAttachmentError("");
-    void setWorkspaceDefaultProvider(currentAgent, providerId).catch((error: unknown) => {
-      setAttachmentError(
-        t("composer.modelDefaultFailed", errorMessage(error)),
-      );
+    const open = async () => {
+      if (!onPickModel) throw new Error(t("composer.model.pickerMissing"));
+      if (!currentWorkspaceId) throw new Error(t("composer.model.sourceGone"));
+      await onPickModel({
+        anchor,
+        loadModels: async () => (await refreshAgents(currentWorkspaceId)).find(agent => agent.agent_id === currentAgent)?.models ?? [],
+        currentModel,
+        onSelect: async model => {
+          try { await switchModel(model); }
+          catch (error) { throw new Error(t("composer.modelFailed", errorMessage(error)), { cause: error }); }
+        },
+        onSetWorkspaceDefault: async model => {
+          try { await setWorkspaceDefaultModel(currentAgent, model); }
+          catch (error) { throw new Error(t("composer.modelDefaultFailed", errorMessage(error)), { cause: error }); }
+        },
+        onManage: onManageConfiguration ? model => {
+          const selected = model ?? currentModel;
+          onManageConfiguration('providers', selected?.provider_id ?? '', selected?.model_id);
+        } : undefined,
+      });
+    };
+    return open().catch((error: unknown) => {
+      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(errorMessage(error));
     });
   };
 
@@ -691,12 +742,6 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     }
     e.preventDefault();
     setAgentMenuOpen(false);
-  };
-
-  const handleModelMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape") return;
-    e.preventDefault();
-    setModelMenuOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -756,6 +801,13 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   return (
     <>
       <footer className="composer">
+        <MessageSubmissionRecovery port={state.apiPort ?? DEFAULT_BACKEND_PORT}
+          owner={currentWorkspaceId && currentSessionId && (threadId ?? state.currentSession?.thread_id)
+            ? { workspaceKey: currentWorkspaceId, sessionId: currentSessionId, threadId: (threadId ?? state.currentSession!.thread_id)! } : null}
+          onAccepted={refreshTurnHistory} render={submission => <ThreadStatusBar key={currentSessionCacheKey} {...status}
+            conversations={status?.conversations ?? []} timeline={status?.timeline ?? null}
+            active={status?.active ?? true} activeJobId={state.currentActiveJobId}
+            syncError={state.sessionExecutionSyncError} submission={submission} />} />
         <div className="composer-surface new-chat-input-container">
           <div className="new-chat-input-area">
             <div className="composer-copy sessions-chat-editor">
@@ -788,33 +840,13 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                 error={attachmentError}
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
+                onRetry={fileId => {
+                  const attachment = attachments.find(item => item.file_id === fileId);
+                  if (!attachment?.data_url) return;
+                  void fetch(attachment.data_url).then(response => response.blob()).then(file => uploadAttachment(attachment, file))
+                    .catch(error => setAttachmentError(t("composer.attachments.uploadFailed", errorMessage(error))));
+                }}
               />
-              {visibleGoal ? (
-                <div
-                  className="composer-goal-status"
-                  role="status"
-                  aria-label={t("composer.currentGoal", GOAL_STATUS_LABELS[visibleGoal.status], visibleGoal.objective)}
-                  title={visibleGoal.objective}
-                  data-testid="composer-current-goal"
-                >
-                  <span className="codicon codicon-target" aria-hidden="true" />
-                  <span className="composer-goal-status-label">
-                    Goal · {GOAL_STATUS_LABELS[visibleGoal.status]}
-                  </span>
-                  <span className="composer-goal-status-objective">
-                    {visibleGoal.objective}
-                  </span>
-                </div>
-              ) : state.goalLoading && currentSessionId ? (
-                <div className="composer-goal-status" role="status">
-                  {t("composer.loadingGoal")}
-                </div>
-              ) : null}
-              {state.goalError && currentSessionId ? (
-                <div className="composer-attachment-error" role="alert">
-                  {t("composer.syncGoalFailed", state.goalError)}
-                </div>
-              ) : null}
               {selectedBrowserElements.length > 0 ? (
                 <div className="composer-browser-elements" aria-label={t("composer.selectedElements")}>
                   {selectedBrowserElements.map((element) => (
@@ -870,7 +902,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                   onSelect={handleViewSelect}
                   onKeyDown={handleViewMenuKeyDown}
                 />
-                <div className="composer-hint">{composerHint}</div>
+                <div className="composer-hint">{t("composer.sendHint")}</div>
               </div>
               <div className="composer-actions-right">
                 <div className="composer-actions-row sessions-chat-config-toolbar">
@@ -884,28 +916,21 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                     onSelect={handleAgentSelect}
                     onSetWorkspaceDefault={handleWorkspaceDefaultAgent}
                     onKeyDown={handleAgentMenuKeyDown}
+                    onManage={onManageConfiguration ? () => { setAgentMenuOpen(false); onManageConfiguration('agents', currentAgent); } : undefined}
                   />
-                  <ComposerModelControl
-                    controlRef={modelMenuRef}
-                    providers={currentProviders}
-                    currentProviderId={currentProviderId}
-                    open={modelMenuOpen}
-                    disabled={currentProviders.length === 0}
-                    onToggle={handleModelMenuToggle}
-                    onClose={() => setModelMenuOpen(false)}
-                    onSelect={handleModelSelect}
-                    onSetWorkspaceDefault={handleWorkspaceDefaultProvider}
-                    onKeyDown={handleModelMenuKeyDown}
-                  />
+                  <ComposerModelControl models={currentModels} currentModel={currentModel} onOpen={handleModelPicker} />
                   <ComposerToolControl
                     apiPort={state.apiPort ?? DEFAULT_BACKEND_PORT}
                     agentId={currentAgent}
                     workspaceId={currentWorkspaceId}
                     onStatus={setStatus}
+                    models={currentModels}
                   />
                   <ComposerActionButtons
                     hasContent={hasContent}
+                    sendBlocked={!slashCommandMode && attachments.some(attachment => Boolean(attachment.uploadState))}
                     showInterrupt={showInterrupt}
+                    stopPending={stopPendingFor !== null && stopPendingFor === currentSessionCacheKey}
                     onClear={handleClear}
                     onInterrupt={handleInterrupt}
                     onSend={() => handleSend(defaultDeliveryPolicy)}
@@ -959,6 +984,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
             () => updateGoal({
               objective,
               status: goalEditStatus(visibleGoal.status),
+              expected_control_revision: visibleGoal.control_revision,
             }),
             t("composer.goalUpdated"),
           );

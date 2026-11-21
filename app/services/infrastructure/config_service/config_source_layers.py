@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
     ConfigSource,
+    StableConfigFile,
     config_revision,
     parse_stable_config_file,
     read_stable_config_file,
@@ -21,6 +22,7 @@ from app.core.path_utils import (
     get_user_workspace_schema_path,
     get_workspace_config_path,
 )
+from app.schemas.internal_v2.config import ConfigSourceBaselineDTO
 from app.services.infrastructure.config import (
     SHARED_USER_WORKSPACE_SOURCE_KEY,
 )
@@ -113,6 +115,8 @@ class ConfigSourceLayersMixin:
         source_override: tuple[str, dict[str, object]] | None = None,
         import_sources: bool = True,
         source_payloads: dict[str, dict[str, object]] | None = None,
+        source_files: dict[str, StableConfigFile] | None = None,
+        operation_only: bool = False,
     ) -> tuple[
         dict[str, Any],
         tuple[Path, ...],
@@ -128,10 +132,13 @@ class ConfigSourceLayersMixin:
                 payload = self._read_shared_override(config_key=config_key, path=path)
             else:
                 require_settled_config_migration(path)
-                payload = parse_stable_config_file(read_stable_config_file(path))
+                file = read_stable_config_file(path)
+                if source_files is not None:
+                    source_files[config_key] = file
+                payload = parse_stable_config_file(file)
             source_details.append(self._config_source(path=path, config_key=config_key))
             if (
-                payload is not None
+                not operation_only and payload is not None
                 and config_key in {
                     "workspace_mutable_override",
                     "workspace_local_mutable_override",
@@ -144,8 +151,9 @@ class ConfigSourceLayersMixin:
                 )
             if not import_sources and payload is not None:
                 require_current_workspace_config(payload, partial=True)
-                prepare_config_for_persistence(payload)
-                ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
+                if not operation_only:
+                    prepare_config_for_persistence(payload)
+                    ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
             if source_payloads is not None:
                 source_payloads[config_key] = payload or {}
             return payload
@@ -162,7 +170,18 @@ class ConfigSourceLayersMixin:
                     source_key=_INLINE_SOURCE_KEY,
                 ),
             ])
-            config = self._read_config_source(self._inline_config_path)
+            if source_files is not None:
+                require_settled_config_migration(self._inline_config_path)
+                file = read_stable_config_file(self._inline_config_path)
+                source_files[_INLINE_SOURCE_KEY] = file
+                config = parse_stable_config_file(file)
+                if config is None:
+                    raise FileNotFoundError("发行包内置 Workspace 配置不存在")
+                require_current_workspace_config(config, partial=True)
+                if not operation_only:
+                    ConfigAgentToolsMixin._preflight_custom_tool_factories(config)
+            else:
+                config = self._read_config_source(self._inline_config_path)
             if source_payloads is not None:
                 source_payloads["inline"] = config
             source_configs = {self._inline_config_path: config}
@@ -221,7 +240,8 @@ class ConfigSourceLayersMixin:
                 )
             if source_payloads is not None:
                 source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
-            self._validate_agent_tool_policies(config)
+            if not operation_only:
+                self._validate_agent_tool_policies(config)
             if schema_path is None:
                 schema_path = self._resolve_schema_path(source_configs=source_configs)
             return config, tuple(source_paths), tuple(source_details), schema_path
@@ -230,6 +250,30 @@ class ConfigSourceLayersMixin:
                 cast("ConfigService", self)._record_shared_source_application(sources=tuple(source_details),
                     result="failed", error=f"Workspace 配置来源读取失败: error={type(error).__name__}")
             raise
+
+    def _read_saved_source_view(self) -> tuple[
+        dict[str, Any], dict[str, dict[str, object]],
+        dict[str, StableConfigFile], dict[str, ConfigSourceBaselineDTO],
+    ]:
+        """读取本次保存态及原来源版本；不导入来源、发布候选或执行运行时审计。"""
+        service = cast("ConfigService", self)
+        layers: dict[str, dict[str, object]] = {}
+        files: dict[str, StableConfigFile] = {}
+        config, _, sources, _ = service._read_effective_config(
+            import_sources=False, source_payloads=layers, source_files=files, operation_only=True,
+        )
+        baseline = {}
+        for source in sources:
+            assert source.source_key is not None
+            file = files.get(source.source_key)
+            baseline[source.source_key] = ConfigSourceBaselineDTO(
+                uri=source.uri, presence=source.presence,
+                layer_revision=source.layer_revision, layer_digest=source.layer_digest,
+                source_generation=source.source_generation,
+                file_presence=file.presence if file is not None else None,
+                file_digest=file.digest if file is not None else None,
+            )
+        return config, layers, files, baseline
 
     def _runtime_override_source(self) -> ConfigSource:
         # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，
@@ -508,7 +552,7 @@ class ConfigSourceLayersMixin:
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
                 uri=None,
-                config_version=int(payload.get("config_version", 2)),
+                config_version=int(payload.get("config_version", 3)),
                 presence="present",
                 payload=payload,
                 layer_digest=file_snapshot.digest,
@@ -537,7 +581,7 @@ class ConfigSourceLayersMixin:
         source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
             uri=None,
-            config_version=int(payload.get("config_version", 2)),
+            config_version=int(payload.get("config_version", 3)),
             presence="present",
             payload=payload,
             layer_digest=file_snapshot.digest,
@@ -611,15 +655,22 @@ class ConfigSourceLayersMixin:
                     result="materialized" if is_current else "superseded",
                 )
             if owner_record.source_generation <= previous_source_generation:
-                source_owner.record_fanout(
-                    source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
-                    source_generation=owner_record.source_generation,
-                    workspace_id=workspace_id,
-                    status="applying",
-                    layer_revision=materialized.layer_revision,
-                    layer_digest=materialized.layer_digest,
-                    result="materialized",
+                observed = next(
+                    (item for item in source_owner.list_fanout(
+                        source_generation=owner_record.source_generation,
+                    ) if item.workspace_id == workspace_id),
+                    None,
                 )
+                if observed is None or observed.status in {"pending", "unobserved"}:
+                    source_owner.record_fanout(
+                        source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                        source_generation=owner_record.source_generation,
+                        workspace_id=workspace_id,
+                        status="applying",
+                        layer_revision=materialized.layer_revision,
+                        layer_digest=materialized.layer_digest,
+                        result="materialized",
+                    )
             return
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
@@ -660,6 +711,8 @@ class ConfigSourceLayersMixin:
         record = owner.get_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
             source_generation=source.source_generation, workspace_id=workspace_id)
         if record.status not in {"pending", "applying"}:
+            return
+        if record.result == "restart_required" and result == "restart_required":
             return
         status = {"applied": "applied", "unchanged": "applied", "restart_required": "applying",
                   "conflict": "conflict", "failed": "failed"}[result]

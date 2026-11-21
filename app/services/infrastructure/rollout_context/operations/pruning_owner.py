@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 
 if TYPE_CHECKING:
@@ -125,7 +125,7 @@ class RolloutPruningOwner:
             ) as connection,
         ):
             self._host._require_v2_runtime(connection)
-            transaction_id = uuid4().hex
+            transaction_id = create_uuid_hex()
             timestamp = _now()
             connection.execute("BEGIN IMMEDIATE")
             for candidate in plan.candidates:

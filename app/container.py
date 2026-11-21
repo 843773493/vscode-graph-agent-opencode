@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
@@ -17,12 +18,8 @@ from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.session_context import WorkspaceSessionContextClientProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
-from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
-from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.agents.graph_binding import SessionControlGraphBindingStore
-from app.agents.workspace_backend import build_workspace_backend
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
+from app.agents.manual_compaction_checkpoint import ManualCompactionCheckpointAdapter
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
@@ -42,14 +39,14 @@ from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
+from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
+from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
-from app.services.business.gateway_context_query_service import (
-    GatewayContextQueryService,
-)
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
@@ -62,9 +59,12 @@ from app.services.business.search.providers import (
     register_trace_search,
 )
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.gateway import (
+    GatewayContextQueryService,
+)
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.business.session_generation import (
@@ -75,26 +75,24 @@ from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_navigation.service import SessionCatalogService
-from app.services.business.session_resource_providers import (
+from app.services.business.session_resources.providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
     TerminalResourceProvider,
 )
-from app.services.business.session_resource_registry import (
+from app.services.business.session_resources.registry import (
     SessionResourceProviderRegistry,
 )
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.session_turn_history import (
     SessionTurnHistoryService,
 )
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
@@ -102,9 +100,6 @@ from app.services.infrastructure.attachment_blob_catalog.maintenance import (
 from app.services.infrastructure.attachment_blob_catalog.store import (
     ATTACHMENT_ROOT_DIRECTORY_NAME,
     AttachmentBlobStore,
-)
-from app.services.infrastructure.background_work_handlers import (
-    SystemTimeEmitterHandler,
 )
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -119,8 +114,8 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.gateway_communication_client import (
@@ -129,8 +124,8 @@ from app.services.infrastructure.gateway_communication_client import (
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.log_service import LogService
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -144,7 +139,6 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.persistent_tasks.events import task_channel
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.resource_platform.bootstrap import (
@@ -166,19 +160,13 @@ from app.services.infrastructure.rollout_context.activation.body import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
-from app.services.infrastructure.session_message_idempotency_store import (
-    SessionMessageIdempotencyStore,
-)
+from app.services.infrastructure.session_trace.recorder import TraceEventRecorder
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.tool_service import ToolService
-from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -194,11 +182,16 @@ from app.services.infrastructure.workspace_files.text_owner import (
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
-from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.system_time_emitter import (
+    SystemTimeEmitterHandler,
+)
 from app.services.orchestration.communication.service import (
     SessionCommunicationService,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
@@ -207,16 +200,24 @@ from app.services.orchestration.owner_thread_creation_factory import (
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from app.services.orchestration.session_stop import SessionStopService
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 from app.services.orchestration.team.fanout_service import TeamFanoutService
 from app.services.orchestration.terminal_steering_service import TerminalSteeringService
 from app.services.orchestration.thread_initial_execution_service import (
     ThreadInitialExecutionService,
 )
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
 
@@ -226,6 +227,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         *,
         message_service: MessageService,
         session_service: SessionService,
+        user_question_service: UserQuestionService,
         checkpointer: RolloutCheckpointSaver,
         terminal_resource_owner: TerminalResourceOwner,
         browser_resource_owner: BrowserResourceOwner,
@@ -238,6 +240,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
+        self._user_question_service = user_question_service
         self._checkpointer = checkpointer
         self._terminal_resource_owner = terminal_resource_owner
         self._browser_resource_owner = browser_resource_owner
@@ -249,7 +252,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._text_mutations = text_mutations
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
-        self._session_orchestrator: SessionOrchestrator | None = None
+        self._session_orchestrator: SessionMessageOrchestrator | None = None
         self._session_communication_service: SessionCommunicationProtocol | None = None
         self._session_subagent_service: SessionSubagentProtocol | None = None
         self._team_service: TeamCoordinationProtocol | None = None
@@ -262,6 +265,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         if self._goal_service is None:
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionGoalService")
         return self._goal_service
+
+    def get_user_question_service(self) -> UserQuestionService:
+        return self._user_question_service
 
     def get_message_service(self) -> MessageService:
         return self._message_service
@@ -332,12 +338,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 JobService")
         return self._job_service
 
-    def set_session_orchestrator(self, session_orchestrator: SessionOrchestrator) -> None:
+    def set_session_orchestrator(self, session_orchestrator: SessionMessageOrchestrator) -> None:
         self._session_orchestrator = session_orchestrator
 
-    def get_session_orchestrator(self) -> SessionOrchestrator:
+    def get_session_orchestrator(self) -> SessionMessageOrchestrator:
         if self._session_orchestrator is None:
-            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionOrchestrator")
+            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionMessageOrchestrator")
         return self._session_orchestrator
 
     def set_session_subagent_service(
@@ -369,15 +375,15 @@ class AppContainer:
     workspace_source_owner: WorkspaceSourceOwner
     agent_service: AgentService
     artifact_service: ArtifactService
-    event_service: EventService
     job_service: JobServiceProtocol
     message_service: MessageService
+    user_question_service: UserQuestionService
     attachment_blob_store: AttachmentBlobStore
     external_resource_leases: ExternalResourceLeaseLedger
-    runtime_service: RuntimeService
+    runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
-    session_interrupt_service: SessionInterruptService
-    session_skill_tracking_service: SessionSkillTrackingService
+    session_stop_service: SessionStopService
+    session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -392,7 +398,7 @@ class AppContainer:
     browser_manager_client: BrowserManagerClient
     context_compaction_service: ContextCompactionService
     session_service: SessionService
-    session_orchestrator: SessionOrchestrator
+    session_orchestrator: SessionMessageOrchestrator
     session_communication_service: SessionCommunicationService
     runtime_source_dispatcher: RuntimeSourceDispatcher
     persistent_task_runtime: PersistentTaskRuntime
@@ -405,9 +411,9 @@ class AppContainer:
     session_subagent_service: SessionSubagentService
     team_service: TeamCoordinationService
     team_fanout_service: TeamFanoutService
-    llm_request_log_service: LLMRequestLogService
-    log_service: LogService
-    tool_service: ToolService
+    llm_request_log_reader: LLMRequestLogReader
+    html_snapshot_store: HtmlSnapshotStore
+    agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
     tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
@@ -416,20 +422,20 @@ class AppContainer:
     text_mutations: WorkspaceTextMutationOwner
     workspace_file_watch_service: WorkspaceFileWatchService
     workspace_file_resource_registry: WorkspaceFileResourceRegistry
-    file_tree_settings_service: FileTreeSettingsService
+    file_tree_shortcut_store: FileTreeShortcutStore
     agent_execution_service: AgentExecutionService
     node_debug_service: NodeDebugService
     job_event_bus: JobEventBusProtocol
     thread_residency_tracker: ThreadResidencyTracker
     background_task_registry: BackgroundTaskRegistry
-    background_message_bus: BackgroundMessageBus
+    background_mailbox: BackgroundMailbox
     trace_event_store: TraceEventStore
     trace_event_recorder: TraceEventRecorder
     rollout_checkpoint_runtime: RolloutCheckpointRuntime
     checkpointer: RolloutCheckpointSaver
     mcp_catalog_owner: McpCatalogOwner
     mcp_connection_service: McpConnectionService
-    pending_request_store: PendingRequestStore
+    execution_queue_service: ExecutionQueueService
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
 
@@ -614,8 +620,10 @@ def _build_app_container(
         clock=clock_ports.residency, wall_clock=clock_ports.wall,
     )
     background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
-    background_message_bus = BackgroundMessageBus(store=background_work_store)
-    trace_event_store = TraceEventStore(sessions_dir=resolved_sessions_root)
+    background_mailbox = BackgroundMailbox(store=background_work_store)
+    trace_event_store = TraceEventStore(
+        sessions_dir=resolved_sessions_root, event_service=job_event_bus.event_channel_service,
+    )
     trace_event_recorder = TraceEventRecorder(
         bus=job_event_bus,
         store=trace_event_store,
@@ -732,13 +740,13 @@ def _build_app_container(
         path_resolver=session_path_resolver,
         creation_service=session_creation_service,
     )
-    file_tree_settings_service = FileTreeSettingsService(
+    file_tree_shortcut_store = FileTreeShortcutStore(
         workspace_root=resolved_workspace_root,
         path_resolver=session_path_resolver,
         file_paths=workspace_service.file_paths,
     )
     session_service.register_change_listener(
-        file_tree_settings_service.handle_session_change
+        file_tree_shortcut_store.handle_session_change
     )
     persistent_task_store = PersistentTaskStore(
         workspace_activity_service.store, workspace_id=workspace_id, paths=session_path_resolver,
@@ -774,6 +782,7 @@ def _build_app_container(
     background_task_registry = BackgroundTaskRegistry(
         store=background_work_store, residency_tracker=thread_residency_tracker,
         handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler),
+        admission_guard=lambda session_id: job_service.assert_session_control_open(session_id),
     )
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
         artifact = parse_resource_uri(uri)
@@ -829,9 +838,11 @@ def _build_app_container(
         browser_resource_owner=browser_resource_owner,
         transport=workspace_session_context_transport,
     )
+    user_question_service = UserQuestionService(sessions=session_service, store=checkpointer.user_questions, events=job_event_bus.event_channel_service)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
+        user_question_service=user_question_service,
         checkpointer=checkpointer,
         terminal_resource_owner=terminal_resource_owner,
         browser_resource_owner=browser_resource_owner,
@@ -884,7 +895,7 @@ def _build_app_container(
         session_catalog=session_catalog,
         config_service=config_service,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         dependency_provider=dependency_provider,
         session_changes_service=session_changes_service,
@@ -910,10 +921,7 @@ def _build_app_container(
             session_id, thread_id, registry, scope,
         ),
     )
-    session_catalog_service = SessionCatalogService(
-        session_service=session_service,
-        background_task_registry=background_task_registry,
-    )
+    session_catalog_service = SessionCatalogService(session_service=session_service)
     workspace_search_service = WorkspaceSearchService(workspace_id)
     register_context_search(workspace_search_service, session_context_query_service)
     register_file_search(workspace_search_service, resource_navigation)
@@ -929,14 +937,14 @@ def _build_app_container(
         job_event_bus=job_event_bus,
         session_title_service=session_title_service,
     )
-    pending_request_store = PendingRequestStore(
+    execution_queue_service = ExecutionQueueService(
         sessions_dir=resolved_sessions_root, owner=checkpointer,
         input_reader=lambda reference: message_service.accepted_job_message(reference, display=False),
     )
     job_service = JobService(
         job_event_bus=job_event_bus,
         job_executor=job_executor,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
         session_lifecycle_guard=session_service.assert_session_active,
         job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
         job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
@@ -957,7 +965,7 @@ def _build_app_container(
         saver=checkpointer, session_service=session_service, job_service=job_service,
     )
     mcp_connection_wait_handler.bind_dispatcher(runtime_source_dispatcher)
-    session_orchestrator = SessionOrchestrator(
+    session_orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_blob_store.deletion_holder,
         message_service=message_service,
         session_service=session_service,
@@ -965,9 +973,6 @@ def _build_app_container(
         job_service=job_service,
         job_event_bus=job_event_bus,
         runtime_source_dispatcher=runtime_source_dispatcher,
-        idempotency_store=SessionMessageIdempotencyStore(
-            path_resolver=session_path_resolver,
-        ),
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
     session_generation_service = SessionGenerationService(
@@ -1008,7 +1013,7 @@ def _build_app_container(
         dispatcher=runtime_source_dispatcher, publication_lock=mcp_catalog_owner.publication_lock,
     )
     team_service = TeamCoordinationService(
-        store=TeamStore(factory=thread_creation_factory, write_admission=session_service.session_write_admission),
+        store=TeamStore(factory=thread_creation_factory, write_admission=partial(session_service.session_write_admission, new_operation=True)),
         session_service=session_service,
         fanout=team_fanout_service,
         session_subagent_service=session_subagent_service,
@@ -1028,17 +1033,15 @@ def _build_app_container(
 
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
-    event_service = EventService(bus=job_event_bus)
-    runtime_service = RuntimeService(
+    runtime_service = WorkspaceRuntimeLifecycleService(
         workspace_id=workspace_service.workspace_id,
-        workspace_root=resolved_workspace_root,
         job_service=job_service,
         background_task_registry=background_task_registry,
         trace_event_store=trace_event_store,
         message_stream_store=message_stream_store,
         terminal_status_writer=checkpointer,
         pending_tool_checkpoint_id=agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
     )
     session_interrupt_service = SessionInterruptService(
         session_service=session_service,
@@ -1048,49 +1051,48 @@ def _build_app_container(
         message_stream_store=message_stream_store,
         execution_scope_registry=agent_execution_service.execution_scope_registry,
     )
-    session_skill_tracking_service = SessionSkillTrackingService(
+    session_skill_untrack_service = SessionSkillUntrackService(
         checkpointer=checkpointer,
         session_service=session_service,
     )
-    session_resource_mapper = SessionResourceMapper()
     session_resource_provider_registry = SessionResourceProviderRegistry(
         [
-            BackgroundTaskResourceProvider(
-                task_registry=background_task_registry,
-                resource_mapper=session_resource_mapper,
-            ),
-            TerminalResourceProvider(
-                terminal_owner=terminal_resource_owner,
-                resource_mapper=session_resource_mapper,
-            ),
-            BrowserResourceProvider(
-                browser_owner=browser_resource_owner,
-                resource_mapper=session_resource_mapper,
-            ),
+            BackgroundTaskResourceProvider(task_registry=background_task_registry),
+            TerminalResourceProvider(terminal_owner=terminal_resource_owner),
+            BrowserResourceProvider(browser_owner=browser_resource_owner),
         ]
     )
     session_resource_service = SessionResourceService(
         session_service=session_service,
-        job_service=job_service,
         provider_registry=session_resource_provider_registry,
     )
+
+    async def drain_session_collaboration(session_id: str) -> None:
+        await session_communication_service.observations.drain_session(session_id)
+        await team_fanout_service.drain_session(session_id)
+
+    async def close_session_runtime(session_id: str, thread_id: str | None) -> None:
+        await thread_residency_tracker.close(session_id=session_id, thread_id=thread_id)
+        background_mailbox.close_session(session_id, thread_id=thread_id)
+
+    stop_holders = (session_communication_service.deletion_holder, team_fanout_service.deletion_holder,
+                    attachment_blob_store.deletion_holder, terminal_resource_owner.deletion_holder)
+    session_stop_service = SessionStopService(
+        sessions=session_service, jobs=job_service, interrupt=session_interrupt_service,
+        resources=session_resource_provider_registry, debug=node_debug_service,
+        policy=config_service.get_session_stop_policy,
+        drain_collaboration=drain_session_collaboration, pause_goal=goal_service.pause_for_stop,
+        close_runtime=close_session_runtime, holders=stop_holders,
+    )
     if isinstance(session_path_resolver, SessionCatalogPathResolver):
-        # 子树删除的单一 drain 回调按固定顺序收敛所有运行时 owner：先
-        # NodeDebug，再清理终端、浏览器和后台任务资源。该回调在每个
+        # 子树删除沿统一停止入口依次结算 Job、调试和资源 owner。该回调在每个
         # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
         # drain 进度记录，保证部分失败可按 record 定点重试。
         async def drain_session_resources(session_id: str) -> None:
             session_service.settle_abandoned_context_controls(session_id)
             runtime_source_dispatcher.recover_context_publications(session_id)
-            await node_debug_service.drain_session(session_id)
-            await session_resource_service.cleanup_session(session_id)
+            await session_stop_service.drain_for_deletion(session_id)
             persistent_task_store.goal_clear(session_id)
-            await session_communication_service.observations.drain_session(session_id)
-            await team_fanout_service.drain_session(session_id)
-            # 所有领域资源排空后关闭本 Session 的真实 graph scope；旧
-            # residency 记账不能越过 fence/rename 后再查询已删除控制库。
-            await thread_residency_tracker.close(session_id=session_id)
-            background_message_bus.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
@@ -1099,13 +1101,12 @@ def _build_app_container(
             await observe_phase(session_id, "attachments.working_copies.processed", details={
                 "released_attachment_ids": list(released),
             })
+            await trace_event_store.close_session(session_id)
 
         session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)
         session_path_resolver.bind_fork_child_abort_callback(checkpointer.forks.abort_prepared_child_fork)
         session_path_resolver.bind_session_drain_callback(
-            drain_session_resources, holders=(session_communication_service.deletion_holder, team_fanout_service.deletion_holder,
-                                             attachment_blob_store.deletion_holder,
-                                             terminal_resource_owner.deletion_holder),
+            drain_session_resources, holders=stop_holders,
         )
     session_information_service = SessionInformationService(
         session_service=session_service,
@@ -1115,26 +1116,26 @@ def _build_app_container(
     session_context_query_service.bind_information_source(
         session_information_service
     )
-    context_checkpoint_store = ContextCompactionCheckpointStore(
+    compaction_checkpoint_adapter = ManualCompactionCheckpointAdapter(
         checkpointer=checkpointer,
     )
     summarization_compactor = AgentSummarizationCompactor(
         config_service=config_service,
-        history_backend=build_workspace_backend(resolved_workspace_root),
+        workspace_root=resolved_workspace_root,
     )
     context_compaction_service = ContextCompactionService(
-        checkpoint_store=context_checkpoint_store,
+        checkpoint_adapter=compaction_checkpoint_adapter,
         job_service=job_service,
         session_service=session_service,
         summarization_compactor=summarization_compactor,
     )
-    llm_request_log_service = LLMRequestLogService(
+    llm_request_log_reader = LLMRequestLogReader(
         resolved_sessions_root,
         path_resolver=session_path_resolver,
     )
-    register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_service)
+    register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_reader)
     register_trace_search(workspace_search_service, session_catalog_service, session_service, trace_event_store)
-    log_service = LogService(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
+    html_snapshot_store = HtmlSnapshotStore(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
         config_service=config_service,
         registry=ToolTestRegistry(),
@@ -1146,12 +1147,12 @@ def _build_app_container(
         / "workspaces"
         / "model_tool_test_workspace",
     )
-    tool_catalog_service = ToolCatalogService(
+    agent_tool_catalog = AgentToolCatalog(
         runtime_catalog=agent_execution_service,
         config_service=config_service,
     )
-    tool_service = ToolService(
-        tool_catalog=tool_catalog_service,
+    agent_tool_settings_service = AgentToolSettingsService(
+        tool_catalog=agent_tool_catalog,
         selection_store=tool_selection_store,
         config_service=config_service,
         test_supported_tools=tool_test_service.supported_tools,
@@ -1164,15 +1165,15 @@ def _build_app_container(
         workspace_source_owner=workspace_source_owner,
         agent_service=agent_service,
         artifact_service=artifact_service,
-        event_service=event_service,
         job_service=job_service,
         message_service=message_service,
+        user_question_service=user_question_service,
         attachment_blob_store=attachment_blob_store,
         external_resource_leases=external_resource_leases,
         runtime_service=runtime_service,
         goal_service=goal_service,
-        session_interrupt_service=session_interrupt_service,
-        session_skill_tracking_service=session_skill_tracking_service,
+        session_stop_service=session_stop_service,
+        session_skill_untrack_service=session_skill_untrack_service,
         session_context_fork_service=session_context_fork_service,
         session_turn_replay_service=session_turn_replay_service,
         session_turn_history_service=session_turn_history_service,
@@ -1200,9 +1201,9 @@ def _build_app_container(
         session_subagent_service=session_subagent_service,
         team_service=team_service,
         team_fanout_service=team_fanout_service,
-        llm_request_log_service=llm_request_log_service,
-        log_service=log_service,
-        tool_service=tool_service,
+        llm_request_log_reader=llm_request_log_reader,
+        html_snapshot_store=html_snapshot_store,
+        agent_tool_settings_service=agent_tool_settings_service,
         tool_test_service=tool_test_service,
         tool_selection_store=tool_selection_store,
         workspace_service=workspace_service,
@@ -1211,19 +1212,19 @@ def _build_app_container(
         resource_platform=resource_platform,
         resource_navigation=resource_navigation,
         text_mutations=text_mutations,
-        file_tree_settings_service=file_tree_settings_service,
+        file_tree_shortcut_store=file_tree_shortcut_store,
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,
         job_event_bus=job_event_bus,
         thread_residency_tracker=thread_residency_tracker,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         trace_event_store=trace_event_store,
         trace_event_recorder=trace_event_recorder,
         rollout_checkpoint_runtime=rollout_checkpoint_runtime,
         checkpointer=checkpointer,
         mcp_catalog_owner=mcp_catalog_owner,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
         mcp_connection_service=mcp_connection_service,
         workspace_activity_service=workspace_activity_service,
         message_stream_store=message_stream_store,

@@ -24,6 +24,7 @@ message GatewayThreadAddressRequest {
   string workspace_id = 3;
   string session_id = 4;
   string thread_id = 5;
+  optional string item_id = 6;
 }
 
 // 会话变更文件的当前逻辑引用；不读取正文，也不新增快照或版本字段。
@@ -49,6 +50,7 @@ message GatewayResourceAddressDTO {
   string reference_uri = 9;
   optional string changeset_id = 10;
   optional string change_file_uri = 11;
+  optional string item_id = 12;
 }
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 
@@ -89,14 +91,6 @@ message AddRemoteGatewayRequest {
   optional string connection_id = 9;
 }
 
-message ChangePortForwardLabelRequest {
-  optional string label = 1;
-}
-
-message ChangePortForwardLocalPortRequest {
-  int64 local_port = 1;
-}
-
 message CreateFederationManagedWorkspaceRequest {
   string root_path = 1;
   optional string name = 2;
@@ -110,11 +104,20 @@ message CreateGatewayManagedWorkspaceRequest {
   optional string gateway_connection_id = 4;
 }
 
+message PortForwardEndpoint {
+  string host_id = 1;
+  optional string address = 2;
+  int64 port = 3;
+}
+
 message CreatePortForwardRequest {
-  int64 remote_port = 1;
-  optional int64 local_port = 2;
+  reserved 1, 2;
+  reserved "remote_port", "local_port";
   optional string protocol = 3;
   optional string label = 4;
+  PortForwardEndpoint listener = 5;
+  PortForwardEndpoint destination = 6;
+  optional bool enabled = 7;
 }
 
 message DevelopmentRuntimeRestartDTO {
@@ -452,6 +455,9 @@ message GatewayDiagnosticsDTO {
   repeated GatewayDiagnosticProcessDTO processes = 11;
   optional RuntimeObservationStatus observation = 12;
   repeated PluginRuntimeObservationDTO plugin_observations = 13;
+  // 目标机器上的原生展示位置；不能作为资源 URI 或当前机器上的操作目标。
+  optional string control_directory = 14;
+  optional string log_directory = 15;
 }
 
 message GatewayDiagnosticLogQueryScopeDTO {
@@ -534,6 +540,24 @@ message GatewayDirectoryListDTO {
   optional bool truncated = 5;
   int64 limit = 6;
   string name = 7;
+}
+
+message WorkspaceIdentityMappingDTO {
+  string legacy_workspace_id = 1;
+  string gateway_id = 2;
+  string workspace_id = 3;
+}
+
+message WorkspaceIdentityRecoveryDTO {
+  int32 format_version = 1;
+  string migration_id = 2;
+  string registry_gateway_id = 3;
+  repeated WorkspaceIdentityMappingDTO mappings = 4;
+}
+
+message GatewayClientRecoveryDTO {
+  string gateway_id = 1;
+  WorkspaceIdentityRecoveryDTO workspace_identity = 2;
 }
 
 message GatewayHealthDTO {
@@ -745,9 +769,6 @@ message GatewaySearchScopeResolutionDTO {
   repeated GatewaySearchScopeBranchDTO branches = 2;
 }
 
-
-
-
 message GatewayUIAssetDTO {
   string asset_id = 1;
   string original_filename = 2;
@@ -773,6 +794,8 @@ message GatewayManagementTargetDTO {
   string connection_kind = 3;
   optional string gateway_connection_id = 4;
   optional string connection_error = 5;
+  optional string source_owner = 6;
+  optional int64 remote_gateway_port = 7;
 }
 
 message GatewayManagementDirectoryDTO {
@@ -813,23 +836,34 @@ message GatewayWorkspaceListDTO {
 }
 
 message PortForwardDTO {
-  string gateway_id = 14;
+  reserved 2, 3, 4, 5, 6, 7, 12;
+  reserved "workspace_id", "connection_id", "remote_host", "remote_port", "local_host", "local_port", "local_url";
   string forward_id = 1;
-  string workspace_id = 2;
-  string connection_id = 3;
-  string remote_host = 4;
-  int64 remote_port = 5;
-  string local_host = 6;
-  int64 local_port = 7;
   string protocol = 8;
   string label = 9;
   string status = 10;
   string error = 11;
-  string local_url = 12;
+  string gateway_id = 14;
+  PortForwardEndpoint listener = 15;
+  PortForwardEndpoint destination = 16;
+  bool enabled = 17;
 }
 
 message PortForwardListDTO {
   repeated PortForwardDTO items = 1;
+  string gateway_id = 2;
+}
+
+message PortForwardHostDTO {
+  string host_id = 1;
+  string label = 2;
+  string description = 3;
+  string kind = 4;
+}
+
+message PortForwardHostsDTO {
+  string gateway_id = 1;
+  repeated PortForwardHostDTO items = 2;
 }
 
 message ReorderGatewayWorkspacesRequest {
@@ -837,7 +871,6 @@ message ReorderGatewayWorkspacesRequest {
   reserved "workspace_ids";
   repeated GatewaySearchWorkspaceOwnerDTO workspaces = 2;
 }
-
 
 message SshConnectionOptionDTO {
   reserved 7;
@@ -927,8 +960,6 @@ message WebUISettingsUpdateDTO {
   reserved 5;
   reserved "theme";
 }
-
-
 
 message WebUIWorkspaceBottomPanelSettingsDTO {
   optional bool visible = 1;

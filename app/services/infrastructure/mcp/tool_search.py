@@ -15,10 +15,10 @@ from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.core.failures import report_failure
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_SOURCE_ID,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
 )
@@ -86,7 +86,7 @@ def _definition_result(
     return {
         "tool_id": metadata.tool_id, "status": "available", "schema_state": "inline_complete", "origin": metadata.origin,
         "server_id": definition.server_id,
-        "group_id": metadata.group_id, **definition.payload,
+        "group_id": metadata.group_id, **definition.contract_payload,
         "schema_hash": definition.schema_hash, "catalog_revision": catalog.catalog_revision,
         "match_reasons": reasons, "effective_policy": asdict(policy),
         "readiness": definition.readiness,

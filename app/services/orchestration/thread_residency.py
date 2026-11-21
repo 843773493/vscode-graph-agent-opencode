@@ -16,9 +16,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TypeAlias, TypeVar, cast
 from uuid import uuid4
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
+
 from app.core.phase_observer import observe_phase_sync
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker, ResidencyBlockerSource
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -188,7 +188,11 @@ class ThreadResidencyTracker:
                         "ThreadResidencyTracker 正在关闭，拒绝新 admission"
                     )
                 if state.runtime_unload is not None:
-                    await self._wait_runtime_task(state.runtime_unload, state, deadline, "admission")
+                    try:
+                        await self._wait_runtime_task(state.runtime_unload, state, deadline, "admission")
+                    except ThreadUnloadBlocked:
+                        # 已有卸载被新活动撤回；重新检查代际，不能连带拒绝同代执行。
+                        pass
                     continue
                 runtime = state.runtime
                 if runtime is not None:
@@ -418,7 +422,7 @@ class ThreadResidencyTracker:
                 )
         return task.result()
 
-    async def close(self, *, session_id: str | None = None) -> None:
+    async def close(self, *, session_id: str | None = None, thread_id: str | None = None) -> None:
         """关闭指定 Session 或进程内全部 generation，等待真实 build/lease/scope。
 
         Session 删除只关闭该 Session；全进程关闭才停止 tracker 的新准入。
@@ -435,7 +439,8 @@ class ThreadResidencyTracker:
                 name=f"thread-runtime-drain-wait:{state.session_id}:{state.thread_id}",
             )
             for state in tuple(self._states.values())
-            if session_id is None or state.session_id == session_id
+            if (session_id is None or state.session_id == session_id)
+            and (thread_id is None or state.thread_id == thread_id)
         ]
         try:
             results = await asyncio.gather(*waiters)

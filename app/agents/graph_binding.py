@@ -30,6 +30,8 @@ middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 generati
 
 注册表采用 events/ 的闭集哲学：只允许代码内注册，不提供运行时可配置的
 factory 注册扩展点；新增 graph family 属于代码变更。
+闭集声明直接注册 runtime 懒构建入口，selector 解析不依赖执行模块导入，
+重 SDK 只在该入口真正构建图时加载。
 """
 
 from __future__ import annotations
@@ -42,8 +44,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.session_control_store import SessionControlStore
+from app.runtime.graph_factory import assemble_deep_agent
 
 # 摘要形状与 channel_events.py 同一标准：完整 ``sha256:`` + 64 位小写 hex。
 # 只查前缀会让「sha256: + 任意正文」走私，因此必须 fullmatch 全匹配。
@@ -403,6 +405,7 @@ DEEP_AGENT_GRAPH_BINDING: Final[GraphBinding] = GraphBinding(
 
 GRAPH_FACTORY_REGISTRY: Final[GraphFactoryRegistry] = GraphFactoryRegistry()
 """进程级 graph factory 注册表；只允许代码内注册（闭集，无运行时扩展点）。"""
+GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, assemble_deep_agent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,42 +467,6 @@ class SessionControlGraphBindingStore:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class InvocationGraphBinding:
-    """一次 invocation 的完整绑定：持久 graph selector + 受信线程归属。"""
-
-    graph: GraphBinding
-    thread: ThreadRuntimeBinding
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.graph, GraphBinding):
-            raise TypeError(
-                f"InvocationGraphBinding.graph 必须是 GraphBinding: "
-                f"{type(self.graph).__name__}"
-            )
-        if not isinstance(self.thread, ThreadRuntimeBinding):
-            raise TypeError(
-                f"InvocationGraphBinding.thread 必须是 ThreadRuntimeBinding: "
-                f"{type(self.thread).__name__}"
-            )
-
-
-def binding_for(
-    graph_binding: GraphBinding,
-    thread_runtime_binding: ThreadRuntimeBinding,
-) -> InvocationGraphBinding:
-    """组合查询辅助：把持久 selector 与 invocation 线程归属组成完整绑定。
-
-    持久 selector 负责解析受注册的 factory；线程
-    归属只来自 generation 装配时的 :class:`ThreadRuntimeBinding`，二者合成
-    一次 invocation 的完整身份。
-    """
-    return InvocationGraphBinding(
-        graph=graph_binding,
-        thread=thread_runtime_binding,
-    )
-
-
 def resolve_graph_binding(
     *,
     store: GraphBindingStorePort,
@@ -534,9 +501,7 @@ __all__ = [
     "GraphFactoryBuilder",
     "GraphFactoryRegistrationConflictError",
     "GraphFactoryRegistry",
-    "InvocationGraphBinding",
     "SessionControlGraphBindingStore",
-    "binding_for",
     "compute_capability_profile_hash",
     "compute_graph_schema_hash",
     "resolve_graph_binding",

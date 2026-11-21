@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
-import { readProcessStat } from "../../../shared/serverProcessLifecycle.mjs";
+import { readProcessStat } from "@boxteam/plugin-sdk/process-lifecycle";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalSession/workspace", randomUUID());
 // 文件级清理兜住准备失败；用例结束优先释放本次创建的独占工作区。

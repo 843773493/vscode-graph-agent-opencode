@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config.session_defaults import SessionDefaults
 
 
@@ -19,20 +20,20 @@ def defaults_case(tmp_path: Path):
             raise ValueError(f"unknown agent: {value}")
         return value
 
-    def resolve_provider(agent, value=None):
+    def resolve_model(agent, value=None):
         validate_agent(agent)
         if value is None:
-            return "primary"
-        if value not in {"primary", "backup"}:
-            raise ValueError(f"unknown provider: {value}")
+            return ModelReferenceDTO(provider_id="service", model_id="primary")
+        if value not in {ModelReferenceDTO(provider_id="service", model_id=name) for name in ("primary", "backup")}:
+            raise ValueError(f"unknown model: {value}")
         return value
 
     service = SessionDefaults(
         workspace_root=tmp_path, validate_agent_id=validate_agent,
-        resolve_agent_provider_id=resolve_provider, default_agent_id_provider=lambda: "default",
+        resolve_agent_model=resolve_model, default_agent_id_provider=lambda: "default",
     )
     service.set_workspace_default_agent("reviewer")
-    service.set_workspace_default_provider("reviewer", "backup")
+    service.set_workspace_default_model("reviewer", ModelReferenceDTO(provider_id="service", model_id="backup"))
     path = service.workspace_session_defaults_path()
     return SimpleNamespace(service=service, path=path, root=tmp_path, original=path.read_bytes())
 
@@ -78,7 +79,7 @@ def test_session_defaults_io_errors_preserve_type_errno_cause_and_original(
 
 @pytest.mark.parametrize("failure", [
     "shape", "version", "json", "utf8", "agent_type", "agent_unknown",
-    "provider_map", "provider_type", "provider_unknown",
+    "model_map", "model_type", "model_unknown",
 ])
 def test_session_defaults_invalid_data_is_not_echoed_or_rewritten(defaults_case, failure):
     case = defaults_case
@@ -90,10 +91,12 @@ def test_session_defaults_invalid_data_is_not_echoed_or_rewritten(defaults_case,
         payload["schema_version"] = private_input
     elif failure.startswith("agent"):
         payload["default_agent_id"] = {private_input: True} if failure == "agent_type" else private_input
-    elif failure == "provider_map":
-        payload["provider_by_agent"] = private_input
-    elif failure.startswith("provider"):
-        payload["provider_by_agent"]["reviewer"] = {private_input: True} if failure == "provider_type" else private_input
+    elif failure == "model_map":
+        payload["model_by_agent"] = private_input
+    elif failure == "model_type":
+        payload["model_by_agent"]["reviewer"] = {private_input: True}
+    elif failure == "model_unknown":
+        payload["model_by_agent"]["reviewer"] = {"provider_id": "service", "model_id": "unknown-model"}
     corrupted = json.dumps(payload).encode()
     if failure == "json":
         corrupted = ('{\n "' + private_input + '":').encode()
@@ -103,11 +106,11 @@ def test_session_defaults_invalid_data_is_not_echoed_or_rewritten(defaults_case,
     expected = {
         "shape": TypeError, "version": ValueError, "json": json.JSONDecodeError,
         "utf8": UnicodeDecodeError, "agent_type": TypeError, "agent_unknown": ValueError,
-        "provider_map": TypeError, "provider_type": TypeError, "provider_unknown": ValueError,
+        "model_map": TypeError, "model_type": ValueError, "model_unknown": ValueError,
     }[failure]
     with pytest.raises(expected) as caught:
-        if failure.startswith("provider"):
-            case.service.get_workspace_default_provider_id("reviewer")
+        if failure.startswith("model"):
+            case.service.get_workspace_default_model("reviewer")
         else:
             case.service.get_workspace_default_agent_id()
     message = str(caught.value)
@@ -125,26 +128,26 @@ def test_session_defaults_invalid_data_is_not_echoed_or_rewritten(defaults_case,
         assert isinstance(caught.value.__cause__, UnicodeDecodeError)
         assert (caught.value.start, caught.value.end) == (0, 1)
     elif failure.endswith("unknown"):
-        field = "default_agent_id" if failure == "agent_unknown" else "provider_by_agent"
+        field = "default_agent_id" if failure == "agent_unknown" else "model_by_agent"
         assert f"field={field}" in message
         assert type(caught.value.__cause__) is ValueError
-        assert private_input in str(caught.value.__cause__)
+        assert (private_input if failure == "agent_unknown" else "unknown-model") in str(caught.value.__cause__)
     else:
         rule = {
             "shape": "必须是对象", "version": "版本非法", "agent_type": "Agent 必须是非空字符串",
-            "provider_map": "provider 映射必须是对象", "provider_type": "provider 必须是非空字符串",
+            "model_map": "模型映射必须是对象", "model_type": "模型无效",
         }[failure]
         assert rule in message
     assert case.path.read_bytes() == corrupted
     assert not case.path.with_suffix(".json.tmp").exists()
     case.path.write_bytes(case.original)
     assert case.service.get_workspace_default_agent_id() == "reviewer"
-    assert case.service.get_workspace_default_provider_id("reviewer") == "backup"
+    assert case.service.get_workspace_default_model("reviewer") == ModelReferenceDTO(provider_id="service", model_id="backup")
 
 
 def test_session_defaults_missing_file_uses_static_defaults_without_creating_file(defaults_case):
     case = defaults_case
     case.path.unlink()
     assert case.service.get_workspace_default_agent_id() == "default"
-    assert case.service.get_workspace_default_provider_id("reviewer") == "primary"
+    assert case.service.get_workspace_default_model("reviewer") == ModelReferenceDTO(provider_id="service", model_id="primary")
     assert not case.path.exists()

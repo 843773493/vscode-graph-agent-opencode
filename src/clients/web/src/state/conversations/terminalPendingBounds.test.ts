@@ -55,6 +55,7 @@ function liveConversation(index: number): ConversationView {
 function runTurns(turns: number): ConversationView[] {
   const pendingMap = new Map<string, ConversationView[]>();
   const activeJobMap = new Map<string, string>();
+  const queueVersions = new Map<string, Map<string, number>>();
   for (let index = 0; index < turns; index += 1) {
     const list = pendingMap.get(SESSION) ?? [];
     pendingMap.set(SESSION, [...list, liveConversation(index)]);
@@ -70,7 +71,7 @@ function runTurns(turns: number): ConversationView[] {
       active_job_id: null,
       requests: [],
       snapshot_version: index + 1,
-    });
+    }, SESSION, queueVersions);
   }
   return pendingMap.get(SESSION) ?? [];
 }

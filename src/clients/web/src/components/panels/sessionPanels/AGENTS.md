@@ -1,6 +1,6 @@
 # 目录用途
 
-`components/panels/sessionPanels/` 存放会话与子线程面板族：AgentSessionsPanel（左侧侧边栏会话导航面板，含筛选、搜索、分组与工作区会话目录编排）、ChildThreadPanel（当前 Session 的右侧侧边栏子线程列表）、ChildThreadConversation（选定 child 的历史、报告和直接对话展示）及其渲染测试。业务数据由 App 与对应 hook 通过 props 传入。
+`components/panels/sessionPanels/` 存放会话与子线程面板族：AgentSessionsPanel（左侧侧边栏会话导航面板，含筛选、搜索、分组与工作区会话目录编排）、ChildThreadPanel（会话标签页内独立的 Thread 索引）、ChildThreadConversation（选定 child 的历史、报告和直接对话展示）及其渲染测试。业务数据由宿主与对应 hook 通过 props 传入。
 
 本目录与相邻子包的边界：
 
@@ -15,7 +15,7 @@
 # 可修改内容
 
 - 会话面板的筛选、搜索、分组、折叠与工作区会话目录编排。
-- 子线程面板的列表渲染、调试 owner 选中与复制交互。
+- 子线程面板的列表渲染、对话打开、Fork 与复制交互。
 - 选定 child 的独立对话、runtime/报告/未读展示与发送、报告跳转回调；请求及草稿编排归 `hooks/sessionTurnHistory/useChildThreadConversation.ts`，组件不自行创建历史或业务状态。
 - 面板级对话框（重命名工作区、新建工作区、新建会话文件夹）的接线。
 - 与上述逻辑直接相关的组件测试。
@@ -29,6 +29,8 @@
 # 规范
 
 - 已有目录错误报告回执的动作不重复弹通知；普通失败与新发生的回读错误仍通过显式 `onError` 显示。
+
+- 主 Thread 和子 Thread 都通过明确回调打开原版对话编辑器；列表不提供源码调试跳转，调试沿用会话资源区入口。导航子 Session 与 Session 内的子 Thread 保持不同节点语义。
 
 - 会话与子线程数据只以 App 层传入的 props 与 API 返回为依据，不在本目录伪造成功状态。
 - AgentSessionsPanel 的新建、解除绑定及工作区刷新失败传入显式 `onError`；宿主负责可见错误出口，普通筛选和排序状态仍走 `onStatusChange`。

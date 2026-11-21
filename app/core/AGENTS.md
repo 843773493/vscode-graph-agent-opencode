@@ -1,6 +1,6 @@
 # 目录用途
 
-`app/core/` 存放不带具体业务语义的后端通用内核，包括环境读取、路径契约、标识符、事件总线、后台任务注册、Trace 中间件和一次性存储迁移。
+`app/core/` 存放不带具体业务语义的后端通用内核，包括环境读取、路径契约、标识符、事件总线、Trace 中间件和一次性存储迁移。
 
 ## 顶层模块导航
 
@@ -13,7 +13,7 @@ app/core/
 │   ├── user_identity.py / workspace_identity.py / backend_identity.py / mounted_workspaces.py
 │   ├── path_utils.py / path_segments.py
 │   ├── user_storage_migration.py
-│   └── logging_config.py / logging_contract.py
+│   └── logging_layout.py（产品 Home 到日志根目录的解析）
 ├── 请求、模型与执行上下文
 │   ├── trace_middleware.py / job_context.py
 │   ├── model_request_context.py / model_delta_context.py
@@ -26,10 +26,9 @@ app/core/
 │   └── exceptions.py / failures.py
 ├── 并发、生命周期与后台工作
 │   ├── child_process_state.py（资源账本记录的进程身份与退出状态）
-│   ├── key_lock_pool.py / lifecycle.py / session_lifecycle_gate.py
+│   ├── key_lock_pool.py / session_lifecycle_gate.py
 │   ├── shielded_cleanup.py / phase_observer.py / job_event_bus.py
-│   ├── background_task_contracts.py / background_task_registry.py
-│   └── background_message_bus.py / thread_residency_contracts.py
+│   └── thread_residency_contracts.py
 ├── 文件系统与持久化原语
 │   ├── atomic_fs.py / file_permissions.py / sqlite_state.py
 └── 会话创建、定位与专用持久化基础
@@ -48,12 +47,13 @@ app/core/
 
 ## 共享原语与专用子包说明
 
+- 进程内 `LifetimeScope`、异步收尾和周期调度由 `boxteam_plugin_sdk.lifecycle`／`maintenance` 唯一实现；request_id 上下文由 SDK `request_context` 持有，Trace 中间件只绑定和恢复。工作区六项维护由 `app/workspace_lifecycle.py` 静态装配，先排空再关闭依赖；fork 恢复、Terminal steering、Gateway 与 federation 自身维护继续沿原 owner。
 - `child_process_state.py`：资源账本使用的进程身份与退出状态值；它不创建或管理进程。Gateway 的进程生命周期继续由 `app/gateway/runtime/` 负责。
 - `http_cache.py`：对显式登记的 HTTP 路由模板统一设置失败响应 no-store，Backend 与 Gateway 共用；沿 Starlette 的路由模板匹配，不解析资源 URI、不处理权限或正文校验器，不改变其它接口策略。
 - `shielded_cleanup.py`：同步 worker 结算前保留调用方准入；线程桥接以结果值传递原异常，再在原异步任务抛出，保留异常身份、cause 与 notes，避免标准库重建 TimeoutError 等异常。正常返回的异常对象仍为返回值；取消继续等待 worker 结算。
-- `turn_execution_scope.py`：Turn 注册表持有原 scope／inbox 直到资源与控制文件清理成功；失败或等待者取消保留同一身份供重试，迟到关闭须核对象身份，不得删除后继登记或文件。inbox 经异步 open 加载，控制文件读写及删除交既有受保护 worker，提交结算后才在事件循环发布命令；控制提交与关闭沿原锁串行，不新增写入链。清理执行与重试仍由原 LifetimeScope 单点拥有，不新增关闭任务表。
-- `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。
-- `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供core registry与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
+- `turn_execution_scope.py`：Turn 注册表持有原 scope／inbox 直到资源与控制文件清理成功；失败或等待者取消保留同一身份供重试，迟到关闭须核对象身份，不得删除后继登记或文件。inbox 经异步 open 加载，控制文件读写及删除交既有受保护 worker，提交结算后才在事件循环发布命令；控制提交与关闭沿原锁串行，不新增写入链。清理执行与重试由 `boxteam_plugin_sdk.lifecycle.LifetimeScope` 单点拥有，不新增关闭任务表。
+- 后台任务与邮箱的纯数据合同位于 `app/domain/background_work.py`，handler 端口位于 `app/abstractions/background_task_registry.py`，执行与恢复位于 `app/services/orchestration/background_work/`；不在 core 中增加第二套后台工作实现。
+- `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供生命周期原语与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
 - `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，已知文件 I/O 的目标与原因可以进入执行诊断；SQLite、内部 Pydantic／canonical 领域校验及上游异常正文继续按来源保护，明确的本地业务说明保持原合同。SQLite 只生成原异常类别和适用错误码，内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。
 - `sqlite_state.py` 的运行时拒绝复用 `failure_detail`；路径、VFS、进程锁与 schema 规则的原原因保留位置及日志次错，普通错误保留逻辑 artifact、阶段、SQLite 版本与系统码。不得为日志故障改变锁、连接或迁移顺序，也不补建损坏账本声明的表。
 - `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。
@@ -90,7 +90,6 @@ app/core/
 
 # 规范
 
-- `background_task_registry.py` 在启动完整恢复后只保留活动会话候选 ID，由同一 registry 的持久准入补入；全局状态查询读取候选控制库并剔除终态与已删除会话，不缓存任务正文或状态。未启动的冷查询仍完整读取；`reconcile_required` 即使没有本地 Task 也必须保留为活动任务。
 - 全局根目录统一为 `${BOXTEAM_HOME:-~/.boxteams}/`，工作区业务根目录统一为 `${workspace_abs_path}/.boxteam/`。
 - 路径函数应返回明确的绝对路径；调用方必须显式提供工作区路径或从受控运行时状态取得它。
 - 工作区目录初始化只处理当前显式工作区，不产生与该工作区无关的全局副作用。

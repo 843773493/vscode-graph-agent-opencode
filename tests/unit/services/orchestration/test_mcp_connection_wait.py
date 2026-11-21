@@ -10,14 +10,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.abstractions.mcp_connection_wait import McpWaitCheckpoint, McpWaitPayload
 from app.agents.policy.tool_capability import ToolPolicyResolver
-from app.core.background_task_contracts import (
+from app.core.trace_middleware import get_current_gateway_id
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
 )
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.schemas.internal_v2.mcp import McpConnectionOperationDTO
 from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 

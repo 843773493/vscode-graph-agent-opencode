@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from app.core.sqlite_state import utc_now_text
+from app.services.infrastructure.config.recovery import recover_expired_applies
 from app.services.infrastructure.config.state import (
     ConfigApplyClaimRecord,
     ConfigConflictError,
@@ -225,52 +225,7 @@ class ConfigApplyClaimMixin:
         connection = self._database.connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            now = datetime.now(UTC).isoformat()
-            rows = connection.execute(
-                """
-                SELECT candidate_id FROM config_pending_candidate
-                WHERE config_domain = ? AND state = 'applying'
-                  AND candidate_id NOT IN (
-                      SELECT candidate_id FROM config_apply_claim
-                      WHERE config_domain = ? AND lease_expires_at > ?
-                  )
-                """,
-                (config_domain, config_domain, now),
-            ).fetchall()
-            candidate_ids = tuple(str(row[0]) for row in rows)
-            connection.executemany(
-                """
-                UPDATE config_pending_candidate
-                SET state = 'recovery_required',
-                    last_error = 'Gateway 启动恢复发现 apply lease 已过期'
-                WHERE config_domain = ? AND candidate_id = ? AND state = 'applying'
-                """,
-                ((config_domain, candidate_id) for candidate_id in candidate_ids),
-            )
-            if config_domain == "gateway" and candidate_ids:
-                connection.executemany(
-                    """
-                    UPDATE gateway_restart_intent
-                    SET state = 'recovery_required',
-                        last_error = 'Gateway 启动恢复发现 apply lease 已过期',
-                        updated_at = ?
-                    WHERE candidate_id = ? AND state = 'applying'
-                    """,
-                    ((utc_now_text(), candidate_id) for candidate_id in candidate_ids),
-                )
-                connection.executemany(
-                    """
-                    UPDATE config_apply_journal
-                    SET state = 'recovery_required',
-                        last_error = 'Gateway 启动恢复发现 apply lease 已过期',
-                        updated_at = ?
-                    WHERE config_domain = ? AND candidate_id = ? AND state = 'applying'
-                    """,
-                    (
-                        (utc_now_text(), config_domain, candidate_id)
-                        for candidate_id in candidate_ids
-                    ),
-                )
+            candidate_ids = recover_expired_applies(connection, config_domain)
             connection.execute("COMMIT")
             return candidate_ids
         except Exception:

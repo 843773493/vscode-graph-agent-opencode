@@ -301,7 +301,7 @@ class WorkspaceFileStore:
         with self._lock:
             return int(self._db.execute("SELECT COALESCE(MAX(event_id),0) FROM events").fetchone()[0])
 
-    def events(self, after: int) -> list[dict]:
+    def events(self, after: int, *, limit: int = 200) -> list[dict]:
         with self._lock:
             return [{**json.loads(row[1]), "event_id": int(row[0])} for row in self._db.execute(
-                "SELECT event_id,payload FROM events WHERE event_id>? ORDER BY event_id LIMIT 200", (after,))]
+                "SELECT event_id,payload FROM events WHERE event_id>? ORDER BY event_id LIMIT ?", (after, limit))]

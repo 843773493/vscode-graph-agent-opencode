@@ -4,6 +4,10 @@ export interface SseFrame {
   data: string;
 }
 
+export class SseProtocolError extends Error {
+  constructor(message: string, options?: ErrorOptions);
+}
+
 export interface SseEventDefinition<T = unknown> {
   decode(data: string, frame: SseFrame): T;
   handle(value: T, frame: SseFrame): void;
@@ -16,6 +20,7 @@ export interface ConsumeSseResponseOptions {
   idleTimeoutError?: (timeoutMs: number) => Error;
   readError?: (cause: unknown) => Error;
   onActivity?: () => void;
+  /** 帧间交接微任务，长批次按时间片让出主线程。 */
   yieldBetweenEvents?: boolean;
 }
 

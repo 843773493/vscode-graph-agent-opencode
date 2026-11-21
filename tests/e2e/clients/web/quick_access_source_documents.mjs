@@ -20,8 +20,7 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
     // 原工作区观察流用 POST 建立只读订阅；其余非 GET 请求仍逐一检查。
     const navigationRead = navigationPath && ['describe', 'list', 'search', 'read'].includes(body?.operation);
     if (!['GET', 'HEAD'].includes(request.method()) && !['/api/gateway/search', '/api/gateway/resource-addresses/parse', '/api/v1/resources/navigation',
-      '/api/gateway/service-plugins/commands/events',
-      '/api/v1/workspace/observations/stream'].includes(path) && !navigationRead) {
+      '/api/gateway/service-plugins/inventory'].includes(path) && !navigationRead) {
       writes.push({ path, method: request.method() });
     }
   };

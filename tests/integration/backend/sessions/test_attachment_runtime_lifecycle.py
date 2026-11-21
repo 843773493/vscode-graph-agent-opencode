@@ -42,6 +42,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 from tests.support.message_service import accept_queued_message
 from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
@@ -68,9 +69,9 @@ def clock() -> Clock:
 async def execute_upload(case: RuntimeCase):
     container = case.runner.container
     session = await container.session_service.create(SessionCreateRequest(title="目录运行时释放"))
-    result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+    result = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
         message=MessageCreateRequest(content="读取本次上传", attachments=[upload(b"runtime original")]),
-        run=RunOptions(),
+        run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     assert isinstance(container.job_service, JobService)
     job = container.job_service._jobs[result.job_id]
@@ -216,7 +217,7 @@ async def test_queued_input_retains_previous_runtime_then_old_release_cannot_det
     result = await container.job_service.start_job(
         sid, queued.content, thread_id=tid, message_id=queued.message_id,
         message_created_at=queued.created_at.isoformat(),
-        message_metadata={"boxteam_session_provider_id": record.input.provider_id},
+        message_metadata={"boxteam_session_model": record.input.model},
         execution_binding=record.input.execution_binding, agent_id=record.input.agent_id,
     )
     assert isinstance(container.job_service, JobService)
@@ -340,8 +341,8 @@ async def test_file_tool_results_survive_repeated_unload_and_cold_owner_until_ex
         with closing(AttachmentBlobStore(case.runner.workspace, path_resolver=container.session_service.path_resolver)) as cold:
             assert cold.read(sid, output).data == "必须保留的处理结果 Ω\n".encode()
             assert attachment_directory(cold, aid) == directory
-        result = await container.session_orchestrator.create_message(sid, MessageRunRequest(
-            message=MessageCreateRequest(content="继续使用已有处理结果", attachments=[ref]), run=RunOptions(),
+        result = await container.session_orchestrator.submit_user_message(sid, MessageRunRequest(
+            message=MessageCreateRequest(content="继续使用已有处理结果", attachments=[ref]), run=RunOptions(), operation_id=new_message_operation_id(),
         ))
         assert isinstance(container.job_service, JobService)
         job = container.job_service._jobs[result.job_id]

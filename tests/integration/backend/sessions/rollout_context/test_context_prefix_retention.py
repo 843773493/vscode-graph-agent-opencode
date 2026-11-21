@@ -9,6 +9,7 @@ import pytest
 from app.domain.itemized.epoch.prefix_epoch import AppendedItemRef, EpochReason
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.runtime import prefix_compiler
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
@@ -43,8 +44,8 @@ def test_root_rebuild_visits_retained_source_refs_linearly(
     first = case.prepare(internal, "retained-initial", manager=manager)
     assert {source.source_identity for source in first.seal_binding.root.sources} == set(expected)
     for revision in revisions:
-        for name in expected:
-            body = expected[name] if revision == 1 else f"后续正文 {revision} {name}\n"
+        for name, initial_body in expected.items():
+            body = initial_body if revision == 1 else f"后续正文 {revision} {name}\n"
             manager.observe(name, body, revision=f"retained:{revision}")
         activated = case.prepare(internal, f"retained-updated:{revision}", manager=manager)
     before = canonical_json_bytes(activated.to_dict())
@@ -68,7 +69,7 @@ def test_root_rebuild_visits_retained_source_refs_linearly(
     assert promoted.seal_binding.prefix.state.epoch.reason == EpochReason.RUNTIME_NOTICE_CONSUMED
     assert {
         source["source_identity"]: source["body"]
-        for source in json.loads(promoted.seal_binding.root.content)["sources"]
+        for source in parse_root_section(promoted.seal_binding.root.content, tag="context_sources")["sources"]
     } == expected
 
     def tail_sources(snapshot):

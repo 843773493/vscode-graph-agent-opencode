@@ -9,17 +9,16 @@ from contextlib import closing
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.path_utils import workspace_context
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.session_interrupt_state import SessionInterruptState
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import JobStatus
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter

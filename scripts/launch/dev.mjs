@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { once } from "node:events";
-import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
+import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";
 
 import {
   spawnDetachedProcess,
@@ -26,9 +26,10 @@ import {
 } from "./dev-environment.mjs";
 
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
+import { prepareDevelopmentPlugins } from "./dev-bundled-plugins.mjs";
 
-// /health 还要等待 Workbench 资源构建和 Vite 入口预热，不能只按 HTTP 服务启动计时。
-const FRONTEND_START_TIMEOUT_MS = 180_000;
+// 冷启动包含完整 Workbench 资源构建和 Vite 源码预热；此期限不用于普通 API。
+const FRONTEND_START_TIMEOUT_MS = 300_000;
 
 const cliArguments = process.argv.slice(2);
 const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
@@ -40,7 +41,7 @@ const {
   portOffset,
   ports,
 } = developmentLayout;
-const logContract = loadRuntimeLogContract(projectRoot);
+const logContract = loadRuntimeLogContract();
 const webRoot = path.join(frontendRoot, "src", "clients", "workbench");
 const workbenchArguments = ["run", "dev",
   "--outdir", path.join(boxteamHome, "state", "workbench-assets", "dist"),
@@ -123,13 +124,15 @@ function spawnProcess(command, args, cwd, environment) {
   });
 }
 
-function installDevelopmentConfiguration(environment) {
+function installDevelopmentConfiguration(environment, bundledPlugins) {
   const result = Bun.spawnSync(
     [
       pythonBin,
       "-m",
       "configs.boxteam",
       "install-source-development",
+      "--bundled-plugins",
+      JSON.stringify(bundledPlugins),
       "--project-root",
       projectRoot,
     ],
@@ -167,7 +170,7 @@ function installNodeDebugFixture() {
   }
 }
 
-function writeDevelopmentManifest() {
+function writeDevelopmentManifest(bundledPlugins) {
   const runtimeRoot = path.join(boxteamHome, "state");
   const version = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
   if (typeof version !== "string" || !version.trim()) {
@@ -191,6 +194,7 @@ function writeDevelopmentManifest() {
           workspace_schema: path.join(projectRoot, "configs", "workspace_schema.jsonc"),
         },
         skill_resources: path.join(projectRoot, "resources", "skills"),
+        bundled_plugins: bundledPlugins,
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
@@ -389,7 +393,10 @@ async function main() {
   assertDevelopmentPortsAvailable();
   await assertDevelopmentPortsBindable(selectedPorts(), listenHost);
 
-  const runtimeManifest = writeDevelopmentManifest();
+  const bundledPlugins = serviceMode === "all" || serviceMode === "gateway"
+    ? await prepareDevelopmentPlugins({ projectRoot, pythonExecutable: pythonBin,
+      nodeExecutable: Bun.which(nodeBin), bunExecutable: process.execPath }) : [];
+  const runtimeManifest = writeDevelopmentManifest(bundledPlugins);
   const environment = {
     ...process.env,
     BOXTEAM_PROJECT_ROOT: projectRoot,
@@ -421,7 +428,7 @@ async function main() {
       `frontend_root=${frontendRoot} backend_root=${projectRoot} ` +
       `boxteam_home=${boxteamHome}\n`,
   );
-  installDevelopmentConfiguration(environment);
+  installDevelopmentConfiguration(environment, bundledPlugins);
   const backendWorkspaceId =
     serviceMode === "backend" || serviceMode === "all"
       ? resolveBackendWorkspaceId({

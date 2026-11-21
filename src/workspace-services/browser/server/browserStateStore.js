@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import path from "node:path";
 import { mkdir, opendir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";

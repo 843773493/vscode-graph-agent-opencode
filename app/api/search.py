@@ -3,6 +3,7 @@
 import asyncio
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
@@ -13,7 +14,6 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
 )
 from app.api.deps import (
-    get_request_id,
     get_workspace_search_service,
     verify_local_token,
 )
@@ -48,19 +48,19 @@ from app.services.business.session_navigation.thread_search import (
 from app.services.business.session_turn_history.workspace_search import (
     WorkspaceMessageSearchCursorError,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogError
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.turn_history import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,
 )
-from app.services.infrastructure.turn_history.trace_search import TraceSearchError
+from app.services.infrastructure.session_trace.trace_search import TraceSearchError
 
 router = APIRouter(prefix="/search", tags=["search"])
 

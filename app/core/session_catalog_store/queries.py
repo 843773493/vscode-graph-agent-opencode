@@ -16,6 +16,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -59,8 +60,103 @@ _SESSION_LIST_VISIBLE = """
 """
 
 
+@dataclass(frozen=True)
+class CatalogReadRange:
+    catalog_revision: int
+    nodes: list[SessionCatalogNode]
+    parent_session_ids: dict[str, str | None]
+    visible_node_ids: frozenset[str]
+    node_ids_with_children: frozenset[str]
+    total: int = 0
+    offset: int = 0
+
+
 class CatalogQueriesMixin:
     """catalog 只读查询方法族（唯一实现点）。"""
+
+    def read_catalog_children(
+        self, parent_node_id: str | None, *, limit: int | None,
+        page_offset: Callable[[int, int], int], minimum_catalog_revision: int,
+    ) -> CatalogReadRange:
+        """同一事务只投影本页；版本下限先于父节点存在性判断。"""
+        with self.read_transaction() as connection:
+            revision = _catalog_revision_in(connection, minimum_catalog_revision)
+            if parent_node_id is not None:
+                parent = self._node_from_row(self._require_node(connection, parent_node_id))
+                if parent.node_id not in self._catalog_range_in(connection, revision, [parent]).visible_node_ids:
+                    raise KeyError(f"会话目录节点不存在: {parent_node_id}")
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM nodes WHERE parent_node_id IS ? AND state = 'active'",
+                (parent_node_id,),
+            ).fetchone()[0])
+            offset = page_offset(revision, total)
+            rows = connection.execute(
+                f"SELECT {_NODE_COLUMNS} FROM nodes WHERE parent_node_id IS ? AND state = 'active' "
+                "ORDER BY kind != 'folder', catalog_casefold(display_name), node_id LIMIT ? OFFSET ?",
+                (parent_node_id, -1 if limit is None else limit, offset),
+            ).fetchall()
+            result = self._catalog_range_in(connection, revision, [self._node_from_row(row) for row in rows])
+            return CatalogReadRange(
+                revision, result.nodes, result.parent_session_ids,
+                result.visible_node_ids, result.node_ids_with_children, total, offset,
+            )
+
+    def read_catalog_nodes(self, node_ids: list[str], *, minimum_catalog_revision: int) -> CatalogReadRange:
+        """指定 ID 的有界可见性确认；不从某一分页推断目标不存在。"""
+        with self.read_transaction() as connection:
+            revision = _catalog_revision_in(connection, minimum_catalog_revision)
+            nodes = []
+            for node_id in sorted(set(node_ids)):
+                row = connection.execute(f"SELECT {_NODE_COLUMNS} FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+                if row is not None:
+                    nodes.append(self._node_from_row(row))
+            return self._catalog_range_in(connection, revision, nodes)
+
+    def read_catalog_breadcrumb(self, node_id: str, *, minimum_catalog_revision: int) -> CatalogReadRange:
+        with self.read_transaction() as connection:
+            revision = _catalog_revision_in(connection, minimum_catalog_revision)
+            nodes = []
+            current_id: str | None = node_id
+            visited: set[str] = set()
+            while current_id is not None:
+                if current_id in visited:
+                    raise RuntimeError(f"会话目录包含循环: {current_id}")
+                visited.add(current_id)
+                node = self._node_from_row(self._require_node(connection, current_id))
+                nodes.append(node)
+                current_id = node.parent_node_id
+            return self._catalog_range_in(connection, revision, list(reversed(nodes)))
+
+    def _catalog_range_in(self, connection: sqlite3.Connection, revision: int, nodes: list[SessionCatalogNode]) -> CatalogReadRange:
+        by_id = {node.node_id: node for node in nodes}
+        parents: dict[str, str | None] = {}
+        visible: set[str] = set()
+        children: set[str] = set()
+        for node in nodes:
+            nearest = None
+            active = node.state == "active"
+            current_id = node.parent_node_id
+            visited = {node.node_id}
+            while current_id is not None:
+                if current_id in visited:
+                    raise RuntimeError(f"会话目录包含循环: {current_id}")
+                visited.add(current_id)
+                parent = by_id.get(current_id)
+                if parent is None:
+                    parent = self._node_from_row(self._require_node(connection, current_id))
+                    by_id[current_id] = parent
+                if nearest is None and parent.kind == "session":
+                    nearest = parent.node_id
+                active &= parent.state == "active"
+                current_id = parent.parent_node_id
+            parents[node.node_id] = nearest
+            if active:
+                visible.add(node.node_id)
+                if connection.execute(
+                    "SELECT 1 FROM nodes WHERE parent_node_id = ? AND state = 'active' LIMIT 1", (node.node_id,),
+                ).fetchone() is not None:
+                    children.add(node.node_id)
+        return CatalogReadRange(revision, nodes, parents, frozenset(visible), frozenset(children))
 
     def count_children(self, node_id: str) -> int:
         """返回直接子节点数。"""
@@ -420,8 +516,19 @@ def _session_list_member_fingerprint(node_id: str, created_at: str) -> bytes:
     return hashlib.sha256(encoded).digest()
 
 
+def _catalog_revision_in(connection: sqlite3.Connection, minimum: int) -> int:
+    row = connection.execute("SELECT navigation_revision FROM catalog_metadata WHERE singleton_id = 1").fetchone()
+    if row is None:
+        raise CatalogMaintenanceRequiredError("session catalog 缺少 navigation revision 记录")
+    revision = int(row[0])
+    if revision < minimum:
+        raise RuntimeError(f"会话目录权威版本低于读取下限: catalog_revision={revision}, minimum_catalog_revision={minimum}")
+    return revision
+
+
 def _register_session_list_functions(connection: sqlite3.Connection) -> None:
     """每个 catalog 连接都注册同一派生索引函数，包含只读重开。"""
+    connection.create_function("catalog_casefold", 1, str.casefold, deterministic=True)
     connection.create_function(
         "session_list_created_us", 1, _session_list_created_us, deterministic=True
     )

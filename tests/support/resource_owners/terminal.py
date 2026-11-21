@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +32,14 @@ class TerminalTransportFake:
         self.revisions: dict[str, int] = {}
         self.grants: dict[str, tuple[str, int, str | None]] = {}
         self.fail_delete = False
+        self.changed = asyncio.Event()
+
+    async def changes(self) -> AsyncIterator[None]:
+        yield None
+        while True:
+            await self.changed.wait()
+            self.changed.clear()
+            yield None
 
     async def create_terminal(
         self, *, terminal_id: str, owner_revision: int, title: str, agent_id: str | None,
@@ -49,9 +59,9 @@ class TerminalTransportFake:
         }
         return dict(self.records[terminal_id])
 
-    async def list_resources(self) -> list[dict[str, object]]:
+    async def list_resources(self, *, resource_ids: frozenset[str] | None = None) -> list[dict[str, object]]:
         return [{key: value for key, value in record.items() if key not in {"buffer", "display_buffer"}}
-                for record in self.records.values()]
+                for resource_id, record in self.records.items() if resource_ids is None or resource_id in resource_ids]
 
     async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
         record = self.records.get(resource_id)

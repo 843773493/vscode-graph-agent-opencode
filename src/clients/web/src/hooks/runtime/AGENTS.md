@@ -12,7 +12,8 @@ runtime/
 │   ├── useTraceNavigation.ts           按精确 Session／Thread 核验单条原事件，原文仅用于本次定位
 │   └── useAgentStateSnapshot.ts        Agent State 快照及按 message_id 取正文
 ├── 请求状态动作
-│   └── usePendingRequestActions.ts     待处理请求接受、拒绝和清理
+│   └── usePendingRequestActions.ts     待处理请求策略、撤回与精确 Thread 重排
+│   └── useUserQuestions.ts             留言数量订阅、按需分页与逐条删除
 ├── 并发原语
 │   ├── inFlightRequests.ts             按请求身份登记与注销在途任务
 │   └── serialTaskQueue.ts              FIFO 串行队列与 latest-only 队列

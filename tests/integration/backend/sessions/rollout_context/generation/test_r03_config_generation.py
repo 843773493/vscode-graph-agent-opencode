@@ -9,8 +9,8 @@ from hashlib import sha256
 import pytest
 from langchain_core.messages import messages_to_dict
 
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_call_execution import ModelCallExecution
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.core.execution_admission_context import (
     execution_admission_scope,
     require_current_execution_admission,

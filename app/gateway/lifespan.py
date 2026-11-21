@@ -12,20 +12,26 @@ from contextlib import asynccontextmanager
 from typing import cast
 
 import httpx
+from boxteam_plugin_sdk.logging import (
+    configure_application_logging,
+    runtime_logging_state,
+)
+from boxteam_plugin_sdk.observation import (
+    RuntimeObservation,
+    RuntimeObservationSettings,
+)
 from fastapi import FastAPI
 
 from app.core.env import (
     get_project_root,
     load_boxteam_env,
 )
-from app.core.logging_config import configure_application_logging, runtime_logging_state
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import (
     get_boxteam_home,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
 )
-from app.core.runtime_observation import RuntimeObservation
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import (
@@ -73,7 +79,7 @@ from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
 )
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.runtime.service_plugins.runtime import plugin_runtime_lifespan
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
@@ -88,12 +94,12 @@ from app.gateway.runtime_proof import (
     _should_preserve_gateway_generation_for_handoff,
 )
 from app.gateway.search.service import GatewaySearchService
+from app.gateway.secrets.vault import SecretVault
 from app.gateway.server.bootstrap import (
     _restore_managed_local_runtimes,
     create_registry,
 )
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
-from app.schemas.runtime_observation import RuntimeObservationSettings
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)
@@ -134,6 +140,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     gateway_id = load_or_create_gateway_id(_gateway_root() / "identity.json")
     app.state.gateway_state = gateway_state
     app.state.gateway_id = gateway_id
+    app.state.secret_vault = SecretVault(_gateway_root() / "credentials" / "secrets")
     startup_generation = (
         os.environ.get("BOXTEAM_CONFIG_GENERATION") or f"gateway_runtime_{os.getpid()}"
     )
@@ -344,15 +351,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             )
         )
         _refresh_federation_workspace_ports(app.state.federation_rpc_service, registry)
-        app.state.port_forward_manager = SshPortForwardManager(
+        app.state.port_forward_manager = PortForwardManager(
             registry=registry,
             storage_path=_gateway_root() / "port-forwards.json",
             log_dir=get_runtime_log_root(),
         )
-        await app.state.port_forward_manager.reconcile_workspaces()
         await app.state.port_forward_manager.restore()
         async def reconcile_runtime_dependents() -> None:
-            await app.state.port_forward_manager.reconcile_workspaces()
             await workspace_plugin_bindings.reconcile()
 
         app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(

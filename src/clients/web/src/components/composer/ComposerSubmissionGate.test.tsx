@@ -10,6 +10,7 @@ import {
 import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
 import type { Agent } from "../../types/backend";
+import { MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
 import Composer from "./Composer";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 
@@ -23,9 +24,9 @@ const agent = (agentId: string): Agent => ({
   model: "primary",
   tools: [],
   capabilities: [],
-  providers: [
+  models: [
     {
-      provider_id: "provider_a",
+      model_ref: { provider_id: "provider_a", model_id: "default" },
       model: "model-a",
       custom_llm_provider: "openai",
       available: true,
@@ -75,6 +76,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
@@ -82,9 +84,9 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
-    refreshAgents: async () => undefined,
+    refreshAgents: async () => [],
     setWorkspaceDefaultAgent: async () => undefined,
-    setWorkspaceDefaultProvider: async () => undefined,
+    setWorkspaceDefaultModel: async () => undefined,
     switchContentView: () => undefined,
     createSession: async () => undefined,
     renameSession: async () => undefined,
@@ -268,6 +270,47 @@ describe("Composer 提交闸门：同一次提交不得被重复触发", () => {
       await Promise.resolve();
     });
     expect(sent.length).toBe(2);
+    act(() => renderer.unmount());
+  });
+
+  test("冻结提交结果未知时不把原输入回填成可能重复发送的新操作", async () => {
+    installComposerEnvironment();
+    const sent: string[] = [];
+    const renderer = mountComposer(appState(), baseActions({
+      sendMessage: async (content: string) => {
+        sent.push(content);
+        throw new MessageSubmissionUnknownError("op_frozen", new TypeError("连接在回执前中断"));
+      },
+    }));
+    typeInput(renderer, "结果未知的输入");
+
+    await act(async () => {
+      renderer.root.findByProps({ id: "sendButton" }).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(sent).toEqual(["结果未知的输入"]);
+    expect(renderer.root.findByProps({ id: "input" }).props.value).toBe("");
+    expect(JSON.stringify(renderer.toJSON())).toContain("消息接收结果尚未确认，已保留原输入");
+    act(() => renderer.unmount());
+  });
+
+  test("提交被明确拒绝时交给恢复入口编辑，不自动回填旧输入", async () => {
+    installComposerEnvironment();
+    const renderer = mountComposer(appState(), baseActions({
+      sendMessage: async () => { throw new MessageSubmissionRejectedError("op_rejected", new Error("消息格式无效")); },
+    }));
+    typeInput(renderer, "被拒绝的输入");
+
+    await act(async () => {
+      renderer.root.findByProps({ id: "sendButton" }).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(renderer.root.findByProps({ id: "input" }).props.value).toBe("");
+    expect(JSON.stringify(renderer.toJSON())).toContain("消息格式无效");
     act(() => renderer.unmount());
   });
 });

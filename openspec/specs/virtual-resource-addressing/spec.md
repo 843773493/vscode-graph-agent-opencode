@@ -3,9 +3,7 @@
 为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、资源 URI与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭集、scope_id 语义表、URI 语法、kind 闭集与拒绝码登记处的唯一 owner。
 
 **契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**仓库内受版本控制的事实源**（`app/core/resource_uri.py` 与 `app/services/infrastructure/resource_platform/virtual_resources/` 下的 `resolver.py`、`values.py` 三处逐字取值，关键取值已内联在本 spec 各处；不引用任何 `out/tests/temp/**` 临时产物）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 URI scope**，MUST NOT 出现在闭集内。
-
 ## Requirements
-
 ### Requirement: 术语必须区分机制、地址、身份与真实路径
 
 系统 MUST 使用以下唯一术语表；其它 change、文档和实现说明 MUST 引用本表，不得另定义同义名称。
@@ -471,7 +469,7 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `attachments` | `workspace` | `folder`。`attachments` 只允许 workspace scope，目录根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}`，其后按同一文件路径段规则访问 child；原件与预览只读，派生区复用原文件 owner 的写入能力。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
+URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `attachments` | `workspace` | `folder` | `changes`。`attachments` 只允许 workspace scope，目录根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}`，其后按同一文件路径段规则访问 child；原件与预览只读，派生区复用原文件 owner 的写入能力。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
 
 语法 kind 与语义来源描述符 kind MUST 分开：描述符仍只有 `agent-spec`/`skills`，普通 files 导航不会创建来源描述符。后续扩展必须先在本 owner 更新模板和能力，不存在通用未知 kind fallback；旧 memory 两点式仍拒绝。
 
@@ -891,3 +889,53 @@ URI的位置、revision/view/anchor的并列字段及ResourceIdentity职责 MUST
 
 - **WHEN** thread范围资源或未知状态资源被请求复用到另一个thread
 - **THEN** 通用入口不能自动提升scope、伪造可用状态或绕过lease；实际owner拒绝或按已授权的操作完成后返回权威结果
+
+### Requirement: Session 文件更改使用原 owner 的当前 Diff 地址
+
+中央寻址 owner SHALL 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/changes/{session_id}/{selection}/{source_gateway?}/{source_scope}/{source_scope_id}/resources/{source_kind}/{root}/{child...}`。`changes` 只属于 workspace scope；Session ID 沿既有 profile，selection 只接受 `all`、`turn_[0-9a-f]{32}` 或 replay owner 的 `turn-replay-[0-9a-f]{32}`，分别映射原变更 API 的 `all` 或 `turn:{turn_id}`，身份段不得百分号编码。
+
+selection 后的层级 SHALL 是完整规范源文件 URI 去掉 `boxteam://` 的地址，由同一 grammar 解析为明确 `files` 或 `attachments` child；不能是目录根、其它 kind 或嵌套 changes。源文件名沿原文件段编码，只解码一次，不继续解释字面百分号。不得把完整源 URI 百分号编码进单段，避免通用 URI 对象将编码斜杠展开后改变结构。嵌入引用补齐明确 Gateway，交原 owner 读取时归一为目标 Gateway 的规范本地形式；复制的完整外层 URI 同样携带明确 Gateway，解析不在中继机器解释路径。
+
+地址仅表达 Session、变更范围及源文件，不带 edit_id、revision、query、fragment 或正文。认证 Gateway 地址构造／解析不读取业务存储或授予权限。实际打开 SHALL 由原 SessionChanges owner 读取当前聚合 Diff，并由原只读编辑器展示；已打开版本与恢复仍归原变更 owner，不增加普通文件快照、通用版本字段、第二份历史或持久账本。未接通通用正文读取 owner 时，只提供复制／打开和实际正文粘贴，不将其伪装成可供 Composer 读取的文件引用。
+
+#### Scenario: 中文文件及 replay Turn 通过同一 grammar 往返
+
+- **WHEN** 普通执行或 replay Turn 修改包含中文、空格、百分号等文件名的资源并复制 Diff 地址
+- **THEN** 构造和解析保留原 Session、Turn 及源文件归属，文件名只按原文件段规则解码一次；零正文读取，内部编辑器投影不被公开
+
+#### Scenario: 引用重开读取当前变更而不制造快照
+
+- **WHEN** 用户关闭 Diff 后用公开 URI 重新打开
+- **THEN** 原 owner 核验访问并返回当前聚合 Diff，前后文本共用一次响应；源文件不在变更集中时明确失败，不改投同名文件，不以历史版本或当前文件猜测内容
+
+### Requirement: 自有插件配置与业务资源必须复用现行寻址 owner
+
+插件配置 SHALL 使用其 Gateway／Workspace 原配置来源资源，继续遵守现行 config kind、逻辑来源名、独立 layer 及 URI／身份分离合同；无稳定可寻址来源文件时保持无 URI。Workbench 展示态仍使用原 profile，不为插件模拟 vscode settings／多根 view 或扩展宿主文件。
+
+本 change SHALL 撤销尚未发布的用户 VSIX `extensions` 包根及 `config/extension-host/...` 模板提案，不将其当作新格式的兼容地址。旧接入的构造器、解析／映射和消费者 SHALL 迁齐后删除；主规范的 kind 闭集和既有资源不因本次规划改写而被隐式放宽或删改。插件包按安装记录身份管理，instance_id、端口、命令、进度不普遍造 URI。
+
+终端／浏览器／MCP 的既有可引用业务资源 SHALL 维持原规范 URI、独立版本及 owner；Gateway 代理只改变传输路径，不按服务位置重命名资源。确需新增可重开资源时 SHALL 先由唯一寻址 owner 正式登记模板／能力并同步消费者，不在 UI 或插件自行拼接 grammar 或提供任意原生路径旁路。
+
+自有贡献的 command_id、registration_id 和通道代际 SHALL 只用于注册／调用／失效，不自动成为资源 URI。未来开放文件系统、文本内容或编辑器 Provider 时，稳定可重开对象仍须按原寻址合同登记；标准工作台 URI 投影不转移业务身份与版本的权威来源。
+
+#### Scenario: 插件设置复用工作区来源资源
+- **WHEN** 用户从快速访问重开 A1 插件设置，随后 Gateway 路由或服务 instance_id 改变
+- **THEN** 仍解析原 A1 来源并经配置 owner 读取／提交，地址不包含临时端口或进程身份，不重建宿主 settings 文件
+
+#### Scenario: 服务统一托管不改变终端与浏览器资源身份
+- **WHEN** 原终端／浏览器服务迁为受管插件或 Backend 重新连接
+- **THEN** 原业务 URI 和资源 ID 继续指向同一 owner，失效资源明确报错，不把新实例资源伪装成旧 URI 的成功恢复
+
+#### Scenario: 旧扩展地址不能启动兼容链路
+- **WHEN** 调用方使用已撤销的用户 VSIX 包根或 extension-host 配置地址
+- **THEN** 明确拒绝不支持的模板，不启动旧宿主、不改投自有包或工作区普通文件路径
+
+### Requirement: 插件 Skill 及配套文件必须复用技能资源寻址
+
+plugins[].contributes.skills 的 SKILL.md、相对引用文档／示例和目录导航 SHALL 接入现有 Skill／文件资源 owner，由其正式登记合法展示 URI 和读取／列举／搜索能力；复用原 kind 闭集，不恢复 VSIX extensions 包根、不由插件或 UI 拼接 grammar。Skill 的来源绑定 SHALL 保留原生 Gateway、启用范围、包版本／摘要、plugin_id 和贡献身份；内容 revision 与服务 instance_id 分离，服务重启不重命名技能资源。逻辑来源切换和历史冻结读取 SHALL 由原来源及上下文 owner 按实际版本解析，不能仅按同名新包重定向。
+
+读取相对配套文件 SHALL 限于原贡献合法目录和精确目标，沿原认证资源链解析，不暴露物理安装路径或复制到工作区。读取／列举／搜索不触发 skill_load、不执行包脚本，也不自动跟踪；未登记能力或失效来源明确拒绝。
+
+#### Scenario: 远端 Skill 配套文件与实例重启
+- **WHEN** A 经 Relay 打开 B 的 Skill 并读取其相对示例，期间 B 服务重启
+- **THEN** 示例仍由 B 原资源 owner 按原贡献和版本读取，展示 URI 不包含端口／实例或 A 本地路径；读取不激活 Skill，非法越目录引用明确拒绝

@@ -10,6 +10,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Body,
@@ -22,16 +23,14 @@ from fastapi import (
 from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,
     verify_gateway_token,
 )
 from app.gateway.federation import (
-    build_remote_gateway_connection_id,
     request_remote_gateway_management,
 )
 from app.gateway.federation.policy import require_federation_capability
@@ -51,12 +50,7 @@ from app.gateway.routes._shared import (
 from app.gateway.routes.workspaces_managed import _remote_gateway_credential
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.local_workspace import wait_for_workspace_health
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.server.port_forwarding import (
-    get_port_forward_manager,
-    port_forward_http_error,
-)
 from app.gateway.ssh_connections import (
     list_ssh_connection_options,
     resolve_ssh_connection_request,
@@ -261,7 +255,6 @@ async def add_remote_gateway(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
-    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     try:
         connection = await run_sync_shielded(resolve_ssh_connection_request, payload, registry)
@@ -269,61 +262,25 @@ async def add_remote_gateway(
         raise HTTPException(status_code=400, detail=str(error)) from error
     try:
         gateway_config = request.app.state.gateway_config
-        connection_id = build_remote_gateway_connection_id(
+        await register_remote_gateway(
+            registry=registry,
+            log_dir=get_runtime_log_root(),
+            name=payload.name,
             host=connection.host,
             port=connection.port,
             username=connection.username,
+            private_key_path=connection.private_key_path,
+            ssh_config_host=connection.ssh_config_host,
             remote_gateway_port=connection.remote_gateway_port,
+            remote_pair_command=connection.remote_pair_command,
+            activate=False,
+            health_request_timeout_seconds=(
+                gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            health_poll_interval_seconds=(
+                gateway_config.gateway_process_health_poll_interval_seconds
+            ),
         )
-        previous_commit = registry._last_committed_snapshot
-        previous_revision = registry.registry_revision
-        previous_runtime = registry._remote_gateway_runtimes.get(connection_id)
-        try:
-            await register_remote_gateway(
-                registry=registry,
-                log_dir=get_runtime_log_root(),
-                name=payload.name,
-                host=connection.host,
-                port=connection.port,
-                username=connection.username,
-                private_key_path=connection.private_key_path,
-                ssh_config_host=connection.ssh_config_host,
-                remote_gateway_port=connection.remote_gateway_port,
-                remote_pair_command=connection.remote_pair_command,
-                activate=False,
-                health_request_timeout_seconds=(
-                    gateway_config.gateway_process_health_request_timeout_seconds
-                ),
-                health_poll_interval_seconds=(
-                    gateway_config.gateway_process_health_poll_interval_seconds
-                ),
-            )
-        except BaseException as error:
-            current_runtime = registry._remote_gateway_runtimes.get(connection_id)
-            published = (
-                registry._last_committed_snapshot is not previous_commit
-                and (
-                    registry._state_store is None
-                    or registry.registry_revision > previous_revision
-                )
-                and current_runtime is not None
-                and current_runtime is not previous_runtime
-                and registry.remote_gateway_url(connection_id)
-                == current_runtime.service_urls["workspace_api"]
-            )
-            if not published:
-                raise
-            try:
-                await port_forward_manager.reconcile_workspaces()
-            # 异步对账普通失败附加原错；取消必须传播给请求调用方。
-            except Exception as secondary_error:  # noqa: BLE001
-                note = (
-                    "远程 Gateway 投影已提交，但 SSH 端口转发对账失败: "
-                    f"{secondary_error}"
-                )
-                error.add_note(note)
-            raise
-        await port_forward_manager.reconcile_workspaces()
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(
@@ -729,7 +686,6 @@ async def remove_workspace(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
-    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
     controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
 ):
     workspace_key = resolve_workspace_key(request, workspace_id, registry)
@@ -742,12 +698,6 @@ async def remove_workspace(
             )
             if result.status == "blocked":
                 raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
-        try:
-            await port_forward_manager.remove_workspace(workspace_key)
-        except (LookupError, ValueError, OSError, RuntimeError, httpx.HTTPError) as error:
-            raise port_forward_http_error(
-                error, stage="workspace_remove", permission_status_code=403,
-            ) from error
         if not managed_local:
             registry.remove(workspace_key, owner="manual_crud")
     except PermissionError as error:

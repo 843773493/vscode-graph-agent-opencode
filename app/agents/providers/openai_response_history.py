@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.ai import InputTokenDetails, UsageMetadata
 
 from app.core.failures import mark_provider_failure
+from app.prompting.validation import internal_prompt_metadata
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_responses_tool_content,
@@ -190,22 +191,14 @@ def _message_with_standard_tool_calls(message: AIMessage) -> AIMessage:
     return message.model_copy(update={"tool_calls": unique_calls})
 
 
-def _is_internal_history_message(message: BaseMessage) -> bool:
-    """识别不应再次发送给 provider 的 checkpoint 内部提醒。"""
-    metadata = message.response_metadata or {}
-    if metadata.get("internal") is True:
-        return True
-    message_metadata = metadata.get("message_metadata")
-    if (
-        isinstance(message_metadata, Mapping)
-        and message_metadata.get("internal") is True
-    ):
-        return True
-    content = message.content
+def _is_checkpoint_boundary(message: BaseMessage) -> bool:
+    """只有 typed checkpoint 中断提醒切断旧工具事务，正文不决定身份。"""
+    metadata = internal_prompt_metadata(message.response_metadata)
     return (
         isinstance(message, HumanMessage)
-        and isinstance(content, str)
-        and content.lstrip().startswith("<system_reminder>")
+        and metadata is not None
+        and metadata.get("internal") is True
+        and metadata.get("structured_prompt_kind") == "checkpoint_reminder"
     )
 
 
@@ -232,7 +225,7 @@ def _project_tool_history(
     projected_messages: list[BaseMessage] = []
     last_internal_message_index = -1
     for index in range(len(messages) - 1, -1, -1):
-        if _is_internal_history_message(messages[index]):
+        if _is_checkpoint_boundary(messages[index]):
             last_internal_message_index = index
             break
     pending_tool_call_ids: set[str] = set()
@@ -259,7 +252,7 @@ def _project_tool_history(
                 f"message_index={index} timeout_seconds="
                 f"{DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             )
-        if _is_internal_history_message(message):
+        if _is_checkpoint_boundary(message):
             if pending_tool_call_ids:
                 discard_pending_segment()
             continue

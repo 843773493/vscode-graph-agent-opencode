@@ -1214,7 +1214,7 @@ describe("Gateway 远程工作区新增", () => {
   test("注册失败后回读权威列表、写入连接失败文案并原样抛出", async () => {
     const events: string[] = [];
     const failure = new Error("连接被拒绝");
-    const add = spyOnGatewayApi("addSshGatewayWorkspace").mockImplementation(async () => {
+    const add = spyOnGatewayApi("addRemoteGatewayConnection").mockImplementation(async () => {
       events.push("api");
       throw failure;
     });
@@ -1233,7 +1233,7 @@ describe("Gateway 远程工作区新增", () => {
       resetWorkspaceScopedState: () => { events.push("reset"); },
     });
 
-    await expect(hook.addSshGatewayWorkspace({
+    await expect(hook.addRemoteGatewayConnection({
       remote_gateway_port: 8014,
       ssh_config_host: "remote-host",
     })).rejects.toBe(failure);
@@ -1257,7 +1257,7 @@ describe("Gateway 远程工作区新增", () => {
 
   test("注册失败且权威列表回读失败时保留旧列表、标记失效并展示两个错误", async () => {
     const failure = new Error("连接被拒绝");
-    const add = spyOnGatewayApi("addSshGatewayWorkspace").mockRejectedValue(failure);
+    const add = spyOnGatewayApi("addRemoteGatewayConnection").mockRejectedValue(failure);
     const previousWorkspaces = [gatewayWorkspace({ workspace_id: "ws-old" })];
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(
       new Error("列表不可用"),
@@ -1267,7 +1267,7 @@ describe("Gateway 远程工作区新增", () => {
       gatewayWorkspacesStale: false,
     }));
 
-    await expect(hook.addSshGatewayWorkspace({
+    await expect(hook.addRemoteGatewayConnection({
       remote_gateway_port: 8014,
       ssh_config_host: "remote-host",
     })).rejects.toBe(failure);
@@ -1284,7 +1284,7 @@ describe("Gateway 远程工作区新增", () => {
 
   test("注册失败后的列表回读遇到新请求代次时不覆盖新列表", async () => {
     const failure = new Error("连接被拒绝");
-    const add = spyOnGatewayApi("addSshGatewayWorkspace").mockRejectedValue(failure);
+    const add = spyOnGatewayApi("addRemoteGatewayConnection").mockRejectedValue(failure);
     let resolveList!: (value: GatewayWorkspaceList) => void;
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockImplementation(
       () => new Promise((resolve) => { resolveList = resolve; }),
@@ -1294,7 +1294,7 @@ describe("Gateway 远程工作区新增", () => {
       gatewayWorkspaces: previousWorkspaces,
       gatewayWorkspacesStale: false,
     }));
-    const pending = hook.addSshGatewayWorkspace({
+    const pending = hook.addRemoteGatewayConnection({
       remote_gateway_port: 8014,
       ssh_config_host: "remote-host",
     }).catch((error: unknown) => error);
@@ -1321,7 +1321,7 @@ describe("Gateway 远程工作区新增", () => {
 
   test("注册失败后的列表回读遇到新选择意图时不覆盖活动工作区", async () => {
     const failure = new Error("连接被拒绝");
-    const add = spyOnGatewayApi("addSshGatewayWorkspace").mockRejectedValue(failure);
+    const add = spyOnGatewayApi("addRemoteGatewayConnection").mockRejectedValue(failure);
     let resolveList!: (value: GatewayWorkspaceList) => void;
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockImplementation(
       () => new Promise((resolve) => { resolveList = resolve; }),
@@ -1331,7 +1331,7 @@ describe("Gateway 远程工作区新增", () => {
       gatewayWorkspaces: previousWorkspaces,
       gatewayWorkspacesStale: false,
     }));
-    const pending = hook.addSshGatewayWorkspace({
+    const pending = hook.addRemoteGatewayConnection({
       remote_gateway_port: 8014,
       ssh_config_host: "remote-host",
     }).catch((error: unknown) => error);
@@ -1357,7 +1357,7 @@ describe("Gateway 远程工作区新增", () => {
   });
 
   test("远程 Gateway 已连接但界面同步失败时写入复合文案", async () => {
-    spyOnGatewayApi("addSshGatewayWorkspace").mockResolvedValue(workspaceList(null, []));
+    spyOnGatewayApi("addRemoteGatewayConnection").mockResolvedValue(workspaceList(null, []));
     const { hook, state, calls } = await mountHook(appState(), {
       finishWorkspaceRefresh: async () => {
         throw new Error("刷新失败");
@@ -1365,7 +1365,7 @@ describe("Gateway 远程工作区新增", () => {
     });
 
     const message = "远程 Gateway 已连接，但界面同步失败: 刷新失败";
-    await expect(hook.addSshGatewayWorkspace({
+    await expect(hook.addRemoteGatewayConnection({
       remote_gateway_port: 8014,
       ssh_config_host: "remote-host",
     })).rejects.toThrow(message);

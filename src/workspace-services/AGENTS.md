@@ -33,6 +33,7 @@ BrowserStateStore和TerminalStateStore测试只需要路径隔离：它们不读
 
 ## 规范
 
+- 插件运行、命令、日志和诊断直接使用 `@boxteam/plugin-sdk` 的公开子模块，wire 从其生成入口消费；不恢复旧 `src/shared` 实现或私有协议副本。Browser 截图维护使用 SDK，关闭先排空；Terminal 保留启动及创建时清理，其它清理策略不因 SDK 整理改变。
 - 可以依赖 `src/shared` 的协议和常量。
 - 服务错误必须快速失败并暴露详细信息。
 - 每个新增服务子目录必须包含四段式 `AGENTS.md`。

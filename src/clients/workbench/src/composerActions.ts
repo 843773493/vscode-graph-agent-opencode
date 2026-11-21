@@ -40,6 +40,9 @@ async function appendToThread(accessor: ServicesAccessor, content: (assertRecipi
   if (!gatewayId) throw new Error(t('workbench.composer.gatewayMissing'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseGateway = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidated = true;
+  });
   try {
     const selected = originating ?? await quick.pick(targets.map(item => ({ ...item, label: item.target.input.owner.title,
         description: `${item.target.input.owner.gatewayId} · ${item.target.input.owner.workspaceId}`,
@@ -58,7 +61,7 @@ async function appendToThread(accessor: ServicesAccessor, content: (assertRecipi
     if (text === undefined) return;
     assertRecipient();
     await draft.append(text);
-  } finally { release(); }
+  } finally { release(); releaseGateway(); }
 }
 
 /** 全部来源先确认能力，再逐项解析；任何失败均不追加部分草稿。 */

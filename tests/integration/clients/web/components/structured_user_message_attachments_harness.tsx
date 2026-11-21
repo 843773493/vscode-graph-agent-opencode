@@ -5,6 +5,7 @@ import MessageAttachments from "../../../../../src/clients/web/src/components/ch
 import WorkspaceAttachmentPreview from "../../../../../src/clients/web/src/components/workspace/preview/WorkspaceAttachmentPreview";
 import WorkspaceAuxiliaryPanel from "../../../../../src/clients/web/src/components/workspace/WorkspaceAuxiliaryPanel";
 import { gatewayWorkspaceKey } from "../../../../../src/clients/web/src/api/workspaceIdentity";
+import "../../../../harness/js/workbench-locale";
 
 const parameters = new URLSearchParams(window.location.search);
 const gatewayId = parameters.get("gatewayId");

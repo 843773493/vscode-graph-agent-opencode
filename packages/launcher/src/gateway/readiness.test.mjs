@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../../src/shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 import { describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";

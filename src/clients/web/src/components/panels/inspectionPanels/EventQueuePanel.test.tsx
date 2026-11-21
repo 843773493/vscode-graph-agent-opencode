@@ -211,6 +211,16 @@ describe("EventQueuePanel 超大 payload 兜底", () => {
     expect(html).not.toContain(firstText);
     expect(html).not.toContain("<pre>");
   });
+
+  test("跨事件的 emoji 恰好落在预览上限时也不能留下半个字符", () => {
+    const prefix = "X".repeat(LARGE_STRING_DISPLAY_LIMIT - 1);
+    const html = renderToStaticMarkup(<EventQueuePanel {...historyProps}
+      items={[textDeltaItem(1, `${prefix}\ud83d`), textDeltaItem(2, "\ude00tail")]}
+      limit={200} sessionId="ses_events" active />);
+    expect(html).toContain(`${prefix}…（已截断展示`);
+    expect(html).not.toContain("\ud83d");
+    expect(html).not.toContain("\ude00");
+  });
 });
 
 describe("EventQueuePanel 空态与失败态口径", () => {

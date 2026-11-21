@@ -28,8 +28,8 @@ function migrateSettings(value: unknown, material: WorkspaceIdentityRecovery): u
 }
 
 function migrateView(key: string, value: unknown, material: WorkspaceIdentityRecovery): ViewChange | null {
-  const draftPrefix = `draft:${material.registry_gateway_id}::`;
-  if (key.startsWith(draftPrefix)) {
+  const draftPrefix = ["draft", "attachments"].map(kind => `${kind}:${material.registry_gateway_id}::`).find(prefix => key.startsWith(prefix));
+  if (draftPrefix) {
     const suffix = key.slice(draftPrefix.length), end = suffix.indexOf("::");
     if (end < 1) throw new Error("草稿缺少原工作区和 Session 引用");
     const workspace = recoveredWorkspaceKey(material, decodeURIComponent(suffix.slice(0, end)));

@@ -25,12 +25,14 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     InternalExecutionHistoryEntry,
     InternalExecutionHistoryPage,
 )
-from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
-from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
-from app.services.infrastructure.turn_history.models import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
+)
+from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
+from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
+from app.services.mapping.itemized.history_turns.internal_execution import (
+    build_internal_execution_history,
 )
 
 
@@ -290,7 +292,7 @@ def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
     )
     assert cursor.turn_ordinal is None
     assert cursor.logical_item_ordinal == 20
-    projected = RolloutHistoryReader._project_internal_entries(
+    projected = build_internal_execution_history(
         (entry,),
         include=DEFAULT_INITIAL_INCLUDE,
     )
@@ -306,7 +308,7 @@ def test_internal_projection_keeps_original_historical_owner() -> None:
         session_id="source-session",
         thread_id="source-thread",
     )
-    projected = RolloutHistoryReader._project_internal_entries(
+    projected = build_internal_execution_history(
         (entry,), include=DEFAULT_INITIAL_INCLUDE,
     )
     serialized = projected[0].model_dump(mode="json")
@@ -324,7 +326,7 @@ def test_internal_projection_rejects_conflicting_execution_owners() -> None:
         _entry(81, logical_item_ordinal=21), thread_id="another-thread",
     )
     with pytest.raises(RuntimeError, match="durable metadata 不一致"):
-        RolloutHistoryReader._project_internal_entries(
+        build_internal_execution_history(
             (entry, conflicting), include=DEFAULT_INITIAL_INCLUDE,
         )
 

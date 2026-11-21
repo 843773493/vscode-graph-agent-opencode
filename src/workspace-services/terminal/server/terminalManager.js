@@ -1,9 +1,9 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { validateWorkspaceId, verifyWorkspaceIdentity } from "./workspaceIdentity.js";
-import { readProcessStat } from "../../../shared/serverProcessLifecycle.mjs";
+import { readProcessStat } from "@boxteam/plugin-sdk/process-lifecycle";
 import {
   nowIso,
   resolveShell,
@@ -75,6 +75,8 @@ export class TerminalManager {
     this.persistRequested = false;
     this.persistPromise = null;
     this.pendingPersist = null;
+    this.stateObservers = new Set();
+    this.observedState = new Map();
     /** @type {Map<string, TerminalTransportGrant>} */
     this.transportGrants = new Map();
   }
@@ -146,10 +148,25 @@ export class TerminalManager {
       this.persistPromise = pending.promise;
       this.persistRequested = false;
       try {
+        const records = [...this.terminalsById.values()].map((session) => session.toRecord());
         await this.stateStore.write({
           updated_at: nowIso(),
-          terminals: [...this.terminalsById.values()].map((session) => session.toRecord()),
+          terminals: records,
         });
+        // 只观察资源/命令状态；输出字节及游标继续走原 WebSocket，不触发清单补读。
+        const state = new Map(records.map((record) => [record.terminal_id, JSON.stringify([
+          record.terminal_id, record.transport_owner_revision, record.status, record.reconciliation_status,
+          record.title, record.cols, record.rows, record.last_command_status, record.last_command_started_at,
+          record.last_command_completed_at, record.model_backgrounded,
+          record.completion_observed_by_model, record.steering_dispatching, record.steering_dispatched,
+          record.completion_event_id,
+        ])]));
+        const changed = [...new Set([...this.observedState.keys(), ...state.keys()])]
+          .filter(id => this.observedState.get(id) !== state.get(id));
+        this.observedState = state;
+        if (changed.length) {
+          for (const observer of this.stateObservers) observer(changed);
+        }
       } catch (error) {
         // 原错误交给本轮与尚未开始的等待方；保留脏状态，只由后续显式调用重试。
         this.persistRequested = true;
@@ -164,10 +181,32 @@ export class TerminalManager {
     this.persistPromise = null;
   }
 
-  list() {
-    return [...this.terminalsById.values()]
+  list(resourceIds) {
+    const sessions = resourceIds === undefined ? [...this.terminalsById.values()]
+      : [...new Set(resourceIds)].flatMap(id => this.terminalsById.has(id) ? [this.terminalsById.get(id)] : []);
+    return sessions
       .map((session) => session.summary())
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  }
+
+  observe(response) {
+    response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "X-Accel-Buffering": "no" });
+    const stop = () => {
+      clearInterval(heartbeat);
+      this.stateObservers.delete(notify);
+      response.end();
+    };
+    const notify = (resourceIds = null) => {
+      // 慢订阅者断开后读当前快照，不积压资源事件或输出正文。
+      if (!response.write(`event: terminals_changed\ndata: ${JSON.stringify({ resource_ids: resourceIds })}\n\n`)) stop();
+    };
+    this.stateObservers.add(notify);
+    const heartbeat = setInterval(() => {
+      if (!response.write(": heartbeat\n\n")) stop();
+    }, 15_000);
+    response.once("close", () => { clearInterval(heartbeat); this.stateObservers.delete(notify); });
+    notify();
+    return stop;
   }
 
   get(id) {

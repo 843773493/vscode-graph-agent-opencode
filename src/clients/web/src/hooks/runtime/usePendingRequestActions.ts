@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { errorMessage } from "../../utils/errorMessage";
 
 import {
   clearPendingRequests as apiClearPendingRequests,
+  reorderPendingRequests as apiReorderPendingRequests,
   listThreadPendingRequests as apiListThreadPendingRequests,
   removePendingRequest as apiRemovePendingRequest,
   updatePendingRequestPolicy as apiUpdatePendingRequestPolicy,
@@ -34,6 +35,8 @@ export function usePendingRequestActions({
   currentSessionCacheKey: string | null;
   setState: SetAppState;
 }) {
+  const orderRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => orderRequest.current?.abort(), [currentSessionCacheKey, currentThreadId]);
   const requireTarget = useCallback(() => {
     if (!currentSession) {
       throw new Error("当前没有可操作的会话");
@@ -66,6 +69,7 @@ export function usePendingRequestActions({
         next.activeJobIdsBySession,
         snapshot,
         sessionCacheKey,
+        next.pendingQueueVersions,
       );
       return next;
     });
@@ -163,7 +167,26 @@ export function usePendingRequestActions({
     );
   }, [apiPort, applyServerMutation, requireTarget]);
 
+  const reorderPendingRequests = useCallback(async (messageIds: string[], expectedRevision: number) => {
+    const target = requireTarget();
+    if (!target.threadId) throw new Error("重排必须指定 Thread");
+    orderRequest.current?.abort();
+    const controller = new AbortController();
+    orderRequest.current = controller;
+    let snapshot: PendingRequestList;
+    try {
+      snapshot = await apiReorderPendingRequests(apiPort, target.sessionId, target.threadId, messageIds,
+        expectedRevision, target.workspaceId, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      // 409、超时或丢失回执均重读权威顺序；不猜测服务端是否提交成功。
+      snapshot = await apiListThreadPendingRequests(apiPort, target.sessionId, target.workspaceId, controller.signal, target.threadId);
+    }
+    if (!controller.signal.aborted) replaceSnapshot(target.sessionId, target.cacheKey, snapshot);
+  }, [apiPort, replaceSnapshot, requireTarget]);
+
   return {
+    reorderPendingRequests,
     removePendingRequest,
     clearPendingRequests,
     updatePendingRequestPolicy,

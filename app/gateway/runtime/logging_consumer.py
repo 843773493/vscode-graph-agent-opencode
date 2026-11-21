@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import httpx
+from boxteam_plugin_sdk.logging import RuntimeLoggingApply, RuntimeLoggingStatus
 
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config.values import GatewayConfig
@@ -20,10 +21,6 @@ from app.gateway.runtime.logging_control import (
     RuntimeLoggingProcess,
     RuntimeLoggingProcessControl,
     runtime_logging_processes,
-)
-from app.schemas.runtime_logging import (
-    RuntimeLoggingApply,
-    RuntimeLoggingStatus,
 )
 
 if TYPE_CHECKING:

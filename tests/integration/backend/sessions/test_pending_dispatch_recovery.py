@@ -21,15 +21,16 @@ from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.schemas.event import Event
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -71,9 +72,10 @@ class PendingRecoveryCase:
     queued: tuple[tuple[str, str], tuple[str, str]]
     jobs: JobService
     executor: _HeldExecutor
-    store: PendingRequestStore
+    store: ExecutionQueueService
     workspace_id: str
     workspace_root: Path
+    events: list[Event]
 
 
 @pytest.fixture
@@ -110,7 +112,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
         main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
         workspace_root=workspace_root,
     )
-    store = PendingRequestStore(
+    store = ExecutionQueueService(
         sessions_dir=workspace.sessions_root,
         owner=saver, input_reader=lambda reference: messages.accepted_job_message(reference, display=False),
     )
@@ -118,7 +120,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
     def scheduler(executor: _HeldExecutor) -> JobService:
         return JobService(
             job_event_bus=JobEventBus(), job_executor=executor,
-            pending_request_store=store, input_owner=messages, terminal_status_writer=saver,
+            execution_queue_service=store, input_owner=messages, terminal_status_writer=saver,
             session_lifecycle_guard=workspace.resolver.resolve_session_node_for_runtime,
         )
 
@@ -126,6 +128,12 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
     source = scheduler(source_executor)
     cold_executor = _HeldExecutor()
     cold = scheduler(cold_executor)
+    observed: list[Event] = []
+
+    async def record(event: Event) -> None:
+        observed.append(event)
+
+    await cold._bus.register_durable_listener(record)
     try:
         queued = []
         for thread_id in threads:
@@ -139,7 +147,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
                     created_at=now, updated_at=now,
                 )
                 messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-                    execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+                    execution_binding=identity, message_id=message.message_id, agent_id="default", model=None,
                     delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat(),
                 ))
                 dispatch = await source.start_job(
@@ -165,7 +173,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
         assert [item.job_id for item in await store.load(session_id)] == [job for group in queued for job in group]
         yield PendingRecoveryCase(
             session_id, threads, tuple(queued), cold, cold_executor, store,
-            workspace.workspace_id, workspace_root,
+            workspace.workspace_id, workspace_root, observed,
         )
     finally:
         await _stop_jobs(source)
@@ -179,19 +187,21 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
     pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch, failure: str,
 ) -> None:
     case = pending_recovery_case
-    original_save = case.jobs._pending_requests.refresh_version
+    original_refresh = case.jobs._pending_requests.refresh_version
     original_start = case.jobs._start_job_task
-    save_calls = 0
     starts: list[str] = []
-    failing_save = {"load_projection": 1, "first_dispatch_projection": 2, "sibling_dispatch_projection": 3}.get(failure)
+    fail_projection = failure != "sibling_task"
+    target = 1 if failure == "sibling_dispatch_projection" else 0
+    target_active_job = None if failure == "load_projection" else case.queued[target][0]
     fail_task = failure == "sibling_task"
 
-    async def save_once(session_id):
-        nonlocal save_calls
-        save_calls += 1
-        if save_calls == failing_save:
+    async def refresh_once(session_id):
+        nonlocal fail_projection
+        active_job = case.jobs._thread_current_job.get((session_id, case.threads[target]))
+        if fail_projection and active_job == target_active_job:
+            fail_projection = False
             raise OSError("injected queue persistence failure")
-        await original_save(session_id)
+        await original_refresh(session_id)
 
     def start_once(job):
         nonlocal fail_task
@@ -201,7 +211,7 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
         starts.append(job.job_id)
         original_start(job)
 
-    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", save_once)
+    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", refresh_once)
     monkeypatch.setattr(case.jobs, "_start_job_task", start_once)
     with pytest.raises(OSError, match="injected"):
         await case.jobs.list_pending(case.session_id)
@@ -294,7 +304,7 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
         assert starts == []
         if fail_queued:
             assert successor_job.status == JobStatus.cancelled
-            events = await case.jobs._bus.list_events(successor)
+            events = [event for event in case.events if event.job_id == successor]
             assert [event.type for event in events].count("job_cancelled") == 1
     result = await cancel()
     assert job.status == JobStatus.cancelled
@@ -310,7 +320,7 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
         assert all(item.status == JobStatus.cancelled for item in case.jobs._jobs.values())
         assert case.jobs._thread_current_job == {}
         assert starts == []
-    events = await case.jobs._bus.list_events(first)
+    events = [event for event in case.events if event.job_id == first]
     assert [event.type for event in events].count("job_cancelled") == 1
     cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._path_resolver.sessions_root)
     admission = cold_saver.execution_admission_for_job(
@@ -324,7 +334,7 @@ async def test_cancel_unstarted_recovery_commits_terminal_and_wakes_original_fif
     if operation == "force_interrupt":
         for identity, reference in references.items():
             assert case.jobs._input_owner.accepted_job_outcome(reference) == "cancelled"
-            events = await case.jobs._bus.list_events(identity)
+            events = [event for event in case.events if event.job_id == identity]
             assert [event.type for event in events].count("job_cancelled") == 1
 
 
@@ -380,7 +390,7 @@ async def test_live_cancel_write_failure_retains_owner_and_retry_uses_original_f
     assert job.status == JobStatus.cancelling and job.ended_at is None
     assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == first
     assert case.jobs._input_owner.accepted_job_outcome(references[first]) == "unknown"
-    events = await case.jobs._bus.list_events(first)
+    events = [event for event in case.events if event.job_id == first]
     assert not {"job_failed", "job_cancelled"}.intersection(event.type for event in events)
     assert case.executor.started.empty()
     if operation == "force_paused":
@@ -409,7 +419,7 @@ async def test_live_cancel_write_failure_retains_owner_and_retry_uses_original_f
         assert case.executor.started.empty()
         await case.jobs.control(successor, JobControlRequest(action="pause"))
     await case.jobs.drain_finalizations()
-    events = await case.jobs._bus.list_events(first)
+    events = [event for event in case.events if event.job_id == first]
     assert [event.type for event in events].count("job_cancelled") == 1
     assert not any(event.type == "job_failed" for event in events)
     cold_saver = RolloutCheckpointSaver(sessions_dir=case.store._path_resolver.sessions_root)
@@ -485,7 +495,7 @@ async def test_prebody_cancel_write_failure_clears_only_after_original_job_retry
     assert case.jobs._thread_current_job[(case.session_id, case.threads[0])] == first
     assert case.jobs._jobs[successor].status == JobStatus.queued
     assert case.executor.started.empty()
-    events = await case.jobs._bus.list_events(first)
+    events = [event for event in case.events if event.job_id == first]
     assert not {"job_failed", "job_cancelled"}.intersection(event.type for event in events)
 
     result = await case.jobs.control(first, JobControlRequest(action="cancel"))
@@ -497,6 +507,6 @@ async def test_prebody_cancel_write_failure_clears_only_after_original_job_retry
     assert await asyncio.wait_for(case.executor.started.get(), 5) == successor
     await case.jobs.control(successor, JobControlRequest(action="pause"))
     await case.jobs.drain_finalizations()
-    events = await case.jobs._bus.list_events(first)
+    events = [event for event in case.events if event.job_id == first]
     assert [event.type for event in events].count("job_cancelled") == 1
     assert not any(event.type == "job_failed" for event in events)

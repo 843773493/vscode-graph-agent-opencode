@@ -2,12 +2,14 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { extract as extractTar } from "tar";
+import { parse as parseJsonc } from "jsonc-parser";
 
 import {
   BOXTEAM_VERSION,
@@ -23,7 +25,7 @@ import {
   writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
 import { downloadPinnedLinuxPython, downloadPinnedLinuxNode } from "./pinned-archive-download.mjs";
-import { copyApplicationSources } from "./application-sources.mjs";
+import { copyApplicationSources, writeApplicationNodeManifest } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
@@ -60,16 +62,9 @@ function run(command, args, options = {}) {
 }
 
 function installPythonDependencies(pythonExecutable) {
+  run("bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]);
   const requirementsPath = path.join(outputRoot, "requirements.locked.txt");
-  run("uv", [
-    "export",
-    "--locked",
-    "--no-dev",
-    "--format",
-    "requirements-txt",
-    "--output-file",
-    requirementsPath,
-  ]);
+  run("bun", ["scripts/plugins/export-python-requirements.mjs", requirementsPath]);
   run("uv", [
     "pip",
     "install",
@@ -81,15 +76,12 @@ function installPythonDependencies(pythonExecutable) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  cpSync(
-    path.join(projectRoot, "packaging", "runtime", "node-package.json"),
-    path.join(applicationRoot, "package.json"),
-  );
+  writeApplicationNodeManifest(projectRoot, applicationRoot);
   run("bun", ["install", "--production", "--exact", "--ignore-scripts"], {
     cwd: applicationRoot,
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
   });
-  run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+  run(nodeExecutable, ["--input-type=module", "--eval", "await import('@boxteam/plugin-sdk/runtime');"], {
     cwd: applicationRoot,
   });
 }
@@ -145,6 +137,7 @@ function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
 }
 
 function writeRuntimeMetadata({ chromiumExecutable }) {
+  const plugin = parseJsonc(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
   const manifest = {
     schema_version: 1,
     distribution: "npm",
@@ -159,6 +152,8 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
       workspace_schema: "application/configs/workspace_schema.jsonc",
     },
     skill_resources: "application/resources/skills",
+    bundled_plugins: [{ package_id: plugin.package_id, package_version: plugin.version,
+      archive: "application/resources/plugins/developer-tools.zip" }],
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {

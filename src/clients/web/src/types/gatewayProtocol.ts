@@ -31,15 +31,15 @@ export type CreateGatewayManagedWorkspaceRequest = Omit<
   name?: string | null;
   gateway_connection_id?: string | null;
 };
-export type CreatePortForwardRequest = Omit<OptionalFields<GatewayProtocol.CreatePortForwardRequest>, "local_port" | "label"> & {
-  local_port?: number | null;
-  label?: string | null;
-};
-export type ChangePortForwardLocalPortRequest = OptionalFields<GatewayProtocol.ChangePortForwardLocalPortRequest>;
-export type ChangePortForwardLabelRequest = Omit<OptionalFields<GatewayProtocol.ChangePortForwardLabelRequest>, "label"> & {
+export type PortForwardEndpoint = Omit<OptionalFields<GatewayProtocol.PortForwardEndpoint>, "address"> & { address: string };
+export type CreatePortForwardRequest = Omit<OptionalFields<GatewayProtocol.CreatePortForwardRequest>, "label" | "listener" | "destination" | "protocol"> & {
+  listener: PortForwardEndpoint;
+  destination: PortForwardEndpoint;
+  protocol: "tcp" | "http" | "https";
   label?: string | null;
 };
 export type DevelopmentRuntimeRestartDTO = OptionalFields<GatewayProtocol.DevelopmentRuntimeRestartDTO>;
+export type GatewayClientRecoveryDTO = NullableOptionalFields<OptionalFields<GatewayProtocol.GatewayClientRecoveryDTO>, "workspace_identity">;
 export type GatewayConfigSourceDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourceDTO>,
   | "uri"
@@ -145,18 +145,16 @@ export type GatewayConfigReloadStatusDTO = Omit<
   reason?: "invalid_config" | "restart_required" | "apply_failed" | "conflict" | "rejected" | "recovery_required" | null;
   layer_digests: Record<string, string | null>;
 };
-export type PortForwardDTO = Omit<OptionalFields<GatewayProtocol.PortForwardDTO>, "remote_host" | "local_host" | "protocol" | "label" | "status" | "error" | "local_url"> & {
-  remote_host: "127.0.0.1";
-  local_host: "127.0.0.1";
+export type PortForwardDTO = Omit<OptionalFields<GatewayProtocol.PortForwardDTO>, "listener" | "destination" | "protocol" | "label" | "status" | "error"> & {
+  listener: PortForwardEndpoint;
+  destination: PortForwardEndpoint;
   protocol: "http" | "https" | "tcp";
   label: string | null;
   status: "starting" | "active" | "error" | "stopped";
   error: string | null;
-  local_url: string | null;
 };
-export type PortForwardListDTO = Omit<OptionalFields<GatewayProtocol.PortForwardListDTO>, "items"> & {
-  items: PortForwardDTO[];
-};
+export type PortForwardListDTO = Omit<OptionalFields<GatewayProtocol.PortForwardListDTO>, "items"> & { items: PortForwardDTO[] };
+export type PortForwardHostsDTO = OptionalFields<GatewayProtocol.PortForwardHostsDTO>;
 export type ReorderGatewayWorkspacesRequest = OptionalFields<GatewayProtocol.ReorderGatewayWorkspacesRequest>;
 export type SshConnectionOptionDTO = OptionalFields<GatewayProtocol.SshConnectionOptionDTO>;
 export type SshConnectionOptionListDTO = OptionalFields<GatewayProtocol.SshConnectionOptionListDTO>;

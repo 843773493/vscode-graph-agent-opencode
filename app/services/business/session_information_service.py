@@ -16,7 +16,7 @@ from app.schemas.internal_v2.session import (
 )
 from app.schemas.internal_v2.session_resource import SessionResourceDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.workspace_service import WorkspaceService
 
@@ -145,7 +145,7 @@ class SessionInformationService:
             workspace_id=session.workspace_id,
             title=title,
             current_agent_id=session.current_agent_id,
-            current_provider_id=session.current_provider_id,
+            current_model=session.current_model,
             parent_session_id=session.parent_session_id,
             context_source_session_id=session.context_source_session_id,
             kind=session.kind,

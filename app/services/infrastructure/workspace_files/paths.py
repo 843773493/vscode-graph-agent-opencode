@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Protocol, TypeVar
 
 import httpx
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from pydantic import ValidationError
 
 from app.core import resource_uri
@@ -31,7 +32,7 @@ from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
 )
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.gateway.native_directories import (
     NativeDirectoryBindingDTO,
     NativeDirectoryResolveDTO,

@@ -9,14 +9,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-from app.core.resource_uri import resource_display_uri
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.core.resource_uri import resource_display_uri
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.text_mutation import (
     CreateText,
     EditText,
@@ -41,7 +40,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _prepare_workspace,
     _tool,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication.federation import open_communication_triad
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
@@ -268,10 +267,10 @@ async def test_real_agent_cancellation_persists_original_unknown_tool_result(mut
         ),
     )
     (call_id,) = model.control.plan_model_calls(session, thread, cassette.raw["interactions"])
-    response = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await source.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "验证取消已发布的远端文件调用"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     accepted = response.json()["data"]
     await _wait(artifacts / "cancel-entered.json", 30)

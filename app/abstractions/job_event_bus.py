@@ -5,7 +5,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from app.schemas.event import Event
 
-
 DurableEventListener = Callable[[Event], Awaitable[None]]
 
 
@@ -79,7 +78,3 @@ class JobEventBusProtocol(Protocol):
     async def register_durable_listener(self, listener: DurableEventListener) -> None: ...
 
     async def unregister_durable_listener(self, listener: DurableEventListener) -> None: ...
-
-    async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]: ...
-
-    async def get_event(self, event_id: str) -> Event | None: ...

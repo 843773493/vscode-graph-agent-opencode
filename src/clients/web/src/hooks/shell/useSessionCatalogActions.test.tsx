@@ -80,7 +80,6 @@ function mountHook(options: MountOptions = {}) {
       activeSessionId: "activeSessionId" in options
         ? options.activeSessionId!
         : "ses-active",
-      sessionsByWorkspace: new Map(),
       gatewayWorkspaces: options.gatewayWorkspaces ?? [],
       confirm: async (input) => {
         confirmations.push(input);

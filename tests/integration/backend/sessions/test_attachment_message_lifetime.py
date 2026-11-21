@@ -18,6 +18,9 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from PIL import Image
 
 from app.agents.providers.wire_finalize import finalize_provider_wire
+from app.agents.structured_prompt_validation_middleware import (
+    StructuredPromptValidationMiddleware,
+)
 from app.api import messages as messages_api
 from app.api.deps import get_session_orchestrator, verify_local_token
 from app.core.checkpoint_config import build_checkpoint_config
@@ -45,7 +48,6 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.domain.itemized.serialization import normalize_wire_request
 from app.prompting import PromptSection, internal_message_factory
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.message import (
     AttachmentRef,
@@ -59,6 +61,9 @@ from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -68,9 +73,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import validate_summary_source
 from app.services.mapping.itemized.provider_request import project_user_message_content
+from app.services.mapping.message_content import checkpoint_message_to_dto
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from tests.support.api_helpers import new_message_operation_id
 
 BODY = b"attachment survives until canonical acceptance"
 
@@ -114,7 +122,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         attachments=message.attachments, message_metadata=message.metadata,
         message_created_at=message.created_at.isoformat(),
     )
-    case.messages.accept_job_input(job, queue_input=ExecutionQueueInput(execution_binding=job.execution_binding, message_id=job.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=job.message_created_at))
+    case.messages.accept_job_input(job, queue_input=ExecutionQueueInput(execution_binding=job.execution_binding, message_id=job.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=job.message_created_at))
     (notice,) = case.saver.read_canonical_items(owner.session_id, owner.thread_id)
     payload = RuntimeNoticePayload.from_dict(notice.payload)
     assert payload.prompt == prepared.content
@@ -135,7 +143,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
     assert frozen.response_metadata["attachments"] == list(payload.attachments)
     assert frozen.response_metadata["attachment_blocks"] == list(payload.attachment_blocks)
     validate_summary_source(frozen, (notice,))
-    visible = case.messages._message_to_dto(owner.session_id, owner.thread_id, 0, frozen)
+    visible = checkpoint_message_to_dto(owner.session_id, owner.thread_id, 0, frozen)
     assert private not in visible.model_dump_json()
     assert visible.content == ("生成分支已结束，正在处理结果。" if kind == "generated_session_result" else "")
     assert visible.attachments == message.attachments
@@ -145,21 +153,25 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
     with monkeypatch.context() as patch:
         patch.setattr("app.services.business.message_service.UserContentBuilder.build", refuse_rebuild)
         queued_input = SimpleNamespace(**{**vars(job), "message_metadata": frozen.response_metadata})
-        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         with pytest.raises(ValueError, match="附件.*不一致"):
             queued_input = SimpleNamespace(**{
                 **vars(job), "message_metadata": frozen.response_metadata, "attachments": [],
             })
-            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         with pytest.raises(ValueError):
             queued_input = SimpleNamespace(**{
                 **vars(job), "message_metadata": frozen.response_metadata, "message": prepared.content + "漂移",
             })
-            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
     assert case.saver.read_canonical_items(owner.session_id, owner.thread_id) == (notice,)
     with RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions", attachment_store=case.store,
     ) as cold:
+        cold.claim_execution_queue(
+            owner.session_id, owner.thread_id, job_id=job_id,
+            claim_owner="attachment-test", previous_generation=0,
+        )
         assert cold.accepted_internal_message(
             owner.session_id, thread_id=owner.thread_id, job_id=job_id,
             message_id=message.message_id, intent=intent,
@@ -186,6 +198,10 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
                 **frozen_provider_activation(cold, plan_creation_idempotency_key=key),
             )
         selected = [entry for entry in result["snapshot"].selection if entry.included and entry.ref.ref_id == notice.item_id]
+        StructuredPromptValidationMiddleware._validate(SimpleNamespace(messages=result["messages"]))
+        for carrier in result["messages"]:
+            if carrier.response_metadata.get("attachments"):
+                assert "attachment_blocks" not in carrier.response_metadata
         assert len(selected) == 1 and selected[0].content_hash == notice.content_hash
         if target_format == "responses":
             wire = result["native_projection"]["request"]["input"]
@@ -252,7 +268,7 @@ class MessageLifetimeCase:
     store: AttachmentBlobStore
     saver: RolloutCheckpointSaver
     messages: MessageService
-    orchestrator: SessionOrchestrator
+    orchestrator: SessionMessageOrchestrator
     owner: MutationIntentOwner
     identity: UserExecutionIdentity
     started_jobs: list[str]
@@ -268,7 +284,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
     sessions = root / ".boxteam" / "sessions"
     session_id = create_prefixed_id("ses")
     session_bundle_factory(sessions, session_id)
-    store = AttachmentBlobStore(root)
+    store = AttachmentBlobStore(root, leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite"))
     resolver = store._path_resolver
     thread_id = resolver.main_thread_id(session_id)
     identity = UserExecutionIdentity(
@@ -278,7 +294,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
     started_jobs = []
 
     async def get_session(_session_id):
-        return SimpleNamespace(current_agent_id="default", current_provider_id=None)
+        return SimpleNamespace(current_agent_id="default", current_model=None)
 
     async def resolve_main_thread(_session_id):
         return thread_id
@@ -291,7 +307,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             session_id=_session_id, message=_content, job_id=identity.job_id,
             **kwargs,
         )
-        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         started_jobs.append(kwargs["message_id"])
         return JobDispatchSnapshotDTO(
             session_id=session_id, thread_id=thread_id, job_id=identity.job_id,
@@ -304,14 +320,14 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             main_thread_resolver=resolver.main_thread_id, checkpointer=saver,
             attachment_store=store, workspace_root=root,
         )
-        orchestrator = SessionOrchestrator(
+        orchestrator = SessionMessageOrchestrator(
             message_service=messages,
             session_service=SimpleNamespace(
                 get=get_session, resolve_main_thread=resolve_main_thread, path_resolver=resolver,
             ),
             config_service=SimpleNamespace(
                 resolve_agent_id=lambda agent_id: agent_id,
-                validate_agent_id=lambda agent_id: None,
+                validate_agent_id=lambda agent_id: agent_id,
             ),
             job_service=SimpleNamespace(
                 thread_input_admission=ThreadInputAdmission().hold,
@@ -352,7 +368,7 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
             file_id="inline:retry", name="retry.txt", content_type="text/plain",
             data_url="data:text/plain;base64," + base64.b64encode(body).decode(),
         )],
-    )).model_dump(mode="json", by_alias=True)
+    ), operation_id=new_message_operation_id()).model_dump(mode="json", by_alias=True)
     def fail_sync(operation_id, phase, *, details=None):
         if phase == "attachment.ingest." + boundary:
             raise OSError("注入上传失败")
@@ -451,23 +467,24 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
         if pause_at == "acceptance":
             paused.set()
             assert release.wait(5), "测试未释放真实 acceptance worker"
-        accept(message, execution_identity=execution_identity, queue_input=queue_input)
+        record = accept(message, execution_identity=execution_identity, queue_input=queue_input)
         canonical = case.saver.accepted_user_message(
             session_id, thread_id=thread_id,
             job_id=execution_identity.job_id, message_id=message.message_id,
         )
         data = case.store.read(session_id, message.attachments[0].file_id).data
         accepted.append((message, canonical, data))
+        return record
 
     if pause_at == "after_upload":
         monkeypatch.setattr(case.messages, "create", paused_create)
     monkeypatch.setattr(case.messages, "accept_user_message", paused_accept)
     if prepared is None:
-        operation = case.orchestrator.create_message(
+        operation = case.orchestrator.submit_user_message(
             session_id,
             MessageRunRequest(run=RunOptions(), message=MessageCreateRequest(
                 role="user", content="读取附件", attachments=[attachment],
-            )),
+            ), operation_id=new_message_operation_id()),
         )
     else:
         operation = case.orchestrator.dispatch_prepared_message(
@@ -540,12 +557,13 @@ async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_h
         )
         expected = AttachmentRef(file_id=expected_uri, name=asset.name, content_type="application/pdf")
         assert prepared.attachments == [expected]
+        queue = await case.orchestrator._job_event_bus.subscribe(case.identity.job_id, subscriber_kind="test_attachments")
         accepted = await case.orchestrator.dispatch_prepared_message(
             case.owner.session_id, prepared, requested_agent_id="default", execution_binding=case.identity,
         )
         assert case.started_jobs == [prepared.message_id]
-        events = await case.orchestrator._job_event_bus.list_events(accepted.job_id)
-        event = next(event for event in events if event.type == "message_created")
+        event = queue.get_nowait()
+        assert event.type == "message_created"
         event_attachments = event.model_dump(mode="json")["payload"]["attachments"]
         assert event_attachments == [expected.model_dump(exclude={"data_url"})]
         assert str(root) not in json.dumps(event_attachments, ensure_ascii=False)

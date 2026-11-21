@@ -48,7 +48,7 @@ def extension_tool_guidance(
         for group, entries in sorted(groups.items())[:MAX_NAVIGATION_GROUPS]
     ]
     automatic = [
-        {"tool_name": definition.metadata.tool_id, **definition.payload, "schema_hash": definition.schema_hash,
+        {"tool_name": definition.metadata.tool_id, **definition.contract_payload, "schema_hash": definition.schema_hash,
          **({"skill_names": [association.skill_name for association in definition.skill_associations
                              if association.status == "available"]}
             if any(association.status == "available" for association in definition.skill_associations) else {}),

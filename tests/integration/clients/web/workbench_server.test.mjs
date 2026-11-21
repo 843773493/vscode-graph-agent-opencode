@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 // 使用与 Electron 相同的 Node HTTP 实现；Gateway 是随机本地端口上的显式替身。
@@ -63,6 +64,10 @@ try {
           'Set-Cookie': 'fixture-session=returned; HttpOnly' });
         response.end(JSON.stringify({ path: upstream.path, owner: upstream.owner,
           cookie: upstream.cookie, body: JSON.parse(upstream.body) }));
+      } else if (input.scenario === 'upstream-error') {
+        response.writeHead(503, { 'X-Request-ID': 'gateway-failure',
+          'X-BoxTeam-Error-Context': JSON.stringify({ source: { component: 'gateway' }, stage: 'workspace_connect' }) });
+        response.end('workspace unavailable');
       } else {
         response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'fixture-stream' });
         response.write('data: ready\n\n');
@@ -71,7 +76,14 @@ try {
   });
   const target = await listen(gateway);
   const origin = await listen(createWorkbenchServer({ root: input.root, gateway: target }));
-  if (input.scenario === 'file-cache') {
+  if (input.scenario === 'gateway-unavailable') {
+    await new Promise((resolve, reject) => gateway.close(error => error ? reject(error) : resolve()));
+    observed.failures = [];
+    for (const headers of [{ 'X-Request-ID': 'caller-request' }, {}]) {
+      const response = await fetch(origin + '/api/unavailable?token=private-query', { headers });
+      observed.failures.push({ status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() });
+    }
+  } else if (input.scenario === 'file-cache') {
     const path = '/api/v1/workspace/files/raw?path=boxteam%3A%2F%2Fworkspace%2Ffixture%2Fimage.png';
     const headers = { 'X-BoxTeam-Workspace-Id': 'workspace-a', 'X-BoxTeam-Target-Gateway-Id': 'gateway-a',
       Authorization: 'Bearer test-only', Cookie: 'fixture-session=local' };
@@ -116,12 +128,13 @@ try {
     client.destroy();
     observed.releasedBeforeHeaders = await waitFor(() => upstreams[0].closed);
     observed.clientErrors = errors;
-  } else if (input.scenario === 'json') {
+  } else if (input.scenario === 'json' || input.scenario === 'upstream-error') {
     const client = open(origin, '/api/json');
     const [response] = await once(client, 'response');
     let body = '';
     for await (const chunk of response) body += chunk;
-    observed.response = { status: response.statusCode, headers: response.headers, body: JSON.parse(body) };
+    observed.response = { status: response.statusCode, headers: response.headers,
+      body: input.scenario === 'json' ? JSON.parse(body) : body };
   } else if (input.scenario === 'static') {
     const read = async (path, headers = {}, method = 'GET') => {
       const response = await fetch(origin + path, { headers, method });
@@ -140,6 +153,10 @@ try {
     observed.missing = await read('/worker.js', { 'If-None-Match': observed.updated.headers.etag });
     observed.oauth = await read('/%6dcp-oauth-callback.html?code=private-code');
     observed.multi = await read('/main.js', { 'If-None-Match': '"different", ' + observed.reads['/main.js'].cold.headers.etag.slice(2) });
+    observed.gzip = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip, deflate, br' });
+    observed.identity = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip;q=0, *;q=1', 'If-None-Match': observed.gzip.headers.etag });
+    observed.gzipWarm = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip', 'If-None-Match': observed.gzip.headers.etag });
+    observed.gzipHead = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip' }, 'HEAD');
   } else throw new Error('未知场景: ' + input.scenario);
   observed.requests = upstreams.map(({ response, ...entry }) => entry);
   // 在 fixture 强制清理之前取证，不能把兜底清理误当成代理释放。
@@ -148,6 +165,7 @@ try {
   for (const client of clients) client.destroy();
   for (const socket of sockets) socket.destroy();
   await Promise.all(servers.map(server => new Promise((resolve, reject) => {
+    if (!server.listening) { resolve(); return; }
     server.close(error => error ? reject(error) : resolve());
   })));
 }
@@ -156,7 +174,7 @@ try {
 const scope = await TestRunContext.fromTestFile('tests/integration/clients/web/workbench_server.test.mjs').prepare();
 await writeFile(join(scope.artifactsDir, 'observer.mjs'), observer);
 
-for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
+for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache', 'gateway-unavailable', 'upstream-error']) {
   test(`Workbench HTTP 代理：${scenario}`, async () => {
     const directory = join(scope.artifactsDir, scenario);
     await mkdir(directory);
@@ -166,7 +184,9 @@ for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
       for (const name of ['index.html', 'main.js', 'worker.js', 'font-ABC12345.ttf', 'unlisted-ABC12345.js', 'mcp-oauth-callback.html']) {
         await writeFile(join(root, name), name + '-v1');
       }
-      await writeFile(join(root, 'immutable-assets.json'), JSON.stringify(['font-ABC12345.ttf']));
+      await writeFile(join(root, 'chunk-ABC12345.js'), 'compressed-module-v1'.repeat(100));
+      await writeFile(join(root, 'chunk-ABC12345.js.gz'), gzipSync('compressed-module-v1'.repeat(100)));
+      await writeFile(join(root, 'immutable-assets.json'), JSON.stringify(['font-ABC12345.ttf', 'chunk-ABC12345.js', 'chunk-ABC12345.js.gz']));
     }
     const input = {
       module: pathToFileURL(resolve('src/clients/workbench/scripts/server.mjs')).href,
@@ -187,9 +207,31 @@ for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
     expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
+    if (scenario === 'gateway-unavailable') {
+      expect(result.stderr.match(/Gateway 代理失败：\/api\/unavailable，connect ECONNREFUSED/g)).toHaveLength(2);
+      expect(result.stderr).not.toContain('private-query');
+    } else expect(result.stderr).toBe('');
     const observed = JSON.parse(result.stdout);
-    if (scenario === 'file-cache') {
+    if (scenario === 'gateway-unavailable') {
+      for (const failure of observed.failures) {
+        expect(failure.status).toBe(502);
+        expect(JSON.parse(failure.headers['x-boxteam-error-context'])).toEqual({
+          source: { component: 'workbench_host' }, stage: 'gateway_connect',
+          target: { component: 'gateway' }, error_type: 'ECONNREFUSED',
+        });
+        expect(failure.body).toContain('ECONNREFUSED');
+        expect(failure.body).not.toContain('private-query');
+      }
+      expect(observed.failures[0].headers['x-request-id']).toBe('caller-request');
+      expect(observed.failures[1].headers['x-request-id']).toBeUndefined();
+    } else if (scenario === 'upstream-error') {
+      expect(observed.response.status).toBe(503);
+      expect(observed.response.headers['x-request-id']).toBe('gateway-failure');
+      expect(JSON.parse(observed.response.headers['x-boxteam-error-context'])).toEqual({
+        source: { component: 'gateway' }, stage: 'workspace_connect',
+      });
+      expect(observed.response.body).toBe('workspace unavailable');
+    } else if (scenario === 'file-cache') {
       expect(observed.cold.status).toBe(200);
       expect(observed.cold.body).toBe('fixture-image-bytes');
       expect(observed.warm.status).toBe(304);
@@ -247,6 +289,20 @@ for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
       expect(observed.oauth.headers['referrer-policy']).toBe('no-referrer');
       expect(observed.oauth.headers.etag).toBeUndefined();
       expect(observed.multi.status).toBe(304); expect(observed.requests).toEqual([]);
+      expect(observed.gzip.status).toBe(200);
+      expect(observed.gzip.body).toBe('compressed-module-v1'.repeat(100));
+      expect(observed.gzip.headers['content-encoding']).toBe('gzip');
+      expect(observed.gzip.headers['content-type']).toBe('text/javascript');
+      expect(observed.gzip.headers.vary).toBe('Accept-Encoding');
+      expect(Number(observed.gzip.headers['content-length'])).toBeLessThan(observed.identity.body.length);
+      expect(observed.identity.status).toBe(200);
+      expect(observed.identity.body).toBe(observed.gzip.body);
+      expect(observed.identity.headers['content-encoding']).toBeUndefined();
+      expect(observed.identity.headers.etag).not.toBe(observed.gzip.headers.etag);
+      expect(observed.gzipWarm.status).toBe(304);
+      expect(observed.gzipWarm.headers.vary).toBe('Accept-Encoding');
+      expect(observed.gzipHead.body).toBe('');
+      expect(observed.gzipHead.headers['content-length']).toBe(observed.gzip.headers['content-length']);
     }
   });
 }

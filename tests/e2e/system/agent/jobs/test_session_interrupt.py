@@ -7,6 +7,8 @@ import json
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
+
 
 async def _wait_for_job_terminal(
     client: httpx.AsyncClient,
@@ -46,10 +48,10 @@ async def _run_interrupt_then_second_message(
 
         message_response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {"content": first_message_content},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         )
         assert message_response.status_code == 200
         first_job_id = message_response.json()["data"]["job_id"]
@@ -92,10 +94,10 @@ async def _run_interrupt_then_second_message(
 
     second_message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": second_message_content},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert second_message_response.status_code == 200
     second_job_id = second_message_response.json()["data"]["job_id"]

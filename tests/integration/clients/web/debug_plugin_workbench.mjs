@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { testControl } from '../../../support/e2e_control/browser_client.mjs';
 import { installPlugin } from '../../../support/plugin_package.mjs';
+import { newOperationId } from '../../../support/operation_ids.mjs';
 
 const input = JSON.parse(process.env.BOXTEAM_DEBUG_UI_INPUT);
 const result = { phase: 'initialization', pageErrors: [], dap: [] };
@@ -406,6 +407,7 @@ try {
   const calls = await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId, interactions: input.modelInteractions });
   result.modelCallIds = calls;
   const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`, { method: 'POST', body: {
+    operation_id: newOperationId(),
     message: { content: '读取当前 UI 暂停运行的 state，然后将 state.counter 加十，不要重新启动。' },
     run: { mode: 'single_agent', agent_id: 'default' } } }, owner);
   // 由真实 Node 求值输出标记进入临界区，原 UI 此时发出单步；不替代任何产品结果。

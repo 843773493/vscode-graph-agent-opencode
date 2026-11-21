@@ -12,7 +12,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 — 复用隔离进程及 model_stream
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 async def test_product_snapshots_keep_original_block_model_calls_after_restart(
@@ -25,10 +25,10 @@ async def test_product_snapshots_keep_original_block_model_calls_after_restart(
         {**_tool("read_file", {"path": "identity-source.txt"}, "identity-read"), "content": "identity-before-tool"},
         {"content": "identity-after-tool"},
     ])
-    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "读取 identity-source.txt 后答复"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     result = accepted.json()["data"]
     await _completed(case.client, result["job_id"])
@@ -55,6 +55,11 @@ async def test_product_snapshots_keep_original_block_model_calls_after_restart(
         assert {block["block_id"]: block["model_call_id"] for block in snapshot["blocks"]} == block_owners
         assert snapshot["current_model_call_id"] == calls[-1]
         assert {block["text"] for block in snapshot["blocks"]} == {"identity-before-tool", "identity-after-tool"}
+        traces = await case.client.get(f"/api/v1/sessions/{session}/traces")
+        assert traces.status_code == 200, traces.text
+        completed, = [event for event in traces.json()["data"]["items"] if event["type"] == "job_completed"]
+        assert completed["job_id"] == result["job_id"]
+        assert completed["raw"]["payload"]["result"] == "identity-after-tool"
         # 已收到全部事件的客户端以高水位重连，服务端返回终态快照控制帧。
         stream = await case.client.get(base, params={"after_seq": snapshot["snapshot_seq"]})
         assert stream.status_code == 200, stream.text

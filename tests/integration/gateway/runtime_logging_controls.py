@@ -11,8 +11,8 @@ from pathlib import Path
 
 import commentjson
 import httpx
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.core.workspace_identity import read_workspace_id
 from tests.support.workspaces import prepare_default_test_workspace
 

@@ -4,17 +4,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from app.schemas.internal_v2.session_changes import (
-    SessionChangesetDTO,
-    SessionFileChangeKind,
-)
+from app.schemas.internal_v2.session_changes import SessionFileChangeKind
 
 
 @dataclass(frozen=True, slots=True)
-class FileEditSnapshot:
+class ObservedFileEdit:
+    """文件 owner 为同一次工具编辑提供的前后状态，不代表当前磁盘内容。"""
+
     file_path: str
-    existed: bool
-    content: str
+    before_exists: bool
+    before_content: str
     after_exists: bool
     after_content: str
 
@@ -69,19 +68,6 @@ class SessionChangesStoreProtocol(Protocol):
 
     def edit_text_reader(self, session_id: str) -> Callable[[str, Literal["before", "after", "diff"]], str]: ...
 
-    def save_changeset_file(
-        self,
-        *,
-        session_id: str,
-        changeset_id: str,
-        file_path: str,
-        before_content: str | None,
-        after_content: str | None,
-        diff_text: str,
-    ) -> None: ...
-
-    def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None: ...
-
 
 class SessionChangesRecorderProtocol(Protocol):
     async def record_tool_file_edit(
@@ -92,5 +78,5 @@ class SessionChangesRecorderProtocol(Protocol):
         tool_call_id: str,
         execution_id: str,
         tool_name: str,
-        before: FileEditSnapshot,
+        edit: ObservedFileEdit,
     ) -> StoredFileEdit | None: ...

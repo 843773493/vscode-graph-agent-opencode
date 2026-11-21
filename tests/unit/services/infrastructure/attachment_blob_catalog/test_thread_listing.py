@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
 from app.api import messages
 from app.api.deps import (
     get_attachment_blob_store,
@@ -99,7 +99,7 @@ async def test_pages_preserve_upload_identity_owner_and_released_sources(listing
 @pytest.fixture
 async def listing_http(listing_case: ListingCase) -> AsyncIterator[tuple[httpx.AsyncClient, Mock]]:
     case = listing_case
-    service = Mock(spec=TurnSessionLookupProtocol)
+    service = Mock(spec=SessionThreadReaderProtocol)
     service.resolve_thread = AsyncMock(return_value=case.thread)
 
     @asynccontextmanager

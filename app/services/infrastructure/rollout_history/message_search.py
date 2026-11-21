@@ -22,6 +22,11 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.storage.catalog.projections import (
     canonical_projection_content,
 )
+from app.services.infrastructure.rollout_history.errors import (
+    InvalidTurnCursorError,
+    StaleTurnCursorError,
+    StaleTurnReferenceError,
+)
 from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
 from app.services.infrastructure.rollout_history.tool_result import (
     ToolOutputChangedError,
@@ -29,11 +34,6 @@ from app.services.infrastructure.rollout_history.tool_result import (
     tool_result_identity,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from app.services.infrastructure.turn_history.models import (
-    InvalidTurnCursorError,
-    StaleTurnCursorError,
-    StaleTurnReferenceError,
-)
 
 MAX_SEARCH_ITEMS = 256
 MAX_SEARCH_BYTES = 8 * 1024 * 1024

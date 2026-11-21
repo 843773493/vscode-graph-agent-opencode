@@ -108,12 +108,18 @@ export function mergeToolCall(
   previous: Record<string, unknown> | undefined,
   incoming: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!previous) return { ...incoming };
-  const merged = { ...previous, ...incoming };
-  if (stringValue(previous.tool_name) && !stringValue(incoming.tool_name)) {
+  const { arguments_delta: argumentsDelta, ...fields } = incoming;
+  const merged = { ...previous, ...fields };
+  if (typeof argumentsDelta === "string" && incoming.arguments === undefined) {
+    const raw = isRecord(previous?.arguments) && typeof previous.arguments.raw === "string"
+      ? previous.arguments.raw : "";
+    merged.arguments = { raw: raw + argumentsDelta };
+  }
+  if (previous && stringValue(previous.tool_name) && !stringValue(incoming.tool_name)) {
     merged.tool_name = previous.tool_name;
   }
-  if (hasArguments(previous.arguments) && !hasArguments(incoming.arguments)) {
+  if (previous && incoming.arguments_complete !== true
+    && hasArguments(previous.arguments) && !hasArguments(merged.arguments)) {
     merged.arguments = previous.arguments;
   }
   return merged;

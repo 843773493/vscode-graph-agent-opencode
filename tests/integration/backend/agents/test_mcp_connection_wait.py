@@ -31,7 +31,7 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 from tests.integration.backend.agents.test_mcp_connection_control import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 本文件正式隔离工作区
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.mcp.http_endpoint import (
@@ -99,10 +99,10 @@ def idle_child(recovery_case):
         ).raw["interactions"]
         assert isinstance(seed, list) and isinstance(seed[0], dict)
         replay.control.plan_model_calls(session, main_thread, [seed[0]])
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "准备独立 child 的历史来源。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
         # 关键 child 和历史由公开 fork 入口创建，不预填 Thread／checkpoint。
@@ -191,10 +191,10 @@ async def test_authorization_continues_without_new_user_turn(
         call_ids = wait_plan(replay, session, thread, "授权完成后检查 secure 的完整定义，再调用 probe 核实连接。")
         operation_id = software_tool_operation_id("mcp_connect", session, thread, str(UUID(call_ids[0])), "debug-e2e-call-0")
         task_id = mcp_wait_task_id(session, thread, operation_id)
-        response = await client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json=with_message_run_operation_id({
             "message": {"content": "为 secure 发起连接并登记授权后继续，结束本次执行。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         await wait_for_job_done(client, accepted["job_id"], max_attempts=140)
@@ -299,10 +299,10 @@ async def test_cancelling_one_thread_wait_preserves_other_waiter_and_shared_conn
             if operation_id is None:
                 operation_id = software_tool_operation_id("mcp_connect", session, thread, str(UUID(calls[0])), "debug-e2e-call-0")
             task_id = mcp_wait_task_id(session, thread, operation_id)
-            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "为 secure 登记等待，授权成功后继续。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert response.status_code == 200, response.text
             await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=140)
             await task_resource(client, session, task_id, "running")

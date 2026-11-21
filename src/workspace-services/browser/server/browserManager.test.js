@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BrowserManager, BrowserTransportGrantRejected } from "./browserManager.js";
@@ -12,20 +12,123 @@ afterAll(() => rmSync(workspaceRunRoot, { recursive: true, force: true }));
 
 function createBrowserManagerWithStateWriter(writer, options = {}) {
   const workspaceRoot = path.join(workspaceRunRoot, randomUUID());
+  const workspaceId = options.workspaceId ?? WORKSPACE_ID;
   cpSync(
     path.join(process.cwd(), "tests/fixtures/workspaces/browser_state_store_workspace"),
     workspaceRoot,
     { recursive: true },
   );
-  const manager = new BrowserManager({ workspaceRoot, workspaceId: WORKSPACE_ID, ...options });
+  writeFileSync(path.join(workspaceRoot, ".boxteam", "workspace-identity.json"), JSON.stringify({ workspace_id: workspaceId }));
+  const manager = new BrowserManager({ workspaceRoot, ...options, workspaceId });
   if (writer !== null) manager.stateStore.write = writer;
   return manager;
+}
+async function writeExpiredScreenshot(manager, browserId) {
+  const { screenshot_id: screenshotId } = await manager.stateStore.writeScreenshot(browserId, Buffer.from("old screenshot"));
+  const screenshotPath = path.join(manager.stateStore.screenshotDir, `${browserId}-${screenshotId}.png`);
+  const oldTime = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+  utimesSync(screenshotPath, oldTime, oldTime);
+  return screenshotPath;
 }
 function createOptions() {
   return { workspaceId: WORKSPACE_ID, browserId: `browser_${randomUUID().replaceAll("-", "")}`, ownerRevision: 1 };
 }
 
 describe("浏览器状态持久化", () => {
+  test("截图维护首次立即使用真实存储清理，关闭等待维护排空", async () => {
+    const manager = createBrowserManagerWithStateWriter(null);
+    await manager.init();
+    const screenshotPath = await writeExpiredScreenshot(manager, `browser_${"a".repeat(32)}`);
+
+    manager.startArtifactPrune();
+    const deadline = Date.now() + 1000;
+    while (existsSync(screenshotPath) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(existsSync(screenshotPath)).toBe(false);
+    await manager.shutdown();
+  });
+
+  test("同一插件的两个工作区实例只清理各自状态目录", async () => {
+    const first = createBrowserManagerWithStateWriter(null, { workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const second = createBrowserManagerWithStateWriter(null, { workspaceId: "00000000-0000-4000-8000-000000000002" });
+    await Promise.all([first.init(), second.init()]);
+    const firstScreenshot = await writeExpiredScreenshot(first, `browser_${"b".repeat(32)}`);
+    const secondScreenshot = await writeExpiredScreenshot(second, `browser_${"c".repeat(32)}`);
+
+    try {
+      first.startArtifactPrune();
+      const deadline = Date.now() + 1000;
+      while (existsSync(firstScreenshot) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(existsSync(firstScreenshot)).toBe(false);
+      expect(existsSync(secondScreenshot)).toBe(true);
+      await first.shutdown();
+      expect(existsSync(secondScreenshot)).toBe(true);
+
+      second.startArtifactPrune();
+      const secondDeadline = Date.now() + 1000;
+      while (existsSync(secondScreenshot) && Date.now() < secondDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(existsSync(secondScreenshot)).toBe(false);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+    }
+  });
+
+  test("维护失败仍尝试独立资源收尾并向关闭调用保留原错误", async () => {
+    const manager = createBrowserManagerWithStateWriter(null);
+    await manager.init();
+    const maintenanceFailure = new Error("截图文件删除失败");
+    const entered = Promise.withResolvers();
+    let rejectPrune;
+    manager.stateStore.pruneScreenshots = () => {
+      entered.resolve();
+      return new Promise((_resolve, reject) => { rejectPrune = reject; });
+    };
+    let runtimeClosed = false;
+    manager.runtimePool.shutdown = async () => { runtimeClosed = true; };
+    manager.startArtifactPrune();
+
+    await entered.promise;
+    const shutdown = manager.shutdown();
+    rejectPrune(maintenanceFailure);
+    await expect(shutdown).rejects.toBe(maintenanceFailure);
+    expect(runtimeClosed).toBe(true);
+    expect(manager.artifactMaintenance).toBeNull();
+  });
+
+  for (const stage of ["runtime", "persist"]) {
+    test(`维护与 ${stage} 收尾同时失败时完整交还原错，显式重试不重放维护失败`, async () => {
+      const manager = createBrowserManagerWithStateWriter(null);
+      await manager.init();
+      const maintenanceFailure = new Error("截图文件删除失败");
+      const releaseFailure = new Error(`${stage} 收尾失败`);
+      const prune = Promise.withResolvers();
+      manager.stateStore.pruneScreenshots = () => prune.promise;
+      let attempts = 0;
+      const release = async () => {
+        if (++attempts === 1) throw releaseFailure;
+      };
+      if (stage === "runtime") manager.runtimePool.shutdown = release;
+      else manager.persist = release;
+      manager.startArtifactPrune();
+
+      const closing = manager.shutdown();
+      prune.reject(maintenanceFailure);
+      const failure = await closing.catch(error => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.errors).toEqual([maintenanceFailure, releaseFailure]);
+      expect(manager.artifactMaintenance).toBeNull();
+
+      await manager.shutdown();
+      expect(attempts).toBe(2);
+      expect(manager.shutdownStage).toBe("complete");
+    });
+  }
+
   test("下载列表淘汰实际删除文件，重启回收未发布的残留而保留可访问下载", async () => {
     const manager = createBrowserManagerWithStateWriter(null);
     const browser = new BrowserSession({ manager, record: {

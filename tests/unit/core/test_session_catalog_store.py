@@ -37,6 +37,7 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_lifecycle_gate import NavigationTopologyGate, SessionLifecycleGate
 from app.core.sqlite_state import sqlite_file_uri
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import (
     session_id_at,
     session_id_for_name_at,
@@ -386,7 +387,7 @@ def test_store_initializes_wal_and_pragmas(store: SessionCatalogStore) -> None:
     )
     assert int(store.connection.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     assert int(store.connection.execute("PRAGMA busy_timeout").fetchone()[0]) == 5000
-    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 11
+    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 12
 
 
 def test_store_does_not_create_sessions_root(
@@ -423,7 +424,7 @@ def test_store_reopens_existing_database(
     second = SessionCatalogStore(database_path, sessions_root)
     try:
         assert second.get_node(folder_id).display_name == "持久文件夹"
-        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 11
+        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 12
     finally:
         second.close()
 
@@ -1491,7 +1492,7 @@ def create_record(
     created_at: datetime | None = None,
     preimage_hash: str = "preimage-A",
     purpose: SessionCreationPurpose = "normal",
-    session_metadata_json: str = '{"context_source_session_id":null,"current_agent_id":"default","current_provider_id":null,"delegation":null,"generation_origin":null,"kind":"normal"}',
+    session_metadata_json: str = '{"context_source_session_id":null,"current_agent_id":"default","current_model_json":null,"delegation":null,"generation_origin":null,"kind":"normal"}',
 ) -> SessionCreationRecord:
     """测试辅助：create-or-get 一个 creation record。"""
     moment = created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
@@ -3509,10 +3510,10 @@ def test_nodes_authority_columns_are_typed_and_complete(store: SessionCatalogSto
     columns = {str(row[1]): row for row in store.connection.execute("PRAGMA table_info(nodes)")}
     assert columns["node_id"][2] == "TEXT"
     assert columns["node_id"][5] == 1
-    assert {"session_kind", "current_agent_id", "current_provider_id",
+    assert {"session_kind", "current_agent_id", "current_model_json",
             "context_source_session_id", "generation_origin_json", "updated_at"} <= columns.keys()
     folder = store.create_folder(make_session_id(), WORKSPACE_ID, None, "仅导航")
-    assert folder.session_kind is folder.current_agent_id is folder.current_provider_id is None
+    assert folder.session_kind is folder.current_agent_id is folder.current_model_json is None
     assert folder.context_source_session_id is folder.generation_origin_json is folder.updated_at is None
 
 
@@ -3530,13 +3531,13 @@ def test_session_business_fields_survive_reopen_in_one_catalog_owner(
         node = store.create_session_node(
             session_id, WORKSPACE_ID, None, "权威配置", JUNE_1,
             make_locator(session_id, JUNE_1), thread_id_for_name_at("authority", JUNE_1),
-            current_agent_id="default", current_provider_id="primary",
+            current_agent_id="default", current_model_json=ModelReferenceDTO(provider_id="primary", model_id="default").canonical_json(),
             session_kind="context_fork", context_source_session_id=source_id,
             generation_origin_json=origin,
         )
         generation, revision = store.current_generation(), store.current_navigation_revision()
         updated = store.update_session_configuration(
-            session_id, current_agent_id="coder", current_provider_id=None,
+            session_id, current_agent_id="coder", current_model_json=None,
             updated_at=JUNE_1 + timedelta(days=1),
         )
         assert updated.revision == node.revision
@@ -3670,7 +3671,7 @@ def test_session_list_cursor_preserves_exact_member_drift_semantics(
     _, _, total, cursor, _ = store.read_session_list_page(skip=0, limit=1, cursor=None)
     assert total == 3 and cursor is not None
     store.rename_node(inserted[0].node_id, "改名")
-    store.update_session_configuration(inserted[0].node_id, current_agent_id="另一个Agent", current_provider_id="provider", updated_at=JUNE_1)
+    store.update_session_configuration(inserted[0].node_id, current_agent_id="另一个Agent", current_model_json=ModelReferenceDTO(provider_id="provider", model_id="default").canonical_json(), updated_at=JUNE_1)
     store.move_node(inserted[0].node_id, other.node_id)
     # 非节点journal写、空目录新增/删除及成员配置/active重挂父均不改变原成员revision。
     with store.write_transaction() as connection:

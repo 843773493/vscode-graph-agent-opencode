@@ -41,7 +41,7 @@ async function collectSourceFiles(folder) {
 }
 
 /** 用一次 esbuild split build 固定上游模块身份，项目模块仍由 Vite 提供。 */
-export async function buildWorkbenchDependencies(root, transformSource, outdir) {
+export async function buildWorkbenchDependencies(root, transformSource, outdir, productIdentity) {
   const upstreamSource = join(root, 'upstream/src');
   const appSource = join(root, 'src');
   const entries = new Set([join(upstreamSource, 'vs/workbench/workbench.web.main.internal.ts')]);
@@ -67,6 +67,7 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir) 
     format: 'esm',
     platform: 'browser',
     target: 'es2024',
+    define: { __BOXTEAM_PRODUCT__: JSON.stringify(productIdentity) },
     outdir,
     entryNames: 'dev-upstream/[dir]/[name]',
     chunkNames: 'dev-upstream/chunks/[name]-[hash]',
@@ -95,14 +96,24 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir) 
   });
 
   return {
+    needsRebuild(source, file) {
+      return ts.preProcessFile(source).importedFiles.some(({ fileName }) => {
+        const path = sourceFileFor(resolve(dirname(file), fileName.split('?', 1)[0]));
+        return isWithin(upstreamSource, path) && /\.tsx?$/.test(path)
+          && !path.endsWith('.d.ts') && !entries.has(path);
+      });
+    },
     transform(source, file) {
       const sourceFile = file.split('?', 1)[0];
       if (!isWithin(appSource, sourceFile) || !/\.tsx?$/.test(sourceFile)) return source;
       for (const { fileName } of ts.preProcessFile(source).importedFiles) {
-        const path = sourceFileFor(resolve(dirname(sourceFile), fileName));
+        const [specifier, ...query] = fileName.split('?');
+        const path = sourceFileFor(resolve(dirname(sourceFile), specifier));
         if (!isWithin(upstreamSource, path)) continue;
-        // 业务与上游都指向同一次 split build 的 entry，共享相同模块实例。
-        const upstreamUrl = '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js');
+        // 样式继续由 Vite 处理；脚本指向同一次 split build 的 entry，共享模块身份。
+        const upstreamUrl = (viteSourceUrl(root, path)
+          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js'))
+          + (query.length ? '?' + query.join('?') : '');
         source = source.replaceAll("'" + fileName + "'", JSON.stringify(upstreamUrl))
           .replaceAll(JSON.stringify(fileName), JSON.stringify(upstreamUrl));
       }

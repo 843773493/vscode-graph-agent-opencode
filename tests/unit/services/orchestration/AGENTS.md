@@ -8,8 +8,13 @@
 
 ```text
 orchestration/
+├── background_work/     后台工具任务、持久邮箱与恢复的状态转换
 ├── communication/       Session 间消息接纳与冷观察的组合规则
 ├── resource_activation/ 资源快照冻结、binding 与 epoch 边界
+├── test_session_messages.py 用户消息准入、幂等提交、精确 Thread 派发与消息事件
+├── test_session_turn_replay_service.py Message/Turn 回退、替换输入与重新派发顺序
+├── test_execution_step_retry.py 最终回答与工具原文精确匹配时的引号还原
+├── test_workspace_runtime_lifecycle.py 工作区准入排空、强制中断与启动恢复
 └── test_<service>.py    app/services/orchestration 下单个服务的流程行为
 ```
 

@@ -22,6 +22,7 @@ from pydantic import (
 
 from app.core.resource_uri import parse_session_artifact_uri
 from app.domain.itemized.execution_admission import ExecutionBinding
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.pending_request import DeliveryBoundary, DeliveryPolicy
 from app.schemas.internal_v2.session_changes import SessionChangeFileURI
 
@@ -32,6 +33,8 @@ TextStreamKind = Literal["markdown", "reasoning"]
 
 class BaseEvent(BaseModel):
     """所有事件的基类"""
+    # 此次登记现行事件 envelope 为 v1；后续不兼容字段变化必须递增，不混用 Trace SQLite schema。
+    format_version: Literal[1] = 1
     event_id: str
     part_id: str | None = None
     job_id: str
@@ -92,6 +95,7 @@ class JobStartedPayload(BaseModel):
     # started 冻结真实执行 owner；终态与重启收口不得把 Job 映射到默认 thread。
     session_id: str = Field(min_length=1)
     thread_id: str = Field(min_length=1)
+    dispatch: JobDispatchSnapshotDTO
 
 
 class JobCompletedPayload(BaseModel):
@@ -150,6 +154,8 @@ class GoalUpdatedPayload(BaseModel):
 class GoalClearedPayload(BaseModel):
     session_id: str
     thread_id: str
+    control_revision: int = Field(ge=0)
+    sync_version: int = Field(ge=0)
 
 
 class ModelTokenUsagePayload(BaseModel):

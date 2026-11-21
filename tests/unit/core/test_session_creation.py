@@ -42,6 +42,7 @@ from app.core.sqlite_state import (
     sqlite_vfs_max_pathname,
     validate_sqlite_path_budget,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import (
     session_id_for_name_at,
     thread_id_for_name_at,
@@ -62,7 +63,7 @@ def make_metadata(**overrides: object) -> dict[str, object]:
         "delegation": None,
         "generation_origin": None,
         "current_agent_id": "default",
-        "current_provider_id": "default_provider",
+        "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
         "context_source_session_id": None,
     }
     metadata.update(overrides)
@@ -671,7 +672,7 @@ async def test_create_writes_stripped_session_json(
     metadata = make_metadata(
         kind="normal",
         generation_origin=generation_origin,
-        current_provider_id="provider-x",
+        current_model_json=ModelReferenceDTO(provider_id="provider-x", model_id="default").canonical_json(),
     )
     result = await do_create(service, metadata=metadata)
     manifest_path = (
@@ -691,7 +692,7 @@ async def test_create_writes_stripped_session_json(
     assert result.node.session_kind == "normal"
     assert json.loads(result.node.generation_origin_json) == generation_origin
     assert result.node.current_agent_id == "default"
-    assert result.node.current_provider_id == "provider-x"
+    assert result.node.current_model_json == ModelReferenceDTO(provider_id="provider-x", model_id="default").canonical_json()
     assert result.node.context_source_session_id is None
 
 
@@ -795,7 +796,7 @@ async def test_published_replay_preserves_current_catalog_business_fields(
     updated = store.update_session_configuration(
         first.session_id,
         current_agent_id="coder",
-        current_provider_id=None,
+        current_model_json=None,
         updated_at=datetime(2026, 10, 9, tzinfo=UTC),
     )
 
@@ -803,7 +804,7 @@ async def test_published_replay_preserves_current_catalog_business_fields(
 
     assert replayed.node == updated
     assert replayed.node.current_agent_id == "coder"
-    assert replayed.node.current_provider_id is None
+    assert replayed.node.current_model_json is None
     assert replayed.node.parent_node_id == folder.node_id
     assert replayed.node.display_name == "发布后名称"
     assert store.get_creation_record("key-1") == record
@@ -1397,7 +1398,7 @@ def test_preimage_hash_deterministic_and_sensitive() -> None:
     )
     # 键插入顺序不同不影响 preimage（canonical JSON sort_keys）
     reordered = {
-        "current_provider_id": "default_provider",
+        "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
         "context_source_session_id": None,
         "kind": "normal",
         "delegation": None,

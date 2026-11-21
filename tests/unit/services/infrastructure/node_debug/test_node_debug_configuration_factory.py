@@ -346,7 +346,7 @@ def test_breakpoint_decode_error_identifies_resource_without_native_path(
     uri = factory.resolve_workspace_path(str(source))[1]
     value = {"relative": source.name, "absolute": str(source), "uri": uri}[input_kind]
     with pytest.raises(RuntimeError, match="不是 UTF-8 文本") as failure:
-        factory.create_breakpoint(path=value, line=1, column=1, condition=None)
+        factory.create_breakpoints([NodeDebugBreakpointRequest(path=value, line=1)])
     assert uri in str(failure.value)
     assert str(tmp_path) not in str(failure.value)
     assert isinstance(failure.value.__cause__, UnicodeDecodeError)
@@ -371,7 +371,7 @@ def test_breakpoint_read_failure_preserves_errno_and_cause_without_native_path(
 
     monkeypatch.setattr(Path, "read_bytes", fail_source_read)
     with pytest.raises(type(original)) as failure:
-        factory.create_breakpoint(path=str(source), line=1, column=1, condition=None)
+        factory.create_breakpoints([NodeDebugBreakpointRequest(path=str(source), line=1)])
     assert failure.value.errno == error_code
     assert failure.value.__cause__ is original
     assert uri in str(failure.value)

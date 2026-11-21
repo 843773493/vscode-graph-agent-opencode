@@ -36,6 +36,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
@@ -78,9 +79,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     config_path = install_test_workspace_config(workspace_root=workspace_root,
         config_path=Path(integration_workspace_config_path), schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in configuration["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "plugin-ui-unused-key"
+    clear_test_provider_api_keys(configuration)
     configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{plugin_gateway_port}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "ui-plugin-package.zip"

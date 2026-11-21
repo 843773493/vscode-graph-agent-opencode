@@ -34,7 +34,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
@@ -58,12 +58,12 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
     regular_file.write_text("ordinary-file-for-product-flow", encoding="utf-8")
     session = await create_session(case.client, "附件完整处理来源")
     await case.plan(session, [{"content": "附件已接受"}])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "保留原件并处理附件", "attachments": [
             {"file_id": regular_file.name},
             upload(b"original-for-product-flow").model_dump(mode="json"),
         ]}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     history = await case.client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
@@ -87,12 +87,12 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
         _tool("read_file", {"path": derived}, "read-derived"),
         {"content": "派生文件已读取"},
     ])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "在目录中处理原件并读取结果", "attachments": [
             {"file_id": ordinary["file_id"]}, {"file_id": original["file_id"]},
         ]},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     shell = case.tool_result(session, calls[0] + ":tool-call:process-original")
@@ -141,10 +141,10 @@ async def test_upload_shell_read_fork_and_restart_share_original_directory(
         _tool("read_file", {"path": ordinary["file_id"]}, "cold-ordinary"),
         {"content": "重启后原件与处理结果均可用"},
     ])
-    response = await case.client.post(f"/api/v1/sessions/{target}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{target}/messages", json=with_message_run_operation_id({
         "message": {"content": "从 fork 冷恢复读取同一原件和派生结果"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     # 冷读使用真实新执行取得 capability，不能由测试替目标补建执行或关联。

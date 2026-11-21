@@ -6,7 +6,7 @@ import { usePersistentTasks } from "./usePersistentTasks";
 
 const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "backend-one" };
 const original: api.PersistentTaskDTO = {
-  task_id: "task-one", workspace_id: "backend-one", revision: 1, definition_revision: 1,
+  task_id: "task-one", workspace_id: "backend-one", revision: 1, definition_revision: 1, tokens_used: 0, time_used_seconds: 0, sync_version: 1,
   application_type: "automation", application_version: "1", configuration: {
     name: "原任务", trigger: { type_id: "builtin.manual", version: "1", timezone: "UTC" }, condition: { type_id: "builtin.always", version: "1" },
     context: { type_id: "builtin.literal", version: "1", content: "原内容" }, action: { type_id: "builtin.runtime_source", version: "1", target_uri: "boxteam://workspace/backend-one/resources/session/session-one/threads/thread-one", delivery_mode: "context_only", delivery_policy: "after_turn" },
@@ -45,6 +45,15 @@ test("切换关联会话撤销旧状态流，迟到的原会话快照不能覆�
   await act(async () => { previous.publish(snapshot([original])); });
   expect(value.items).toEqual([]);
   expect(value.loaded).toBe(true);
+});
+
+test("会话列表保留空Goal槽位及清空版本供详情复用，切换owner即撤下", async () => {
+  await act(async () => { renderer = create(<Probe owner={target} sessionId="session-one" />); });
+  const sessionGoal = { session_id: "session-one", thread_id: "thread-one", goal: null, control_revision: 4, sync_version: 7 };
+  act(() => streams[0].publish({ ...snapshot([]), session_goal: sessionGoal }));
+  expect(value.sessionGoal).toEqual(sessionGoal);
+  await act(async () => { renderer.update(<Probe owner={target} sessionId="session-two" />); });
+  expect(value.sessionGoal).toBeNull();
 });
 
 test("隐藏编辑器停止订阅并保留选中任务，重新显示后读取新快照", async () => {
@@ -92,6 +101,17 @@ test("revision冲突后读回完整对象，保留后端错误且不伪造暂停
   expect(value.items[0].lifecycle).toBe("active");
   expect(value.busy).toBe(false);
   expect(control.mock.calls[0][2]).toBe(original);
+  act(() => streams[0].publish(snapshot(records)));
+  expect(value.error).toContain("revision已变化");
+});
+
+test("隐藏后重新订阅成功清除旧连接错误", async () => {
+  spyOn(api, "watchPersistentTasks").mockRejectedValueOnce(new Error("旧连接失败"));
+  await mount();
+  expect(value.error).toBe("旧连接失败");
+  await act(async () => { renderer.update(<Probe owner={target} active={false} />); });
+  await act(async () => { renderer.update(<Probe owner={target} />); });
+  expect(value.loaded).toBe(true); expect(value.items).toEqual(records); expect(value.error).toBeNull();
 });
 
 test("写入保持状态订阅，较早操作回执不能覆盖已收到的新状态", async () => {
@@ -162,4 +182,37 @@ test("分页保持接受顺序，实时更新只替换对应运行且不重读�
   expect(history.mock.calls.at(-1)?.[4]).toBe("second");
   expect(value.history?.runs.map(item => item.run_id)).toEqual(["first", "second", "third"]);
   expect(value.history?.nextBefore).toBeUndefined();
+  let rejectRead!: (cause: Error) => void;
+  const pendingRead = new Promise<Awaited<ReturnType<typeof api.listPersistentTaskRuns>>>((_resolve, reject) => { rejectRead = reject; });
+  history.mockImplementationOnce(() => pendingRead);
+  await act(async () => { streams[0].publish(snapshot(records)); });
+  expect(value.history?.loading).toBe(true);
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["first", "second", "third"]);
+  await act(async () => { rejectRead(new Error("HTTP 503：运行记录读取失败")); });
+  expect(value.history?.loading).toBe(false);
+  expect(value.history?.error).toContain("HTTP 503");
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["first", "second", "third"]);
+});
+
+test("Goal通知保留历史续页游标，断线或缺口快照仍补读最新运行", async () => {
+  const run = (id: string, sequence: number): api.PersistentTaskRunSummaryDTO => ({
+    run_id: id, task_id: original.task_id, run_sequence: sequence, definition_revision: 1,
+    check_only: false, phase: "delivered", trigger_type: "manual", created_at: original.created_at, updated_at: original.updated_at,
+  });
+  const history = spyOn(api, "listPersistentTaskRuns").mockImplementation(async (_port, _owner, _taskId, _signal, before) => before
+    ? { items: [run("older", 1)], next_before: "older" }
+    : { items: [run("latest", 2)], next_before: "latest" });
+  restores.push(() => history.mockRestore());
+  await mount();
+  await act(async () => { value.select(original.task_id); });
+  await act(async () => { value.loadOlder(); });
+  const reads = history.mock.calls.length;
+  act(() => streams[0].publish({ ...snapshot(records), history_invalidated: false }));
+  expect(history.mock.calls.length).toBe(reads);
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["older", "latest"]);
+  expect(value.history?.nextBefore).toBe("older");
+  history.mockResolvedValueOnce({ items: [run("new-after-gap", 3)] });
+  await act(async () => { streams[0].publish({ ...snapshot(records), history_invalidated: true }); });
+  expect(history.mock.calls.length).toBe(reads + 1);
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["new-after-gap"]);
 });

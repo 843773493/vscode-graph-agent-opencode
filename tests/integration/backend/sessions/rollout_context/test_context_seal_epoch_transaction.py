@@ -49,6 +49,7 @@ from app.services.mapping.itemized.prefix_frames import project_canonical_prefix
 from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
     epoch_db as registry_db,
 )
+from tests.support.messages import compaction_summary_message
 
 __all__ = ["registry_db"]
 
@@ -97,7 +98,7 @@ def seal_inputs(registry_db):
                 checkpoint["channel_values"]["_summarization_event"] = {
                     "cutoff_index": len(messages),
                     "cutoff_message_id": messages[-1].id,
-                    "summary_message": HumanMessage(content="已完成对话的真实摘要", id="summary:" + name),
+                    "summary_message": compaction_summary_message(content="已完成对话的真实摘要", id="summary:" + name),
                 }
             checkpoint["channel_versions"] = {
                 key: checkpoint["id"] for key in checkpoint["channel_values"]
@@ -292,7 +293,7 @@ def test_success_applies_sources_tools_epoch_once_and_restart_retry_reuses_them(
 
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         monkeypatch.setattr(
-            "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.uuid4",
+            "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.create_uuid_hex",
             refuse_allocation,
         )
         monkeypatch.setattr(restarted._detail_store, "write", refuse_allocation)

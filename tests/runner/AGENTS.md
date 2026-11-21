@@ -1,5 +1,9 @@
 # 目录用途
 
+`integration-context-history-markers` 经真实消息执行、原 Fork 服务和 SQLite／冻结正文验证来源元数据、续页及三个 Fork 模式的独立冷读，固定180秒／4GiB，沿原 Fork watchdog。`integration-web-context-history-markers` 经正式 Workbench 和真实 Gateway／Backend 验证新建、打断续发、查看／复制、刷新重开及20个暖正文样本，固定300秒／4GiB。两者复用集成独占闸门与 model_stream，不替代真实 Provider、Windows 或128 Turn浏览器锚点预算。
+
+`unit-named-secrets` 核对目标侧密文存储、命名引用及受信批量解析，固定60秒／4GiB；`integration-web-configuration-entities` 经真实 Gateway 和完整 Workbench 验证原设置表单、密钥复用、轮换与 Gateway 重启恢复，固定300秒／4GiB。后者不调用真实模型，不替代远端服务或原生客户端验收。
+
 Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `unit-search-providers` 分别核公开结构、联邦调度及领域 owner；定向上限90秒／4GiB。`integration-search-headless-tools`、`integration-search-provider-lifecycle` 和 `integration-search-federation` 保留真实 Gateway／Backend、模型入口及原集成独占闸门，分别限600／240／480秒，不代替页面或真实 Provider 验收。
 
 `integration-workbench-quick-access-contracts` 限300秒／4GiB，核原上游调用语义、文件覆盖及动作目标；`integration-web-quick-access-actions` 限900秒／4GiB，经正式 Workbench 与真实 Gateway 验资源、任务、Session、工作区及 Composer。各测试沿自身隔离目录和原集成闸门，默认共用一次构建；复用已准备的不可变包不复用 Home 或运行实例。
@@ -249,3 +253,8 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 `integration-extension-language-features` 独立进程运行原 MainThread 的33类文档 Provider 注册、原 registry／wordHighlighter 与 typed RPC，核目标 scheme／glob／RelativePattern、exclusive／缓存、次要文档及取消／关闭，固定90秒／4GiB；目标平台与 Windows renderer 仅为评分模拟，不代替真实 Gateway／Node／文档同步或 Windows 实机。与原宿主状态 suite 分开，保留组合运行时 HTTP 监听句柄失效的 TODO 与原始证据，不放宽行为断言。
 
 `integration-extension-workspace-symbols` 沿相同90秒／4GiB保护运行原符号注册表、MainThread、CommandService／DI与RPC，核完整view准入、发起host、解析、取消及cache释放；认证binding与字节输送为具名装具，不代替真实Gateway／Node或页面操作。
+
+- `integration-maintenance-pagination` 在真实 Gateway／Backend 上固定运行三批清理与60次分页采集；外层780秒包含集成名额等待，采集子进程仍硬限60秒。保留内容、大小、request_id及全部延迟／重叠样本；不自动调参、补批或用屏障制造性能竞争。源码指纹包含 SDK、proto、packaging 和只读资源。
+- `integration-sdk-protocol-bootstrap` 用独立旧 SDK 环境验证纯生成、正常构建安装及原应用合同门，外层1100秒包含名额最多600秒等待及原500秒执行预算，内存4GiB。`integration-python-sdk-offline` 验完整包内 MCP、独立 SDK 插件的维护／日志热应用，以及正式 application 清单与锁定依赖组成的 Backend 初始化和会话 API；固定780秒／4GiB并沿集成闸门，不代替固定运行时的正式 release 或 Windows 验收。
+
+SDK 定向入口按层级和引擎运行：`unit-sdk-python`／`contract-sdk-python` 使用 pytest；`unit-sdk-node-bun`／`unit-sdk-node-native` 分别使用 Bun／原生 Node；`contract-sdk-node` 核 exports 与日志样本。`integration-sdk-node-native` 保留真实 Node HTTP／Worker，`integration-sdk-node-bun` 驱动真实 Node 子进程；上述新增入口均固定60秒／4GiB。`integration-sdk-python-runtime` 验 SDK 路由与产品 Trace／同步 worker 协作，外层690秒包含名额最多600秒等待及90秒执行预算，内存4GiB并沿原集成闸门；完整离线制品及自举继续沿原长入口，不加入快速单测。

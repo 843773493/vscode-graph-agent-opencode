@@ -7,7 +7,7 @@ import {
   THREAD_ID,
   SCOPE_KEY,
   WORKSPACE_KEY,
-  appState,
+  appState, emptyPendingResponse,
   bootstrap,
   emptyHistoryPageResponse,
   installWindow,
@@ -35,6 +35,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
     globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
       const path = new URL(String(args[0]), `http://127.0.0.1:${apiPort}`).pathname;
       if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "force-scope-token" } });
+      if (path.endsWith("/pending-requests")) return emptyPendingResponse();
       if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "req_force_scope_bootstrap",
         data: { ...bootstrap("ready", 1), latest_turn: null } });
       if (path.endsWith("/history")) {
@@ -98,6 +99,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "turn-history-dirty-token" } });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           return Response.json({
             code: 0,
@@ -201,6 +203,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
             data: { token: "turn-history-future-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           return Response.json({
             code: 0,
@@ -290,6 +293,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "turn-history-stale-token" } });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({
@@ -361,6 +365,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "turn-history-stale-detail-token" } });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({
@@ -446,6 +451,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "turn-history-retry-token" } });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           return Response.json({
             code: 0,

@@ -69,3 +69,12 @@ for (const mode of ['scope-cancel', 'source-cancel', 'back-cancel', 'scope-ident
     if (mode === 'back-cancel') expect(result.events).toEqual(['capture:0', 'scope', 'sources', 'scope']);
   });
 }
+for (const mode of ['scope-gateway-returned', 'source-gateway-returned', 'back-gateway-returned']) {
+  test(`${mode}锁存来源选择身份，原Provider释放后零解析、追加与重开`, async () => {
+    const result = await exercise(mode);
+    expect(result.drafts).toEqual([[], []]); expect(result.errors).toEqual([]); expect(parses(result)).toEqual([]);
+    expect(result.outcome.error).toBeTruthy();
+    expect(result.events).toEqual(mode === 'scope-gateway-returned' ? ['capture:0', 'scope'] : ['capture:0', 'scope', 'sources']);
+    if (mode === 'scope-gateway-returned') expect(result.requests).toEqual([]);
+  });
+}

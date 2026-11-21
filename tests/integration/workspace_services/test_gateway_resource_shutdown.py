@@ -18,6 +18,7 @@ from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import ModelStreamCassette, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -97,17 +98,16 @@ def shutdown_environment(
     config_path = Path(integration_workspace_config_path)
     before = config_path.read_bytes()
     config = read_jsonc_object(config_path)
-    primary = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
-    target = primary if model_protocol == "chat_completions" else next(
-        provider for provider in config["llm"]["providers"] if provider["id"] == "backup_3"
-    )
+    primary = config["llm"]["providers"]["primary"]
+    target = config["llm"]["providers"]["primary" if model_protocol == "chat_completions" else "backup_3"]
     endpoint_suffix = "/responses" if model_protocol == "responses" else "/chat/completions"
-    primary.update({
+    primary["defaults"].update({
         "endpoint": shutdown_cassette.interactions[0].request.url.removesuffix(endpoint_suffix),
-        "model": shutdown_cassette.metadata["model"], "api_key": "fixture-key",
-        "api_mode": target["api_mode"],
+        "api_key": "",
+        "api_mode": target["defaults"]["api_mode"],
     })
-    config["agents"]["default"]["model"]["fallback_providers"] = []
+    primary["models"] = {"default": {"model": shutdown_cassette.metadata["model"]}}
+    config["agents"]["default"]["model"]["fallbacks"] = []
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(21)}"
@@ -198,9 +198,9 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
                     for index, entry in enumerate(shutdown_cassette.raw["interactions"])
                 ],
             )
-            sent = await client.post(f"/api/v1/sessions/{sid}/messages", json={
+            sent = await client.post(f"/api/v1/sessions/{sid}/messages", json=with_message_run_operation_id({
                 "message": {"content": "只回复就绪"}, "run": {"async": True},
-            })
+            }))
             assert sent.status_code == 200, sent.text
             job_id = sent.json()["data"]["job_id"]
             deadline = time.monotonic() + 60

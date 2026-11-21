@@ -16,9 +16,12 @@ from pathlib import Path
 
 import pytest
 import uvicorn
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import FastAPI
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
 from app.gateway.federation.errors import (
@@ -30,13 +33,7 @@ from app.gateway.federation.errors import (
     FEDERATION_UNKNOWN_PEER,
     FederationError,
 )
-from app.gateway.federation.grants import (
-    MAX_GATEWAY_HOPS,
-    MAX_TRANSIT_GATEWAYS,
-    ContextGrantTarget,
-    GrantTarget,
-    ResourceNavigationGrantTarget,
-)
+from app.gateway.federation.grants import MAX_GATEWAY_HOPS, MAX_TRANSIT_GATEWAYS
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.router import router as federation_router
@@ -46,7 +43,12 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.runtime.process_ports import allocate_local_port_in_range
-from app.services.business.session_context_resource import (
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    GrantTarget,
+    ResourceNavigationGrantTarget,
+)
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,

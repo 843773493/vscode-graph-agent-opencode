@@ -158,6 +158,7 @@ manifest = {
     "config_resources": {name: str(root / "configs" / (name + ".jsonc")) for name in (
         "gateway_inline", "gateway_schema", "workspace_inline", "workspace_schema"
     )},
+    "bundled_plugins": [],
     "skill_resources": str(root / "resources" / "skills"), "web_assets": None,
     "chromium_executable": os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
     "node": {"source": "launcher", "executable": None},
@@ -229,6 +230,7 @@ def _windows_gateway_start_command(
             "    workspace_inline = Join-Path $RepositoryRoot 'configs/workspace_inline.jsonc'",
             "    workspace_schema = Join-Path $RepositoryRoot 'configs/workspace_schema.jsonc'",
             "  }",
+            "  bundled_plugins = @()",
             "  skill_resources = Join-Path $RepositoryRoot 'resources/skills'",
             "  web_assets = $null",
             "  chromium_executable = [Environment]::GetEnvironmentVariable('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH')",

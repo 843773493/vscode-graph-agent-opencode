@@ -2,11 +2,11 @@
 
 ## 目录用途
 
-存放 `app/runtime/` Agent 运行时、认证运行时和会话编排入口，以及应用生命周期协调的单元测试。
+存放 `app/runtime/` Agent 运行时和认证运行时，以及应用生命周期协调的单元测试。
 
 ## 可修改内容
 
-- 运行时构建、会话请求编排和认证状态解析测试。
+- 运行时构建和认证状态解析测试；消息准入与派发测试归 `services/orchestration/test_session_messages.py`。
 - 测试专用 fake、mock 和 fixture。
 
 ## 不可修改内容

@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.rollout_context.assembly.content_store import (
@@ -162,7 +162,7 @@ def record_seal_failure(
         "seal-storage-failure",
     }:
         raise ValueError("seal failure error_code 不属于允许的控制分类")
-    failure_id = f"seal-failure:{uuid4().hex}"
+    failure_id = f"seal-failure:{create_uuid_hex()}"
     connection.execute(
         "INSERT INTO context_plan_seal_failures(failure_id, session_id, thread_id, plan_id, revision, "
         "seal_idempotency_key, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

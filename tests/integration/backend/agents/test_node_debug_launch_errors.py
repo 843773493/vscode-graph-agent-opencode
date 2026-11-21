@@ -91,18 +91,29 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
         "executable"
     ] = str(missing)
     # 本场景不调用模型；显式提供配置依赖，避免借用宿主凭据。
-    source["llm"]["providers"] = [{
-        "id": "primary", "endpoint": "http://127.0.0.1:1/v1", "model": "unused-debug-model",
-        "api_key": "unused-debug-test-key", "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions",
-            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-            "supports_reasoning": {"reasoning_content": False}},
-    }]
+    source["llm"]["providers"] = {
+        "primary": {
+            "defaults": {
+                "endpoint": "http://127.0.0.1:1/v1",
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": "unused-debug-model"}},
+        }
+    }
     for agent in source["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'primary', 'model_id': 'default'}, 'fallbacks': []}
     source["$schema"] = "./workspace_schema.jsonc"
-    source["config_version"] = 2
+    source["config_version"] = 3
     dummy_config = json.dumps(source, ensure_ascii=False, indent=2) + "\n"
     config_path.write_text(dummy_config, encoding="utf-8")
     Path(integration_workspace_config_path).write_text(dummy_config, encoding="utf-8")

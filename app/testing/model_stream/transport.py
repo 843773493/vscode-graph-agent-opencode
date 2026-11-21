@@ -25,15 +25,21 @@ from .replay import ReplayCoordinator
 
 
 class _ReplayByteStream(httpx.AsyncByteStream):
-    def __init__(self, frames: tuple[StreamFrame, ...], codec: StreamProtocolCodec) -> None:
+    def __init__(
+        self, frames: tuple[StreamFrame, ...], codec: StreamProtocolCodec,
+        model_call_id: str | None,
+    ) -> None:
         self._frames = frames
         self._codec = codec
+        self._model_call_id = model_call_id
         self._closed = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        for frame in self._frames:
+        for index, frame in enumerate(self._frames):
             if self._closed:
                 return
+            if self._model_call_id is not None:
+                await observe_phase(self._model_call_id, f"model.response_frame/{index}")
             yield self._codec.encode(frame)
 
     async def aclose(self) -> None:
@@ -280,7 +286,10 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
             return httpx.Response(
                 status_code=interaction.response.status,
                 headers=interaction.response.headers,
-                stream=_ReplayByteStream(interaction.response.frames, codec),
+                stream=_ReplayByteStream(
+                    interaction.response.frames, codec,
+                    identity.model_call_id if self._replay_policy == "call_identity" else None,
+                ),
                 request=request,
             )
         if self._live_transport is None:

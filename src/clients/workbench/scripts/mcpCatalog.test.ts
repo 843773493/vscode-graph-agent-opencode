@@ -12,6 +12,8 @@ import { createDefaultWebUiSettings } from '../../web/src/state/uiSettings/prefe
 import type { GatewayWorkspaceList } from '../../web/src/types/backend.js';
 import { workspaceContext } from '../src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
+import { PluginRuntimeStatusDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { McpConnectionState } from '../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 
 const target = { gateway_id: 'gateway-a', workspace_id: '00000000-0000-4000-8000-000000000001' };
 const other = { gateway_id: 'gateway-b', workspace_id: '00000000-0000-4000-8000-000000000002' };
@@ -41,6 +43,48 @@ beforeEach(() => { mocks = installMocks(); });
 afterEach(() => {
   catalogs.splice(0).forEach(catalog => catalog.dispose());
   Object.values(mocks).forEach(mock => mock.mockRestore());
+});
+
+for (const workspaceId of [undefined, target.workspace_id]) test(`插件运行与工作区连接独立展示，断开不会改变 ${workspaceId ? '专属' : '共享'}实例`, async () => {
+  const catalog = create();
+  const service = { gateway_id: target.gateway_id, workspace_id: workspaceId, package_id: 'tools', package_version: '1.0.0', plugin_id: 'mcp', service_id: 'http' };
+  mocks.read.mockResolvedValue(envelope(target, [{ ...server, status: 'ready', service }]));
+  await catalog.refresh();
+  const binding = { ...service, enabled: true };
+  catalog.pluginRuntime = { snapshot: PluginRuntimeStatusDTO.fromPartial({ plugins: [
+    { gateway_id: target.gateway_id, binding: { ...binding, workspace_id: 'another-workspace' }, state: 'failed', error: '不属于此连接' },
+    { gateway_id: target.gateway_id, binding, state: 'ready', instance: { instance_id: 'original-instance', package_version: '1.0.0' } },
+  ] }) };
+  const instance = model(catalog);
+  expect(instance.sourceLabel).toContain(workspaceId ? '工作区插件' : '共享插件');
+  expect(instance.serviceStatusLabel).not.toContain('不属于此连接');
+  expect(instance.pluginSlot?.instance?.instance_id).toBe('original-instance');
+  const runtimeBefore = JSON.stringify(catalog.pluginRuntime);
+  mocks.submit.mockResolvedValue({ ...operation, action: 'disconnect', status: 'succeeded' });
+  await instance.stop();
+  expect(mocks.submit).toHaveBeenCalledWith(0, target, 'secure', 'disconnect', expect.any(AbortSignal));
+  expect(JSON.stringify(catalog.pluginRuntime)).toBe(runtimeBefore);
+  catalog.pluginRuntime.error = '运行状态流断开 · request-runtime';
+  expect(instance.serviceStatusLabel).toContain('request-runtime');
+  expect(instance.connectionState.get().state).toBe(McpConnectionState.Kind.Running);
+  const details = await instance.getReadme(CancellationToken.None);
+  expect(details).toContain('original-instance');
+  expect(details).toContain('request-runtime');
+});
+
+test('外部 MCP 不推测进程状态，插件版本切换后不会把其它版本的运行状态显示为就绪', async () => {
+  const catalog = create();
+  await catalog.refresh();
+  const instance = model(catalog);
+  expect(instance.sourceLabel).toBe('外部 MCP');
+  expect(instance.serviceStatusLabel).toContain('外部');
+  const service = { gateway_id: target.gateway_id, package_id: 'tools', package_version: '1.0.0', plugin_id: 'mcp', service_id: 'http' };
+  mocks.read.mockResolvedValue(envelope(target, [{ ...server, service }]));
+  await catalog.refresh();
+  catalog.pluginRuntime = { snapshot: PluginRuntimeStatusDTO.fromPartial({ plugins: [
+    { gateway_id: target.gateway_id, binding: { ...service, package_version: '2.0.0', enabled: true }, state: 'ready' },
+  ] }) };
+  expect(instance.serviceStatusLabel).toContain('版本不符');
 });
 
 test('完整目录封套与精确 owner 保留，同名服务共享原对象但不同目标不串线', async () => {

@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 import { describe, expect, spyOn, test } from "bun:test";
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 import { parseTerminalClientMessage, rejectTerminalMessageType } from "./terminalInput.js";
 
 const logger = createRuntimeLogger("terminal", "terminal.input.test").withContext({ workspace_id: "workspace_input_test" });

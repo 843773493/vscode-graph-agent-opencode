@@ -6,6 +6,7 @@ import {
 import type { McpServerListResponseDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { authorizeMcpInWindow } from './authorizationWindow.js';
+import type { PluginRuntimeStatusDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
 export type McpWorkspaceRequestTarget = GatewayWorkspaceRequestTarget & { backend_id?: string };
 export const mcpCatalogKey = (target: McpWorkspaceRequestTarget) =>
@@ -26,6 +27,8 @@ export class WorkspaceMcpCatalog {
   readonly target: McpWorkspaceRequestTarget;
   readonly key: string;
   snapshot: McpCatalogSnapshot = { operations: [] };
+  // 运行状态来自 Gateway 原 SSE；与工作区连接目录分开，断开连接不改变插件实例。
+  pluginRuntime?: { snapshot?: PluginRuntimeStatusDTO; error?: string };
   private generation = 0;
   private busy = false;
   private reading?: { promise: Promise<void>; refresh: boolean };

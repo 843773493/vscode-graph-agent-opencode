@@ -5,6 +5,7 @@ import { t } from "../../../../shared/core/i18n/index.js";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
 import type { GatewayWorkspace } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
+import { HttpRequestError } from "../../api/http";
 
 interface WorkspaceRenameDialogProps {
   workspace: GatewayWorkspace | null;
@@ -49,9 +50,9 @@ export default function WorkspaceRenameDialog({
       await onSubmit(gatewayWorkspaceKey(workspace), normalizedName);
       onClose();
     } catch (submitError) {
-      setError(
-        errorMessage(submitError),
-      );
+      const message = submitError instanceof HttpRequestError && submitError.requestId
+        ? `${errorMessage(submitError)} · request_id=${submitError.requestId}` : errorMessage(submitError);
+      setError(t("gateway.workspaceDetails.actionFailed", workspace.gateway_id, workspace.workspace_id, message));
     } finally {
       setSubmitting(false);
     }

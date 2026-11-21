@@ -11,6 +11,10 @@ from types import SimpleNamespace
 import commentjson
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
@@ -18,9 +22,9 @@ from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.session_history import (
     create_read_context_tool,
@@ -30,12 +34,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.session_thread_context import session_thread_owner_scope
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id, read_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
@@ -50,10 +49,10 @@ from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.remote_gateway import refresh_remote_gateway_projections
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.gateway_context_query_service import (
+from app.services.business.session_context_query.gateway import (
     GatewayContextQueryService,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,
@@ -70,7 +69,7 @@ from app.services.infrastructure.gateway_session_context_client import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.support.api_helpers import checkpoint_fixture
 from tests.support.ports import integration_port_block_for_file
@@ -742,7 +741,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
 
         invoker = create_extension_tool_invoker_tool(
             [read_tool, search_tool],
-            catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
                 [read_tool, search_tool]
             ),
         )

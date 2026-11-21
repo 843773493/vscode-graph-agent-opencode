@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../../../support/workbench/realtime.mjs";
 // Integration：SSH 执行与隧道由既有 loopback 装具替换，其余 owner、HTTP 和 Workbench 均为产品。
 import { writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -5,6 +6,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../../support/operation_ids.mjs';
 
 const fixture = JSON.parse(process.env.BOXTEAM_REMOTE_URI_FIXTURE);
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_remote_gateway_uri.py');
@@ -68,6 +70,7 @@ try {
   page.on('close', () => networkEvent('page-closed', {}));
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
+  const realtime = observeRealtime(page);
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (!path.startsWith('/api/')) return;
@@ -174,8 +177,7 @@ try {
     await phase('connection-capacity-open-two-owners');
     await open(publicFile(a)); await expect(text(0)).toContainText('REMOTE-TEXT-A');
     await open(publicFile(b), true); await expect(text(1)).toContainText('REMOTE-TEXT-B');
-    await expect.poll(() => [...network.values()].filter(item => !item.terminal
-      && item.url.includes('/workspace/observations/stream') && item.response?.status === 200).length).toBe(2);
+    await expect.poll(() => [...realtime.active.keys()].filter(item => item.path.startsWith('/api/v1/workspace/files/events')).length).toBe(2);
     await phase('connection-capacity-probe');
     result.activeBeforeProbe = structuredClone([...network.values()].filter(item => !item.terminal));
     // 独立连接只作诊断对照，产品请求仍必须经页面的同源 fetch 完成。
@@ -247,7 +249,7 @@ try {
   const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`, b);
   await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: main.thread_id, interactions: [fixture.interaction] });
   const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${main.thread_id}/messages`, b,
-    { message: { content: '仅 B 生成真实 main 与 child 的来源历史。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '仅 B 生成真实 main 与 child 的来源历史。' }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, b);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

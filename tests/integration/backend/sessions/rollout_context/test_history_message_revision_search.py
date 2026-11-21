@@ -17,7 +17,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_history import message_search
-from app.services.infrastructure.turn_history.models import StaleTurnReferenceError
+from app.services.infrastructure.rollout_history.errors import StaleTurnReferenceError
 from tests.integration.backend.sessions.rollout_context.test_message_revisions import (
     _execution_scope,
 )

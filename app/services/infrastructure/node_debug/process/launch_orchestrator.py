@@ -286,15 +286,7 @@ class NodeDebugLaunchOrchestrator:
             if previous is not None and previous.configuration_id == selected_configuration_id:
                 requested_breakpoints.extend(previous_breakpoints)
             requested_breakpoints.extend(
-                context.configuration_factory.create_breakpoint(
-                    path=breakpoint.path,
-                    line=breakpoint.line,
-                    column=breakpoint.column,
-                    condition=breakpoint.condition,
-                    hit_condition=breakpoint.hit_condition,
-                    log_message=breakpoint.log_message,
-                )
-                for breakpoint in request.breakpoints
+                context.configuration_factory.create_breakpoints(request.breakpoints)
             )
             unique_breakpoints = {
                 (

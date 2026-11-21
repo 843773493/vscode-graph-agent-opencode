@@ -1,15 +1,19 @@
 # BoxTeam 本地工作区后端接口文档
 
+> 本文保留了早期设计中的目录和初始化示例。定位当前实现时，入口与边界以 [本目录指引](AGENTS.md)、实际路由和协议为准；不要据此新建旧目录或无参数实例化服务。
+
+> 当前页面到 Gateway 的常驻事件统一走 `/api/gateway/realtime` WebSocket，后端仍提供各领域 SSE owner。下文 SSE 接口表示领域格式／后端入口，不表示每个会话要在浏览器创建独立 HTTP 长连接；早期 EventBuffer、轮询补偿和目录示例也不构成当前实现要求。接入方式见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
+
 ## 1. 文档范围
 
 本文档定义 BoxTeam 的本地工作区 Python 后端接口。
 
 运行方式如下：
 
-- 用户打开 VSCode 工作区
-- 前端插件自动在本地拉起 Python 后端进程
-- 后端仅服务当前机器、当前用户、当前工作区
-- 前端通过 HTTP + SSE 与本地后端通信
+- 用户打开共享 Code OSS Workbench
+- Launcher／Gateway 管理后端生命周期，页面不创建后端进程
+- 后端处理显式身份定位的已挂载工作区；Gateway 路由本地或远端目标
+- 页面通过同源 HTTP 与共享实时 WebSocket 访问 Gateway，后端事件继续使用原 SSE 格式
 
 后端能力包含：
 
@@ -480,43 +484,16 @@ pending -> running -> completed
 
 **GET** `/jobs/{job_id}/steps`
 
-## 13.3 获取任务事件
+## 13.3 读取任务执行轨迹
 
-**GET** `/jobs/{job_id}/events?after=evt_100&limit=100`
+任务历史和实时流统一使用 Session Trace SQLite：
 
-## 13.4 订阅任务事件流
+- **GET** `/sessions/{session_id}/traces?limit=100`：按 `next_cursor` 分页，事件携带 `job_id` 和原始事件 `raw`。
+- **GET** `/sessions/{session_id}/traces/stream`：SSE `trace` 事件，按返回的流游标恢复；可用 `thread_id` 限定线程。
 
-**GET** `/jobs/{job_id}/events/stream`
+Job 事件总线只向在途订阅者投递，不在内存保留历史；无人订阅时释放该 Job 通道。
 
-事件示例：
-
-```text
-event: job.status
-data: {"job_id":"job_001","status":"running"}
-
-event: agent.thought
-data: {"agent_id":"planner","text":"开始分析工作区入口文件"}
-
-event: tool.start
-data: {"tool":"workspace_search","input":{"query":"asyncio.create_task"}}
-
-event: tool.end
-data: {"tool":"workspace_search","ok":true}
-
-event: token
-data: {"agent_id":"summarizer","text":"当前任务链路分为三段"}
-
-event: job.paused
-data: {"job_id":"job_001"}
-
-event: job.interrupted
-data: {"job_id":"job_001","action":"replace_instruction"}
-
-event: job.completed
-data: {"job_id":"job_001","status":"succeeded"}
-```
-
-## 13.5 获取任务产物列表
+## 13.4 获取任务产物列表
 
 **GET** `/jobs/{job_id}/artifacts`
 
@@ -1008,7 +985,7 @@ app/
 │   ├── message_service.py
 │   ├── job_service.py
 │   ├── agent_service.py
-│   ├── tool_service.py
+│   ├── business/agent_tool_settings/  # Agent 工具目录与能力开关
 │   ├── artifact_service.py
 │   ├── config_service.py
 │   └── event_service.py
@@ -1194,10 +1171,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_request_id, verify_local_token
+from app.api.deps import get_request_id, get_session_orchestrator, verify_local_token
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
-from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 
@@ -1208,9 +1185,10 @@ async def create_message_and_run(
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    session_orchestrator: SessionMessageOrchestrator = Depends(get_session_orchestrator),
 ):
-    result = await MessageService().create_and_run(session_id, payload)
-    return APIResponse(message="accepted", data=result, request_id=request_id)
+    result = await session_orchestrator.submit_user_message(session_id, payload)
+    return APIResponse(message="ok", data=result, request_id=request_id)
 
 
 @router.get("/{session_id}/messages", response_model=APIResponse[CursorPage[MessageDTO]], summary="获取消息列表")
@@ -1246,11 +1224,9 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.internal_v2.artifact import ArtifactDTO
-from app.schemas.event import Event as SSEEvent
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
-from app.services.event_service import EventService
 from app.services.job_service import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -1274,30 +1250,6 @@ async def list_job_steps(
 ):
     result = await JobService().list_steps(job_id)
     return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{job_id}/events", response_model=APIResponse[list[SSEEvent]], summary="获取任务事件")
-async def list_job_events(
-    job_id: str,
-    after: str | None = None,
-    limit: int = 100,
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await EventService().list(job_id=job_id, after=after, limit=limit)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{job_id}/events/stream", summary="订阅任务事件流")
-async def stream_job_events(
-    job_id: str,
-    _: str = Depends(verify_local_token),
-):
-    async def event_generator():
-        async for chunk in EventService().stream_sse(job_id):
-            yield chunk
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/{job_id}/control", response_model=APIResponse[JobControlResponseDTO], summary="控制任务")
@@ -1357,38 +1309,11 @@ async def get_agent(
 
 ## 21.9 app/api/tools.py
 
-```python
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends
-
-from app.api.deps import get_request_id, verify_local_token
-from app.schemas.internal_v2.common import APIResponse
-from app.schemas.internal_v2.tool import ToolDTO
-from app.services.tool_service import ToolService
-
-router = APIRouter(prefix="/tools", tags=["tools"])
-
-
-@router.get("", response_model=APIResponse[list[ToolDTO]], summary="获取 Tool 列表")
-async def list_tools(
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await ToolService().list()
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{tool_id}", response_model=APIResponse[ToolDTO], summary="获取 Tool 详情")
-async def get_tool(
-    tool_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await ToolService().get(tool_id)
-    return APIResponse(data=result, request_id=request_id)
-
-```
+工具列表、详情和选择变更由 `app/api/tools.py` 适配，使用
+`Depends(get_agent_tool_settings_service)` 取得容器中的 `AgentToolSettingsService`。
+业务实现位于 `app/services/business/agent_tool_settings/service.py`，目录合成位于同目录
+`catalog.py`；工具执行仍归 Agent runtime，选择持久化仍归 `ToolSelectionStore`。
+具体签名和错误映射以当前路由为准，不在文档中维护另一份可漂移的路由实现。
 
 ## 21.10 app/api/artifacts.py
 
@@ -1457,10 +1382,9 @@ async def update_config(
 - `MessageService`
 - `JobService`
 - `AgentService`
-- `ToolService`
+- `AgentToolSettingsService`
 - `ArtifactService`
 - `ConfigService`
-- `EventService`
 
 多智能体编排作为 `JobService / Runtime` 内部能力实现。
 
@@ -1557,8 +1481,8 @@ app.include_router(config_router, prefix="/api/v1")
 - `GET /sessions/{session_id}/messages/{message_id}`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/steps`
-- `GET /jobs/{job_id}/events`
-- `GET /jobs/{job_id}/events/stream`
+- `GET /sessions/{session_id}/traces`
+- `GET /sessions/{session_id}/traces/stream`
 - `POST /jobs/{job_id}/control`
 - `GET /jobs/{job_id}/artifacts`
 - `GET /agents`
@@ -1579,7 +1503,7 @@ app.include_router(config_router, prefix="/api/v1")
 
 - 本地运行
 - 单工作区隔离
-- HTTP + SSE 通信
+- 页面 HTTP／共享实时 WebSocket，后端领域 SSE
 - 统一使用 `./workspace` 目录存储本地状态与产物
 - 统一使用 `X-Local-Token` 进行本地鉴权
 - 统一使用 Job 控制接口实现暂停、恢复、取消、插话与跳步

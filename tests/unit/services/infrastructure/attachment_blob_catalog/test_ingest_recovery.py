@@ -12,14 +12,14 @@ from pathlib import Path
 
 import portalocker
 import pytest
-
-from app.core.resource_uri import parse_resource_uri
-from app.core.shielded_cleanup import run_sync_shielded
-from app.core.trace_middleware import (
+from boxteam_plugin_sdk.request_context import (
     get_current_request_id,
     reset_current_request_id,
     set_current_request_id,
 )
+
+from app.core.resource_uri import parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog import (
     recovery as recovery_module,

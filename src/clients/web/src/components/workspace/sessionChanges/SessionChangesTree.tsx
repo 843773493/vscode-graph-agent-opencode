@@ -56,11 +56,11 @@ export default function SessionChangesTree({
   const summary = activeChangeset?.summary ?? { files: 0, additions: 0, deletions: 0 };
 
   return (
-    <div className="session-changes-tree">
+    <div className="session-changes-tree panel-feedback-host" aria-busy={loading}>
       <div className="auxiliary-actions-row">
         <button type="button" onClick={onRefresh} disabled={loading}>
 
-          {t("changes.refresh")}
+          <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />{t("changes.refresh")}
         </button>
         {loadedAt ? (
           <span className="session-changes-loaded">{t("changes.readAt", formatDateTime(loadedAt))}</span>
@@ -75,8 +75,8 @@ export default function SessionChangesTree({
         </span>
       </div>
 
-      {loading ? <div className="auxiliary-empty-row">{t("changes.loading")}</div> : null}
-      {error ? <div className="auxiliary-empty-row danger">{error}</div> : null}
+
+      {error ? <div className="panel-feedback" role="alert">{error}</div> : null}
 
       <section className="auxiliary-tree-section">
         <header>{t("changes.sets")}</header>

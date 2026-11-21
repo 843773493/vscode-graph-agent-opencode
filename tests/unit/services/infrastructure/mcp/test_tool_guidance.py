@@ -66,7 +66,7 @@ def test_explicit_visibility_includes_complete_contract_and_local_extensions(def
     body = json.loads(extension_tool_guidance(definitions, policies_for(definitions, visible=("visible",))))
     automatic, = body["automatic_definitions"]
     assert automatic["tool_name"] == "visible"
-    assert automatic["input_schema"] == definitions[1].payload["input_schema"]
+    assert automatic["input_schema"] == definitions[1].contract_payload["input_schema"]
     assert automatic["schema_hash"] == definitions[1].schema_hash
     assert body["navigation"][0]["tool_count"] == 2
     assert "skill_load" in body["discovery"]

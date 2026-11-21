@@ -4,16 +4,17 @@ import type {
   SessionStreamEvent,
   TraceEvent,
 } from "../../types/backend";
-import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent, SseProtocolError } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { validateTraceEvent } from "../../sse/sseRuntimeSchemas";
+import { goalStreamMutation } from "../../protocol/sessionGoal";
 import {
   HttpRequestError,
   requestJson,
   unwrapApiData,
   workspaceHeader,
 } from "../http";
-import { consumeWorkspaceObservation } from "./workspaceObservation";
+import { consumeRealtimeSubscription } from "./realtime";
 
 const SESSION_TRACE_TIMEOUT_MS = 10_000;
 
@@ -90,24 +91,22 @@ export async function streamSessionEvents(
   const idleTimeoutMs = options?.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   const deliveredCursors = new Set<string>();
   try {
-    await consumeWorkspaceObservation(port, workspaceHeader(options?.workspaceId), () => ({
-      kind: "session_trace", session_id: sessionId, trace_after: afterCursor, paths: [],
-      thread_id: options?.threadId,
-    }), {
+    await consumeRealtimeSubscription(port, () => ({ path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream?${new URLSearchParams({ ...(afterCursor ? { after_event_id: afterCursor } : {}), ...(options?.threadId ? { thread_id: options.threadId } : {}) })}`, headers: workspaceHeader(options?.workspaceId) }), {
       signal: options?.signal,
       idleTimeoutMs,
       idleTimeoutError: (timeoutMs) => new SessionStreamIdleTimeoutError(timeoutMs),
       onActivity: options?.onActivity,
-      onConnected: (routeRevision) => {
+      onConnected: (headers) => {
+        const routeRevision = headers.get("X-BoxTeam-Route-Revision");
         connected = true;
         options?.onConnected?.(routeRevision);
       },
       events: {
         trace: defineSseEvent(
           (data, frame) => {
-            if (!frame.id) throw new Error("SSE trace 缺少 id 行");
+            if (!frame.id) throw new SseProtocolError("SSE trace 缺少 id 行");
             if (deliveredCursors.has(frame.id)) {
-              throw new Error(`SSE trace 重复 cursor: ${frame.id}`);
+              throw new SseProtocolError(`SSE trace 重复 cursor: ${frame.id}`);
             }
             deliveredCursors.add(frame.id);
             const event = validateTraceOwner(decodeJsonSseData(data, frame), sessionId, options?.threadId);
@@ -134,9 +133,15 @@ export async function streamSessionEvents(
 }
 
 function validateTraceOwner(value: unknown, sessionId: string, threadId?: string): SessionStreamEvent {
-  const event = validateTraceEvent(value);
-  if (event.session_id !== sessionId || (threadId !== undefined && event.thread_id !== threadId)) {
-    throw new Error(`Trace owner 不匹配: 请求 ${sessionId}/${threadId ?? "*"}，收到 ${event.session_id}/${event.thread_id}`);
+  try {
+    const event = validateTraceEvent(value);
+    if (event.session_id !== sessionId || (threadId !== undefined && event.thread_id !== threadId)) {
+      throw new SseProtocolError(`Trace owner 不匹配: 请求 ${sessionId}/${threadId ?? "*"}，收到 ${event.session_id}/${event.thread_id}`);
+    }
+    goalStreamMutation(event, { session_id: sessionId, thread_id: event.thread_id });
+    return event;
+  } catch (error) {
+    if (error instanceof SseProtocolError) throw error;
+    throw new SseProtocolError(error instanceof Error ? error.message : String(error), { cause: error });
   }
-  return event;
 }

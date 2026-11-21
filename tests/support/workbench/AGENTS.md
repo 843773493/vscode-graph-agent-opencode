@@ -1,10 +1,10 @@
 # 目录用途
 
-复用真实 Workbench 的设置操作与搜索网络观察，供 Integration 和 E2E 使用。
+复用真实 Workbench 的设置操作、会话 Thread 导航与搜索网络观察，供 Integration 和 E2E 使用。
 
 # 可修改内容
 
-原命令／剪贴板设置操作、Quick Input 的真实滚轮操作、真实请求及联邦回执断言。
+原命令／剪贴板设置操作、会话标签页资源栏中的 Thread 索引导航、Quick Input 的真实滚轮操作、真实请求及联邦回执断言；`realtime.mjs` 直接观察产品 WebSocket 的订阅、响应头和原字节，不能把它们伪装为 HTTP 网络请求。
 
 # 不可修改内容
 

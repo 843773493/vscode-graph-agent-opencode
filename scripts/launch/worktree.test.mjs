@@ -80,6 +80,21 @@ test("真实 Git CLI 创建、配置复制、增量同步和冲突保护保留�
   observations.push({ name: "sync", first, experiment, sourceIndexPreserved: true });
 }, 30000);
 
+test("首次同步接受源中新提交，同时保护目标尚未同步过的独有编辑", async () => {
+  const root = fixture("committed-sync");
+  const {target} = await main(["create", "dev", "HEAD", "--no-setup"], root);
+  writeFileSync(path.join(root, "tracked.txt"), "committed source\n");
+  writeFileSync(path.join(root, "delete.txt"), "another committed change\n");
+  git(root, ["add", "tracked.txt", "delete.txt"]);
+  git(root, ["commit", "-qm", "source advances after dev creation"]);
+  writeFileSync(path.join(target, "delete.txt"), "target private edit\n");
+  await expect(main(["sync", "dev", "tracked.txt", "delete.txt"], root)).rejects.toThrow("重叠修改");
+  expect(readFileSync(path.join(target, "tracked.txt"), "utf8")).toBe("base\n");
+  await main(["sync", "dev", "tracked.txt"], root);
+  expect(readFileSync(path.join(target, "tracked.txt"), "utf8")).toBe("committed source\n");
+  expect(readFileSync(path.join(target, "delete.txt"), "utf8")).toBe("target private edit\n");
+});
+
 test("创建互斥、失败初始化可重试、setup 顺序及未知范围拒绝", async () => {
   const root = fixture("locking");
   const results = await Promise.allSettled([main(["create", "dev", "HEAD", "--no-setup"], root), main(["create", "dev", "HEAD", "--no-setup"], root)]);
@@ -87,7 +102,13 @@ test("创建互斥、失败初始化可重试、setup 顺序及未知范围拒�
   expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   const calls = [];
   setupWorktree(root, ["python", "root", "web", "workbench"], (command, args) => { calls.push([command, args]); return { status: 0 }; });
-  expect(calls.map(([command]) => command)).toEqual(["git", "uv", "bun", "bun", "bun"]);
+  expect(calls.map(([command]) => command)).toEqual(["git", "bun", "uv", "bun", "bun", "bun", "bun"]);
+  const releaseCalls = setupWorktree(root, ["python", "root"], () => ({ status: 0 }), { frozen: true });
+  expect(releaseCalls.slice(0, 3)).toEqual([
+    ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "node", "python"]],
+    ["uv", ["sync", "--frozen", "--no-editable"]],
+    ["bun", ["install", "--cwd", ".", "--frozen-lockfile"]],
+  ]);
   expect(() => setupWorktree(root, ["python"], () => ({ status: 7 }))).toThrow("可重跑 setup");
   await main(["setup", "dev", "--scopes="], root);
   await expect(main(["setup", "dev", "--scopes=unknown"], root)).rejects.toThrow("未知依赖范围");

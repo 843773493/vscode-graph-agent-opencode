@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,12 +27,16 @@ class ConfigSnapshot:
     loaded_at: datetime
     source_details: tuple[ConfigSource, ...] = ()
     schema_path: Path | None = None
+    origins_json: str = "[]"
 
     def to_dict(self) -> dict[str, Any]:
         value = json.loads(self.canonical_json)
         if not isinstance(value, dict):
             raise TypeError("配置快照根节点必须是对象")
         return value
+
+    def source_origins(self) -> list[dict[str, object]]:
+        return json.loads(self.origins_json)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +75,7 @@ def build_config_snapshot(
     source_paths: tuple[Path, ...],
     source_details: tuple[ConfigSource, ...] = (),
     schema_path: Path | None = None,
+    origins: list[dict[str, object]] | None = None,
 ) -> ConfigSnapshot:
     canonical_json = json.dumps(
         config,
@@ -82,7 +87,7 @@ def build_config_snapshot(
         revision=hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
         canonical_json=canonical_json,
         source_paths=source_paths,
-        loaded_at=datetime.now(timezone.utc),
+        loaded_at=datetime.now(UTC),
         source_details=source_details
         or tuple(
             ConfigSource(
@@ -94,4 +99,6 @@ def build_config_snapshot(
             for index, _path in enumerate(source_paths)
         ),
         schema_path=schema_path,
+        origins_json=json.dumps(sorted(origins or [], key=lambda origin: str(origin["path"])),
+                                ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )

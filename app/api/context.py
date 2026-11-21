@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError
@@ -12,7 +13,7 @@ from app.abstractions.session_context import (
     SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
-from app.api.deps import get_request_id, get_session_context_query_service
+from app.api.deps import get_session_context_query_service
 from app.api.errors import (
     not_found_http_error,
     session_context_revision_http_error,
@@ -27,7 +28,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
@@ -98,6 +99,10 @@ async def search_context(
         result = await query_service.search_context(payload)
     except (SessionContextSearchPatternError, SessionContextSearchBudgetError, SessionContextCursorError) as error:
         raise HTTPException(status_code=400, detail=error.detail()) from error
+    except TimeoutError as error:
+        raise HTTPException(
+            status_code=409, detail={"code": "deadline", "message": str(error)},
+        ) from error
     except SessionContextRevisionChangedError as error:
         raise session_context_revision_http_error(error) from error
     except (KeyError, NotFoundError) as error:

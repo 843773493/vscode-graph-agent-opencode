@@ -10,8 +10,36 @@ import { IConfigurationService } from '../upstream/src/vs/platform/configuration
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { IWorkbenchLayoutService } from '../upstream/src/vs/workbench/services/layout/browser/layoutService.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
+import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, readAppearanceBackground, loadAndApplyBackground, applyBackground } from '../../web/src/theme/theme.js';
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
+import type { IColorTheme } from '../upstream/src/vs/platform/theme/common/themeService.js';
+import type { ITheme } from '@xterm/xterm';
+import { ansiColorIdentifiers } from '../upstream/src/vs/workbench/contrib/terminal/common/terminalColorRegistry.js';
+
+/** 与原 XtermTerminal 一样消费当前主题及 ANSI 色，不维护另一份配色。 */
+export function getTerminalTheme(theme: IColorTheme): ITheme {
+  const color = (id: string) => theme.getColor(id)?.toString();
+  const background = color('terminal.background') ?? color('panel.background');
+  const foreground = color('terminal.foreground');
+  const result: ITheme = {
+    background, foreground,
+    cursor: color('terminalCursor.foreground') ?? foreground,
+    cursorAccent: color('terminalCursor.background') ?? background,
+    selectionBackground: color('terminal.selectionBackground'),
+    selectionInactiveBackground: color('terminal.inactiveSelectionBackground'),
+    selectionForeground: color('terminal.selectionForeground'),
+    scrollbarSliderBackground: color('scrollbarSlider.background'),
+    scrollbarSliderHoverBackground: color('scrollbarSlider.hoverBackground'),
+    scrollbarSliderActiveBackground: color('scrollbarSlider.activeBackground'),
+  };
+  const ansi = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+    'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'] as const;
+  ansi.forEach((key, index) => { result[key] = color(ansiColorIdentifiers[index]); });
+  return result;
+}
 
 // 聊天专属颜色仍由原主题扩展和 workbench.colorCustomizations 提供。
 registerColor('boxteam.chat.background', 'editor.background', t('appearance.chatBackground'));
@@ -38,6 +66,19 @@ Registry.as<IConfigurationRegistry>(Extensions.Configuration).registerConfigurat
       },
     },
   },
+});
+
+registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: 'boxteam.appearance.open', title: { value: t('appearance.title'), original: 'BoxTeam Appearance' }, f1: true,
+      menu: [
+        { id: MenuId.GlobalActivity, group: '2_configuration', order: 8 },
+        { id: MenuId.MenubarPreferencesMenu, group: '2_configuration', order: 8 },
+      ] });
+  }
+  run(accessor: ServicesAccessor): Promise<void> {
+    return accessor.get(ICommandService).executeCommand('workbench.action.openSettings', '@id:boxteam.appearance.background');
+  }
 });
 
 /** 原生 JSON 编辑与设置页共用的配置值校验。 */

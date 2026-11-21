@@ -10,19 +10,18 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
 )
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_boxteam_home
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.services.business.resource_derivations.skills import SkillFacetLoader

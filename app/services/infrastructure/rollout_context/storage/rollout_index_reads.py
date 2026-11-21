@@ -123,7 +123,7 @@ class RolloutIndexMixin:
                         f"expected={expected_owner!r}, actual={actual_owner!r}"
                     )
                 if validate_integrity:
-                    self._validate_v2_commit_offsets(connection, jsonl_path)
+                    self._host._validate_v2_commit_offsets(connection, jsonl_path)
                 else:
                     # 完整审计已核对同一末尾边界，只有普通读取需要单独检查。
                     validate_commit_boundary(connection, jsonl_path.stat().st_size)

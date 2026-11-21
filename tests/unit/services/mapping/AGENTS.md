@@ -11,14 +11,16 @@ mapping tests/
 ├── 对话内容与Turn
 │   ├── test_agent_content_mapper.py
 │   ├── test_user_message_content_projection.py
+│   ├── test_message_content.py 原生 Agent State 记录与轻量内容的边界
 │   └── test_turn_response_parts.py
 ├── 运行事件
-│   ├── test_observation_event_mapper.py
-│   └── test_trace_event_mapper.py
+│   └── test_trace_event_mapper.py（Trace DTO身份、时间、工具状态与Skill字段）
+├── 工具管理目录
+│   └── test_tool_catalog.py（模型可见参数与 MCP 分组字段）
 └── itemized投影
     ├── itemized/test_selection_role_projection.py
     ├── itemized/test_carrier_dedup_tool_result.py
-    ├── itemized/test_message_reasoning_merge.py 未知 model-call scope 的工具ID匹配
+    ├── itemized/test_message_reasoning_merge.py reasoning 选择顺序、受保护载体、去重与工具归属
     ├── itemized/test_history_time_projection.py
     ├── itemized/test_root_placement_projection.py
     ├── test_history_turn_tool_identity.py      根目录测试，覆盖history_turns投影

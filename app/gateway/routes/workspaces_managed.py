@@ -6,6 +6,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import (
     APIRouter,
     Body,
@@ -16,9 +17,8 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
-from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
-from app.core.trace_middleware import get_request_id
+from app.core.failures import failure_detail, public_failure_message
+from app.core.logging_layout import get_runtime_log_root
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import (
     FederationCredential,
@@ -43,7 +43,7 @@ from app.gateway.routes._shared import (
     resolve_management_directory,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.server.port_forwarding import (
     get_port_forward_manager,
     port_forward_http_error,
@@ -132,7 +132,6 @@ async def gateway_managed_workspaces(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
-    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     if gateway_connection_id is not None:
         try:
@@ -147,7 +146,6 @@ async def gateway_managed_workspaces(
                 registry=registry,
                 connection_id=gateway_connection_id,
             )
-            await port_forward_manager.reconcile_workspaces()
         except LookupError as error:
             raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_list", label="工作区清单失败")) from error
         except httpx.HTTPStatusError as error:
@@ -197,7 +195,6 @@ async def create_gateway_managed_workspace(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
-    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     connection_id = payload.gateway_connection_id
     remote_data: dict[str, object] | None = None
@@ -231,11 +228,11 @@ async def create_gateway_managed_workspace(
                 registry=registry,
                 connection_id=connection_id,
             )
-            await port_forward_manager.reconcile_workspaces()
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
+        raise HTTPException(status_code=400, detail=public_failure_message(error)
+            or failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except httpx.HTTPStatusError as error:
         status_code = error.response.status_code
         raise HTTPException(
@@ -272,7 +269,6 @@ async def remove_gateway_managed_workspace(
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
     controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
-    port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     remote_data: dict[str, object] | None = None
     try:
@@ -299,7 +295,6 @@ async def remove_gateway_managed_workspace(
                 registry=registry,
                 connection_id=gateway_connection_id,
             )
-            await port_forward_manager.reconcile_workspaces()
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except (PermissionError, ValueError) as error:
@@ -367,12 +362,12 @@ async def remove_gateway_connection(
     _: Annotated[str, Depends(verify_gateway_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
-    port_forward_manager: Annotated[SshPortForwardManager, Depends(get_port_forward_manager)],
+    port_forward_manager: Annotated[PortForwardManager, Depends(get_port_forward_manager)],
 ):
     try:
         registry.validate_remote_gateway_removal(connection_id)
         try:
-            await port_forward_manager.reconcile_workspaces(removing_connection_id=connection_id)
+            await port_forward_manager.disconnect_host(connection_id)
         except (OSError, RuntimeError) as error:
             raise port_forward_http_error(error, stage="gateway_connection_remove") from error
         registry.remove_remote_gateway(connection_id)

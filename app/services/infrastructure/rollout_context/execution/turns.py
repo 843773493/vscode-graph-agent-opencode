@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -20,7 +20,10 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
-from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    MessageSubmissionConflictError,
+)
 from app.domain.itemized.hashing import content_hash as item_content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -122,6 +125,29 @@ class RolloutTurnsMixin:
         strict_text(identity_origin, field="identity_origin")
         with self._storage.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if queue_input is not None and queue_input.submission_hash is not None:
+                existing_submission = connection.execute(
+                    "SELECT job_id FROM executions WHERE session_id=? AND thread_id=? "
+                    "AND admission_idempotency_key=?",
+                    (session_id, owner_thread_id, admission_idempotency_key),
+                ).fetchone()
+                if existing_submission is not None:
+                    record = self._execution_queue_record(
+                        connection, session_id, owner_thread_id, checkpoint_ns, existing_submission[0],
+                    )
+                    if record.input.submission_hash != queue_input.submission_hash:
+                        raise MessageSubmissionConflictError("operation_id 已用于不同消息输入")
+                    admission = record.cursor.admission
+                    root = connection.execute(
+                        "SELECT root_input_item_id FROM turn_records WHERE session_id=? AND thread_id=? AND turn_id=?",
+                        (session_id, owner_thread_id, admission.turn_id),
+                    ).fetchone()
+                    return {
+                        "turn_id": admission.turn_id, "root_input_item_id": root[0],
+                        "initial_execution_id": admission.execution_id, "execution_id": admission.execution_id,
+                        "job_id": admission.job_id, "admission_idempotency_key": admission.admission_idempotency_key,
+                        "commit_id": record.cursor.commit_id, "idempotent": True,
+                    }
             if branch_id is None:
                 active_branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
@@ -433,7 +459,7 @@ class RolloutTurnsMixin:
                 is not None
             ):
                 raise ValueError("turn_id 已存在但 acceptance identity 不存在")
-            execution_id = initial_execution_id or "execution-" + uuid4().hex
+            execution_id = initial_execution_id or "execution-" + create_uuid_hex()
             execution_id = strict_text(
                 execution_id,
                 field="initial_execution_id",
@@ -474,7 +500,7 @@ class RolloutTurnsMixin:
                 )
                 + 1
             )
-            root_item_value = root_item_id or "item-root-" + uuid4().hex
+            root_item_value = root_item_id or "item-root-" + create_uuid_hex()
             root = CanonicalItemRecord.create(
                 item_sequence=item_sequence,
                 item_id=root_item_value,
@@ -496,7 +522,7 @@ class RolloutTurnsMixin:
                 turn_scope=TurnScope.TURN_ROOT,
                 wire_role="user",
             )
-            notice_selection = freeze_runtime_notice_selection(
+            notice_selection = None if queue_input is not None else freeze_runtime_notice_selection(
                 connection, storage=self._storage, session_id=session_id,
                 thread_id=owner_thread_id, checkpoint_ns=checkpoint_ns,
                 branch_id=branch_value, execution_id=execution_id,
@@ -588,7 +614,7 @@ class RolloutTurnsMixin:
                 "SELECT head_view_id FROM branches WHERE branch_id = ? AND status = 'active'",
                 (branch_value,),
             ).fetchone()
-            if active_view is not None and active_view[0] is not None:
+            if queue_input is None and active_view is not None and active_view[0] is not None:
                 self._storage._append_context_view_items(
                     connection,
                     checkpoint_ns=checkpoint_ns,
@@ -634,13 +660,9 @@ class RolloutTurnsMixin:
             connection.execute(
                 "UPDATE turns SET status='accepted' WHERE turn_id=?", (turn_value,),
             )
-            # acceptance-time 可能早于第一个 LangGraph checkpoint。除了
-            # canonical item membership，还必须立即登记 active view 的
-            # Turn logical ordinal；否则 replay_as_new_turn/新输入虽然
-            # 已经有 root，却会在即时 history/root lookup 中暂时消失，
-            # 直到下一次 checkpoint 偶然重建派生索引。
+            # 排队输入在领取时激活；直接历史导入在此登记 logical ordinal。
             view_id = self._storage._active_context_view_id(connection, checkpoint_ns, branch_value)
-            if view_id is not None:
+            if queue_input is None and view_id is not None:
                 existing_view_turn = connection.execute(
                     "SELECT logical_turn_ordinal, root_input_item_id FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
                     (view_id, turn_value),

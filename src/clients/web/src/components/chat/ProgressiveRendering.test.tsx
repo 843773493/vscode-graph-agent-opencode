@@ -19,6 +19,16 @@ describe("渐进 Markdown 渲染", () => {
     expect(html).toContain('data-markdown-rendering="lightweight"');
     expect(html).toContain("# 标题");
     expect(html).not.toContain("<h1>");
+    expect(html.length).toBeLessThan(value.length);
+
+    const streaming = renderToStaticMarkup(<MarkdownContent value={`${value}最新尾部`} streaming />);
+    expect(streaming).toContain("最新尾部");
+    expect(streaming).not.toContain("# 标题");
+    expect(streaming).toContain("展开全文");
+    expect(streaming.length).toBeLessThan(value.length);
+    const historical = renderToStaticMarkup(<MarkdownContent value={`${value}最新尾部`} preview="tail" />);
+    expect(historical).toContain("最新尾部");
+    expect(historical).not.toContain("# 标题");
   });
 
   test("大型 Markdown 在调度后原位增强", async () => {
@@ -27,6 +37,9 @@ describe("渐进 Markdown 渲染", () => {
 
     await act(async () => {
       renderer = create(<MarkdownContent value={value} />);
+    });
+    // 先提交组件并运行 effect，再等待它注册的增强任务，避免等待先于任务注册结束。
+    await act(async () => {
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 10));
     });
 
@@ -35,7 +48,7 @@ describe("渐进 Markdown 渲染", () => {
     )).toHaveLength(1);
     expect(renderer!.root.findAllByType("h1")).toHaveLength(1);
     expect(renderer!.root.findAllByType("button")[0].children.join(""))
-      .toContain("渲染完整 Markdown");
+      .toContain("展开全文");
     renderer!.unmount();
   });
 
@@ -78,6 +91,18 @@ describe("渐进 Markdown 渲染", () => {
 
     expect(html).toContain("显示完整输入");
     expect(html).not.toContain(hiddenTail);
+  });
+
+  test("长用户输入截断不留下半个 emoji，展开后恢复完整原文", async () => {
+    const content = `${"x".repeat(LARGE_USER_MESSAGE_RENDER_LIMIT - 1)}😀tail`;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ProgressiveUserMessage content={content} internalLabel={null} />); });
+    try {
+      const text = () => renderer.root.findByProps({ className: "chat-user-text" }).children.filter(value => typeof value === "string").join("");
+      expect(text()).toBe(`${"x".repeat(LARGE_USER_MESSAGE_RENDER_LIMIT - 1)}\n\n…`);
+      await act(async () => renderer.root.findByType("button").props.onClick());
+      expect(text()).toBe(content);
+    } finally { act(() => renderer.unmount()); }
   });
 });
 

@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { browserViewKey, readBrowserView, updateBrowserView } from "../browserViewStore";
 import type { SessionSelection } from "../sessionViewState";
 import { openWorkspaceFileIntentStore } from "../workspaceFiles/intentStore";
-import { openCatalogOutboxDatabase } from "../session/sessionCatalogOutboxStore";
+import { createIndexedDbCatalogOutboxPort, openCatalogOutboxDatabase } from "../session/sessionCatalogOutboxStore";
+import { addCatalogOutboxIntent, catalogOutboxPartitionKey, createCatalogOutbox } from "../session/sessionCatalogOutbox";
 import { recoverWorkspaceIdentity } from "./recovery";
 import { parseWorkspaceIdentityRecoveries, parseWorkspaceIdentityRecovery, recoverThreadEditor, type WorkspaceIdentityRecovery } from "./material";
 
@@ -154,7 +155,10 @@ test("显式升级旧 selection、会话视图、设置和草稿；历史正文�
   await updateBrowserView(settingsKey, () => ({ session_sidebar: { collapsed_workspace_ids: [alias], expanded_root_tree_ids: [`workspace:${alias}`, "folder:unchanged"], collapsed_session_ids: ["ses"] },
     workspace_file_tree: { expanded_paths_by_workspace: { [alias]: [root] } } }));
   const oldDraft = `draft:${registry}::${alias}::ses::thread:thread`;
+  const oldAttachments = `attachments:${registry}::${alias}::ses::thread:thread`;
+  const attachments = [{ name: "gw_remote.txt", resource_uri: `${root}/gw_remote.txt`, selected: true }];
   await updateBrowserView(oldDraft, () => "草稿正文 gw_remote 不替换");
+  await updateBrowserView(oldAttachments, () => attachments);
   await updateBrowserView(other, () => ({ workspace_id: "gw_unknown", session_id: "other" }));
   const historyKey = browserViewKey(registry, "thread-history", OTHER_UUID, "history-session", "history-thread");
   const history = { version: 1, owner: { gatewayId: registry, workspaceId: OTHER_UUID, sessionId: "history-session", threadId: "history-thread" },
@@ -167,6 +171,8 @@ test("显式升级旧 selection、会话视图、设置和草稿；历史正文�
   expect(await readBrowserView<typeof view & SessionSelection>(browserViewKey(registry, "session", ownerKey, "ses", "main"))).toEqual({ ...view, gateway_id: remote, workspace_id: UUID });
   expect(await readBrowserView(oldDraft)).toBeUndefined();
   expect(await readBrowserView<string>(`draft:${registry}::${encodeURIComponent(ownerKey)}::ses::thread:thread`)).toBe("草稿正文 gw_remote 不替换");
+  expect(await readBrowserView(oldAttachments)).toBeUndefined();
+  expect(await readBrowserView<typeof attachments>(`attachments:${registry}::${encodeURIComponent(ownerKey)}::ses::thread:thread`)).toEqual(attachments);
   expect(await readBrowserView<typeof history>(historyKey)).toEqual(history);
   expect(await readBrowserView<Pick<SessionSelection, "workspace_id" | "session_id">>(other)).toEqual({ workspace_id: "gw_unknown", session_id: "other" });
   const settings = await readBrowserView<{ session_sidebar: { collapsed_workspace_ids: string[]; expanded_root_tree_ids: string[] }; workspace_file_tree: { expanded_paths_by_workspace: Record<string, string[]> } }>(settingsKey);
@@ -182,11 +188,36 @@ test("未知 selection 与目标冲突逐项保留，可确认的其他记录仍
   await updateBrowserView(selection, () => ({ workspace_id: "gw_missing", session_id: "ses" }));
   await updateBrowserView(source, () => ({ workspace_id: alias, session_id: "ses", scroll_offset: 1 }));
   await updateBrowserView(target, () => ({ gateway_id: remote, workspace_id: UUID, session_id: "ses", scroll_offset: 2 }));
+  const oldAttachments = `attachments:${registry}::${alias}::ses::thread:thread`;
+  const newAttachments = `attachments:${registry}::${encodeURIComponent(ownerKey)}::ses::thread:thread`;
+  await updateBrowserView(oldAttachments, () => [{ id: "old-attachment" }]);
+  await updateBrowserView(newAttachments, () => [{ id: "new-attachment" }]);
   const result = await recoverWorkspaceIdentity(material);
-  expect(result.batches[0]?.issues.map(issue => issue.key)).toEqual([selection, source]);
+  expect(result.batches[0]?.issues.map(issue => issue.key)).toEqual(expect.arrayContaining([selection, source, oldAttachments]));
+  expect(result.batches[0]?.issues).toHaveLength(3);
+  expect(await readBrowserView<{ id: string }[]>(oldAttachments)).toEqual([{ id: "old-attachment" }]);
+  expect(await readBrowserView<{ id: string }[]>(newAttachments)).toEqual([{ id: "new-attachment" }]);
   expect(await readBrowserView<{ workspace_id: string; session_id: string; scroll_offset: number }>(source)).toEqual({ workspace_id: alias, session_id: "ses", scroll_offset: 1 });
   expect((await readBrowserView<{ scroll_offset: number }>(target))?.scroll_offset).toBe(2);
   expect(await readBrowserView<Pick<SessionSelection, "workspace_id" | "session_id">>(selection)).toEqual({ workspace_id: "gw_missing", session_id: "ses" });
+});
+
+test("视图数据库无法打开时，仍返回其他数据库已提交的真实恢复结果", async () => {
+  await seedFiles(); await seedCatalog();
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const failure = spyOn(indexedDB, "open").mockImplementation((name, version) => {
+    if (name === names[0]) throw new Error("视图数据库不可读");
+    return version === undefined ? originalOpen(name) : originalOpen(name, version);
+  });
+  try {
+    const result = await recoverWorkspaceIdentity(material);
+    expect(result.batches[0]?.issues[0]?.message).toBe("视图数据库不可读");
+    expect(result.batches.slice(1).map(batch => batch.issues)).toEqual([[], []]);
+    expect(result.batches.slice(1).map(batch => batch.changed)).toEqual([2, 2]);
+  } finally { failure.mockRestore(); }
+  const catalog = await openCatalogOutboxDatabase();
+  expect(await all(catalog, "partition-sequences")).toEqual([{ partition_key: [remote, UUID, "user:original"].join("\u0000"), next_client_sequence: 1007 }]);
+  catalog.close();
 });
 
 test("文件 v1 普通打开拒绝，显式迁移保留 Blob、命令、回执和序号高水位", async () => {
@@ -246,7 +277,7 @@ test("目录 v2 歧义不派发且保留原分区，精确材料升级后不改 
   expect((await recoverWorkspaceIdentity(material)).batches[2]?.changed).toBe(0);
 });
 
-test("旧命令已清理时仍须显式恢复独存高水位，不能从 1 重新分配序号", async () => {
+test("目录仅剩高水位时自动升级并保留原分区；文件旧 scope 仍需精确恢复", async () => {
   await seedFiles(); await seedCatalog();
   for (const [name, store] of [[names[1]!, "intents"], [names[2]!, "operations"]]) {
     const database = await open(name), transaction = database.transaction(store, "readwrite"), done = finished(transaction);
@@ -254,14 +285,54 @@ test("旧命令已清理时仍须显式恢复独存高水位，不能从 1 重�
     await done; database.close();
   }
   await expect(openWorkspaceFileIntentStore()).rejects.toThrow("原记录已保留");
-  await expect(openCatalogOutboxDatabase()).rejects.toThrow("原记录已保留");
+  const catalog = await openCatalogOutboxDatabase();
+  expect(catalog.version).toBe(3);
+  expect(await all(catalog, "partition-sequences")).toEqual([{ partition_key: [registry, UUID, "user:original"].join("\u0000"), next_client_sequence: 1007 }]);
+  expect(await all(catalog, "operations")).toEqual([]);
+  catalog.close();
   expect((await recoverWorkspaceIdentity(material)).batches.flatMap(batch => batch.issues)).toEqual([]);
   const files = await open(names[1]!);
   expect(await all(files, "sequences")).toEqual([{ scopeKey: [remote, UUID, root, "local"].join("\u0000"), next: 48 }]);
   files.close();
-  const catalog = await openCatalogOutboxDatabase();
-  expect(await all(catalog, "partition-sequences")).toEqual([{ partition_key: [remote, UUID, "user:original"].join("\u0000"), next_client_sequence: 1007 }]);
-  catalog.close();
+});
+
+test("无映射升级后原分区及新 owner 分区都不回退序号，重开后继续递增", async () => {
+  await seedCatalog();
+  let database = await open(names[2]!);
+  const tx = database.transaction("operations", "readwrite"), done = finished(tx);
+  tx.objectStore("operations").clear(); await done; database.close();
+  database = await openCatalogOutboxDatabase();
+  let port = createIndexedDbCatalogOutboxPort(database);
+  for (const gatewayId of [registry, remote]) {
+    const partition = { gatewayId, workspaceId: UUID, principal: "user:original" };
+    const operation = addCatalogOutboxIntent(createCatalogOutbox(partition), `op_${gatewayId}`,
+      { kind: "create_folder", name: "新操作" }, { baseCatalogRevision: 0 }).operations[0]!;
+    const stored = await port.insert(catalogOutboxPartitionKey(partition), operation);
+    expect(stored.client_sequence).toBe(1007);
+    expect(stored.partition_key).toBe(catalogOutboxPartitionKey(partition));
+  }
+  database.close();
+  database = await openCatalogOutboxDatabase(); port = createIndexedDbCatalogOutboxPort(database);
+  const partition = { gatewayId: remote, workspaceId: UUID, principal: "user:original" };
+  const next = addCatalogOutboxIntent(createCatalogOutbox(partition), "op_after_reopen",
+    { kind: "create_folder", name: "重开后的操作" }, { baseCatalogRevision: 0 }).operations[0]!;
+  expect((await port.insert(catalogOutboxPartitionKey(partition), next)).client_sequence).toBe(1008);
+  expect((await port.load(catalogOutboxPartitionKey(partition))).map(row => row.operation.client_operation_id)).toEqual([`op_${remote}`, "op_after_reopen"]);
+  database.close();
+});
+
+test("计数器损坏时回滚自动升级，不重置或清除原值", async () => {
+  await seedCatalog();
+  let database = await open(names[2]!);
+  const tx = database.transaction(["operations", "partition-sequences"], "readwrite"), done = finished(tx);
+  tx.objectStore("operations").clear();
+  const original = { partition_key: [registry, UUID, "user:original"].join("\u0000"), next_client_sequence: -1 };
+  tx.objectStore("partition-sequences").put(original); await done; database.close();
+  await expect(openCatalogOutboxDatabase()).rejects.toThrow("序号高水位无效");
+  database = await open(names[2]!);
+  expect(database.version).toBe(2);
+  expect(await all(database, "partition-sequences")).toEqual([original]);
+  database.close();
 });
 
 for (const kind of ["files", "catalog"] as const) test(`${kind} 升级被旧窗口阻塞后放弃原请求，关闭旧窗口不会触发迟到写入`, async () => {

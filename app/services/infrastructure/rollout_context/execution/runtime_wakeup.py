@@ -15,9 +15,6 @@ from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionProgress,
     RuntimeExecutionWakeup,
 )
-from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
-    project_annotations,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
@@ -278,33 +275,29 @@ class RuntimeWakeupStorageMixin:
                 raise KeyError(f"runtime execution admission 不存在: {execution_id}")
             return str(row[0])
 
-    def runtime_execution_progress(self, wakeup: RuntimeExecutionWakeup) -> RuntimeExecutionProgress:
-        """核对原准入，读取最终消息已保存的整轮用量；不从当前 checkpoint 猜测。"""
-        with self._storage.read_connection(wakeup.session_id, wakeup.thread_id) as connection:
-            record = self._context.executions._execution_queue_record(connection, wakeup.session_id, wakeup.thread_id, "", wakeup.job_id)
+    def execution_progress(self, session_id: str, thread_id: str, *, job_id: str, execution_id: str) -> RuntimeExecutionProgress:
+        """核对原准入，累计各 ModelCall 的 canonical 用量；失败也保留已发生的调用。"""
+        with self._storage.read_connection(session_id, thread_id) as connection:
+            record = self._context.executions._execution_queue_record(connection, session_id, thread_id, "", job_id)
             admission = record.cursor.admission
-            if (admission.execution_id, admission.admission_idempotency_key) != (
-                wakeup.execution_id, wakeup.admission_idempotency_key,
-            ):
+            if admission.execution_id != execution_id:
                 raise RuntimeError("runtime 进度与原准入 identity 不一致")
+            # 元数据来自原 canonical catalog；计量不必重新载入工具结果和长正文。
+            # TODO：摘要候选不进入普通消息 checkpoint，尚缺同一 ModelCall owner 的持久用量；
+            # 补齐该来源后统一计量，不能从可裁剪 Trace 推断预算或另存一套调用历史。
+            usage_path = '$.extensions."boxteam.checkpoint.annotations".value.model_token_usage'
             rows = connection.execute(
-                "SELECT item_id FROM item_catalog WHERE execution_id=? AND semantic_kind='assistant_output' "
-                "AND status='completed' ORDER BY item_sequence DESC", (wakeup.execution_id,),
+                "SELECT json_extract(projection_manifest_json,'$.projection_identity.model_call_id'),"
+                "json_extract(projection_manifest_json,?),json_type(projection_manifest_json,?) "
+                "FROM item_catalog WHERE execution_id=? AND json_type(projection_manifest_json,?) IS NOT NULL",
+                (usage_path, usage_path, execution_id, usage_path),
             ).fetchall()
-            tokens = 0
-            for row in rows:
-                item = self._storage._read_canonical_item_from_catalog(
-                    connection, session_id=wakeup.session_id, thread_id=wakeup.thread_id,
-                    checkpoint_ns="", item_id=row[0],
-                )
-                metadata = project_annotations(item)
-                usage = metadata.get("token_usage")
-                if usage is not None:
-                    if not isinstance(usage, dict) or type(usage.get("total_tokens")) is not int or usage["total_tokens"] < 0:
-                        raise ValueError("canonical 最终消息 token_usage 非法")
-                    tokens = usage["total_tokens"]
-                    break
-            return RuntimeExecutionProgress(record.outcome, record.updated_at, tokens)
+            usage_by_call: dict[str, int] = {}
+            for model_call_id, usage, usage_type in rows:
+                if usage_type != "integer" or usage < 0 or not model_call_id:
+                    raise ValueError("canonical ModelCall 用量非法")
+                usage_by_call[model_call_id] = max(usage_by_call.get(model_call_id, 0), usage)
+            return RuntimeExecutionProgress(record.outcome, record.updated_at, sum(usage_by_call.values()))
 
     def claim_runtime_wakeup(self, wakeup: RuntimeExecutionWakeup) -> int:
         with self._execution_input_transaction(wakeup.session_id, wakeup.thread_id) as connection:

@@ -11,8 +11,32 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 
 
+def restore_schema26(connection: sqlite3.Connection) -> None:
+    """移除27版的调度与留言结构，保留原队列及历史。"""
+    # 这些历史 fixture 没有团队投递；不能将新 hash 内容伪装成旧正文。
+    assert connection.execute("SELECT 1 FROM team_source_observations LIMIT 1").fetchone() is None
+    connection.executescript("""
+        ALTER TABLE team_source_observations RENAME COLUMN facet_hashes_json TO payload_json;
+        DROP TRIGGER user_question_insert;
+        DROP TRIGGER user_question_update;
+        DROP TABLE user_questions;
+        DROP TABLE user_question_state;
+        DROP INDEX execution_queue_scheduling;
+        DROP INDEX execution_queue_dispatch_order;
+        ALTER TABLE execution_queue DROP COLUMN queue_position;
+        ALTER TABLE execution_queue DROP COLUMN priority;
+        ALTER TABLE execution_queue DROP COLUMN dispatch_order;
+        ALTER TABLE execution_queue DROP COLUMN notice_selection_json;
+        UPDATE database_meta SET schema_version=26;
+    """)
+    connection.execute("UPDATE schema_migrations SET to_version=26,migration_name='rollout_sqlite_v26',migration_checksum=? WHERE from_version=0",
+                       (hashlib.sha256(b"rollout_sqlite_v26").hexdigest(),))
+    connection.commit()
+
+
 def restore_schema25(connection: sqlite3.Connection) -> None:
     """还原创建顺序列引入前的真实结构，保留原 view rowid 插入顺序。"""
+    restore_schema26(connection)
     connection.execute("DROP TRIGGER context_views_assign_creation_sequence")
     connection.execute("DROP TRIGGER context_views_preserve_creation_sequence")
     connection.execute("DROP INDEX context_views_creation_sequence")

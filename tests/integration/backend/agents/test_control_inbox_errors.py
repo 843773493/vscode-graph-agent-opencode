@@ -25,22 +25,26 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     cold_message_stream_client as cold_message_stream_client,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    recording_runtime_case as recording_runtime_case,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case as runner_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 
 
 @pytest.mark.parametrize("fault", ["shape", "session", "command"])
 async def test_control_state_rejection_keeps_locations_out_of_execution_records(
-    runtime_case: RuntimeCase,
+    recording_runtime_case: RuntimeCase,
     cold_message_stream_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     fault: str,
 ) -> None:
-    case = runtime_case
+    case = recording_runtime_case
     container = case.runner.container
     jobs = container.job_service
     assert isinstance(jobs, JobService)
@@ -65,10 +69,10 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
 
     caplog.set_level(logging.ERROR)
     session = await container.session_service.create(SessionCreateRequest(title="控制状态拒绝"))
-    request = MessageRunRequest(message=MessageCreateRequest(content="验证控制状态错误"), run=RunOptions())
+    request = MessageRunRequest(message=MessageCreateRequest(content="验证控制状态错误"), run=RunOptions(), operation_id=new_message_operation_id())
     with monkeypatch.context() as failure:
         failure.setattr(runner, "ports", replace(runner.ports, control_inbox_state_path=corrupt_state))
-        accepted = await container.session_orchestrator.create_message(session.session_id, request)
+        accepted = await container.session_orchestrator.submit_user_message(session.session_id, request)
         job = jobs._jobs[accepted.job_id]
         assert job.task is not None
         await asyncio.wait_for(asyncio.shield(job.task), 20)
@@ -99,7 +103,7 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
     assert response.status_code == 200, response.text
     records = response.json()["data"]
     failures = [event.payload.model_dump(mode="json") for event in
-                await container.job_event_bus.list_events(job.job_id, limit=1000)
+                container.trace_event_store.read_events(session.session_id)
                 if event.type in {EventType.ERROR, EventType.JOB_FAILED}]
     assert failures
     assert frozen["stream_status"] == "failed"
@@ -118,7 +122,9 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
         original_rows = connection.execute("SELECT * FROM item_catalog ORDER BY item_sequence").fetchall()
 
     # 原损坏状态仍可诊断；下一消息仍从同一产品入口执行，不改写已失败的历史。
-    successor = await container.session_orchestrator.create_message(session.session_id, request)
+    successor = await container.session_orchestrator.submit_user_message(
+        session.session_id, request.model_copy(update={"operation_id": new_message_operation_id()}),
+    )
     next_job = jobs._jobs[successor.job_id]
     assert next_job.task is not None
     await asyncio.wait_for(asyncio.shield(next_job.task), 20)

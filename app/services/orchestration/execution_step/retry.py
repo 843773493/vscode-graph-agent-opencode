@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,9 +16,6 @@ from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
-)
-from app.services.orchestration.agent_stream_helpers import (
-    unwrap_json_string_tool_result,
 )
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
@@ -48,6 +46,32 @@ from app.services.orchestration.execution_step.reminders import (
 EMPTY_RESPONSE_RETRY_LIMIT = 2
 CUSTOM_TOOL_RESPONSE_RETRY_LIMIT = 2
 DELEGATED_REPORT_RETRY_LIMIT = 2
+
+
+def _unwrap_matching_tool_result(final_text: str, last_tool_result_text: str) -> str:
+    """只在去除外层引号后与最后工具文本完全一致时还原工具原文。"""
+    if not last_tool_result_text:
+        return final_text
+    stripped = final_text.strip()
+    candidates: list[str] = []
+    if stripped.startswith('"') and stripped.endswith('"'):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, str):
+            candidates.append(parsed)
+    if stripped.startswith('\\"') and stripped.endswith('\\"') and len(stripped) >= 4:
+        candidates.append(stripped[2:-2])
+
+    for candidate in candidates:
+        if candidate == last_tool_result_text:
+            return candidate
+        if candidate.startswith('"') and candidate.endswith('"') and len(candidate) >= 2:
+            inner_candidate = candidate[1:-1]
+            if inner_candidate == last_tool_result_text:
+                return inner_candidate
+    return final_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +172,7 @@ async def run_agent_with_retries(
         final_text = stream_result.final_text
         successful_tool_calls.extend(stream_result.successful_tool_calls)
         completed_custom_tool_names.update(stream_result.completed_custom_tool_names)
-        final_text = unwrap_json_string_tool_result(
+        final_text = _unwrap_matching_tool_result(
             final_text,
             stream_result.last_tool_result_text,
         )
@@ -368,4 +392,4 @@ async def run_agent_with_retries(
 
 __all__ = ["StepAgentRetryResult", "run_agent_with_retries"]
 from app.services.business.communication.addresses import GlobalThreadAddress
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri

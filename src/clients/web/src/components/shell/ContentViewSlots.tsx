@@ -44,6 +44,7 @@ interface ContentViewSlotsProps extends Pick<
   ChatPanelProps,
   | "onLoadOlderMessages"
   | "onLoadNewerMessages"
+  | "onLoadLatestMessages"
   | "onLoadAroundTurn"
   | "onLoadTurnDetails"
   | "onLoadToolDetails"
@@ -175,6 +176,7 @@ export default function ContentViewSlots({
   sessionViewStates,
   onLoadOlderMessages,
   onLoadNewerMessages,
+  onLoadLatestMessages,
   onLoadAroundTurn,
   messageNavigation,
   onViewportReady,
@@ -291,6 +293,7 @@ export default function ContentViewSlots({
           historyError={activeTurnTimeline?.error ?? null}
           onLoadOlderMessages={onLoadOlderMessages}
           onLoadNewerMessages={onLoadNewerMessages}
+          onLoadLatestMessages={onLoadLatestMessages}
           onLoadAroundTurn={onLoadAroundTurn}
           messageNavigation={messageNavigation}
           onViewportReady={onViewportReady}

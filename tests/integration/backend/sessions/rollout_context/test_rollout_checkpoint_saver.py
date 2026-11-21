@@ -39,8 +39,8 @@ from app.domain.itemized.records import RuntimeNoticePayload
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_display import project_message_for_display
-from app.services.business.system_reminder_checkpoint_service import (
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -71,7 +71,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_default_test_workspace
@@ -1957,7 +1957,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
         )
 
         assert (
-            submit_checkpoint_reminder(
+            submit_runtime_reminder(
                 checkpointer=saver,
                 session_id=SESSION_ID,
                 thread_id=thread_id,
@@ -2033,7 +2033,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         turn_id="turn-reminder-events",
     )
 
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2043,7 +2043,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
     # metadata key 顺序变化不能破坏同一事件的 canonical identity。
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2052,7 +2052,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         checkpoint_source="job_timeout",
         event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2122,7 +2122,7 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
             fail_view_membership,
         )
         with pytest.raises(RuntimeError, match="injected SQLite view failure"):
-            submit_checkpoint_reminder(
+            submit_runtime_reminder(
                 checkpointer=saver,
                 session_id=SESSION_ID,
                 thread_id=thread_id,
@@ -2237,16 +2237,17 @@ def test_legacy_hidden_reminder_turn_is_excluded_from_history(
             "turn_id": "turn-legacy-reminder",
         },
     )
-    admission = saver.admit_internal_execution(
+    # 仅为历史查询准备旧封存记录；新产品准入不再接受缺 schema 的输入。
+    notice, = LangChainMessageCodec().items_for_message(
+        legacy_reminder, item_sequence=1, message_id="legacy-reminder", turn_id=None,
+        execution_id="execution-legacy-reminder", timestamp=legacy_reminder.response_metadata["created_at"],
+    )
+    admission = saver._storage.executions.admit_internal_execution(
         SESSION_ID,
         thread_id=thread_id,
         job_id="job-legacy-reminder",
-        intent=InternalExecutionIntent(
-            message_id="legacy-reminder",
-            execution_id="execution-legacy-reminder",
-            admission_idempotency_key="admission-legacy-reminder",
-        ),
-        message=legacy_reminder,
+        execution_id="execution-legacy-reminder", admission_idempotency_key="admission-legacy-reminder",
+        runtime_notice_item=notice, request_input={"kind": "runtime_notice", "payload": notice.payload},
     )
     with _execution_scope(admission):
         saver.put(
@@ -2857,7 +2858,7 @@ def test_application_container_exposes_one_checkpoint_entrypoint(
     assert checkpointer is container.session_turn_replay_service._checkpointer
     assert (
         checkpointer
-        is container.context_compaction_service._checkpoint_store._checkpointer
+        is container.context_compaction_service._checkpoint_adapter._checkpointer
     )
     assert (
         checkpointer

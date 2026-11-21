@@ -6,6 +6,7 @@ import { IQuickInputService } from '../../../../../../src/clients/workbench/upst
 import { IDialogService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { INotificationService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/notification/common/notification.js';
 import { IEditorService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IViewsService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { IMcpService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 import { WorkspaceMcpService } from '../../../../../../src/clients/workbench/src/mcp/service.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
@@ -27,6 +28,7 @@ const record = (kind, index) => ({ resource_id: `${kind}_same`, workspace_id: ow
 export async function runtimeActionContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [], threadSelections = [];
+  const blockedSourceReads = [], abortedSourceReads = [];
   const mcpOpened = [], mcpOptions = [];
   const ownerSelection = mode.startsWith('command-owner-');
   const targets = owners.map((owner, i) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${i}`, status: 'ready' }));
@@ -59,9 +61,25 @@ export async function runtimeActionContract(mode) {
       if (mode === 'freeze' && releaseRoutes === undefined && requests.some(item => item.phase === 'command')) return new Promise(resolve => { releaseRoutes = () => resolve(ok({ items: targets })); });
       return ok({ items: targets });
     }
-    if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
-    if (path === '/api/v1/resources/agent-spec') return ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
-    if (path.endsWith('skill-sources') || path.endsWith('local-skills')) return ok({ workspace_id: owners[index].workspaceId, entries: [] });
+    const deferSource = () => new Promise((_, reject) => {
+      blockedSourceReads.push(path);
+      init.signal.addEventListener('abort', () => {
+        abortedSourceReads.push(path);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+    if (path === '/api/v1/resources/agent-spec') {
+      return mode === 'mcp-independent' && index === 0 ? deferSource()
+        : ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
+    }
+    if (path.endsWith('skill-sources') || path.endsWith('local-skills')) {
+      const response = () => ok({ workspace_id: owners[index].workspaceId, entries: [] });
+      return mode === 'mcp-independent' && index === 0 && path.endsWith('skill-sources') ? deferSource() : response();
+    }
+    if (path === '/api/v1/resources/gateway-skills') {
+      return mode === 'mcp-independent' && index === 0 ? deferSource()
+        : ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
+    }
     if (path === '/api/v1/mcp/servers' || path === '/api/v1/mcp/connection-operations') {
       const response = () => Response.json({ code: 0, message: 'ok', request_id: 'mcp-contract', protocol_version: 1,
         target: { kind: 'workspace', gateway_id: mode === 'mcp-mismatch' && index === 0 ? owners[1].gatewayId : owners[index].gatewayId,
@@ -152,12 +170,6 @@ export async function runtimeActionContract(mode) {
   const commands = { executeCommand(id, ...args) {
     // 面板宿主在真实 Gateway 场景验收；这里核 Provider 冻结的精确命令目标。
     if (id === resourceFocusCommand) { focuses.push(structuredClone(args[0])); return Promise.resolve(); }
-    if (id === 'boxteam.workspace.activate') {
-      focuses.push({ command: id, owner: args[0] });
-      workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
-      workspaceContext.publish(initial);
-      return Promise.resolve();
-    }
     if (id === 'workbench.mcp.serverOptions') { mcpOptions.push(args[0]); return Promise.resolve(); }
     let valid = true;
     const accessor = { get(service) {
@@ -190,6 +202,16 @@ export async function runtimeActionContract(mode) {
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
       return { requests, aborted, rows: picker.items.map(item => ({ id: item.id, label: item.label })), rowsBeforeCancel, errors };
     }
+    if (mode === 'mcp-independent') {
+      await until(() => blockedSourceReads.length === 3
+        && picker.items.filter(item => item.id.endsWith('/mcp/Needle MCP')).length === owners.length);
+      const rowsBeforeCancel = picker.items.map(item => ({ id: item.id, label: item.label }));
+      const busyBeforeCancel = picker.busy;
+      lifetime.dispose();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { requests, blockedSourceReads, abortedSourceReads, busyBeforeCancel,
+        rows: picker.items.map(item => ({ id: item.id, label: item.label })), rowsBeforeCancel, errors };
+    }
     await until(() => !picker.busy && picker.items.length === (mode === 'empty-title' ? 2 : mode.startsWith('mcp-') ? 6 : 4));
     const rows = picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail }));
     const discoveryCount = requests.length;
@@ -217,7 +239,13 @@ export async function runtimeActionContract(mode) {
       await until(() => focuses.length || errors.length);
     } else if (mode === 'focus-command-identity') {
       const handler = CommandsRegistry.getCommand(resourceFocusCommand).handler;
-      await handler({ get: service => service === ICommandService ? commands : {} },
+      const views = { async openView(id, focus) {
+        focuses.push({ view: id, focus });
+        workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+        workspaceContext.publish(initial);
+        return { revealResource() { throw new Error('身份失效后不得定位资源'); } };
+      } };
+      await handler({ get: service => service === IViewsService ? views : {} },
         { owner: owners[1], resource: records[1][0] }).catch(cause => errors.push(String(cause)));
     } else if (['action-cancel', 'action-gateway-returned', 'identity', 'picker-attach', 'accepted-close'].includes(mode)) {
       picker.items[2].trigger(0, picker.keyMods);

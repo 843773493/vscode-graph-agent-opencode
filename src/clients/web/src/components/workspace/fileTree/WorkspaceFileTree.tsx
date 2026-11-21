@@ -68,8 +68,6 @@ interface WorkspaceFileTreeProps {
 }
 
 type WorkspaceFileTreeNotificationKind =
-  | "roots_loading"
-  | "workspace_loading"
   | "roots"
   | "action"
   | "settings";
@@ -745,12 +743,6 @@ export default function WorkspaceFileTree({
   if (showSettingsError && settingsError !== null) {
     notifications.push({ kind: "settings", message: settingsError });
   }
-  if (!roots && rootsError === null) {
-    // 错误优先显示；加载态仍保留在队列中，可通过同一个轮播按钮查看。
-    notifications.push({ kind: "roots_loading", message: t("fileTree.loadingRoots") });
-  } else if (roots && fileTreeLoading) {
-    notifications.push({ kind: "workspace_loading", message: t("fileTree.loadingWorkspace") });
-  }
   const activeNotificationIndex = Math.max(
     0,
     notifications.findIndex((notification) => notification.kind === activeNotificationKind),
@@ -837,17 +829,11 @@ export default function WorkspaceFileTree({
   };
 
   return (
-    <div className="workspace-file-tree">
+    <div className="workspace-file-tree" aria-busy={fileTreeLoading}>
       <div className="files-tree-notifications">
         {activeNotification ? (
           <div className="files-tree-notification-row">
-            {activeNotification.kind === "roots_loading"
-              || activeNotification.kind === "workspace_loading" ? (
-              <div className="files-tree-notification-loading" role="status">
-                <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-                <span>{activeNotification.message}</span>
-              </div>
-            ) : activeNotification.kind === "action" ? (
+            {activeNotification.kind === "action" ? (
               <div className="files-tree-action-error" role="alert">
                 <span className="codicon codicon-error" aria-hidden="true" />
                 <span title={activeNotification.message}>{activeNotification.message}</span>

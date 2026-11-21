@@ -10,10 +10,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.logging import RuntimeLoggingApply, RuntimeLoggingConflictError
 
-from app.core.logging_config import RuntimeLoggingConflictError
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
-from app.schemas.runtime_logging import RuntimeLoggingApply
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -34,11 +33,9 @@ import { pathToFileURL } from 'node:url';
 const [root, home] = process.argv.slice(2);
 const { createGatewaySupervisorControl, gatewaySupervisorControlAddress } = await import(
   pathToFileURL(path.join(root, 'packages/launcher/src/gateway/control-channel.mjs')));
-const { runtimeLoggingControl } = await import(
-  pathToFileURL(path.join(root, 'src/shared/serverRuntimeControl.mjs')));
-const { createRuntimeLogger, loadRuntimeLogContract } = await import(
-  pathToFileURL(path.join(root, 'src/shared/serverRuntimeLogging.mjs')));
-const contract = loadRuntimeLogContract(root);
+const { runtimeLoggingControl } = await import('@boxteam/plugin-sdk/control');
+const { createRuntimeLogger, loadRuntimeLogContract } = await import('@boxteam/plugin-sdk/logging');
+const contract = loadRuntimeLogContract();
 const logger = createRuntimeLogger('launcher', 'control-fixture', process.stderr, contract);
 const address = gatewaySupervisorControlAddress(home);
 const control = createGatewaySupervisorControl({ address,

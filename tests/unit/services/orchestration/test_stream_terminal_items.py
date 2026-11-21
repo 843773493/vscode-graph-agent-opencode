@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 @pytest.fixture

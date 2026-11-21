@@ -8,6 +8,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
@@ -29,6 +30,8 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskRunDTO,
     RuntimeSourceActionDTO,
 )
+from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.persistent_tasks.events import task_channel
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
@@ -129,6 +132,9 @@ class TaskBoundaryService:
     def _fail(self, operation: str) -> NoReturn:
         self.calls.append(operation)
         raise self.error
+
+    def snapshot(self, session_id: str | None = None) -> NoReturn:
+        self._fail("snapshot")
 
     async def create(self, request: object) -> NoReturn:
         self._fail("create")
@@ -465,3 +471,18 @@ def test_run_pages_are_bounded_and_stable_while_new_runs_arrive(stored_run):
     assert last["next_before"] is None
     assert client.get(path, params={"before": "unknown-run"}).status_code == 400
     assert client.get(path, params={"limit": 101}).status_code == 422
+
+
+def test_scoped_task_goal_missing_session_is_explicit_and_stream_stops(boundary_client):
+    client, service = boundary_client
+    service.error = KeyError("会话不存在")
+    service.runtime = SimpleNamespace(events=task_channel(EventChannelService(), "workspace-validation"))
+    response = client.get(BASE, params={"session_id": "missing-session"})
+    assert response.status_code == 404
+    assert response.json() == {"detail": "会话不存在", "request_id": REQUEST_ID}
+    with client.stream("GET", BASE + "/events?session_id=missing-session") as stream:
+        assert stream.status_code == 200
+        lines = list(stream.iter_lines())
+    assert lines[0] == "event: error"
+    assert json.loads(lines[1].removeprefix("data: ")) == {"message": "会话不存在"}
+    assert service.calls == ["snapshot", "snapshot"]

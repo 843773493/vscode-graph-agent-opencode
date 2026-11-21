@@ -1,6 +1,9 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
 import type {
+  SessionGoalDTO as ProtocolSessionGoalDTO,
+  SessionGoalSnapshotDTO as ProtocolSessionGoalSnapshotDTO,
+  SessionGoalOperationResultDTO as ProtocolSessionGoalOperationResultDTO,
   WorkspaceResourceDTO,
   SessionCatalogNodeDTO,
   SessionCatalogPageDTO,
@@ -13,8 +16,6 @@ import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from
 
 export type {
   LLMRequestLogSummaryDTO,
-  WorkspaceObservationFrameDTO,
-  WorkspaceObservationSubscription,
 } from "./protocol_generated/boxteam/workspace/v2/public";
 
 export type {
@@ -25,6 +26,7 @@ export type {
   ToolApprovalSubmitRequest,
   ToolApprovalCommand,
   Agent,
+  ModelReference,
   AgentStateMessages,
   ConfigSourceDTO,
   ConfigSourcesDTO,
@@ -150,28 +152,31 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
-export interface SessionGoal {
-  goal_id: string;
-  session_id: string;
-  thread_id: string;
-  objective: string;
+export type SessionGoal = Omit<ProtocolSessionGoalDTO,
+  "status" | "token_budget" | "tokens_used" | "time_used_seconds" | "revision" | "created_at" | "updated_at"> & {
   status: SessionGoalStatus;
   token_budget: number | null;
   tokens_used: number;
   time_used_seconds: number;
+  revision: number;
   created_at: string;
-  /** 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。revision 仅随普通设置更新递增。 */
   updated_at: string;
-}
+};
+export type SessionGoalSnapshotDTO = Omit<ProtocolSessionGoalSnapshotDTO, "goal"> & { goal?: SessionGoal | null };
+export type SessionGoalOperationResultDTO = Omit<ProtocolSessionGoalOperationResultDTO, "goal"> & { goal?: SessionGoal | null };
 
-export type { SessionGoalClearResultDTO } from "./protocol_generated/boxteam/workspace/v2/public";
-
-export interface SessionGoalUpdateRequest {
+export type SessionGoalUpdateRequest = {
   objective?: string;
   status?: SessionGoalStatus;
   token_budget?: number | null;
   replace?: boolean;
-}
+  expected_control_revision?: number;
+};
+
+export type SessionGoalWriteRequest = SessionGoalUpdateRequest & {
+  operation_id: string;
+  expected_control_revision: number;
+};
 export type {
   MessageDTO,
   SessionInformationSnapshotDTO,
@@ -241,7 +246,7 @@ import type {
   WebUIWorkspaceBottomPanelSettingsDTO,
   WebUIWorkspaceFileTreeSettingsDTO,
 } from "./gatewayProtocol";
-export type { ActivateGatewayWorkspaceResultDTO } from "./gatewayProtocol";
+export type { ActivateGatewayWorkspaceResultDTO, GatewayClientRecoveryDTO } from "./gatewayProtocol";
 import type {
   GatewayResourceDTO,
   GatewayResourceListDTO,
@@ -254,7 +259,6 @@ import type {
 } from "./gatewayProtocol";
 export type { TraceEventDTO as SessionStreamEvent } from "../protocol/jsonTypes";
 // Session SSE 已切换到 Protobuf adapter；旧 JSON DTO 仅作为业务兼容返回类型保留。
-export type { SessionExecutionSse } from "./protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
 
 export type LLMRequestLogRecord = Omit<
   LLMRequestLogRecordDTO,
@@ -406,10 +410,7 @@ export type GatewayPortForwardStatus = PortForwardDTO["status"];
 export type GatewayPortForward = PortForwardDTO;
 export type GatewayPortForwardList = PortForwardListDTO;
 export type CreateGatewayPortForwardRequest = import("./gatewayProtocol").CreatePortForwardRequest;
-export type ChangeGatewayPortForwardLocalPortRequest =
-  import("./gatewayProtocol").ChangePortForwardLocalPortRequest;
-export type ChangeGatewayPortForwardLabelRequest =
-  import("./gatewayProtocol").ChangePortForwardLabelRequest;
+
 
 export type GatewayManagedWorkspace = Required<GatewayManagedWorkspaceDTO>;
 export type GatewayManagedWorkspaceList = Omit<
@@ -489,33 +490,33 @@ export type GatewayRuntimeStateResult = Omit<
 export type GatewayHealth = GatewayHealthDTO;
 export type DevelopmentRuntimeRestartResult = DevelopmentRuntimeRestartDTO;
 
-interface AddSshGatewayWorkspaceRequestBase {
+interface AddRemoteGatewayConnectionRequestBase {
   name?: string | null;
   remote_gateway_port: number;
 }
 
-export interface AddSshGatewayWorkspaceFromConnectionRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionFromConnectionRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   connection_id: string;
 }
 
-export interface AddSshGatewayWorkspaceFromConfigRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionFromConfigRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   ssh_config_host: string;
 }
 
-export interface AddSshGatewayWorkspaceManualRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionManualRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   host: string;
   port: number;
   username: string;
   private_key_path: string;
 }
 
-export type AddSshGatewayWorkspaceRequest =
-  | AddSshGatewayWorkspaceFromConnectionRequest
-  | AddSshGatewayWorkspaceFromConfigRequest
-  | AddSshGatewayWorkspaceManualRequest;
+export type AddRemoteGatewayConnectionRequest =
+  | AddRemoteGatewayConnectionFromConnectionRequest
+  | AddRemoteGatewayConnectionFromConfigRequest
+  | AddRemoteGatewayConnectionManualRequest;
 
 export type UpdateGatewayWorkspaceRequest = GeneratedUpdateGatewayWorkspaceRequest;
 export type ReorderGatewayWorkspacesRequest = GeneratedReorderGatewayWorkspacesRequest;

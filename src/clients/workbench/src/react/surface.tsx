@@ -34,7 +34,11 @@ export class ReactSurface {
     this.root.render(<AppErrorBoundary><OverlayRootContext.Provider value={this.overlay}>{children}</OverlayRootContext.Provider></AppErrorBoundary>);
   }
 
-  focus(selector: string): void { this.host.shadowRoot?.querySelector<HTMLElement>(selector)?.focus(); }
+  focus(selector: string): boolean {
+    const element = this.host.shadowRoot?.querySelector<HTMLElement>(selector);
+    element?.focus();
+    return Boolean(element && this.host.shadowRoot?.activeElement === element);
+  }
 
   dispose(): void { this.root.unmount(); this.host.remove(); }
 }

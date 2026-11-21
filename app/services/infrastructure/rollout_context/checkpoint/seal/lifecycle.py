@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from uuid import uuid4
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
@@ -12,6 +11,7 @@ from app.agents.providers.wire_finalize import (
     ChatWireProfile,
     ResponsesWireProfile,
 )
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -151,6 +151,7 @@ def seal_registered_plan(
                 None if wire_profile is None else owner.project_context_plan_for_dispatch(
                     session_id, thread_id, retry.as_sealed_plan(),
                     target_format=retry.target_format, checkpoint_ns=checkpoint_ns,
+                    wire_profile=wire_profile,
                 ),
             )
         # activation 正文必须在 assemble 之前准备：正文写入失败不能留下已完成
@@ -160,7 +161,7 @@ def seal_registered_plan(
             _, activation_binding = owner.prepare_resource_activation_binding(
                 activation_snapshot, checkpoint_ns=checkpoint_ns
             )
-        assembly_id = f"assembly-{uuid4().hex}"
+        assembly_id = f"assembly-{create_uuid_hex()}"
         try:
             bound, prepared_details, detail_refs = owner._bind_request_detail_refs(
                 session_id,

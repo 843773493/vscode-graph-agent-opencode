@@ -41,10 +41,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 @pytest.fixture(scope="session")
 def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator[Path]:
     """一次准备不可变开发工具包，供隔离 Gateway Home 复制使用。"""
-    from tests.harness.python.terminal_plugin import build_developer_tools_package
-
     project_root = Path.cwd().resolve()
-    context = TestRunContext.from_test_file(Path(request.session.items[0].path)).prepare()
     prepared_root = request.config.getoption("--prepared-developer-tools-package", default=None)
     if prepared_root:
         root = Path(prepared_root).resolve(strict=True)
@@ -69,6 +66,9 @@ def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator
         yield root
         return
 
+    from tests.harness.python.terminal_plugin import build_developer_tools_package
+
+    context = TestRunContext.from_test_file(Path(request.session.items[0].path)).prepare()
     artifacts_dir = context.run_root / "artifacts" / "prepared-developer-tools"
     runtime_dir = context.run_root / "runtime" / "prepared-developer-tools"
     artifacts_dir.mkdir(parents=True, exist_ok=True)

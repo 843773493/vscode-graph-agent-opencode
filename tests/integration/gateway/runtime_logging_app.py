@@ -7,16 +7,16 @@ import os
 from pathlib import Path
 
 import httpx
+from boxteam_plugin_sdk.logging import (
+    RuntimeLoggingApply,
+    RuntimeLoggingHttpService,
+    RuntimeLoggingStatus,
+)
 
 import app.gateway.lifespan as gateway_lifespan
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.runtime import logging_consumer, logging_control
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
-from app.schemas.runtime_logging import (
-    RuntimeLoggingApply,
-    RuntimeLoggingHttpService,
-    RuntimeLoggingStatus,
-)
 from app.services.infrastructure.config.state import ConfigConflictError
 from tests.support.e2e_control.gateway_app import app
 

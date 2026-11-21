@@ -20,6 +20,18 @@ function renderPanel(jsonl: string): string {
 }
 
 describe("AgentStatePanel 非法 JSONL 兜底", () => {
+  test("刷新或失败不会替换已有状态正文，真实错误继续可见", () => {
+    const props = { jsonl: JSON.stringify({ role: "user", content: "保留状态快照" }), messageCount: 1,
+      loadedAt: null, port: 8011, workspaceId: "workspace_test", session: null, active: false };
+    const loading = renderToStaticMarkup(<AgentStatePanel {...props} loading error={null} />);
+    expect(loading).toContain("保留状态快照");
+    expect(loading).toContain('aria-busy="true"');
+    const failed = renderToStaticMarkup(<AgentStatePanel {...props} loading={false} error="HTTP 503：状态读取失败" />);
+    expect(failed).toContain("保留状态快照");
+    expect(failed).toContain("HTTP 503：状态读取失败");
+    expect(failed).toContain('role="alert"');
+  });
+
   test("含非法/截断/超长行时面板仍完整渲染并标注失败行", () => {
     const jsonl = [
       JSON.stringify({ role: "user", content: "正常消息" }),

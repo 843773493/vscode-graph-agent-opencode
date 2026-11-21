@@ -28,6 +28,7 @@ const baseManifest = {
     workspace_schema: "../../configs/workspace_schema.jsonc",
   },
   skill_resources: "../../resources/skills",
+  bundled_plugins: [{ package_id: "boxteam.developer-tools", package_version: "0.1.0", archive: "plugins/developer-tools.zip" }],
   web_assets: null,
   chromium_executable: null,
   node: {
@@ -54,12 +55,31 @@ describe("runtime manifest", () => {
     expect(manifest.skillResources).toBe(
       path.resolve(runtimeDirectory, "../../resources/skills"),
     );
+    expect(manifest.bundledPlugins[0].archive).toBe(path.resolve(runtimeDirectory, "plugins/developer-tools.zip"));
+  });
+
+  test("目录交付显式解析，拒绝目录与 ZIP 同时声明", () => {
+    const entry = { package_id: "boxteam.developer-tools", package_version: "0.1.0", directory: "plugins/developer-tools" };
+    const input = { ...baseManifest, bundled_plugins: [entry] };
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, input);
+    expect(manifest.bundledPlugins[0]).toEqual({ ...entry, directory: path.resolve(runtimeDirectory, entry.directory) });
+    expect(() => validateRuntimeManifest({ ...input, bundled_plugins: [{ ...entry, archive: "plugin.zip" }] })).toThrow();
+    const validate = new Ajv2020().compile(JSON.parse(readFileSync(new URL("../../runtime-manifest.schema.json", import.meta.url), "utf8")));
+    expect(validate(input)).toBe(true);
+    expect(validate({ ...input, bundled_plugins: [{ ...entry, archive: "plugin.zip" }] })).toBe(false);
   });
 
   test("拒绝未知 schema", () => {
     expect(() =>
       validateRuntimeManifest({ ...baseManifest, schema_version: 2 }),
     ).toThrow("不支持的 runtime manifest");
+  });
+
+  test("内置插件清单必须完整，空清单可显式用于隔离测试", () => {
+    expect(validateRuntimeManifest({...baseManifest, bundled_plugins: []}).bundledPlugins).toEqual([]);
+    for (const bundled_plugins of [undefined, null, {}, [{package_id: "probe"}], [{package_id: "probe", package_version: "1.0.0", archive: ""}]]) {
+      expect(() => validateRuntimeManifest({...baseManifest, bundled_plugins})).toThrow();
+    }
   });
 
   test("拒绝未声明的配置资源域", () => {

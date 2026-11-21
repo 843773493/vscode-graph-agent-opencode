@@ -2,16 +2,18 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
-import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
+import type { ITextModel } from '../../upstream/src/vs/editor/common/model.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../upstream/src/vs/platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 import { ITelemetryService } from '../../upstream/src/vs/platform/telemetry/common/telemetry.js';
 import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
+import { IWebWorkerService } from '../../upstream/src/vs/platform/webWorker/browser/webWorkerService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IExtensionService } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
 // 基类模块先完成原 singleton 登记，再登记唯一项目实现，发生于 Workbench create 之前。
@@ -20,6 +22,8 @@ import { DEFAULT_MAX_SEARCH_RESULTS, FileMatch, IAITextQuery, IFileQuery, ISearc
 import { editorMatchesToTextSearchResults, getTextSearchMatchWithModelContext } from '../../upstream/src/vs/workbench/services/search/common/searchHelpers.js';
 import { WorkspaceSearchProvider } from './fileProvider.js';
 import { businessQuery, canonicalFileQuery, fileScheme, openResources, requiresCanonicalFileQuery, resourceInQuery, validateTextQuery } from './query.js';
+import { OpenModelSearch } from './openModelSearch.js';
+import type { ITextSearchResult } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 
 export class WorkspaceSearchService extends RemoteSearchService {
   private readonly businessProvider: WorkspaceSearchProvider;
@@ -33,6 +37,7 @@ export class WorkspaceSearchService extends RemoteSearchService {
     @IFileService fileService: IFileService,
     @IInstantiationService instantiationService: IInstantiationService,
     @IUriIdentityService private readonly businessIdentity: IUriIdentityService,
+    @IWebWorkerService private readonly businessWorkers: IWebWorkerService,
   ) {
     super(businessModels, businessEditors, telemetryService, logService, extensionService, fileService, instantiationService, businessIdentity);
     this.businessProvider = this._register(instantiationService.createInstance(WorkspaceSearchProvider));
@@ -59,6 +64,11 @@ export class WorkspaceSearchService extends RemoteSearchService {
     const lifetime = this._register(new DisposableStore());
     lifetime.add(operation);
     const deadlineAt = Date.now() + 10000;
+    let timedOut = false;
+    if (query.contentPattern.isRegExp) {
+      const timer = setTimeout(() => { timedOut = true; source.cancel(); }, Math.max(0, deadlineAt - Date.now()));
+      lifetime.add(toDisposable(() => clearTimeout(timer)));
+    }
     const search = (canonical: ITextQuery) => this.textSearchCanonical(canonical, operation, lifetime, onProgress,
       notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
     try {
@@ -70,7 +80,8 @@ export class WorkspaceSearchService extends RemoteSearchService {
             messages: [...split.syncResults.messages, ...remote.messages], limitHit: split.syncResults.limitHit || remote.limitHit };
         }) } : search(query);
       return { ...split, asyncResults: split.asyncResults.then(result => { operation.validate(); return result; },
-        error => { operation.validate(); throw error; }).finally(() => this._store.delete(lifetime)) };
+        error => { operation.validate(); if (timedOut) throw new Error(t('quickAccess.files.deadlineExceeded'), { cause: error });
+          throw error; }).finally(() => this._store.delete(lifetime)) };
     } catch (error) {
       this._store.delete(lifetime);
       operation.validate();
@@ -95,6 +106,7 @@ export class WorkspaceSearchService extends RemoteSearchService {
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     let count = 0, limitHit = false;
     const modelVersions = new Map<ReturnType<typeof this.businessModels.getModels>[number], number>();
+    const selectedModels: ITextModel[] = [];
     const validateModels = () => {
       const current = new Map(this.businessModels.getModels().map(model => [key(model.uri), model]));
       if ([...modelVersions].some(([model, version]) => model.isDisposed() || current.get(key(model.uri)) !== model || model.getVersionId() !== version)) {
@@ -110,6 +122,18 @@ export class WorkspaceSearchService extends RemoteSearchService {
       }
       return { dispose: () => watch.dispose(), validate: validateModels };
     };
+    const acceptResults = (model: ITextModel, matchCount: number, matchResults: ITextSearchResult[]) => {
+      if (token.isCancellationRequested) throw new CancellationError();
+      if (matchCount > maximum - count) limitHit = true;
+      count += Math.min(matchCount, maximum - count);
+      if (matchResults.length) {
+        const match = new FileMatch(model.uri);
+        match.results = matchResults;
+        results.push(match);
+        onProgress?.(match);
+      }
+    };
+    const separators = query.contentPattern.isWordMatch ? query.contentPattern.wordSeparators ?? null : null;
     try {
       for (const model of this.businessModels.getModels()) {
         if (token.isCancellationRequested) throw new CancellationError();
@@ -121,30 +145,41 @@ export class WorkspaceSearchService extends RemoteSearchService {
         // 位置及负命中都属于这一代模型；变更／释放后停止网络、续页及迟到 progress。
         lifetime.add(model.onDidChangeContent(() => source.cancel()));
         lifetime.add(model.onWillDispose(() => source.cancel()));
-        const matches = model.findMatches(query.contentPattern.pattern, false, !!query.contentPattern.isRegExp,
-          !!query.contentPattern.isCaseSensitive, query.contentPattern.isWordMatch ? query.contentPattern.wordSeparators ?? null : null,
-          false, maximum - count + 1);
-        if (matches.length > maximum - count) limitHit = true;
-        const accepted = matches.slice(0, maximum - count);
-        count += accepted.length;
-        if (accepted.length) {
-          const match = new FileMatch(model.uri);
-          match.results = getTextSearchMatchWithModelContext(editorMatchesToTextSearchResults(accepted, model, query.previewOptions), model, query);
-          results.push(match);
-          if (!token.isCancellationRequested) onProgress?.(match);
+        if (query.contentPattern.isRegExp) selectedModels.push(model);
+        else {
+          const matches = model.findMatches(query.contentPattern.pattern, false, false,
+            !!query.contentPattern.isCaseSensitive, separators, false, maximum - count + 1);
+          acceptResults(model, matches.length, getTextSearchMatchWithModelContext(
+            editorMatchesToTextSearchResults(matches.slice(0, maximum - count), model, query.previewOptions), model, query));
+          if (limitHit) break;
         }
-        if (limitHit) break;
+      }
+      let pendingModels: Promise<void> | undefined;
+      if (query.contentPattern.isRegExp && selectedModels.length) {
+        const worker = lifetime.add(new OpenModelSearch(this.businessWorkers, token));
+        pendingModels = (async () => {
+          for (const model of selectedModels) {
+            if (token.isCancellationRequested) throw new CancellationError();
+            const found = await worker.findMatches(model.getValue(), { pattern: query.contentPattern,
+              maxResults: maximum - count, previewOptions: query.previewOptions, surroundingContext: query.surroundingContext });
+            validateModels();
+            acceptResults(model, found.count, found.results);
+            if (limitHit) break;
+          }
+        })();
       }
       if (token.isCancellationRequested) throw new CancellationError();
-      const syncResults: ISearchComplete = { results, messages: [], limitHit };
+      const syncResults: ISearchComplete = { results: [...results], messages: [], limitHit };
       const asyncResults = (async () => {
         try {
+          await pendingModels;
           // 本地已取得超限哨兵，无剩余输出或完整性信息需要远端补充。
-          if (limitHit) return { results: [], messages: [], limitHit: true };
+          if (limitHit) return { results: results.slice(syncResults.results.length), messages: [], limitHit: true };
           const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
           for (const resource of ignoredModels) covered.add(resource);
           for (const resource of ignored) covered.add(resource);
-          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt, operation, watchRetryModels });
+          const remote = await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt, operation, watchRetryModels });
+          return { ...remote, results: [...results.slice(syncResults.results.length), ...remote.results] };
         } catch (error) {
           validateModels();
           throw error;

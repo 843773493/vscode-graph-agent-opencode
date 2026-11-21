@@ -1,4 +1,4 @@
-import { consumeWorkspaceObservation } from "../stream/workspaceObservation";
+import { consumeRealtimeSubscription } from "../stream/realtime";
 import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import type { APIResponse } from "../../types/backend";
 import {
@@ -6,6 +6,7 @@ import {
   requestJson,
   unwrapApiData,
 } from "../http";
+import type { NavigationSnapshotDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
 /**
@@ -134,12 +135,9 @@ export interface SessionCatalogNavigationEventsPage {
   cursor_gone: boolean;
 }
 
-export interface SessionCatalogSnapshot {
-  workspace_id: string;
-  catalog_revision: number;
-  event_seq_watermark: number;
-  generation: number;
-}
+export type SessionCatalogSnapshot = Omit<NavigationSnapshotDTO, "projection_revision"> & {
+  projection_revision?: string | null;
+};
 
 const ENQUEUE_PATH = "/api/v1/session-catalog/operations:enqueue";
 const OPERATION_STATUS_PATH = "/api/v1/session-catalog/operations";
@@ -200,13 +198,21 @@ export async function querySessionCatalogOperationStatus(
 export async function fetchSessionCatalogSnapshot(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; minimumCatalogRevision?: number } = {},
 ): Promise<SessionCatalogSnapshot> {
-  return unwrapApiData(await requestJson<APIResponse<SessionCatalogSnapshot>>(
+  const query = new URLSearchParams();
+  if (options.minimumCatalogRevision !== undefined) query.set("minimum_catalog_revision", String(options.minimumCatalogRevision));
+  const snapshot = unwrapApiData(await requestJson<APIResponse<SessionCatalogSnapshot>>(
     port,
-    SNAPSHOT_PATH,
+    `${SNAPSHOT_PATH}${query.size ? `?${query}` : ""}`,
     { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
+  if (snapshot.workspace_id !== workspaceTarget.workspace_id
+    || !Number.isSafeInteger(snapshot.catalog_revision)
+    || snapshot.catalog_revision < (options.minimumCatalogRevision ?? 0)) {
+    throw new Error("会话目录权威 snapshot 归属或最低版本不一致");
+  }
+  return snapshot;
 }
 
 /** 拉取 `event_seq > after` 的 navigation 终态事件页。 */
@@ -233,9 +239,7 @@ export function streamSessionCatalogSnapshots(
   workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { signal: AbortSignal; onSnapshot: (snapshot: SessionCatalogSnapshot) => void },
 ): Promise<void> {
-  return consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(workspaceTarget), () => ({
-    kind: "session_navigation", paths: [],
-  }), {
+  return consumeRealtimeSubscription(port, () => ({ path: '/api/v1/session-catalog/snapshot/events', headers: gatewayWorkspaceRequestHeaders(workspaceTarget) }), {
     signal: options.signal,
     events: {
       session_navigation: defineSseEvent(

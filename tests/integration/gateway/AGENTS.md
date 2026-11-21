@@ -14,6 +14,9 @@
 
 ## 规范
 
+- `test_maintenance_performance.py` 运行真实 Gateway 与 Backend；`maintenance_app.py` 仅在测试组合中暴露原活动 owner 的一次清理，复用真实数据库与锁，不建立第二个 owner。采集子进程固定三批各 10000 条过期／100 条有效记录、20 个并发分页请求和一次清理，硬超时 60 秒；保留全部响应、request_id、大小、延迟和实际重叠样本，不用屏障或 sleep 制造性能竞争。该测量不替代维护在途读取保护的正确性测试。
+- `test_maintenance_concurrency.py` 使用独立测试组合缩短活动维护周期，在原存储 worker 入口设置屏障；经真实 Gateway 读取同一活动表，再释放原 SQL 并核有效记录保留。它不提供性能样本，不修改生产周期、SQL 或引用资格；引用保护由原 owner 场景验证。
+
 - Gateway 本身必须作为真实独立进程启动。
 - 下游替身必须作为独立本地 HTTP 服务启动并显式清理。
 - 导航 scope 下游装具在启动成功前由 `ExitStack` 管理日志，成功后由返回句柄接管；就绪失败或中断仍释放进程和全部日志，清理失败独立汇总并保留启动异常。诊断引用原始日志路径，不全量读取追加日志。
@@ -27,8 +30,10 @@
 
 `test_gateway_launcher_handoff.py` 通过真实 Launcher、Gateway 和受管工作区运行；`runtime_logging_controls.py` 驱动 Gateway、Backend、Launcher 和可选 Extension Management 的原有控制入口及真实用户配置 watcher。它建立 Terminal／Browser 资源并验证日志热应用期间资源身份与运行状态不变；这些资源由插件 owner 管理，不作为独立 Backend 辅助进程或日志目标。核对实际日志目标的私有认证、实例／revision 冲突、真实配置热应用、DEBUG 落盘、WARNING 过滤及换代后的旧实例拒绝，观察结果保存到本测试 `artifacts/runtime-logging-*.json`。其 Web 驱动 `clients/web/runtime_logging_diagnostics.mjs` 使用同一现场，经真实 Gateway 初始化并打开日志诊断，产物仍归父测试目录。两个工作区通过真实注册和受控重启共享 Backend；这项正常热应用验收不代替真实失败补偿。
 
-该页面使用 `web_workbench_assets` 构建正式 Workbench，由 Launcher 的 Gateway 托管。日志诊断从主侧栏的 Gateway 控制中心进入，按对应 ShadowRoot 内的对话框定位；保留原进程实例、revision 和 request_id 断言。HOME 与产物按运行和 pytest 节点隔离；handoff 后按 Launcher 原有退出期限等待旧进程完成连接排空，不用固定睡眠判断退出。
+该页面使用 `web_workbench_assets` 构建正式 Workbench，由 Launcher 的 Gateway 托管。日志诊断从原生设置的日志与遥测分类进入，按管理内容 ShadowRoot 定位；保留原进程实例、revision 和 request_id 断言。HOME 与产物按运行和 pytest 节点隔离；handoff 后按 Launcher 原有退出期限等待旧进程完成连接排空，不用固定睡眠判断退出。
 
 `test_gateway_logging.py` 使用显式 `runtime_logging_app.py` 测试组合，仍运行真实 Gateway、受管 Backend／Node、HTTP 校验和 SQLite 事务；保留 Terminal／Browser 插件完成统一日志热应用后的原失败补偿场景。故障只让发出的前置条件过期，不替换进程状态或写入业务结果。终端验收通过模型回放驱动真实 `exec_command`，同时核 wire、canonical、用户定点详情与工作区专用记录。测试组合不进入产品启动入口，模型响应复用统一 model_stream 资产与编码。
 
 - Gateway 测试组合包装产品 lifespan 时必须原样 yield `state`，保留 `after_http_startup` 与 `before_http_shutdown` 回调供 runner 调用；不得用已退役的 Extension Management owner 替代生命周期状态合同。Backend 测试组合仍沿 Workspace 生命周期。
+
+- `terminal_plugin_page.mjs` 还用实际 React 观察 hook 和正式 attach 页面验证六个嵌入终端：同工作区单逻辑source与页面单业务WebSocket、跨真实60秒对账静止65秒零补读、增减单项不扰动其它视图、按资源变化、一次摘要读取503后的提示恢复、卸载释放及普通请求可达。PTY字节连接独立，不计作事件订阅；503仅注入指定资源的一次读取，健康请求仍限3秒。测试宿主页只负责装配，不替换Gateway、Backend、插件或资源请求，不代替完整Workbench布局验收。

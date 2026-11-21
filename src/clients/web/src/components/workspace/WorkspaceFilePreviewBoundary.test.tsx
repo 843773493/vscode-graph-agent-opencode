@@ -5,6 +5,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { getWorkspaceFileContent } from "../../api";
 import { invalidateGatewayToken } from "../../api/http";
 import WorkspaceFilePreviewArea from "./WorkspaceFilePreviewArea";
+import WorkspaceCodePreview from "./preview/WorkspaceCodePreview";
 import type { WorkspacePreviewTab } from "./WorkspaceFilePreviewArea";
 
 /**
@@ -210,7 +211,7 @@ describe("文件预览区对畸形 content 不白屏", () => {
   test("合法 content 渲染出文件行，不抛错", () => {
     const { renderer, error } = mountPreview(VALID_CONTENT.content);
     expect(error).toBeNull();
-    expect(JSON.stringify(renderer.toJSON())).toContain("const a = 1;");
+    expect(renderer.root.findByType(WorkspaceCodePreview).props.content).toBe(VALID_CONTENT.content);
     act(() => renderer.unmount());
   });
 });

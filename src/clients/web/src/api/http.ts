@@ -1,6 +1,7 @@
 import type { APIResponse, CursorPage } from "../types/backend";
 import { gatewayWorkspaceOwner, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "./workspaceIdentity";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
+import { truncateDisplayText } from "../utils/displayText";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
@@ -55,16 +56,60 @@ type RequestJsonInit = RequestInit & {
   onResponse?: (requestId: string | null) => void;
 };
 
+export interface HttpFailureContext {
+  source: Record<string, string> & { component: string };
+  stage: string;
+  target?: Record<string, string>;
+  error_type?: string;
+}
+
+export function formatFailureContext(context: HttpFailureContext): string {
+  let location = `；来源=${Object.values(context.source).join("/")}；阶段=${context.stage}`;
+  if (context.target && Object.keys(context.target).length) location += `；目标=${JSON.stringify(context.target)}`;
+  return location;
+}
+
+function parseHttpFailureContext(raw: string): HttpFailureContext {
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object") throw new Error("错误来源不是对象");
+  const context = value as Partial<HttpFailureContext>;
+  if (!context.source || typeof context.source !== "object"
+    || typeof context.source.component !== "string"
+    || !Object.values(context.source).every(item => typeof item === "string")
+    || typeof context.stage !== "string"
+    || (context.target !== undefined && (!context.target || typeof context.target !== "object"
+      || !Object.values(context.target).every(item => typeof item === "string")))) {
+    throw new Error("错误来源字段无效");
+  }
+  return context as HttpFailureContext;
+}
+
 export class HttpRequestError extends Error {
+  readonly context: HttpFailureContext | null;
+
   constructor(
     readonly status: number,
     readonly statusText: string,
     readonly detail: unknown,
     readonly path: string,
     readonly requestId: string | null,
+    rawContext: string | null = null,
   ) {
-    super(`请求失败 ${status} ${statusText}: ${httpErrorDetailMessage(detail, path)}`);
+    let context: HttpFailureContext | null = null;
+    let location = "";
+    if (rawContext !== null) {
+      try {
+        context = parseHttpFailureContext(rawContext);
+        location = formatFailureContext(context);
+      } catch (cause) {
+        // 来源损坏也要显式报告，同时保留原 HTTP 状态与业务错误。
+        location = `；错误来源元数据无效: ${cause instanceof Error ? cause.message : String(cause)}`;
+      }
+    }
+    super(`请求失败 ${status} ${statusText}: ${httpErrorDetailMessage(detail, path)}${location}`
+      + `；请求=${path}${requestId ? `；request_id=${requestId}` : ""}`);
     this.name = "HttpRequestError";
+    this.context = context;
   }
 }
 
@@ -109,7 +154,7 @@ const ERROR_BODY_SNIPPET_LIMIT = 200;
  * JSON 时，把这件事本身作为可诊断信息返回，而不是吞成无 detail。断流与截断响应
  * 下用户才能看到真实原因。
  */
-async function readHttpErrorDetail(response: Response): Promise<unknown> {
+export async function readHttpErrorDetail(response: Response): Promise<unknown> {
   const raw = await response.text().catch(() => null);
   if (raw === null) return "响应体不可读取";
   const trimmed = raw.trim();
@@ -119,7 +164,7 @@ async function readHttpErrorDetail(response: Response): Promise<unknown> {
     parsed = JSON.parse(trimmed);
   } catch {
     const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
-      ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…`
+      ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…`
       : trimmed;
     return `响应体不是 JSON: ${snippet}`;
   }
@@ -127,7 +172,7 @@ async function readHttpErrorDetail(response: Response): Promise<unknown> {
     const envelope = parsed as { detail?: unknown; message?: unknown };
     return envelope.detail ?? envelope.message;
   }
-  return `响应体不是 JSON 对象: ${trimmed.length > ERROR_BODY_SNIPPET_LIMIT ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…` : trimmed}`;
+  return `响应体不是 JSON 对象: ${trimmed.length > ERROR_BODY_SNIPPET_LIMIT ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…` : trimmed}`;
 }
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
@@ -202,11 +247,12 @@ export function getApiBaseUrl(port: number): string {
 }
 
 const gatewayTokenByPort = new Map<number, Promise<string>>();
-const gatewayTokenInvalidations = new Map<number, Set<() => void>>();
+type GatewayTokenInvalidationReason = "invalidated" | "refresh";
+const gatewayTokenInvalidations = new Map<number, Set<(reason: GatewayTokenInvalidationReason) => void>>();
 
 /** 撤销依赖旧凭据的在途展示，凭据刷新仍由唯一 HTTP 入口负责。 */
-export function onGatewayTokenInvalidated(port: number, listener: () => void): () => void {
-  const listeners = gatewayTokenInvalidations.get(port) ?? new Set<() => void>();
+export function onGatewayTokenInvalidated(port: number, listener: (reason: GatewayTokenInvalidationReason) => void): () => void {
+  const listeners = gatewayTokenInvalidations.get(port) ?? new Set<(reason: GatewayTokenInvalidationReason) => void>();
   gatewayTokenInvalidations.set(port, listeners);
   listeners.add(listener);
   return () => {
@@ -215,9 +261,9 @@ export function onGatewayTokenInvalidated(port: number, listener: () => void): (
   };
 }
 
-export function invalidateGatewayToken(port: number): void {
+export function invalidateGatewayToken(port: number, reason: GatewayTokenInvalidationReason = "invalidated"): void {
   gatewayTokenByPort.delete(port);
-  for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener();
+  for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener(reason);
 }
 
 export function getGatewayToken(port: number): Promise<string> {
@@ -296,7 +342,7 @@ async function runGatewayRequest<T>(
         abortState.signal,
       );
       if (attempt === 0 && await isInvalidGatewayToken(response)) {
-        if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port);
+        if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port, "refresh");
         tokenPromise = getGatewayToken(port);
         continue;
       }
@@ -312,6 +358,7 @@ async function runGatewayRequest<T>(
         await readHttpErrorDetail(response),
         path,
         response.headers.get("X-Request-ID"),
+        response.headers.get("X-BoxTeam-Error-Context"),
       );
     }
     return await consume(response, abortState.signal);
@@ -440,7 +487,7 @@ function jsonBodyDiagnosticMessage(
 ): string {
   const trimmed = bodyPrefix.trim();
   const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
-    ? `${trimmed.slice(0, ERROR_BODY_SNIPPET_LIMIT)}…`
+    ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…`
     : trimmed;
   const shape = !trimmed
     ? "响应体为空"

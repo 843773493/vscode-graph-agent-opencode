@@ -19,13 +19,14 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import build_model_from_provider
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
 )
 from app.core.checkpoint_config import build_checkpoint_config
+from app.runtime.provider_model import build_model_from_provider
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     closed_tool_prefix_cutoffs,
@@ -33,7 +34,10 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 
 
@@ -112,10 +116,10 @@ async def _send_message(
 ) -> str:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": content},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200
     job_id = response.json()["data"]["job_id"]
@@ -373,7 +377,7 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
         ),
         workspace_root=e2e_workspace_root_path,
     )
-    provider = config_service.get_llm_provider("primary")
+    provider = await config_service.resolve_llm_model(ModelReferenceDTO(provider_id="primary", model_id="default"))
     assert "prompt_cache_key" not in provider["api_mode"].get("request_features", {})
     model = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
     middleware = CachePreservingSummarizationMiddleware(
@@ -589,8 +593,8 @@ async def test_luna_image_reasoning_compaction_hits_prompt_cache(
         ),
         workspace_root=e2e_workspace_root_path,
     )
-    provider = config_service.get_llm_provider("backup_3")
-    assert provider["model"] == "gpt-5.6-luna"
+    provider = await config_service.resolve_llm_model(ModelReferenceDTO(provider_id="backup_3", model_id="default"))
+    assert (provider["provider_id"], provider["model_id"]) == ("backup_3", "default")
     assert provider["api_mode"]["protocol"] == "responses"
     assert provider["api_mode"]["model_info"]["supports_vision"] is True
 

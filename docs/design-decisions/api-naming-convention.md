@@ -236,12 +236,17 @@ PUT    /api/v1/sessions/{id}/goal
 
 ### 5.3 流式端点
 
+运行受理与事件订阅是不同请求，不能在同一个响应里同时返回 JSON 202 和 SSE。常驻事件由页面共享 `/api/gateway/realtime` 逻辑订阅到原领域 SSE 路由；有限请求流继续使用 HTTP。以下仅示意两阶段数据流，实际路径与 DTO 以 `app/api/messages.py`、`app/api/message_stream.py` 和 OpenAPI 为准。
+
 ```python
-# 消息运行（SSE）
-POST   /api/v1/messages/run
+# 消息运行：一次性 JSON 受理
+POST   /api/v1/sessions/{session_id}/messages
     → MessageRunRequest
-    ← 202 Accepted + MessageRunAccepted（受理确认）
-    ← SSE 流：JobDTO、MessageDTO 等状态更新
+    ← 200 + APIResponse[MessageRunAccepted]（受理确认）
+
+# 原领域订阅入口；页面经共享 WS 传输其 SSE 字节
+GET    /api/v1/sessions/{session_id}/turns/{turn_id}/message-stream?thread_id={thread_id}
+    ← stream.snapshot / 消息增量 / stream.completed 等领域事件
 ```
 
 ---

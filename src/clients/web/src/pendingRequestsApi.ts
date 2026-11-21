@@ -74,3 +74,12 @@ export async function updatePendingRequestPolicy(
     ),
   );
 }
+
+export async function reorderPendingRequests(port: number, sessionId: string, threadId: string,
+  messageIds: string[], expectedThreadRevision: number, workspaceId: string | null, signal?: AbortSignal): Promise<PendingRequestList> {
+  return unwrapApiData(await requestJson<APIResponse<PendingRequestList>>(port,
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/threads/${encodeURIComponent(threadId)}/pending-requests/order`, {
+      method: "PUT", headers: workspaceHeader(workspaceId), signal,
+      body: JSON.stringify({ message_ids: messageIds, expected_thread_revision: expectedThreadRevision }),
+    }));
+}

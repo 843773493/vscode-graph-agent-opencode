@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_session_skill_tracking_service
+from app.api.deps import get_session_skill_untrack_service
 from app.api.sessions import router, untrack_session_skill
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -19,8 +19,8 @@ from app.schemas.internal_v2.session import (
     SessionSkillUntrackResultDTO,
 )
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -36,7 +36,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 
@@ -69,7 +69,7 @@ def test_untrack_api_rejects_internal_path_response_with_request_identity(uri: s
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(router, prefix="/api/v1")
-    application.dependency_overrides[get_session_skill_tracking_service] = InvalidReceiptService
+    application.dependency_overrides[get_session_skill_untrack_service] = InvalidReceiptService
     with TestClient(application, raise_server_exceptions=False) as client:
         response = client.post(
             "/api/v1/sessions/ses_019bef80066f7038ae8e88ccb2e5e2ea/threads/thr_00000000400070008000000000000002/skills/untrack",
@@ -111,11 +111,11 @@ def saver(sessions_root: Path) -> RolloutCheckpointSaver:
 
 
 @pytest.fixture()
-def session_skill_tracking_service(
+def session_skill_untrack_service(
     saver: RolloutCheckpointSaver,
     session_service: SessionService,
-) -> SessionSkillTrackingService:
-    return SessionSkillTrackingService(
+) -> SessionSkillUntrackService:
+    return SessionSkillUntrackService(
         checkpointer=saver,
         session_service=session_service,
     )
@@ -181,13 +181,13 @@ async def tracked_skill_session(
 
 
 async def test_untrack_success_persists_frozen_state_without_reading_source(
-    session_skill_tracking_service: SessionSkillTrackingService,
+    session_skill_untrack_service: SessionSkillUntrackService,
     saver: RolloutCheckpointSaver,
     tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
     session_id, owner = tracked_skill_session
 
-    result = await session_skill_tracking_service.untrack(
+    result = await session_skill_untrack_service.untrack(
         session_id=session_id,
         thread_id=owner.thread_id,
         name=SKILL_NAME,
@@ -207,19 +207,19 @@ async def test_untrack_success_persists_frozen_state_without_reading_source(
 
 
 async def test_untrack_not_tracked_is_deterministic_and_zero_state_change(
-    session_skill_tracking_service: SessionSkillTrackingService,
+    session_skill_untrack_service: SessionSkillUntrackService,
     saver: RolloutCheckpointSaver,
     tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
     session_id, owner = tracked_skill_session
-    first = await session_skill_tracking_service.untrack(
+    first = await session_skill_untrack_service.untrack(
         session_id=session_id, thread_id=owner.thread_id, name=SKILL_NAME
     )
     assert first.status == "loaded"
     (tracked_state,) = saver.load_context_source_control_states(owner)
     revision_before = tracked_state.state_revision
 
-    second = await session_skill_tracking_service.untrack(
+    second = await session_skill_untrack_service.untrack(
         session_id=session_id, thread_id=owner.thread_id, name=SKILL_NAME
     )
 
@@ -231,7 +231,7 @@ async def test_untrack_not_tracked_is_deterministic_and_zero_state_change(
 
 
 async def test_untrack_api_handler_maps_unknown_thread_to_404(
-    session_skill_tracking_service: SessionSkillTrackingService,
+    session_skill_untrack_service: SessionSkillUntrackService,
     tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
     session_id, _owner = tracked_skill_session
@@ -243,7 +243,7 @@ async def test_untrack_api_handler_maps_unknown_thread_to_404(
             SessionSkillUntrackRequest(name=SKILL_NAME),
             _="local",
             request_id="req_untrack",
-            skill_tracking_service=session_skill_tracking_service,
+            skill_untrack_service=session_skill_untrack_service,
         )
 
     assert raised.value.status_code == 404
@@ -251,7 +251,7 @@ async def test_untrack_api_handler_maps_unknown_thread_to_404(
 
 def test_untrack_api_http_envelope_auth_and_success(
     saver: RolloutCheckpointSaver,
-    session_skill_tracking_service: SessionSkillTrackingService,
+    session_skill_untrack_service: SessionSkillUntrackService,
     tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
     session_id, owner = tracked_skill_session
@@ -262,7 +262,7 @@ def test_untrack_api_http_envelope_auth_and_success(
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_session_skill_tracking_service] = lambda: session_skill_tracking_service
+    app.dependency_overrides[get_session_skill_untrack_service] = lambda: session_skill_untrack_service
     try:
         with TestClient(app) as client:
             unauthorized = client.post(url, json={"name": SKILL_NAME})

@@ -41,6 +41,9 @@ async function start() {
     throw new Error(`Electron 页面来源运行态损坏：${stateFile}`);
   }
   const rendererRoot = join(app.getAppPath(), 'renderer');
+  const icon = join(rendererRoot, 'out/branding/icon.png');
+  await access(icon);
+  app.dock?.setIcon(icon);
   await access(join(rendererRoot, 'index.html'));
   const server = createWorkbenchServer({ root: rendererRoot, gateway: gateway.href });
   server.listen(state?.port ?? 0, '127.0.0.1');
@@ -76,7 +79,7 @@ async function start() {
     contents.on('will-redirect', restrictNavigation);
     contents.setWindowOpenHandler(({ url }) => {
       if (['https:', 'http:'].includes(new URL(url).protocol)) {
-        return { action: 'allow', overrideBrowserWindowOptions: { webPreferences } };
+        return { action: 'allow', overrideBrowserWindowOptions: { webPreferences, icon } };
       }
       console.error(`拒绝不受支持的窗口协议：${new URL(url).protocol}`);
       return { action: 'deny' };
@@ -118,7 +121,7 @@ async function start() {
     });
   }
   function openWindow() {
-    const window = new BrowserWindow({ width: 1440, height: 960, title: 'BoxTeam', webPreferences });
+    const window = new BrowserWindow({ width: 1440, height: 960, title: 'BoxTeam', icon, webPreferences });
     attachWindow(window, origin);
     void window.loadURL(`${origin}/`).catch(cause => { console.error('加载 Electron 工作台失败', cause); app.exit(1); });
   }

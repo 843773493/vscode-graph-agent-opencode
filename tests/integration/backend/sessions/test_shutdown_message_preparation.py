@@ -27,6 +27,7 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414 - 工作区按当前测试文件隔离。
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 
@@ -99,12 +100,12 @@ async def test_shutdown_preserves_preparation_until_original_message_commit_fini
             monkeypatch.setattr(owner.message_service, "create", prepare)
             monkeypatch.setattr(owner.message_service, "accept_user_message", commit)
             monkeypatch.setattr(owner.message_service, "accept_job_input", commit_job)
-            request = asyncio.create_task(client.post(base + f"/sessions/{session_id}/messages", json={
+            request = asyncio.create_task(client.post(base + f"/sessions/{session_id}/messages", json=with_message_run_operation_id({
                 "message": {"content": "关闭不能抢先关闭本次提交的存储", "attachments": [{
                     "file_id": "inline:shutdown", "name": "shutdown.txt", "content_type": "text/plain",
                     "data_url": "data:text/plain;base64," + base64.b64encode(body).decode(),
                 }]}, "run": {},
-            }))
+            })))
             try:
                 await asyncio.wait_for(entered.wait(), 5)
                 assert jobs._session_preparations == {session_id: 2 if stage == "job" else 1}
@@ -131,9 +132,9 @@ async def test_shutdown_preserves_preparation_until_original_message_commit_fini
                 assert owner.attachment_blob_store._catalog.connection is not None
                 assert not request.done()
                 assert jobs._session_preparations == {session_id: 2 if stage == "job" else 1}
-                rejected = await client.post(base + f"/sessions/{session_id}/messages", json={
+                rejected = await client.post(base + f"/sessions/{session_id}/messages", json=with_message_run_operation_id({
                     "message": {"content": "关闭后拒绝的新输入"}, "run": {},
-                })
+                }))
                 assert rejected.status_code == 503, rejected.text
                 assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
             finally:

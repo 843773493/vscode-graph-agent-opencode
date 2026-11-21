@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from app.abstractions.internal_message import (
+    PreparedInternalMessage,
+    RuntimeContextMode,
+    RuntimeContextReceipt,
+)
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    UserExecutionIdentity,
+)
+from app.schemas.internal_v2.message import MessageDTO, MessageRunAccepted
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
+
+
+@runtime_checkable
+class SessionMessageOrchestratorProtocol(Protocol):
+    """工具和自动化所需的消息准备、派发与内部 runtime source 投递端口。"""
+
+    async def resolve_main_thread(self, session_id: str) -> str: ...
+
+    async def publish_runtime_context(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+        context_mode: RuntimeContextMode = "event",
+    ) -> RuntimeContextReceipt: ...
+
+    async def submit_runtime_event(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+        delivery_policy: DeliveryPolicy = "after_turn",
+        context_mode: RuntimeContextMode = "event",
+    ) -> MessageRunAccepted: ...
+
+    def reserve_user_execution_identity(self) -> UserExecutionIdentity: ...
+
+    async def prepare_user_message(
+        self, session_id: str, content: str, *, thread_id: str,
+        metadata: dict[str, object] | None = None,
+    ) -> MessageDTO: ...
+
+    async def dispatch_existing_message(
+        self,
+        session_id: str,
+        message: MessageDTO,
+        *,
+        execution_binding: ExecutionBinding,
+        reserved_job_id: str | None = None,
+        background: bool = False,
+    ) -> MessageRunAccepted: ...

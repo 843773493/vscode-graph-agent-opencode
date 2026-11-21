@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 
 from app import main
 from app.core.path_utils import workspace_context
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
@@ -51,7 +52,7 @@ def terminal_snapshot_fault(
             errors.append(error)
             raise
 
-    async def terminal_snapshot(client: TerminalManagerClient) -> list[dict[str, object]]:
+    async def terminal_snapshot(client: TerminalManagerClient, **query) -> list[dict[str, object]]:
         if client._workspace_id == workspace_id:
             calls.append(workspace_id)
             entered.set()
@@ -62,7 +63,12 @@ def terminal_snapshot_fault(
     async def browser_snapshot(_client: BrowserManagerClient) -> list[dict[str, object]]:
         return []
 
+    async def terminal_changes(_client: TerminalManagerClient) -> AsyncIterator[None]:
+        yield None
+        await asyncio.Event().wait()
+
     monkeypatch.setattr(TerminalManagerClient, "list_resources", terminal_snapshot)
+    monkeypatch.setattr(TerminalManagerClient, "changes", terminal_changes)
     monkeypatch.setattr(BrowserManagerClient, "list_resources", browser_snapshot)
     return entered, release, errors, calls
 

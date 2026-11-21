@@ -20,9 +20,11 @@ from pathlib import Path
 from threading import RLock
 from typing import Literal, TypeVar
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.child_process_state import ChildProcessState
 from app.core.failures import failure_detail
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
     ResourceStateEventPublisher,

@@ -1,40 +1,27 @@
-import { createWriteStream, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
-import yazl from "yazl";
 import { parse as parseJsonc } from "jsonc-parser";
+import { createHash } from "node:crypto";
+import { buildPluginSdk } from "./build-sdk.mjs";
+import { archivePluginDirectory } from "./artifact-directory.mjs";
 
 const SOURCE_FILES = [
-  "src/shared/serverHttpShutdown.mjs",
-  "src/shared/serverJsonRequest.mjs",
-  "src/shared/serverPluginRuntime.mjs",
-  "src/shared/serverPluginCommands.mjs",
-  "src/shared/serverRuntimeControl.mjs",
-  "src/shared/serverRuntimeLogging.mjs",
-  "src/shared/serverRuntimeObservation.mjs",
-  "src/workspace-services/protocol/generated/boxteam/common/v1/error_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/gateway/v2/service_plugin_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/gateway/v2/plugin_commands_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/terminal/v1/terminal_input_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/terminal/v1/terminal_output_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/terminal/v1/terminal_pb.js",
   "src/workspace-services/terminal/protocol/messages.js",
   "src/workspace-services/terminal/server/backend.js",
   "src/workspace-services/terminal/server/output/terminalOutputMultiplexer.js",
   "src/workspace-services/terminal/server/output/terminalUtf8Output.js",
   "src/workspace-services/terminal/server/processes/isolatedPtyProcess.js",
   "src/workspace-services/terminal/server/processes/ptyWorker.js",
-  "src/shared/serverProcessLifecycle.mjs",
   "src/workspace-services/terminal/server/terminalInput.js",
   "src/workspace-services/terminal/server/terminalManager.js",
   "src/workspace-services/terminal/server/terminalSession.js",
   "src/workspace-services/terminal/server/terminalStateStore.js",
   "src/workspace-services/terminal/server/storage/stateWorker.js",
   "src/workspace-services/terminal/server/storage/schema.sql",
-  "src/workspace-services/terminal/server/storage/importLegacyState.mjs",
+  "src/workspace-services/terminal/server/storage/migrations/v3_json_to_v1_sqlite.mjs",
+  "src/workspace-services/terminal/server/storage/migrations/v3_json_to_v1_sqlite.js",
   "src/workspace-services/terminal/server/workspaceIdentity.js",
   "src/workspace-services/terminal/shared/commandText.js",
   "src/workspace-services/browser/protocol/messages.js",
@@ -70,13 +57,10 @@ const SOURCE_FILES = [
   "src/workspace-services/browser/client/browserModalUi.js",
   "src/workspace-services/browser/client/browserShortcuts.js",
   "src/workspace-services/browser/client/browserToolbarEvents.js",
-  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_input_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_page_pb.js",
-  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_pb.js",
   "src/workspace-services/debug/server/backend.js",
 ];
 
-const PACKAGE_FILES = [
+export const PACKAGE_FILES = [
   ["resources/plugins/developer-tools/plugin.jsonc", "plugin.jsonc"],
   ["resources/plugins/developer-tools/package.json", "package.json"],
   ["resources/plugins/developer-tools/bun.lock", "bun.lock"],
@@ -121,37 +105,17 @@ function packageDependencies(root) {
   return new Set(Object.keys(manifest.dependencies));
 }
 
-async function writeArchive(output, files) {
-  const archive = new yazl.ZipFile();
-  for (const [source, archivePath] of files) {
-    archive.addFile(source, archivePath, { compress: true });
-  }
-  const stream = createWriteStream(output, { flags: "wx" });
-  const closed = finished(stream);
-  archive.outputStream.pipe(stream);
-  archive.end();
-  await closed;
-}
 
 function run(executable, args, cwd, env) {
   const result = Bun.spawnSync([executable, ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
     throw new Error(`插件构建阶段失败: ${path.basename(executable)} ${args[0]} exit=${result.exitCode}: ${result.stderr.toString("utf8")}`);
   }
+  return result.stdout.toString("utf8");
 }
 
-function collectFiles(root, directory, archivePrefix) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const absolute = path.join(directory, entry.name);
-    const relative = path.relative(root, absolute).split(path.sep).join("/");
-    if (entry.isSymbolicLink()) throw new Error(`插件制品不能包含符号链接: ${relative}`);
-    return entry.isDirectory()
-      ? collectFiles(root, absolute, archivePrefix)
-      : [[absolute, path.posix.join(archivePrefix, relative)]];
-  });
-}
 
-function prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeExecutable, nodeGypEntrypoint, pythonExecutable }) {
+function prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeExecutable, nodeGypEntrypoint, pythonExecutable, sdk }) {
   if (!target || target.os !== ({ linux: "linux", win32: "windows", darwin: "macos" }[process.platform]) ||
       target.architecture !== ({ x64: "x64", arm64: "arm64" }[process.arch])) {
     throw new Error("developer-tools 含 node-pty，当前构建主机没有匹配的原生目标制品；拒绝跨 OS/架构构建");
@@ -168,6 +132,13 @@ function prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeEx
   mkdirSync(packageRoot, { recursive: true });
   cpSync(path.join(sourceRoot, "package.json"), path.join(packageRoot, "package.json"));
   cpSync(path.join(sourceRoot, "bun.lock"), path.join(packageRoot, "bun.lock"));
+  const sdkPath = `vendor/sdk/${sdk.digest}/${path.basename(sdk.archive)}`;
+  mkdirSync(path.dirname(path.join(packageRoot, sdkPath)), { recursive: true });
+  cpSync(sdk.archive, path.join(packageRoot, sdkPath));
+  const manifestPath = path.join(packageRoot, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.dependencies["@boxteam/plugin-sdk"] = `file:${sdkPath}`;
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   const credentialHome = path.join(stage, "home");
   mkdirSync(credentialHome);
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -175,7 +146,8 @@ function prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeEx
   environment.HOME = credentialHome;
   environment.USERPROFILE = credentialHome;
   environment.BUN_INSTALL_CACHE_DIR = process.env.BUN_INSTALL_CACHE_DIR ?? path.join(os.homedir(), ".bun/install/cache");
-  run(bunExecutable, ["--no-env-file", "install", "--frozen-lockfile", "--production", "--ignore-scripts"], packageRoot, environment);
+  run(bunExecutable, ["--no-env-file", "install", "--lockfile-only", "--ignore-scripts"], packageRoot, environment);
+  run(bunExecutable, ["--no-env-file", "install", "--production", "--frozen-lockfile", "--ignore-scripts"], packageRoot, environment);
   rmSync(path.join(packageRoot, "node_modules/.bin"), { recursive: true, force: true });
   const nativePackage = path.join(packageRoot, "node_modules/node-pty");
   run(nodeExecutable, [nodeGypEntrypoint, "rebuild", `--target=${runtime.version}`,
@@ -183,31 +155,57 @@ function prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeEx
   return packageRoot;
 }
 
-export async function packDeveloperTools({ projectRoot, output, target, bunExecutable, nodeExecutable, nodeGypEntrypoint, pythonExecutable }) {
+export async function buildDeveloperToolsDirectory(options) {
+  const { projectRoot, output, target, bunExecutable, nodeExecutable, nodeGypEntrypoint, pythonExecutable } = options;
   assertRepositoryRoot(projectRoot);
-  if (!path.isAbsolute(output) || !output.endsWith(".zip")) throw new Error("插件包输出必须是明确的 ZIP 绝对路径");
-  if (existsSync(output)) throw new Error(`拒绝覆盖已有插件包: ${output}`);
+  if (!path.isAbsolute(output) || existsSync(output)) throw new Error(`插件目录必须是未使用的绝对路径: ${output}`);
   packageDependencies(projectRoot);
-  for (const [source] of PACKAGE_FILES) {
-    if (!existsSync(path.join(projectRoot, source))) throw new Error(`插件包清单文件缺失: ${source}`);
+  const sdk = options.sdk ?? buildPluginSdk({ projectRoot, language: "node", bunExecutable });
+  // 依赖缓存只由声明、锁、SDK 归档与目标构建工具决定，业务源码变化不重装依赖。
+  const hash = createHash("sha256").update(JSON.stringify({ target, sdk: sdk.digest, bunExecutable, nodeExecutable, pythonExecutable }));
+  hash.update(run(bunExecutable, ["--version"], projectRoot, process.env));
+  hash.update(run(pythonExecutable, ["--version"], projectRoot, process.env));
+  hash.update(run(nodeExecutable, [nodeGypEntrypoint, "--version"], projectRoot, process.env));
+  for (const relative of ["resources/plugins/developer-tools/package.json", "resources/plugins/developer-tools/bun.lock", "scripts/plugins/pack-developer-tools.mjs"]) {
+    hash.update(readFileSync(path.join(projectRoot, relative)));
   }
-  const stage = mkdtempSync(path.join(os.tmpdir(), "boxteam-developer-tools-"));
-  const packageRoot = path.join(projectRoot, "resources/plugins/developer-tools");
+  hash.update(readFileSync(nodeGypEntrypoint));
+  const cache = path.join(projectRoot, "out/plugin-dependencies/developer-tools", hash.digest("hex"));
+  mkdirSync(path.dirname(cache), { recursive: true });
+  if (!existsSync(cache)) {
+    const temporary = mkdtempSync(path.join(path.dirname(cache), ".prepare-"));
+    try {
+      const prepared = prepareDependencies({ ...options, stage: temporary, sdk });
+      renameSync(prepared, cache);
+    } finally { rmSync(temporary, { recursive: true, force: true }); }
+  }
+  mkdirSync(path.dirname(output), { recursive: true });
+  const stage = mkdtempSync(path.join(path.dirname(output), ".developer-tools-"));
+  const directory = path.join(stage, "package");
   try {
-    const preparedRoot = prepareDependencies({ projectRoot, stage, target, bunExecutable, nodeExecutable, nodeGypEntrypoint, pythonExecutable });
-    const manifestTarget = { os: target.os, architecture: target.architecture,
-      system_baseline: target.system_baseline, node: target.node };
-    const manifest = { ...parseJsonc(readFileSync(path.join(packageRoot, "plugin.jsonc"), "utf8")), target: manifestTarget };
-    const manifestPath = path.join(stage, "plugin.jsonc");
-    await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    const files = PACKAGE_FILES.filter(([, archivePath]) => archivePath !== "plugin.jsonc")
-      .map(([source, archivePath]) => [path.join(projectRoot, source), archivePath]);
-    files.push(...collectFiles(preparedRoot, path.join(preparedRoot, "node_modules"), ""));
-    files.push([manifestPath, "plugin.jsonc"]);
-    await writeArchive(output, files);
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
-  }
+    cpSync(cache, directory, { recursive: true });
+    for (const [source, relative] of PACKAGE_FILES) {
+      if (["plugin.jsonc", "package.json", "bun.lock"].includes(relative)) continue;
+      mkdirSync(path.dirname(path.join(directory, relative)), { recursive: true });
+      cpSync(path.join(projectRoot, source), path.join(directory, relative));
+    }
+    const manifest = parseJsonc(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
+    manifest.target = { os: target.os, architecture: target.architecture, system_baseline: target.system_baseline, node: target.node };
+    writeFileSync(path.join(directory, "plugin.jsonc"), JSON.stringify(manifest, null, 2) + "\n");
+    renameSync(directory, output);
+    return output;
+  } finally { rmSync(stage, { recursive: true, force: true }); }
+}
+
+export async function packDeveloperTools(options) {
+  const { output } = options;
+  if (!path.isAbsolute(output) || !output.endsWith(".zip") || existsSync(output)) throw new Error(`插件包输出必须是未使用的 ZIP 绝对路径: ${output}`);
+  mkdirSync(path.dirname(output), { recursive: true });
+  const stage = mkdtempSync(path.join(path.dirname(output), ".developer-tools-zip-"));
+  try {
+    const directory = await buildDeveloperToolsDirectory({ ...options, output: path.join(stage, "package") });
+    await archivePluginDirectory(directory, output);
+  } finally { rmSync(stage, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

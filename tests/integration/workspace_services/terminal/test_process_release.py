@@ -107,23 +107,22 @@ def unreaped_process() -> Iterator[Callable[[str], int]]:
 def release_process() -> Callable[..., dict[str, object]]:
     node = shutil.which("node")
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
-    module = (Path.cwd() / "src/shared/serverProcessLifecycle.mjs").as_uri()
-    script = f"""
-import {{ readdir }} from 'node:fs/promises';
-import {{ readProcessStat, terminateProcessTree }} from {json.dumps(module)};
+    script = """
+import { readdir } from 'node:fs/promises';
+import { readProcessStat, terminateProcessTree } from '@boxteam/plugin-sdk/process-lifecycle';
 const pid = Number(process.argv[1]);
 const before = await readProcessStat(pid);
-const result = await terminateProcessTree({{
+const result = await terminateProcessTree({
   pid,
   processSessionId: before.processSessionId,
   processStartTime: before.processStartTime + Number(process.argv[2]),
-}});
+});
 const stats = await Promise.all((await readdir('/proc'))
   .filter(name => /^[0-9]+$/.test(name)).map(name => readProcessStat(Number(name))));
 const remaining = stats.filter(stat => stat
   && stat.processSessionId === before.processSessionId
   && !['Z', 'X', 'x'].includes(stat.state)).map(stat => stat.pid);
-console.log(JSON.stringify({{ result, after: await readProcessStat(pid), remaining }}));
+console.log(JSON.stringify({ result, after: await readProcessStat(pid), remaining }));
 """
 
     def release(pid: int, *, stale_identity: bool = False) -> dict[str, object]:

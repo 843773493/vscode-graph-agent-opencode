@@ -225,16 +225,24 @@ gateway 控制面库（`app/gateway/control/gateway_state/` 等）中承载 sess
 
 ### Requirement: 身份变更影响面必须按工厂前缀全集枚举
 
-canonical 身份 profile 变更的影响面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，当前为 **31 个前缀**的闭合 `Literal`）× 是否进入持久面的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。本 change 不重写历史 ID；该矩阵用于证明 v4 身份存在哪些持久载体，并约束任何未来另行授权的身份重写。
+配置记录的 `new_config_id()` 与 Rollout 随机分配的持久业务身份 MUST 复用 `create_uuid_hex()`，不得另用 UUIDv4 或随机 hex 生成。保持原有前缀和业务引用语义；branch 的随机 payload MUST 使用完整 32 位 hex，不得截取 UUIDv7 的时间戳前缀。显式传入的身份、基于幂等输入派生的确定性身份以及 fork 携带的历史身份保持原值；临时文件名不属于此分配约束。
+
+配置 source event 与 fanout、插件私有输入与 MCP 私有 header 的版本、系统自动分配的会话创建幂等键及工作区创建 intent MUST 复用 `create_uuid_hex()`，保留原有前缀与引用结构。已有版本、显式幂等键及确定性派生身份保持原值；私有值和认证凭据的生成不受此规则影响。
+
+本地新分配的 request_id、Workspace/Backend 身份 MUST 通过 `create_uuid_hex()` 取得 UUIDv7，保持原有 UUID 文本和请求前缀；请求已携带的 request_id 原样透传，已有 Workspace/Backend 标准 UUID 保持原值。设备连接 `device` 与端口转发 `pf` 由 `create_prefixed_id()` 分配，持久面分别为联邦凭据中的 connection_id 和端口转发定义中的 forward_id；认证 token 继续使用安全随机源。
+
+canonical 身份 profile 变更的影响面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix` 闭合 `Literal`）× 是否进入持久面的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。本 change 不重写历史 ID；该矩阵用于证明 v4 身份存在哪些持久载体，并约束任何未来另行授权的身份重写。
 
 - **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入影响矩阵，并在未来重写设计中逐项处理。当前持久面为 `adm`、`attempt`、`dbgcfg`、`evt`、`goal`、`gwn`、`intr`、`job`、`lease`、`msg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`op`、`part`、`ptask`、`ptrun`、`req`、`ses`、`snapshot`、`strm`、`team`、`tevt`、`text`、`thr`、`turn`、`tooltest`、`ttask`。`req` 既用于请求关联，也作为 `persistent_task_runs.request_id` 持久保存，不得一概归为内存身份。
 - **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与持久身份重写」并给出负向证据。当前仅进程内的前缀为 `chan`、`sub`、`robs`；原始诊断日志不属于业务身份持久面。已下线的生成器与旧消息链路前缀不再列入当前工厂闭集，其原始审计记录保留为历史。
+
+- **Gateway 持久身份**：`gateway` 前缀由 `app/gateway/credentials.py` 的 `load_or_create_gateway_id` 通过统一 UUIDv7 工厂生成，持久化于控制面 `identity.json` 并用于注册、配对与授权引用。读取和转发仍按 `gateway_<32位小写hex>` 校验不透明身份，不由普通读取重编号既有身份。
 
 新增工厂前缀时 MUST 在矩阵补一行并判定持久面，MUST NOT 遗留未判定前缀。
 
 #### Scenario: 矩阵行数等于工厂前缀全集
 - **WHEN** 枚举迁移面
-- **THEN** 矩阵 MUST 覆盖 `IdentifierPrefix` 的全部前缀（当前 31 个），MUST NOT 只覆盖 `ses_`/`thr_`
+- **THEN** 矩阵 MUST 覆盖 `IdentifierPrefix` 的全部前缀，MUST NOT 只覆盖 `ses_`/`thr_`
 
 #### Scenario: 持久面漏项必须被机械检出
 - **WHEN** 某个进入持久面的前缀（例如 `op_` 进 `navigation_mutation_records` 主键、`strm_` 进 `message_streams/*.jsonl` 文件名）未被列入迁移任务

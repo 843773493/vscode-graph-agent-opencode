@@ -2,6 +2,8 @@
 
 `app/domain/` 存放不依赖 I/O、Provider、LangChain 或编排流程的业务领域值对象与规则。
 
+`background_work.py` 定义精确 Thread 后台任务描述、句柄、步骤、状态与邮箱消息／消费身份；只持有纯数据及序列化。handler 调用端口归 app/abstractions/background_task_registry.py，执行和恢复归 app/services/orchestration/background_work/，控制库直接消费这些领域值，不反向导入运行时。
+
 # 可修改内容
 
 - 可以新增纯领域类型、枚举、不可变值对象和确定性校验。

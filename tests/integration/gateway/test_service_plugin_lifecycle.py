@@ -19,6 +19,7 @@ from tests.integration.gateway.test_plugin_install_operations import (
 )
 from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.scope import register_test_process, unregister_test_process
+from tests.support.workspaces import clear_test_provider_api_keys
 
 _PLUGIN_SOURCE = '''
 import asyncio, json, os, sys
@@ -26,9 +27,9 @@ sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
-from app.core.logging_config import configure_application_logging
+from boxteam_plugin_sdk.logging import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.commands import plugin_command_router
 
 configure_application_logging(service='lifecycle-probe')
 async def shutdown(): server.should_exit = True
@@ -263,9 +264,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
     # 生命周期验收不调用模型，隔离配置不能依赖开发机的 Provider 凭据。
     config_path = workspace / ".boxteam/workspace.jsonc"
     workspace_config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in workspace_config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "lifecycle-test-unused-key"
+    clear_test_provider_api_keys(workspace_config)
     workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
         f"http://127.0.0.1:{unused_tcp_port}"
     )

@@ -70,7 +70,10 @@ export function useComposerDraft(workspaceId: string | null, sessionId: string |
 }
 
 async function readAttachments(key: string | null): Promise<SelectedAttachment[]> {
-  return key ? await readBrowserView<SelectedAttachment[]>(`attachments:${key}`) ?? EMPTY_ATTACHMENTS : EMPTY_ATTACHMENTS;
+  const attachments = key ? await readBrowserView<SelectedAttachment[]>(`attachments:${key}`) ?? EMPTY_ATTACHMENTS : EMPTY_ATTACHMENTS;
+  // 页面关闭后没有仍在运行的上传；保留原输入并让用户显式重试。
+  return attachments.map(attachment => attachment.uploadState === "uploading"
+    ? { ...attachment, uploadState: "failed" } : attachment);
 }
 export async function writeComposerAttachments(key: string | null, attachments: SelectedAttachment[]): Promise<void> {
   if (key) await updateBrowserView(`attachments:${key}`, () => attachments.length ? attachments : undefined);

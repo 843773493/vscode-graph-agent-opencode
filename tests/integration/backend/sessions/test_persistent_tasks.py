@@ -30,6 +30,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import control_request
+from tests.support.goal_control import goal_control_payload
 from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 ROOT = "/api/v1/persistent-tasks"
@@ -49,7 +50,7 @@ def _configuration(target: str, mode: Literal["context_only", "context_and_run"]
         "context": {"type_id": "builtin.literal", "version": "1", "mode": "event", "content": "task-original-private：服务已经就绪。"},
         "action": {"type_id": "builtin.runtime_source", "version": "1", "target_uri": target,
                    "delivery_mode": mode, "delivery_policy": "after_turn"},
-        "policies": {"completion": "continuous", "misfire": "skip", "match_mode": "each_match"},
+        "policies": {"completion": "continuous", "misfire": "skip", "match_mode": "each_match"}, "token_budget": None,
     }
 
 
@@ -216,9 +217,9 @@ async def test_session_task_query_uses_current_goal_work_judge_and_trigger_refer
     work_id, _, work_uri = await _target(case)
     judge_id, _, judge_uri = await _target(case)
     other_id, _, other_uri = await _target(case)
-    response = await case.client.put(f"/api/v1/sessions/{work_id}/goal", json={"objective": "会话关联目标", "status": "paused"})
+    response = await case.client.put(f"/api/v1/sessions/{work_id}/goal", json=await goal_control_payload(case.client, work_id, {"objective": "会话关联目标", "status": "paused"}))
     assert response.status_code == 200, response.text
-    goal = response.json()["data"]
+    goal = response.json()["data"]["goal"]
     configuration = _configuration(work_uri)
     configuration["condition"] = {"type_id": "builtin.model", "version": "1", "model": {"thread_uri": judge_uri, "instruction": "只在触发后判断"}}
     task = await _create(case, configuration)
@@ -559,9 +560,9 @@ async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tas
         # 通用任务继续通过真实 API 发布上下文，不等待慢 Goal 恢复。
         run = await _check(case, task)
         assert (await _run(case, task, run))["delivery"]["state"] == "saved"
-        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"status": "paused"})
+        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"status": "paused"}))
         assert response.status_code == 200, response.text
-        paused = response.json()["data"]
+        paused = response.json()["data"]["goal"]
         assert paused["goal_id"] == goal.goal_id and paused["status"] == "paused"
         projected = (await case.client.get(f"{ROOT}/{goal.goal_id}")).json()["data"]
         assert projected["recovering"] and projected["phase"] == "recovering" and projected["lifecycle"] == "paused"
@@ -569,7 +570,7 @@ async def test_slow_goal_recovery_shares_the_worker_and_does_not_block_other_tas
         async with asyncio.timeout(5):
             while f"goal:{session_id}" in runtime._inflight or runtime._application_work:
                 await asyncio.sleep(0.01)
-        current = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]
+        current = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["goal"]
         assert current == paused
         projected = (await case.client.get(f"{ROOT}/{goal.goal_id}")).json()["data"]
         assert not projected["recovering"] and projected["phase"] == "paused" and projected["goal"] == paused
@@ -630,13 +631,13 @@ async def test_goal_activation_keeps_request_identity_and_completes_through_the_
         _tool_reply("update_goal", {"status": "complete"}, "call_goal_done"),
         {"content": "目标已经完成"},
     ], thread_id=thread_id)
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "验证目标后调用 update_goal 完成"})
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "验证目标后调用 update_goal 完成"}))
     assert response.status_code == 200, response.text
     wakeup, = case.sql(session_id, thread_id, "SELECT job_id,request_id,gateway_id FROM runtime_execution_wakeups")
     assert wakeup[1:] == (response.json()["request_id"], case.gateway_id)
     await _job(case, wakeup[0])
-    goal = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]
-    assert goal["goal_id"] == response.json()["data"]["goal_id"] and goal["status"] == "complete"
+    goal = (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["goal"]
+    assert goal["goal_id"] == response.json()["data"]["goal"]["goal_id"] and goal["status"] == "complete"
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id,outcome FROM executions") == [("internal", None, "completed")]
     assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
     assert case.call_count(session_id, thread_id) == 2 and len(case.requests()) == 2

@@ -1,9 +1,9 @@
-import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "./api/workspaceIdentity";
+import { gatewayWorkspaceKey, workspaceOwnerFromKey, type GatewayRequestTarget } from "./api/workspaceIdentity";
 import { formatNumber, t } from "../../shared/core/i18n/index.js";
-import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
+import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO, GatewayManagementDirectoryDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
 import type {
   AddManagedGatewayWorkspaceRequest,
-  AddSshGatewayWorkspaceRequest,
+  AddRemoteGatewayConnectionRequest,
   ActivateGatewayWorkspaceResultDTO,
   APIResponse,
   GatewayInboundAccessList,
@@ -26,8 +26,6 @@ import type {
   GatewayUiAssetList,
   WorkspaceNavigationTree,
   CreateGatewayPortForwardRequest,
-  ChangeGatewayPortForwardLocalPortRequest,
-  ChangeGatewayPortForwardLabelRequest,
   GatewayPortForwardList,
   GatewayResourceList,
   WorkspaceFolderCreateRequest,
@@ -58,20 +56,29 @@ export async function getGatewayHealth(port: number, options: { signal?: AbortSi
   );
 }
 
+export async function listGatewayManagementTargets(port: number, signal?: AbortSignal): Promise<GatewayManagementDirectoryDTO> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayManagementDirectoryDTO>>(
+    port, "/api/gateway/management/gateways", { signal },
+  ));
+}
+
+export type GatewayLogTarget = GatewayRequestTarget & { log_id?: string };
+
 export async function getGatewayDiagnostics(
   port: number,
   options: {
-    gatewayConnectionId?: string | null;
-    workspaceId?: string | null;
+    target?: GatewayRequestTarget;
     logId?: string | null;
     tailLines?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<GatewayDiagnostics> {
   const params = new URLSearchParams();
-  if (options.gatewayConnectionId) {
-    params.set("gateway_connection_id", options.gatewayConnectionId);
+  const target = options.target;
+  if (target?.gateway_connection_id) {
+    params.set("gateway_connection_id", target.gateway_connection_id);
   }
-  if (options.workspaceId) params.set("workspace_id", workspaceOwnerFromKey(options.workspaceId).workspaceId);
+  if (target?.workspace_id) params.set("workspace_id", target.workspace_id);
   if (options.logId) params.set("log_id", options.logId);
   if (options.tailLines) params.set("tail_lines", String(options.tailLines));
   const query = params.toString();
@@ -79,7 +86,9 @@ export async function getGatewayDiagnostics(
     await requestJson<APIResponse<GatewayDiagnostics>>(
       port,
       `/api/gateway/diagnostics${query ? `?${query}` : ""}`,
-      { headers: workspaceHeader(options.workspaceId), timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
+      { headers: target ? { "X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+          ...(target.workspace_id ? { "X-BoxTeam-Workspace-Id": target.workspace_id } : {}) } : {},
+        timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS, signal: options.signal },
     ),
   );
 }
@@ -132,93 +141,29 @@ export async function listGatewayResources(
   );
 }
 
-export async function listWorkspacePortForwards(
-  port: number,
-  workspaceId: string,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards`,
-      { headers: workspaceHeader(workspaceId) },
-    ),
-  );
+export async function listPortForwards(port: number): Promise<GatewayPortForwardList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayPortForwardList>>(port, "/api/gateway/port-forwards"));
 }
 
-export async function createWorkspacePortForward(
-  port: number,
-  workspaceId: string,
-  payload: CreateGatewayPortForwardRequest,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards`,
-      { headers: workspaceHeader(workspaceId), method: "POST", body: JSON.stringify(payload) },
-    ),
-  );
+export async function listPortForwardHosts(port: number) {
+  return unwrapApiData(await requestJson<APIResponse<import("./types/gatewayProtocol").PortForwardHostsDTO>>(port, "/api/gateway/port-forwards/hosts"));
 }
 
-export async function deleteWorkspacePortForward(
-  port: number,
-  workspaceId: string,
-  forwardId: string,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}`,
-      { headers: workspaceHeader(workspaceId), method: "DELETE" },
-    ),
-  );
+export async function savePortForward(port: number, payload: CreateGatewayPortForwardRequest, forwardId?: string): Promise<GatewayPortForwardList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayPortForwardList>>(port,
+    `/api/gateway/port-forwards${forwardId ? `/${encodeURIComponent(forwardId)}` : ''}`,
+    { method: forwardId ? "PUT" : "POST", body: JSON.stringify(payload) }));
 }
 
-export async function reconnectWorkspacePortForward(
-  port: number,
-  workspaceId: string,
-  forwardId: string,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/reconnect`,
-      { headers: workspaceHeader(workspaceId), method: "POST", body: "{}" },
-    ),
-  );
+export async function setPortForwardRunning(port: number, forwardId: string, enabled: boolean): Promise<GatewayPortForwardList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayPortForwardList>>(port,
+    `/api/gateway/port-forwards/${encodeURIComponent(forwardId)}/${enabled ? 'start' : 'stop'}`,
+    { method: "POST" }));
 }
 
-export async function changeWorkspacePortForwardLocalPort(
-  port: number,
-  workspaceId: string,
-  forwardId: string,
-  payload: ChangeGatewayPortForwardLocalPortRequest,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/local-port`,
-      { headers: workspaceHeader(workspaceId), method: "PATCH", body: JSON.stringify(payload) },
-    ),
-  );
-}
-
-export async function changeWorkspacePortForwardLabel(
-  port: number,
-  workspaceId: string,
-  forwardId: string,
-  payload: ChangeGatewayPortForwardLabelRequest,
-): Promise<GatewayPortForwardList> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayPortForwardList>>(
-      port,
-      `${gatewayWorkspacePath(workspaceId)}/port-forwards/${encodeURIComponent(forwardId)}/label`,
-      {
-        headers: workspaceHeader(workspaceId),
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      },
-    ),
-  );
+export async function deletePortForward(port: number, forwardId: string): Promise<GatewayPortForwardList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayPortForwardList>>(port,
+    `/api/gateway/port-forwards/${encodeURIComponent(forwardId)}`, { method: "DELETE" }));
 }
 
 export async function getWorkspaceNavigation(
@@ -345,12 +290,12 @@ export async function createGatewayDeviceConnection(
 
 export async function revokeGatewayDeviceConnection(
   port: number,
-  connectionId: string,
+  deviceConnectionId: string,
 ): Promise<GatewayDeviceConnectionList> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayDeviceConnectionList>>(
       port,
-      `/api/gateway/device-connections/${encodeURIComponent(connectionId)}`,
+      `/api/gateway/device-connections/${encodeURIComponent(deviceConnectionId)}`,
       { method: "DELETE" },
     ),
   );
@@ -391,9 +336,9 @@ export async function addManagedGatewayWorkspace(
   );
 }
 
-export async function addSshGatewayWorkspace(
+export async function addRemoteGatewayConnection(
   port: number,
-  payload: AddSshGatewayWorkspaceRequest,
+  payload: AddRemoteGatewayConnectionRequest,
 ): Promise<GatewayWorkspaceList> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
@@ -467,10 +412,17 @@ export async function reconnectGatewayWorkspace(
   );
 }
 
-export async function reconnectRemoteGatewayConnection(port: number, connectionId: string): Promise<GatewayWorkspaceList> {
+export async function reconnectRemoteGatewayConnection(port: number, gatewayConnectionId: string): Promise<GatewayWorkspaceList> {
   return unwrapApiData(await requestJson<APIResponse<GatewayWorkspaceList>>(
-    port, `/api/gateway/remote-gateways/${encodeURIComponent(connectionId)}/reconnect`,
+    port, `/api/gateway/remote-gateways/${encodeURIComponent(gatewayConnectionId)}/reconnect`,
     { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+  ));
+}
+
+export async function removeRemoteGatewayConnection(port: number, gatewayConnectionId: string): Promise<GatewayWorkspaceList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayWorkspaceList>>(
+    port, `/api/gateway/remote-gateways/${encodeURIComponent(gatewayConnectionId)}`,
+    { method: "DELETE", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
   ));
 }
 

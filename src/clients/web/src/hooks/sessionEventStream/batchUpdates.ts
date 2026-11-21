@@ -6,19 +6,20 @@ import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
 import {
   appendTraceEventsToPendingConversations,
   writePendingSnapshot,
+  writeDispatchActiveJob,
 } from "../../state/conversations";
-import { goalStreamMutation } from "../../state/sessionGoal";
 import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   buildTraceEvent,
   tracePayloadString,
+  rawTracePayload,
 } from "../../state/traceEvents";
 import {
   dispatchWorkspaceFileChanges,
   fileChangesFromTraceEvents,
 } from "../../state/workspaceFileTreeEvents";
-import type { SessionStreamEvent } from "../../types/backend";
+import type { JobDispatchSnapshot, SessionStreamEvent } from "../../types/backend";
 import {
   refreshSessionMetadata,
 } from "./sessionRefresh";
@@ -54,10 +55,6 @@ function updateCurrentSessionFromEvents(
     ) {
       return previous;
     }
-    const owner = {
-      session_id: context.sessionId, thread_id: previous.currentSession.thread_id ?? "",
-    };
-    const goalMutations = events.map((event) => goalStreamMutation(event, owner));
     const next = cloneMaps(previous);
     next.traceEvents = appendBoundedLiveTraceEvents(next.traceEvents, traceEvents);
     updateAttachmentSummariesFromTraces(
@@ -80,18 +77,13 @@ function updateCurrentSessionFromEvents(
       context.sessionCacheKey,
       true,
     );
-    for (const mutation of goalMutations) {
-      if (mutation?.kind === "updated") {
-        next.currentGoal = mutation.goal;
-        next.currentGoalSessionId = context.sessionId;
-        next.goalLoading = false;
-        next.goalError = null;
-      } else if (mutation?.kind === "cleared") {
-        next.currentGoal = null;
-        next.currentGoalSessionId = context.sessionId;
-        next.goalLoading = false;
-        next.goalError = null;
+    for (const event of traceEvents) {
+      if (event.type !== "job_started") continue;
+      const dispatch = rawTracePayload(event).dispatch as JobDispatchSnapshot | undefined;
+      if (!dispatch || dispatch.session_id !== context.sessionId || dispatch.thread_id !== (context.threadId ?? previous.currentSession.thread_id) || dispatch.job_id !== event.job_id) {
+        throw new Error("Job 开始事件缺少同归属的队列水位");
       }
+      writeDispatchActiveJob(next.activeJobIdsBySession, dispatch, context.sessionCacheKey, next.pendingQueueVersions);
     }
     return next;
   });
@@ -142,9 +134,7 @@ export function flushSessionStreamEventBatch(
   const pendingQueueChanged = events.some(
     (event, index) =>
       event.type === "status_change"
-      && tracePayloadString(traceEvents[index], "reason").startsWith(
-        "pending_request",
-      ),
+      && typeof rawTracePayload(traceEvents[index]).queue_snapshot_version === "number",
   );
   if (pendingQueueChanged) {
     void listThreadPendingRequests(
@@ -162,6 +152,7 @@ export function flushSessionStreamEventBatch(
           next.activeJobIdsBySession,
           snapshot,
           context.sessionCacheKey,
+          next.pendingQueueVersions,
         );
         return next;
       });

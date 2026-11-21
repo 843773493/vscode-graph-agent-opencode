@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 from time import monotonic, time
 from typing import Literal
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.core.resource_uri import parse_resource_uri
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.search.scope import SearchScopeError
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogQueryRequest,
@@ -36,7 +37,7 @@ from app.schemas.search_federation import (
     FederatedSearchSourceDTO,
     FederatedSearchSummaryDTO,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     parse_session_context_ref,
     session_resource_identity,
     workspace_session_inventory_identity,

@@ -515,10 +515,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       label, description, detail, iconClass: ThemeIcon.asClassName(Codicon.output),
       accept: (_mods, event) => this.report((async () => {
         this.assertAccess(run);
-        const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
-        this.assertAccess(run);
-        if (!view) throw new Error(t('quickAccess.gatewayDiagnosticsUnavailable'));
-        view.revealDiagnosticLog(location);
+        await this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand('boxteam.gateway.diagnostics',
+          { gateway_id: reference.gateway_id, name: reference.gateway_id, connection_kind: reference.gateway_id === workspaceContext.getSnapshot().gatewayId ? 'local' : 'remote_gateway' },
+          location.scope?.workspace_ids[0], location));
       })()) };
   }
 

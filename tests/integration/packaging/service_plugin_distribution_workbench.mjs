@@ -1,3 +1,4 @@
+import { selectPluginScope, pluginScopeAction, pluginPackageAction } from '../clients/web/service_plugin_controls.mjs';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { writeFile } from 'node:fs/promises';
@@ -155,34 +156,36 @@ try {
     await page.waitForFunction(() => typeof globalThis.workbench?.commands?.executeCommand === 'function');
     await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
     await expect(page.locator('.service-plugin-packages-view')).toBeVisible();
+    await selectPluginScope(page, 'gateway');
   };
   await openManagement();
   let view = page.locator('.service-plugin-packages-view');
+  const details = () => page.locator('.service-plugin-editor:visible');
   let quick = page.locator('.quick-input-widget');
   const pick = async label => {
     await expect(quick).toBeVisible();
     await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
   };
   const row = version => view.locator('.service-plugin-package').filter({
-    has: page.getByRole('heading', { name: `发行闭环探针 · distribution.probe@${version}`, exact: true }),
+    has: page.getByText(`发行闭环探针 · distribution.probe@${version}`, { exact: true }),
   });
   const install = async (version, file) => {
-    await view.getByRole('button', { name: '安装插件包', exact: true }).click();
+    await (await pluginScopeAction(page, '安装插件包')).click({ delay: 150 });
     await pick('ZIP 文件');
     const field = quick.locator('input').first();
     await field.fill(file); await field.press('Enter');
     await expect(row(version)).toBeVisible({ timeout: 30_000 });
   };
   const open = async (version, plugin) => {
-    await row(version).getByRole('button', { name: `${plugin} · ${plugin}`, exact: true }).click();
-    await expect(view.locator('.service-plugin-details')).toBeVisible();
+    await row(version).getByRole('listitem', { name: `${plugin} · ${plugin}`, exact: true }).click();
+    await expect(page.locator('.service-plugin-editor:visible')).toBeVisible();
   };
   const saveBinding = async (action, expected) => {
-    await view.getByRole('button', { name: action, exact: true }).click();
+    await details().getByRole('button', { name: action, exact: true }).click();
     await pick('gateway_mutable_override');
-    await pick('确认保存 Gateway 插件绑定');
+    await pick('确认保存Gateway插件绑定');
     await expect(quick).not.toBeVisible();
-    await expect(view.getByLabel('插件配置与运行版本')).toContainText(expected);
+    await expect(details().getByLabel('插件配置与运行版本')).toContainText(expected);
   };
   result.phase = 'install-and-bind';
   await install('1.0.0', input.packages[0]);
@@ -279,7 +282,7 @@ try {
   await open('2.0.0', 'python');
   const restarted = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/gateway/service-plugins/restart');
-  await view.getByRole('button', { name: '重启实例', exact: true }).click();
+  await details().getByRole('button', { name: '重启实例', exact: true }).click();
   assert.equal((await restarted).status(), 200);
   const current = await slots();
   assert.notEqual(current.python.instance.instance_id, beforeRestart.python.instance.instance_id);
@@ -294,7 +297,7 @@ try {
   }
   const blocked = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/gateway/service-plugins/uninstall');
-  await row('2.0.0').getByRole('button', { name: '卸载整个包', exact: true }).click(); await pick('卸载整包');
+  await (await pluginPackageAction(page, row('2.0.0'), '卸载整个包')).click({ delay: 150 }); await pick('卸载整包');
   assert.equal((await blocked).status(), 409);
   await expect(page.locator('.notifications-toasts')).toContainText('configuration:');
   for (const plugin of ['python', 'node']) {
@@ -302,7 +305,7 @@ try {
   }
   assert.deepEqual(await slots(), {});
   for (const version of ['1.0.0', '2.0.0']) {
-    await row(version).getByRole('button', { name: '卸载整个包', exact: true }).click(); await pick('卸载整包');
+    await (await pluginPackageAction(page, row(version), '卸载整个包')).click({ delay: 150 }); await pick('卸载整包');
     await expect(row(version)).toHaveCount(0);
   }
   assert.deepEqual(result.pageErrors, []);

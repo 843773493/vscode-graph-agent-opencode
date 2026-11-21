@@ -46,8 +46,8 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     draft as draft,  # noqa: PLC0414 - 复用真实 Saver fixture，不运行主文件用例
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - fixture 按 request.node.path 隔离
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())

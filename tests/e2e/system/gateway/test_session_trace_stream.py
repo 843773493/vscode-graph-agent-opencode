@@ -10,7 +10,8 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import JobStartedEvent, JobStartedPayload
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -58,7 +59,14 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
                         job_id="job_gateway_sse_cursor",
                         agent_id="default",
                         timestamp=datetime.now(UTC),
-                        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+                        payload=JobStartedPayload(
+                            session_id=session_id,
+                            thread_id=thread_id,
+                            dispatch=running_job_dispatch_snapshot(
+                                session_id, thread_id, "job_gateway_sse_cursor",
+                                queued_job_count=0, queue_snapshot_version=0,
+                            ),
+                        ),
                     ),
                 )
             await trace_store.append(
@@ -68,7 +76,14 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
                     job_id="job_gateway_sse_cursor",
                     agent_id="default",
                     timestamp=datetime.now(UTC),
-                    payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+                    payload=JobStartedPayload(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        dispatch=running_job_dispatch_snapshot(
+                            session_id, thread_id, "job_gateway_sse_cursor",
+                            queued_job_count=0, queue_snapshot_version=0,
+                        ),
+                    ),
                 ),
             )
 

@@ -9,9 +9,9 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
+from app.core.identifier import create_uuid_hex
 from app.core.resource_uri import parse_resource_uri
 from app.core.sqlite_state import load_sql, sqlite_file_uri, utc_now_text
 from app.services.infrastructure.rollout_context.fork.copy_items import (
@@ -126,6 +126,8 @@ def prepare_target_snapshot(
         connection.execute(HISTORY_NAMESPACE_SCHEMA_SQL)
         connection.execute("BEGIN IMMEDIATE")
         # 队列/claim 属于当前执行控制，不能随历史复制到目标。
+        connection.execute("DELETE FROM user_questions")
+        connection.execute("UPDATE user_question_state SET revision=0 WHERE singleton_id=1")
         connection.execute("DELETE FROM execution_queue")
         connection.execute("UPDATE execution_queue_revision SET revision=0 WHERE singleton_id=1")
         connection.execute(load_sql(__package__, "migrations/drop_context_epoch_pending_namespace.sql"))
@@ -156,7 +158,7 @@ def prepare_target_snapshot(
             "UPDATE database_meta SET session_id = ?, thread_id = ?, rollout_id = ?, "
             "created_at = ?, updated_at = ?, history_view_revision = history_view_revision + 1 "
             "WHERE singleton_id = 1",
-            (target_session_id, target_thread_id, uuid4().hex, target_database_created_at, now),
+            (target_session_id, target_thread_id, create_uuid_hex(), target_database_created_at, now),
         )
         connection.execute(
             f"INSERT INTO fork_materializations ({','.join(columns)}) "
@@ -217,7 +219,7 @@ def _new_target_view(
         "SELECT 1 FROM context_views WHERE view_id = ?", (source_view_id,),
     ).fetchone() is None:
         raise ValueError("source-mismatch: captured SQLite 缺少冻结 source view")
-    branch_id, view_id = uuid4().hex, uuid4().hex
+    branch_id, view_id = create_uuid_hex(), create_uuid_hex()
     connection.execute(
         "INSERT INTO branches (branch_id, branch_kind, status, head_view_id, "
         "head_checkpoint_id, parent_branch_id, created_at, updated_at) "

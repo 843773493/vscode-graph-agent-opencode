@@ -9,12 +9,14 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.observation import (
+    RuntimeObservation,
+    RuntimeObservationSettings,
+)
 from fastapi import FastAPI, Request
 
-from app.core.runtime_observation import RuntimeObservation
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.config import load_gateway_config
-from app.schemas.runtime_observation import RuntimeObservationSettings
 from configs.runtime import read_jsonc_object, validate_config
 
 

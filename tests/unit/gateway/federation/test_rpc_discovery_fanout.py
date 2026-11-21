@@ -4,8 +4,11 @@ import asyncio
 from typing import cast
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.ports import (

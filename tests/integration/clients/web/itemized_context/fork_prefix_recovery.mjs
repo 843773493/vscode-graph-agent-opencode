@@ -11,6 +11,7 @@ import { webSelectors } from "../../../../clients/selectors/web-selectors.mjs";
 import { beginForkOperationDeadline, closeForkDeadlineWatchdog, testControl,
   waitForForkOperation } from "../../../../support/e2e_control/browser_client.mjs";
 import { openWorkbench, selectThread } from "../persistent_tasks/workbench.mjs";
+import { openSessionThreads } from "../../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -87,11 +88,9 @@ async function send(owner, thread, index, responses) {
 }
 
 async function openChild(owner) {
-  const main = await selectThread(page, facts.source, 0);
-  const toggle = main.getByRole("button", { name: "切换会话资源", exact: true });
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-  await main.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  await main.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click();
+  await selectThread(page, facts.source, 0);
+  const threads = await openSessionThreads(page, facts.source);
+  await threads.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click();
   const child = page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
   await expect(child.locator(webSelectors.composer)).toBeVisible();
   return child;
@@ -126,8 +125,8 @@ try {
   const workspace = await api("/api/v1/workspace", workspaceOwner);
   const created = await api("/api/v1/sessions", workspaceOwner, { title: "较早工具回答的前缀分支", agent_id: "default" });
   assert.equal(created.workspace_id, workspaceOwner.workspaceId);
-  const updated = await api(`/api/v1/sessions/${created.session_id}`, workspaceOwner, { provider_id: "primary" }, "PATCH");
-  assert.equal(updated.current_provider_id, "primary");
+  const updated = await api(`/api/v1/sessions/${created.session_id}`, workspaceOwner, { model: { provider_id: "primary", model_id: "default" } }, "PATCH");
+  assert.deepEqual(updated.current_model, { provider_id: "primary", model_id: "default" });
   const main = await api(`/api/v1/sessions/${created.session_id}/main-thread`, workspaceOwner);
   const source = { ...workspaceOwner, sessionId: created.session_id, threadId: main.thread_id };
   assert.equal(workspace.workspace_id, source.workspaceId);

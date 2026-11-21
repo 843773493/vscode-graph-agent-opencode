@@ -26,8 +26,8 @@ class StoredOutput:
     uri: str
     content: str
 
-    def bound(self, content: str) -> ToolMessage:
-        return self.store.bound(
+    def limit_message(self, content: str) -> ToolMessage:
+        return self.store.limit_message(
             session_id=self.session_id, tool_name="large", tool_call_id="call-large",
             message=ToolMessage(content=content, tool_call_id="call-large"),
         )
@@ -39,7 +39,7 @@ def stored_output(tmp_path: Path, session_bundle_factory: Callable[[Path, str], 
     directory = session_bundle_factory(tmp_path / ".boxteam/sessions", session_id)
     store = ToolOutputStore(workspace_root=tmp_path, max_lines=8, max_bytes=1024)
     content = "原始输出\r\n" * 1000
-    result = store.bound(
+    result = store.limit_message(
         session_id=session_id, tool_name="large", tool_call_id="call-large",
         message=ToolMessage(content=content, tool_call_id="call-large"),
     )
@@ -47,6 +47,21 @@ def stored_output(tmp_path: Path, session_bundle_factory: Callable[[Path, str], 
     assert reference is not None
     uri = str(reference["path"])
     return StoredOutput(store, session_id, directory, directory / "tool-results" / uri.rsplit("/", 1)[1], uri, content)
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\x85", "\u2028", "\u2029"])
+def test_line_limit_and_reference_count_use_resource_reader_line_boundaries(
+    stored_output: StoredOutput, separator: str,
+) -> None:
+    content = separator.join(f"line-{index}" for index in range(12))
+    message = stored_output.store.limit_message(
+        session_id=stored_output.session_id, tool_name="lines", tool_call_id="call-lines",
+        message=ToolMessage(content=content, tool_call_id="call-lines"),
+    )
+    reference = extract_tool_output_reference(message)
+    assert reference is not None
+    assert reference["line_count"] == len(content.splitlines()) == 12
+    assert stored_output.store.read(stored_output.session_id, str(reference["read_path"]), 1024).data == content.encode()
 
 
 @pytest.mark.parametrize("concurrent", [False, True])
@@ -63,7 +78,7 @@ def test_conflicting_result_reports_uri_and_keeps_exact_winner(
 
         monkeypatch.setattr(os, "link", publish_winner)
     with pytest.raises(RuntimeError) as caught:
-        stored_output.bound("另一份输出\r\n" * 1000)
+        stored_output.limit_message("另一份输出\r\n" * 1000)
     assert stored_output.uri in str(caught.value)
     assert str(stored_output.directory) not in str(caught.value)
     assert stored_output.path.read_bytes() == original
@@ -89,7 +104,7 @@ def test_io_failure_keeps_error_type_errno_and_cause_without_storage_location(
             if operation == "read":
                 stored_output.store.read(stored_output.session_id, stored_output.uri, len(original))
             else:
-                stored_output.bound(stored_output.content)
+                stored_output.limit_message(stored_output.content)
     assert caught.value.errno == errno.EACCES
     assert isinstance(caught.value.__cause__, PermissionError)
     assert operation in str(caught.value) and stored_output.uri in str(caught.value)

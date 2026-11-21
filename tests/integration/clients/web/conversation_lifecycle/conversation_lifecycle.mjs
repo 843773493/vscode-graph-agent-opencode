@@ -1,3 +1,4 @@
+import { observeRealtime } from '../../../../support/workbench/realtime.mjs';
 import assert from "node:assert/strict";
 import { appendFile, chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -14,6 +15,8 @@ import { readDiagnosticResponseBody, runDiagnosticResponseLifetimeSelfTest } fro
 import { WORKBENCH_LIFECYCLE_MARKER, classifyNativeShutdownLogs, observeNativeShutdown, originalConsoleLocation,
   runNativeShutdownClassifierSelfTest } from "./native_shutdown.mjs";
 import { canonicalizeJcsJson, digestJcsJson } from "../../../../fixtures/itemized/verify_hash_vectors.mjs";
+import { isTaggedContextSources, parseTaggedContextSources } from "../../../../support/context_sources.mjs";
+import { openSessionThreads } from "../../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -587,7 +590,8 @@ function sessionTargetFromUrl(url) {
   }
   const sessionPath = /^\/api\/v1\/sessions\/([^/]+)(?:\/|$)/.exec(parsed.pathname);
   const breadcrumbPath = /^\/api\/v1\/session-catalog\/breadcrumb\/([^/]+)$/.exec(parsed.pathname);
-  const sessionId = sessionPath?.[1] ?? breadcrumbPath?.[1];
+  const sessionTasks = parsed.pathname === "/api/v1/persistent-tasks" ? parsed.searchParams.get("session_id") : null;
+  const sessionId = sessionPath?.[1] ?? breadcrumbPath?.[1] ?? sessionTasks;
   return sessionId ?? null;
 }
 
@@ -606,7 +610,6 @@ function controlledRestartEndpoint(url, window, pageBinding) {
   if (parsed.pathname === "/api/v1/workspace/files" && parsed.search === "?scope=workspace") return "workspace-files";
   if (parsed.pathname === "/api/v1/workspace" && !parsed.search) return "workspace-bootstrap";
   if (parsed.pathname === "/api/v1/session-catalog/children" && parsed.search === "?limit=100") return "catalog-children";
-  if (parsed.pathname === "/api/v1/workspace/observations/stream" && !parsed.search) return "observations";
   if (parsed.pathname === "/api/v1/session-catalog/events" && parsed.search === "?after=0&limit=1000") return "catalog-events";
   if (parsed.pathname === "/api/v1/session-catalog/navigation-events") {
     const after = parsed.searchParams.get("after");
@@ -626,13 +629,14 @@ function controlledRestartEndpoint(url, window, pageBinding) {
       && parsed.searchParams.get("session_id") === window.sourceSessionId
       && parsed.searchParams.get("thread_id") === window.sourceThreadId
       && pageBinding.sessionIds.includes(window.sourceSessionId)) return "tool-approvals";
+  if (["/api/v1/persistent-tasks", "/api/v1/persistent-tasks/events"].includes(parsed.pathname)
+      && parsed.searchParams.size === 1 && pageBinding.sessionIds.includes(parsed.searchParams.get("session_id"))) return "session-read";
   const sessionId = sessionTargetFromUrl(url);
   if (!sessionId || !pageBinding.sessionIds.includes(sessionId) || parsed.search) return null;
   if (parsed.pathname === `/api/v1/sessions/${sessionId}/history`) return "history";
   if (parsed.pathname === `/api/v1/sessions/${sessionId}`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/main-thread`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/file-tree-settings`
-      || parsed.pathname === `/api/v1/sessions/${sessionId}/goal`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/bootstrap`
       || parsed.pathname === `/api/v1/session-catalog/breadcrumb/${sessionId}`) return "session-read";
   return null;
@@ -684,15 +688,30 @@ function validControlledRestartWindow(window) {
     && window.endedAt >= restart.startedAt;
 }
 
+function describeRealtimeSubscription(request) {
+  const url = new URL(request.url), body = request.body ? JSON.parse(request.body) : {};
+  const trace = /^\/api\/v1\/sessions\/([^/]+)\/traces\/stream$/.exec(url.pathname);
+  return { subscription_id: request.subscription_id,
+    kind: trace ? 'session_trace' : url.pathname === '/api/v1/workspace/files/events' ? 'workspace_files'
+      : url.pathname === '/api/v1/session-catalog/events/stream' ? 'session_activity'
+      : url.pathname === '/api/v1/persistent-tasks/events' ? 'persistent_tasks' : url.pathname,
+    session_id: trace?.[1] ?? url.searchParams.get('session_id') ?? undefined,
+    thread_id: url.searchParams.get('thread_id') ?? undefined, paths: body.paths ?? [] };
+}
+
 function hasConnectedObservationTargets(response, subscriptions) {
   // subscription_id 属于一次登记；重建后核同一领域目标和过滤范围，并绑定新 ID 的 connected 回执。
   return subscriptions.length > 0 && subscriptions.every((original) => {
-    if (!["session_activity", "session_trace", "workspace_files"].includes(original.kind)) return false;
+    if (!["session_activity", "session_trace", "workspace_files", "persistent_tasks"].includes(original.kind)) return false;
     const recovered = response.subscriptions?.filter((candidate) => candidate.kind === original.kind
       && (candidate.session_id ?? null) === (original.session_id ?? null)
       && (candidate.thread_id ?? null) === (original.thread_id ?? null)
       && JSON.stringify(candidate.paths ?? []) === JSON.stringify(original.paths ?? [])) ?? [];
-    return recovered.length === 1 && response.connectedSubscriptions?.includes(recovered[0].subscription_id);
+    const expected = subscriptions.filter(candidate => candidate.kind === original.kind
+      && (candidate.session_id ?? null) === (original.session_id ?? null)
+      && (candidate.thread_id ?? null) === (original.thread_id ?? null)
+      && JSON.stringify(candidate.paths ?? []) === JSON.stringify(original.paths ?? [])).length;
+    return recovered.length === expected && recovered.every(candidate => response.connectedSubscriptions?.includes(candidate.subscription_id));
   });
 }
 
@@ -713,10 +732,10 @@ function hasRecoveredRestartObservations(response, request, window) {
     && proof.absentThreadIds?.includes(window.sourceThreadId)
     && proof.verifiedAt >= window.backendRestart.startedAt
     && (window.endedAt === null || proof.verifiedAt <= window.endedAt);
-  const sourceTrace = subscription => subscription.kind === "session_trace"
-    && subscription.session_id === window.sourceSessionId && subscription.thread_id === window.sourceThreadId;
+  const sourceTrace = subscription => subscription.session_id === window.sourceSessionId
+    && (subscription.kind === "persistent_tasks" || subscription.kind === "session_trace" && subscription.thread_id === window.sourceThreadId);
   const surviving = deleted ? original.filter(subscription => !sourceTrace(subscription)) : original;
-  return hasConnectedObservationTargets(response, surviving)
+  return (surviving.length ? hasConnectedObservationTargets(response, surviving) : deleted && response.subscriptions.length > 0)
     && (!deleted || !response.subscriptions.some(sourceTrace));
 }
 
@@ -757,51 +776,6 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
     const endpoint = controlledRestartEndpoint(error.url, window, pageBinding);
     if (!endpoint) continue;
     const isBadGateway = error.text === "Failed to load resource: the server responded with a status of 502 (Bad Gateway)";
-    const isObservationsPostBadGateway = endpoint === "observations" && isBadGateway;
-    const isIncompleteObservationStream = endpoint === "observations"
-      && error.text === "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING";
-    if (isObservationsPostBadGateway) {
-      const responses = responseFacts.filter((response) => !consumedResponses.has(response)
-        && response.restartWindowId === window.operationId && response.method === "POST" && response.status === 502
-        && typeof error.cdpRequestId === "string" && error.cdpRequestId.length > 0
-        && response.cdpRequestId === error.cdpRequestId
-        && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
-        && response.pageRole === pageBinding.role && typeof response.requestFactId === "string"
-        && response.requestFactId.length > 0 && typeof response.requestId === "string" && response.requestId.length > 0
-        && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
-        && response.bodyRequestId === response.requestId && response.bodyError === undefined
-        && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
-        && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-        && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
-        && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
-        && response.receivedAt <= window.backendRestart.startedAt
-        && Math.abs(response.receivedAt - error.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (responses.length !== 1) continue;
-      const [response] = responses;
-      if (responseFacts.filter((candidate) => candidate.requestFactId === response.requestFactId).length !== 1) continue;
-      const requests = requestFacts.filter((request) => request.requestFactId === response.requestFactId
-        && request.restartWindowId === window.operationId && request.url === response.url
-        && request.method === "POST" && request.pageId === response.pageId
-        && request.documentId === response.documentId && request.pageRole === response.pageRole
-        && request.requestedAt === response.requestedAt && (request.workspaceHeader === response.workspaceHeader && request.targetGatewayHeader === response.targetGatewayHeader)
-        && request.bodyError === undefined && request.body && typeof request.body === "object"
-        && !Array.isArray(request.body) && Array.isArray(request.body.subscriptions)
-        && request.body.subscriptions.length > 0);
-      if (requests.length !== 1
-          || requestFacts.filter((candidate) => candidate.requestFactId === response.requestFactId).length !== 1) continue;
-      const [request] = requests;
-      const competingErrors = consoleErrorFacts.filter((candidate) =>
-        candidate.text === error.text && candidate.restartWindowId === window.operationId
-        && candidate.cdpRequestId === error.cdpRequestId
-        && candidate.pageId === response.pageId && candidate.documentId === response.documentId
-        && candidate.pageRole === response.pageRole && candidate.url === response.url
-        && Number.isInteger(candidate.index) && Number.isFinite(candidate.receivedAt)
-        && candidate.receivedAt >= window.startedAt && candidate.receivedAt <= window.endedAt
-        && Math.abs(candidate.receivedAt - response.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (competingErrors.length !== 1 || competingErrors[0] !== error) continue;
-      recordResponseError(error, window, "observations-post-502", request, response);
-      continue;
-    }
     if (isBadGateway) {
       const responses = responseFacts.filter((response) => !consumedResponses.has(response)
         && response.restartWindowId === window.operationId
@@ -845,60 +819,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
       recordResponseError(error, window, endpoint, request, response);
       continue;
     }
-    if (!isIncompleteObservationStream) continue;
-    const failures = failedRequests.map((failure, index) => ({ failure, index })).filter(({ failure, index }) =>
-      !consumedFailureIndexes.has(index) && failure.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING"
-      && failure.method === "POST"
-      && failure.restartWindowId === window.operationId && failure.pageRole === pageBinding.role
-      && failure.url === error.url && failure.pageId === error.pageId && failure.documentId === error.documentId
-      && Number.isFinite(failure.requestedAt) && Number.isFinite(failure.failedAt)
-      && failure.requestedAt <= window.startedAt && failure.failedAt >= window.backendRestart.stopRequestedAt
-      && failure.failedAt <= window.backendRestart.startedAt && Math.abs(failure.failedAt - error.receivedAt) <= 5_000);
-    if (failures.length !== 1) continue;
-    const [{ failure, index }] = failures;
-    const requests = requestFacts.filter((request) => request.requestFactId === failure.requestFactId
-      && request.method === "POST" && request.url === error.url && request.pageId === error.pageId
-      && request.documentId === error.documentId
-      && (request.restartWindowId === null || request.restartWindowId === window.operationId)
-      && (request.workspaceHeader === window.workspaceId && request.targetGatewayHeader === window.gatewayId) && request.requestedAt <= window.startedAt
-      && request.body && typeof request.body === "object" && Array.isArray(request.body.subscriptions)
-      && request.body.subscriptions.length > 0
-      && request.body.subscriptions.every((subscription) => typeof subscription.subscription_id === "string"
-        && subscription.subscription_id.length > 0)
-      && requestFacts.filter((candidate) => candidate.requestFactId === request.requestFactId).length === 1);
-    if (requests.length !== 1) continue;
-    const [request] = requests;
-    const recoveries = responseFacts.filter((response) => response.method === "POST" && response.status === 200
-      && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
-      && response.restartWindowId === window.operationId && response.pageRole === pageBinding.role
-      && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-      && Number.isFinite(response.requestedAt) && response.requestedAt >= window.backendRestart.startedAt
-      && Number.isFinite(response.receivedAt) && response.receivedAt >= response.requestedAt
-      && response.receivedAt <= window.endedAt
-      && typeof response.requestId === "string" && response.requestId.length > 0
-      && typeof response.contentType === "string"
-      && response.contentType.split(";", 1)[0].trim().toLowerCase() === "text/event-stream"
-      && responseFacts.filter((candidate) => candidate.requestId === response.requestId).length === 1
-      && Array.isArray(response.connectedSubscriptions)
-      && hasRecoveredRestartObservations(response, request, window))
-      .sort((left, right) => left.requestedAt - right.requestedAt);
-    if (recoveries.length === 0) continue;
-    const competingErrors = consoleErrorFacts.filter((candidate) => candidate.text === error.text
-      && candidate.url === error.url && candidate.pageId === error.pageId && candidate.documentId === error.documentId
-      && Number.isFinite(candidate.receivedAt) && candidate.receivedAt >= window.backendRestart.stopRequestedAt
-      && candidate.receivedAt <= window.backendRestart.startedAt);
-    if (competingErrors.length !== 1) continue;
-    consumedFailureIndexes.add(index);
-    consumedConsoleIndexes.add(error.index);
-    handled.push({ consoleIndex: error.index, failedRequestIndex: index, requestFactId: request.requestFactId,
-      recoveryRequestId: recoveries[0].requestId, recoveredSubscriptions: recoveries[0].subscriptions,
-      operationId: window.operationId,
-      phase: window.phase, sourceSessionId: window.sourceSessionId, sourceThreadId: window.sourceThreadId,
-      targetSessionId: window.targetSessionId, activeSessionId: window.activeSessionId, endpoint,
-      targetName: window.targetName, backendPort: window.backendRestart.port,
-      backendBeforePid: window.backendRestart.beforePid, backendAfterPid: window.backendRestart.afterPid,
-      pageId: error.pageId, documentId: error.documentId, pageRole: pageBinding.role,
-      requestedAt: failure.requestedAt, failedAt: failure.failedAt });
+
   }
   const consumedNotifications = new Set();
   for (const error of consoleErrorFacts) {
@@ -1055,13 +976,13 @@ function runMessageStreamDiagnosticsSelfTest() {
   const basicOwner = { page: { diagnosticId: 1 }, sessionId: "ses_owner", threadId: "thr_owner",
     gatewayId: "gateway-owner", workspaceId: "workspace-owner" };
   const trace = { pageId: 1, documentId: 2, status: 200, workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner",
-    contentType: "text/event-stream; charset=utf-8", requestId: "trace-request", cdpRequestId: "cdp-trace",
+    contentType: "text/event-stream; charset=utf-8", requestId: "trace-request", transportId: "ws-trace",
     subscriptions: [{ kind: "session_trace", session_id: "ses_owner", subscription_id: "trace-1" }],
     connectedSubscriptions: ["trace-1"] };
   assert.equal(basicStreamConnections(basicOwner, [trace, { ...trace, requestId: "physical-reconnect" }], [recovery]).trace.length, 1);
   assert.equal(basicStreamConnections(basicOwner, [trace, { ...trace, documentId: 3 }], [recovery]).trace.length, 2);
   for (const changed of [{ pageId: 2 }, { workspaceHeader: "other" }, { status: 502 },
-    { connectedSubscriptions: [] }, { requestId: null }, { cdpRequestId: null },
+    { connectedSubscriptions: [] }, { requestId: null }, { transportId: null },
     { subscriptions: [{ kind: "session_trace", session_id: "other", subscription_id: "trace-1" }] }]) {
     assert.equal(basicStreamConnections(basicOwner, [{ ...trace, ...changed }], []).trace.length, 0);
   }
@@ -1388,24 +1309,22 @@ function runMessageStreamDiagnosticsSelfTest() {
     { windowIndex: 0, pageRole: "copy-request", paths: ["/api/v1/workspace/files?scope=workspace",
       `/api/v1/sessions/${pageRouteSessionId}/main-thread`, `/api/v1/session-catalog/breadcrumb/${pageRouteSessionId}`,
       `/api/v1/sessions/${pageRouteSessionId}/bootstrap`, "/api/v1/session-catalog/events?after=0&limit=1000",
-      `/api/v1/sessions/${pageRouteSessionId}/file-tree-settings`, `/api/v1/sessions/${pageRouteSessionId}/goal`,
+      `/api/v1/sessions/${pageRouteSessionId}/file-tree-settings`, `/api/v1/persistent-tasks?session_id=${pageRouteSessionId}`,
       "/api/v1/session-catalog/children?limit=100", "/api/v1/workspace", "/api/v1/session-catalog/snapshot"] },
-    { windowIndex: 1, pageRole: "foreground-before-restart", paths: ["/api/v1/workspace/observations/stream"] },
+    { windowIndex: 1, pageRole: "foreground-before-restart", paths: ["/api/v1/workspace"] },
     { windowIndex: 2, pageRole: "foreground-after-restart",
-      paths: [`/api/v1/sessions/${pageRouteSessionId}/history`, "/api/v1/workspace/observations/stream"] },
+      paths: [`/api/v1/sessions/${pageRouteSessionId}/history`, "/api/v1/workspace"] },
   ];
   for (const { windowIndex, pageRole, paths } of restartTargets) {
     const window = restartWindows[windowIndex];
     for (const path of paths) {
       const errorIndex = restartConsoleFacts.length;
       const targetUrl = `${window.origin}${path}`;
-      const method = path.endsWith("/history") || path === OBSERVATION_STREAM_PATH ? "POST" : "GET";
+      const method = path.endsWith("/history") ? "POST" : "GET";
       const pageBinding = window.pageBindings.find((binding) => binding.role === pageRole);
       const requestFactId = `browser-request-${errorIndex}`;
       const requestId = `request-${errorIndex}`;
-      const requestBody = path === OBSERVATION_STREAM_PATH
-        ? { subscriptions: [{ subscription_id: `sub-${errorIndex}`, kind: "workspace_files" }] }
-        : method === "POST" ? { direction: "tail", turns: 20 } : null;
+      const requestBody = method === "POST" ? { direction: "tail", turns: 20 } : null;
       restartConsoleFacts.push({ index: errorIndex, text: status502Text, url: targetUrl, cdpRequestId: `cdp-${errorIndex}`,
         pageId: pageBinding.pageId, documentId: 1, pageRole: pageBinding.role,
         receivedAt: 150, restartWindowId: window.operationId });
@@ -1421,43 +1340,17 @@ function runMessageStreamDiagnosticsSelfTest() {
         workspaceHeader: window.workspaceId, targetGatewayHeader: window.gatewayId });
     }
   }
-  const observationsUrl = "http://127.0.0.1:19001/api/v1/workspace/observations/stream";
-  const observationErrorIndex = restartConsoleFacts.length;
-  const observationPageBinding = restartWindows[0].pageBindings.find((binding) => binding.role === "copy-request");
-  restartConsoleFacts.push({ index: observationErrorIndex,
-    text: "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING", url: observationsUrl,
-    pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role, receivedAt: 150,
-    restartWindowId: restartWindows[0].operationId });
-  restartConsoleErrors.push(restartConsoleFacts.at(-1).text);
-  const observationRequestFactId = "browser-request-observation-stream-interrupted";
-  const observationSubscriptionId = "sub-observation-restart";
-  restartFailures.push({ requestFactId: observationRequestFactId, url: observationsUrl, method: "POST",
-    error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING", pageId: observationPageBinding.pageId,
-    documentId: 1, pageRole: observationPageBinding.role, requestedAt: 90, failedAt: 150,
-    restartWindowId: restartWindows[0].operationId });
-  restartRequests.push({ requestFactId: observationRequestFactId, restartWindowId: null, url: observationsUrl,
-    method: "POST", pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 90, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
-    body: { subscriptions: [{ subscription_id: observationSubscriptionId, kind: "workspace_files" }] } });
-  const recoveryRequestId = "request-observation-stream-recovered";
-  restartResponses.push({ requestFactId: "browser-request-observation-stream-recovery",
-    restartWindowId: restartWindows[0].operationId, url: observationsUrl, method: "POST", status: 200,
-    pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 181, receivedAt: 183, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
-    requestId: recoveryRequestId, contentType: "text/event-stream", subscriptions: [
-      { subscription_id: observationSubscriptionId, kind: "workspace_files" },
-    ], connectedSubscriptions: [observationSubscriptionId] });
   const classifiedRestart = classifyControlledRestartErrors(restartConsoleFacts, restartConsoleErrors,
     restartFailures, restartRequests, restartResponses, restartWindows);
-  assert.equal(classifiedRestart.handled.length, 14,
-    "三次受控 capture 重启应逐条绑定十三条 502 与一条 observations stream chunked failure");
+  assert.equal(classifiedRestart.handled.length, 13,
+    "三次受控 capture 重启应逐条绑定十三条真实 HTTP 502");
   assert.deepEqual(classifiedRestart.unhandledConsoleErrors, []);
   assert.deepEqual(classifiedRestart.unhandledFailedRequests, []);
   assert.deepEqual(new Set(classifiedRestart.handled.filter((fact) => fact.responseRequestId)
     .map((fact) => fact.pageRole)), new Set(["copy-request", "foreground-before-restart", "foreground-after-restart"]),
   "502 必须能分别绑定实际 copy 请求页、重启前页面和恢复页面身份");
   const routedSessionErrors = classifiedRestart.handled.filter((fact) => fact.responseRequestId
-    && (fact.url.includes("/api/v1/sessions/") || fact.url.includes("/api/v1/session-catalog/breadcrumb/")));
+    && sessionTargetFromUrl(fact.url) !== null);
   assert.equal(routedSessionErrors.length, 6);
   assert.ok(routedSessionErrors.every((fact) => fact.url.includes(pageRouteSessionId)
     && !fact.url.includes("ses_active")),
@@ -1707,14 +1600,6 @@ function runMessageStreamDiagnosticsSelfTest() {
     "同一 response 附近有多个 console error 时不得猜测匹配对象");
   assert.deepEqual(competingConsoleErrors.unhandledConsoleErrors,
     [baseRestartError.text, competingConsoleError.text], "console 配对歧义时两个原错误都必须保留");
-  const observationConsoleError = restartConsoleFacts.at(-1);
-  const observationFailure = restartFailures[0];
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, restartWindowId: "fork-op-other" } },
-  "观察流失败事实不能借用另一个重启窗口");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, pageRole: "foreground-after-restart" } },
-  "观察流失败事实必须保留实际页面角色");
   assertRestartRemainsUnhandled({ error: { ...baseRestartError, cdpRequestId: "cdp-other" } },
   "网络日志必须与 HTTP 响应的 CDP 请求身份相同");
   assertRestartRemainsUnhandled({ error: { ...baseRestartError, cdpRequestId: null } },
@@ -1729,116 +1614,6 @@ function runMessageStreamDiagnosticsSelfTest() {
       requestFactId: anotherRequestId, requestId: anotherResponseId, bodyRequestId: anotherResponseId,
       body: { ...baseRestartResponse.body, request_id: anotherResponseId } }], [restartWindows[0]]);
   assert.equal(distinctErrors.handled.length, 2, "连续重试即使 URL 与时间相近，也必须按各自网络请求身份分别处理");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, error: "net::ERR_CONNECTION_RESET" } },
-  "受控 observations stream 不得豁免其它网络错误类型");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, restartWindowId: "fork-op-other" } },
-  "observations stream failure 的 operation ID 必须精确匹配受控窗口");
-  const assertObservationRemainsUnhandled = (response, request = restartRequests.at(-1), error = observationConsoleError) => {
-    const responses = response === null ? [] : [response];
-    const classified = classifyControlledRestartErrors([error], [error.text], [observationFailure],
-      [request], responses, [restartWindows[0]]);
-    assert.equal(classified.handled.length, 0, "observations stream 恢复证据不足时不能分类");
-    assert.deepEqual(classified.unhandledConsoleErrors, [error.text]);
-    assert.deepEqual(classified.unhandledFailedRequests, [observationFailure]);
-  };
-  const recoveredObservation = restartResponses.at(-1);
-  const reRegisteredObservation = { ...recoveredObservation,
-    subscriptions: [{ ...recoveredObservation.subscriptions[0], subscription_id: "sub-new-registration" }],
-    connectedSubscriptions: ["sub-new-registration"] };
-  const reRegistered = classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text],
-    [observationFailure], [restartRequests.at(-1)], [reRegisteredObservation], [restartWindows[0]]);
-  assert.equal(reRegistered.handled.length, 1, "同一观察目标重新登记后应按新 ID 的真实 connected 回执证明恢复");
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, connectedSubscriptions: [observationSubscriptionId] });
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [{ ...reRegisteredObservation.subscriptions[0], kind: "session_activity" }] });
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [{ ...reRegisteredObservation.subscriptions[0], paths: ["other/path"] }] });
-  const traceRequest = { ...restartRequests.at(-1), body: { subscriptions: [
-    { subscription_id: "trace-before", kind: "session_trace", session_id: "ses_trace_owner", thread_id: "thr_trace_owner" },
-  ] } };
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, subscriptions: [
-    { subscription_id: "sub-new-registration", kind: "session_trace", session_id: "ses_other" },
-  ] }, traceRequest);
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, subscriptions: [
-    { subscription_id: "sub-new-registration", kind: "session_trace", session_id: "ses_trace_owner", thread_id: "thr_other" },
-  ] }, traceRequest);
-  const deletionWindow = restartWindows[0];
-  const deletedTrace = { subscription_id: "source-trace-before", kind: "session_trace",
-    session_id: deletionWindow.sourceSessionId, thread_id: deletionWindow.sourceThreadId };
-  const deleteRequest = { ...restartRequests.at(-1), body: { subscriptions: [
-    ...restartRequests.at(-1).body.subscriptions, deletedTrace,
-  ] } };
-  const sourceDeletionProof = { operationId: "source-delete", terminalRequestId: "source-delete-terminal",
-    pageId: deleteRequest.pageId, documentId: deleteRequest.documentId,
-    origin: deletionWindow.origin, workspaceHeader: deletionWindow.workspaceId, targetGatewayHeader: deletionWindow.gatewayId,
-    receipt: { state: "committed", settlement: "settled" },
-    journal: { subtree_delete_idempotency_key: "source-delete", root_node_id: deletionWindow.sourceSessionId, state: "completed" },
-    remaining: [], sessionIds: [deletionWindow.sourceSessionId],
-    absentDomNodeIds: [deletionWindow.sourceSessionId], absentChatSessionIds: [deletionWindow.sourceSessionId],
-    absentThreadIds: [deletionWindow.sourceThreadId], verifiedAt: 190 };
-  const classifyDeletedTrace = (proof = sourceDeletionProof, response = reRegisteredObservation, operationId = "source-delete") =>
-    classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text], [observationFailure],
-      [deleteRequest], [response], [{ ...deletionWindow, sourceDeletionOperationId: operationId, sourceDeletionProof: proof }]);
-  assert.equal(classifyDeletedTrace().handled.length, 1,
-    "同页原删除完整完成、Tab 释放且存活观察 connected 后，应允许已删除 source Trace 释放");
-  for (const proof of [null,
-    { ...sourceDeletionProof, operationId: "another-deletion" },
-    { ...sourceDeletionProof, terminalRequestId: null },
-    { ...sourceDeletionProof, pageId: deleteRequest.pageId + 1 },
-    { ...sourceDeletionProof, documentId: deleteRequest.documentId + 1 },
-    { ...sourceDeletionProof, origin: "http://127.0.0.1:19002" },
-    { ...sourceDeletionProof, workspaceHeader: "another-workspace" },
-    { ...sourceDeletionProof, targetGatewayHeader: "another-gateway" },
-    { ...sourceDeletionProof, targetGatewayHeader: null },
-    { ...sourceDeletionProof, receipt: { state: "running", settlement: null } },
-    { ...sourceDeletionProof, receipt: { state: "committed", settlement: "repair_required" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, subtree_delete_idempotency_key: "another-deletion" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, root_node_id: "another-session" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, state: "deleting" } },
-    { ...sourceDeletionProof, remaining: [deletionWindow.sourceSessionId] },
-    { ...sourceDeletionProof, sessionIds: ["another-session"] },
-    { ...sourceDeletionProof, absentDomNodeIds: [] },
-    { ...sourceDeletionProof, absentChatSessionIds: [] },
-    { ...sourceDeletionProof, absentThreadIds: ["another-thread"] },
-    { ...sourceDeletionProof, verifiedAt: 179 },
-    { ...sourceDeletionProof, verifiedAt: 201 },
-  ]) {
-    assert.deepEqual(classifyDeletedTrace(proof).unhandledConsoleErrors, [observationConsoleError.text],
-      "删除归属、完整终态或真实页面释放证明不完整时，原 Trace 缺失必须失败");
-  }
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, reRegisteredObservation, null).handled.length, 0,
-    "未在重启前冻结原删除 operation，不得借用事后的删除证明");
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, { ...reRegisteredObservation, connectedSubscriptions: [] }).handled.length, 0,
-    "source 删除不能代替存活目标的真实 connected");
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, { ...reRegisteredObservation,
-    subscriptions: [...reRegisteredObservation.subscriptions, deletedTrace] }).handled.length, 0,
-  "source 删除完成后，恢复连接不得继续持有已删除 source Trace");
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [...reRegisteredObservation.subscriptions, ...reRegisteredObservation.subscriptions] });
-  const consecutiveRecoveries = classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text],
-    [observationFailure], [restartRequests.at(-1)], [reRegisteredObservation, {
-      ...reRegisteredObservation, requestId: "request-later-reconfiguration", requestedAt: 185, receivedAt: 187,
-    }], [restartWindows[0]]);
-  assert.equal(consecutiveRecoveries.handled.length, 1, "后续合法连接重配不应抹去首次恢复事实");
-  assert.equal(consecutiveRecoveries.handled[0].recoveryRequestId, reRegisteredObservation.requestId);
-  assertObservationRemainsUnhandled({ ...recoveredObservation, connectedSubscriptions: [] });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, connectedSubscriptions: ["sub-other"] });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, pageId: recoveredObservation.pageId + 1 });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, documentId: recoveredObservation.documentId + 1 });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, workspaceHeader: "workspace-other" });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, restartWindowId: "fork-op-other" });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, requestId: null });
-  assertObservationRemainsUnhandled(null);
-  const duplicateObservationErrors = classifyControlledRestartErrors(
-    [observationConsoleError, { ...observationConsoleError, index: observationConsoleError.index + 1 }],
-    [observationConsoleError.text, observationConsoleError.text], [observationFailure],
-    [restartRequests.at(-1)], [recoveredObservation], [restartWindows[0]]);
-  assert.equal(duplicateObservationErrors.handled.length, 0,
-    "重复 observations console error 必须保持歧义并全部未处理");
-  assert.deepEqual(duplicateObservationErrors.unhandledFailedRequests, [observationFailure]);
-
   const controlledStreamWindow = { ...restartWindows[0], origin: "http://127.0.0.1:19000",
     pageId: 1, documentIds: [2], startedAt: 60, endedAt: 140 };
   const afterTwentyConsoleErrors = [chunkedConsoleError, secondChunkedConsoleError].map((error) => ({
@@ -1877,11 +1652,11 @@ function basicStreamConnections(owner, observations = controlledRestartResponses
     if (response.pageId !== owner.page.diagnosticId || response.status !== 200
         || response.workspaceHeader !== owner.workspaceId || response.targetGatewayHeader !== owner.gatewayId
         || response.contentType?.split(";", 1)[0] !== "text/event-stream"
-        || !response.requestId || !response.cdpRequestId) continue;
+        || !response.requestId || !response.transportId) continue;
     const subscriptions = response.subscriptions?.filter((subscription) => subscription.kind === "session_trace"
       && subscription.session_id === owner.sessionId
       && response.connectedSubscriptions.includes(subscription.subscription_id)) ?? [];
-    // 同页增减其它 observer 会重建物理连接；每个 document 只计已确认连接的会话逻辑订阅。
+    // 每个 document 只计已确认连接的会话逻辑订阅，不能把 WS 重连误计为新增视图。
     if (subscriptions.length === 1 && !traceByDocument.has(response.documentId)) {
       traceByDocument.set(response.documentId, { ...response, subscriptionId: subscriptions[0].subscription_id });
     }
@@ -1969,6 +1744,11 @@ async function openOwnerResources(owner) {
   if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
   await surface.getByRole("tab", { name: "运行与连接", exact: true }).click();
   return surface;
+}
+
+async function openOwnerThreads(owner) {
+  await activateOwnerTab(owner);
+  return openSessionThreads(owner.page, owner);
 }
 
 async function selectSession(owner) {
@@ -2130,14 +1910,16 @@ async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning)
 async function runGoalOwner(surface) {
   const owner = await createProductSession(surface, "Goal main Thread 身份");
   const path = `/api/v1/sessions/${owner.sessionId}/goal`;
+  const readPath = `/api/v1/persistent-tasks?session_id=${encodeURIComponent(owner.sessionId)}`;
   const expectedOwner = { session_id: owner.sessionId, thread_id: owner.threadId };
   const assertOwner = (goal) => {
     assert.deepEqual({ session_id: goal.session_id, thread_id: goal.thread_id }, expectedOwner);
   };
   const initial = (await ownerApi(owner, path, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ objective: "编辑前的暂停目标", status: "paused" }),
-  })).data;
+    body: JSON.stringify({ objective: "编辑前的暂停目标", status: "paused",
+      operation_id: crypto.randomUUID(), expected_control_revision: 0 }),
+  })).data.goal;
   assertOwner(initial);
   await openOwner(owner);
   const input = threadSurface(owner).getByTestId("composer-input");
@@ -2146,14 +1928,17 @@ async function runGoalOwner(surface) {
     await input.press("Enter");
   };
   const responseFor = (method) => owner.page.waitForResponse((response) =>
-    new URL(response.url()).pathname === path && response.request().method() === method);
+    (method === "GET" ? new URL(response.url()).pathname + new URL(response.url()).search === readPath
+      : new URL(response.url()).pathname === path) && response.request().method() === method);
   const readResponse = async (pending) => {
     const response = await pending;
     assert.equal(response.status(), 200);
     const envelope = await response.json();
     assert.equal(envelope.request_id, response.headers()["x-request-id"]);
-    if (envelope.data !== null) assertOwner(envelope.data);
-    return envelope.data;
+    const data = response.request().method() === "GET" ? envelope.data.session_goal : envelope.data;
+    assertOwner(data);
+    if (data.goal != null) assertOwner(data.goal);
+    return response.request().method() === "DELETE" ? data : data.goal;
   };
   const refresh = responseFor("GET");
   await command("/goal");
@@ -2181,8 +1966,9 @@ async function runGoalOwner(surface) {
   const clear = responseFor("DELETE");
   await command("/goal clear");
   const cleared = await readResponse(clear);
-  assert.equal(cleared.cleared, true);
-  assert.equal((await ownerApi(owner, path)).data, null);
+  assert.equal(cleared.status, "applied");
+  assert.equal(cleared.goal, null);
+  assert.equal((await ownerApi(owner, readPath)).data.session_goal.goal, null);
   await expect(threadSurface(owner).getByTestId("composer-input")).toBeVisible();
   await expect(threadSurface(owner).getByTestId("composer-current-goal")).toHaveCount(0);
   const clearedRead = responseFor("GET");
@@ -2251,29 +2037,21 @@ async function runBasicChat(surface) {
   assert.equal(contexts.length, 4);
   assert.deepEqual(contexts[0].sources.map(source => [source.source_kind, source.source_identity, source.name,
     source.root_placement, source.source_tracking_at_seal]), [
-    ["workspace_agents", "agents:workspace", "AGENTS.md", "root_eligible", "tracked"],
     ["mcp_tool_catalog", "mcp-tool-guidance:v1", "MCP 工具指引", "tail_only", "untracked"],
-    ["team_state", "team-source:membership:v1", "团队membership", "tail_only", "untracked"],
-    ["team_state", "team-source:tasks:v1", "团队tasks", "tail_only", "untracked"],
   ]);
   for (const context of contexts) {
-    assert.equal(context.protocol, "boxteam-context-sources:v2");
+    assert.equal(context.protocol, "boxteam-context-sources:v3");
     assert.deepEqual(context, contexts[0], "工具循环与续轮必须保留完整冻结上下文来源");
-    // 本工作区没有 AGENTS 文件或团队；空来源仍须携带准确身份与正文版本。
-    for (const index of [0, 2, 3]) {
-      assert.equal(context.sources[index].body, "");
-      assert.equal(context.sources[index].revision, `sha256:jcs:v1:${identityPreimageHash({ content: "" })}`);
-    }
-    assert.ok(context.sources[1].body.length > 0, "实际 MCP 导航指引不得丢失");
-    assert.deepEqual(JSON.parse(context.sources[1].body).navigation.map(group => group.group),
+    // 初次为空的 AGENTS 与 team 来源不进入 Provider 输入。
+    const [mcpGuidance] = context.sources;
+    assert.ok(mcpGuidance.body.length > 0, "实际 MCP 导航指引不得丢失");
+    assert.deepEqual(JSON.parse(mcpGuidance.body).navigation.map(group => group.group),
       ["agent-collaboration", "debugging", "extension:browser", "extension:resource_search", "extension:testing", "extension:web"]);
-    for (const source of context.sources) {
-      assert.equal(source.operation, "activate");
-      assert.equal(source.representation, "full");
-      assert.equal(source.base_revision, null);
-      assert.deepEqual(source.replaces, []);
-      assert.match(source.revision, /^sha256:jcs:v1:[a-f0-9]{64}$/);
-    }
+    assert.equal(mcpGuidance.operation, "activate");
+    assert.equal(mcpGuidance.representation, "full");
+    assert.equal(mcpGuidance.base_revision, null);
+    assert.deepEqual(mcpGuidance.replaces, []);
+    assert.match(mcpGuidance.revision, /^sha256:jcs:v1:[a-f0-9]{64}$/);
   }
   assert.deepEqual(result.persisted.upstreamUserInputs,
     [[firstPrompt], [firstPrompt], [firstPrompt, secondPrompt], [firstPrompt, secondPrompt]],
@@ -2341,7 +2119,7 @@ async function loadPersistedEvidence(owner) {
     llmRequestCount: logItems.length,
     upstreamMessageRoles: upstreamAttempts.map((attempt) =>
       (attempt.request?.messages ?? []).map((message) => message.role)),
-    upstreamContexts: upstreamAttempts.map(attempt => JSON.parse(attempt.request.messages[2].content)),
+    upstreamContexts: upstreamAttempts.map(attempt => parseTaggedContextSources(attempt.request.messages[2].content)),
     upstreamUserInputs: upstreamAttempts.map(attempt => attempt.request.messages
       .filter((message, index) => message.role === "user" && index !== 2).map(message => message.content)),
     agentStateJsonl: agentState?.data?.jsonl ?? "",
@@ -2591,12 +2369,8 @@ async function openOwner(owner) {
     throw error;
   }
   if (!owner.child) return;
-  const main = await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}/main-thread`);
-  const mainSurface = threadSurface({ ...owner, threadId: main.data.thread_id });
-  const toggle = mainSurface.getByRole("button", { name: "切换会话资源", exact: true });
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-  await mainSurface.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  await mainSurface.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click({ timeout: 30_000 });
+  const threads = await openSessionThreads(owner.page, owner);
+  await threads.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click({ timeout: 30_000 });
   await threadSurface(owner).getByTestId("composer-input").waitFor({ state: "visible" });
 }
 
@@ -3268,10 +3042,7 @@ async function assertInternalHistory(owner, history, stage) {
     assert.deepEqual(parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]),
       parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]).sort((left, right) => left[0] - right[0] || left[1] - right[1]));
     if (owner.child) {
-      const surface = threadSurface(owner);
-      const toggle = surface.getByRole("button", { name: "切换会话资源", exact: true });
-      if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-      await surface.getByRole("tab", { name: "运行与连接", exact: true }).click();
+      const surface = await openOwnerThreads(owner);
       await surface.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-report-link`).click();
       const report = surface.locator(`.child-thread-conversation[data-thread-id="${owner.threadId}"] .child-thread-report[data-execution-id="${execution.execution_id}"]`);
       await report.waitFor({ state: "visible" });
@@ -4431,7 +4202,7 @@ async function catalogRows(page) {
 async function expandCatalogRow(row) {
   await row.waitFor({ state: "visible" });
   if (await row.locator("..").getAttribute("aria-expanded") === "false") {
-    await row.locator(".session-resource-chevron").click();
+    await row.locator(".session-resource-expand-toggle").click();
   }
 }
 
@@ -4492,13 +4263,13 @@ async function catalogFolderDialog(surface, { name, parentName = null, renameNam
     ? namedCatalogRow(surface, parentName || renameName || deleteName)
     : surface.page.getByTestId(`workspace-node-${workspaceSelectionKey(surface)}`);
   await row.click({ button: "right" });
-  const item = deleteName ? "删除文件夹及内容" : renameName ? "重命名" : parentName ? "新建子文件夹" : "新建会话文件夹";
+  const item = deleteName ? "删除文件夹及内容" : renameName ? "重命名" : "新建会话文件夹";
   await surface.page.getByRole("menuitem", { name: item, exact: true }).click();
-  const title = deleteName ? "永久删除会话文件夹" : renameName ? "重命名会话文件夹" : parentName ? "新建子文件夹" : "新建会话文件夹";
+  const title = deleteName ? "永久删除会话文件夹" : renameName ? "重命名会话文件夹" : "新建会话文件夹";
   const dialog = surface.page.getByRole("dialog", { name: title, exact: true });
   await dialog.waitFor({ state: "visible" });
   if (!deleteName) await dialog.getByRole("textbox", { name: "文件夹名称", exact: true }).fill(name);
-  await dialog.getByRole("button", { name: deleteName ? "删除" : parentName || renameName ? "保存" : "创建", exact: true }).click();
+  await dialog.getByRole("button", { name: deleteName ? "删除" : renameName ? "保存" : "创建", exact: true }).click();
   return dialog;
 }
 
@@ -4919,17 +4690,6 @@ async function runNavigationOptimism(surfaces) {
           return;
         }
         if (entry.responseStatusCode === undefined) {
-          if (url.pathname === "/api/v1/workspace/observations/stream") {
-            assert.equal(entry.request.method, "POST");
-            const { subscriptions } = JSON.parse(entry.request.postData);
-            assert.ok(Array.isArray(subscriptions));
-            if (subscriptions.some((subscription) => subscription.kind === "session_activity")) {
-              // 活动观察者已合并到唯一工作区传输；只取消包含它的真实目标请求。
-              await eventTransport.send("Fetch.failRequest", { requestId: entry.requestId, errorReason: "Aborted" });
-              eventWire.activitySseDropped.push({ url: entry.request.url, workspaceId, gatewayId, subscriptions, at: Date.now() });
-              return;
-            }
-          }
           if (url.pathname === "/api/v1/session-catalog/navigation-events" && queryAfter !== undefined) {
             const originalUrl = url.href;
             url.searchParams.delete("cursor");
@@ -4976,11 +4736,27 @@ async function runNavigationOptimism(surfaces) {
       });
     });
     await eventTransport.send("Fetch.enable", { patterns: [
-      { urlPattern: "*/api/v1/workspace/observations/stream*", requestStage: "Request" },
       { urlPattern: "*/api/v1/session-catalog/navigation-events*", requestStage: "Request" },
       { urlPattern: "*/api/v1/session-catalog/navigation-events*", requestStage: "Response" },
       { urlPattern: "*/api/v1/session-catalog/snapshot*", requestStage: "Response" },
     ] });
+    await peerPage.routeWebSocket('**/api/gateway/realtime', route => {
+      const server = route.connectToServer();
+      server.onMessage(message => route.send(message));
+      route.onMessage(message => {
+        if (typeof message === 'string') {
+          const command = JSON.parse(message), headers = new Headers(command.headers);
+          if (command.type === 'subscribe' && new URL(command.path, peerPage.url()).pathname === '/api/v1/session-catalog/events/stream'
+            && headers.get('X-BoxTeam-Workspace-Id') === surface.workspaceId
+            && headers.get('X-BoxTeam-Target-Gateway-Id') === surface.gatewayId) {
+            route.send(JSON.stringify({ type: 'error', subscription_id: command.subscription_id, message: '测试受控中断活动订阅' }));
+            eventWire.activitySseDropped.push({ command, at: Date.now() });
+            return;
+          }
+        }
+        server.send(message);
+      });
+    });
     await drainPageResponseBodies(peerPage);
     await peerPage.goto(eventPageUrl, { waitUntil: "domcontentloaded" });
     await openCatalogWorkspace(peer);
@@ -5012,7 +4788,8 @@ async function runNavigationOptimism(surfaces) {
     await release(newerHold);
     const newerReceipt = await navigationTerminal(surface, newer);
     await namedCatalogRow(surface, newerName).waitFor({ state: "visible" });
-    await peerPage.getByRole("button", { name: "刷新资源树", exact: true }).click();
+    await peerPage.locator('.pane-header').filter({ has: peerPage.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+    await peerPage.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
     await namedCatalogRow(peer, newerName).waitFor({ state: "visible" });
     const newerSnapshot = (await ownerApi(peer, "/api/v1/session-catalog/snapshot")).data;
     assert.ok(newerSnapshot.event_seq_watermark > delayedPage.data.event_seq_watermark);
@@ -6230,9 +6007,8 @@ async function startForkMenuObservation(page, article, turnId) {
     const timeline = [];
     const identities = new WeakMap();
     const articleSelector = `.chat-turn[data-turn-id="${CSS.escape(targetTurnId)}"]`;
-    const anchorSelector = ".chat-user-action-menu-anchor";
-    const triggerSelector = ".chat-user-action-menu-trigger";
-    const menuSelector = '.chat-user-action-menu[role="menu"][aria-label="用户消息操作"]';
+    const anchorSelector = ".chat-user-bubble";
+    const menuSelector = '.boxteam-chat-item-menu .monaco-menu';
     let nextIdentity = 1;
     let stopped = false;
     let observer;
@@ -6281,24 +6057,22 @@ async function startForkMenuObservation(page, article, turnId) {
     const currentState = () => {
       targetArticle = targetArticle?.isConnected ? targetArticle : root.querySelector(articleSelector);
       targetAnchor = targetArticle?.querySelector(anchorSelector) ?? null;
-      targetTrigger = targetAnchor?.querySelector(triggerSelector) ?? null;
-      targetMenu = targetTrigger?.getAttribute("aria-expanded") === "true"
-        ? root.querySelector(menuSelector)
-        : null;
-      targetPositioner = targetMenu?.closest(".anchored-overlay-positioner") ?? null;
+      targetTrigger = targetAnchor;
+      targetMenu = initialArticle.ownerDocument.querySelector(menuSelector);
+      targetPositioner = targetMenu?.closest(".context-view") ?? null;
       return {
         turnId: targetTurnId,
         article: elementInfo(targetArticle),
         initialArticleConnected: initialArticle.isConnected,
         anchor: targetAnchor ? { ...elementInfo(targetAnchor), rect: rect(targetAnchor) } : null,
         trigger: targetTrigger ? { ...elementInfo(targetTrigger), rect: rect(targetTrigger),
-          expanded: targetTrigger.getAttribute("aria-expanded") } : null,
+          expanded: Boolean(targetMenu) } : null,
         menu: targetMenu ? {
           ...elementInfo(targetMenu),
           visibility: visibility(targetMenu),
           itemCount: targetMenu.querySelectorAll('[role="menuitem"]').length,
           itemLabels: Array.from(targetMenu.querySelectorAll('[role="menuitem"]'))
-            .map((item) => item.getAttribute("aria-label")),
+            .map((item) => item.textContent),
         } : null,
         positioner: targetPositioner ? { ...elementInfo(targetPositioner), visibility: visibility(targetPositioner) } : null,
       };
@@ -6307,9 +6081,9 @@ async function startForkMenuObservation(page, article, turnId) {
       if (stopped) return;
       stopped = true;
       observer.disconnect();
-      root.removeEventListener("pointerdown", pointerListener, true);
-      root.removeEventListener("click", clickListener, true);
-      root.removeEventListener("keydown", keyListener, true);
+      initialArticle.ownerDocument.removeEventListener("pointerdown", pointerListener, true);
+      initialArticle.ownerDocument.removeEventListener("click", clickListener, true);
+      initialArticle.ownerDocument.removeEventListener("keydown", keyListener, true);
     };
     const append = (entry) => {
       if (stopped) return;
@@ -6324,9 +6098,8 @@ async function startForkMenuObservation(page, article, turnId) {
       || node === targetMenu || node === targetPositioner
       || node.matches(articleSelector)
       || node.matches(anchorSelector) && node.closest(articleSelector) !== null
-      || node.matches(triggerSelector) && node.closest(articleSelector) !== null
       || node.matches(menuSelector)
-      || node.matches(".anchored-overlay-positioner") && node.contains(targetMenu)
+      || node.matches(".context-view") && node.contains(targetMenu)
     );
     const isWithinTargetControl = (node) => node instanceof Element && (
       targetAnchor?.contains(node) || targetTrigger?.contains(node)
@@ -6354,7 +6127,7 @@ async function startForkMenuObservation(page, article, turnId) {
       currentState();
       const path = event.composedPath().filter((node) => node instanceof Element);
       const related = path.find((element) => targetArticle?.contains(element) || targetMenu?.contains(element));
-      const expanded = targetTrigger?.getAttribute("aria-expanded") === "true";
+      const expanded = Boolean(targetMenu);
       const escape = event.type === "keydown" && event.key === "Escape";
       if (!related && !(expanded && (event.type === "pointerdown" || escape))) return;
       append({ kind: "event", eventType: event.type, key: event.type === "keydown" ? event.key : null,
@@ -6372,10 +6145,12 @@ async function startForkMenuObservation(page, article, turnId) {
       attributeOldValue: true,
       attributeFilter: ["aria-expanded", "style"],
     });
+    observer.observe(initialArticle.ownerDocument.body, { subtree: true, childList: true, attributes: true,
+      attributeOldValue: true, attributeFilter: ["style"] });
     currentState();
-    root.addEventListener("pointerdown", pointerListener, true);
-    root.addEventListener("click", clickListener, true);
-    root.addEventListener("keydown", keyListener, true);
+    initialArticle.ownerDocument.addEventListener("pointerdown", pointerListener, true);
+    initialArticle.ownerDocument.addEventListener("click", clickListener, true);
+    initialArticle.ownerDocument.addEventListener("keydown", keyListener, true);
     const stop = () => {
       cleanup();
       return { timeline, truncated };
@@ -6696,9 +6471,10 @@ async function runDefaultChildForkUi(surface) {
   let actionError;
   try {
     try {
-      await targetArticle.getByRole("button", { name: "消息操作", exact: true }).click();
-      menuObservation.afterTriggerClick = await observer.capture("after-trigger-click");
-      await source.page.getByRole("menuitem", { name: "从此消息创建分支", exact: true }).click();
+      await targetArticle.locator(".chat-user-bubble").click({ button: "right" });
+      menuObservation.afterTriggerClick = await observer.capture("after-context-menu");
+      // 原生菜单保留 100ms 的防误触窗口，鼠标松开须晚于此窗口。
+      await source.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true }).click({ delay: 120 });
     } catch (error) {
       actionError = error;
     }
@@ -6845,12 +6621,12 @@ async function runDefaultChildForkUi(surface) {
   assert.equal(childFinalPart.status, "completed", "item 锚点必须来自已闭合最终回答");
   const childTurnElement = childContainer.locator(`.chat-turn[data-turn-id="${childSuccessorTurn.turn_id}"]`);
   await childTurnElement.waitFor({ state: "visible" });
-  await childTurnElement.getByRole("button", { name: "消息操作", exact: true }).click();
-  const childUserForkButton = childContainer.getByRole("menuitem", { name: "从此消息创建分支", exact: true });
-  const childFinalForkButton = childTurnElement.locator(`[data-fork-item-id="${childFinalPart.source.item_id}"]`);
+  await childTurnElement.locator(".chat-user-bubble").click({ button: "right" });
+  const childUserForkButton = child.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true });
+  const childFinalItem = childTurnElement.locator(`.chat-markdown[data-response-sources*="${childFinalPart.source.item_id}"]`);
   await childUserForkButton.waitFor({ state: "visible" });
   assert.equal(await childUserForkButton.count(), 1, "必须定位到后继 Turn 的用户消息按钮");
-  assert.equal(await childFinalForkButton.count(), 1, "必须唯一定位到实际展示的最终回答 item 按钮");
+  assert.equal(await childFinalItem.count(), 1, "必须唯一定位到实际展示的最终回答 item");
   const [childTurnPointResponse] = await Promise.all([
     child.page.waitForResponse((response) => {
       const url = new URL(response.url());
@@ -6858,7 +6634,7 @@ async function runDefaultChildForkUi(surface) {
         && url.searchParams.get("thread_id") === child.threadId
         && url.searchParams.get("turn_id") === childSuccessorTurn.turn_id;
     }, { timeout: 30_000 }),
-    childUserForkButton.click(),
+    childUserForkButton.click({ delay: 120 }),
   ]);
   assert.equal(childTurnPointResponse.status(), 200, await childTurnPointResponse.text());
   const childTurnQuery = new URL(childTurnPointResponse.url()).searchParams;
@@ -6874,8 +6650,9 @@ async function runDefaultChildForkUi(surface) {
   const childTurnDialog = child.page.getByRole("dialog", { name: "创建上下文分支", exact: true });
   await childTurnDialog.waitFor({ state: "visible" });
   await childTurnDialog.getByRole("button", { name: "取消", exact: true }).click();
-  await childTurnElement.hover();
-  await expect(childFinalForkButton).toBeVisible();
+  await childFinalItem.click({ button: "right" });
+  const childFinalForkAction = child.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true });
+  await expect(childFinalForkAction).toBeVisible();
   const [childItemPointResponse] = await Promise.all([
     child.page.waitForResponse((response) => {
       const url = new URL(response.url());
@@ -6883,7 +6660,7 @@ async function runDefaultChildForkUi(surface) {
         && url.searchParams.get("thread_id") === child.threadId
         && url.searchParams.get("item_id") === childFinalPart.source.item_id;
     }, { timeout: 30_000 }),
-    childFinalForkButton.click(),
+    childFinalForkAction.click({ delay: 120 }),
   ]);
   assert.equal(childItemPointResponse.status(), 200, await childItemPointResponse.text());
   const childItemQuery = new URL(childItemPointResponse.url()).searchParams;
@@ -6902,7 +6679,7 @@ async function runDefaultChildForkUi(surface) {
       && new URL(response.url()).pathname === sourcePath
       && new URL(response.url()).searchParams.get("thread_id") === child.threadId, { timeout: 30_000 }),
     (async () => {
-      const resources = await openOwnerResources(child);
+      const resources = await openOwnerThreads(child);
       await resources.locator(`.child-thread-item[data-thread-id="${child.threadId}"]`)
         .getByRole("button", { name: "从此线程创建分支", exact: true }).click();
     })(),
@@ -6981,7 +6758,7 @@ async function runDefaultChildForkUi(surface) {
       await tab.getByRole("button", { name: /^Close(?: \(|$)/ }).click();
       await expect(threadTab(owner)).toHaveCount(0);
       await expect(threadSurface(owner)).toHaveCount(0);
-      const resources = await openOwnerResources(source);
+      const resources = await openOwnerThreads(source);
       await resources.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click();
       const conversation = await activateOwnerTab(owner);
       await conversation.locator(`.chat-turn[data-turn-id="${successor.turn.turn_id}"]`).waitFor({ state: "visible" });
@@ -8774,7 +8551,7 @@ async function runBackgroundMailboxRecovery(surface) {
   const blockedRuntime = await childRuntime();
   assert.equal(blockedRuntime.residency, "resident");
   assert.ok(blockedRuntime.blockers.some((blocker) => blocker.kind === "background_task"));
-  const blockerDisplay = (await openOwnerResources(child))
+  const blockerDisplay = (await openOwnerThreads(child))
     .locator(`.child-thread-item[data-thread-id="${childThread}"] .child-thread-runtime`);
   await waitUntil(async () => {
     const text = await blockerDisplay.innerText();
@@ -8840,7 +8617,21 @@ async function runBackgroundMailboxRecovery(surface) {
     "SELECT * FROM background_consumptions WHERE consumption_id=?", [consumptionId]);
   const [consumptionBefore] = await consumptionRows();
   assert.equal(consumptionBefore.acknowledged, 0, "工具返回但 canonical 未提交时禁止 ack");
-  const batch = JSON.parse(consumptionBefore.batch_json);
+  const storedMessages = await readFrozenControl(child, node,
+    "SELECT message_json FROM background_mailbox WHERE thread_id=? AND agent_id=? AND sequence>? AND sequence<=? AND (? IS NULL OR source_id=?) ORDER BY sequence",
+    [child.threadId, consumptionBefore.agent_id, consumptionBefore.after_sequence, consumptionBefore.through_sequence,
+      consumptionBefore.source_id, consumptionBefore.source_id]);
+  const messages = storedMessages.map(row => JSON.parse(row.message_json));
+  assert.equal(messages.length, consumptionBefore.message_count);
+  const batch = {
+    session_id: consumptionBefore.session_id, thread_id: consumptionBefore.thread_id,
+    agent_id: consumptionBefore.agent_id, consumption_id: consumptionBefore.consumption_id,
+    source_id: consumptionBefore.source_id, messages,
+    interrupted: Boolean(consumptionBefore.interrupted), timed_out: Boolean(consumptionBefore.timed_out),
+    last_message_id: messages.at(-1).message_id,
+    collected_at: consumptionBefore.collected_at.replace(/\+00:00$/, "Z"),
+    tool_result_identity: JSON.parse(consumptionBefore.tool_result_identity_json),
+  };
   assert.equal(batch.thread_id, child.threadId);
   assert.deepEqual(batch.messages.map((item) => item.message_id), messageIds);
   const canonicalResults = () => readRollout(child,
@@ -8855,7 +8646,7 @@ async function runBackgroundMailboxRecovery(surface) {
   assert.deepEqual(JSON.parse(collected.result), batch, "canonical ToolResult 必须保留原冻结 batch");
   const [consumptionAfter] = await consumptionRows();
   assert.equal(consumptionAfter.acknowledged, 1);
-  assert.equal(consumptionAfter.batch_json, consumptionBefore.batch_json);
+  assert.deepEqual(consumptionAfter, { ...consumptionBefore, acknowledged: 1 });
   const canonicalAfter = await canonicalResults();
   // stream attempt 与 checkpoint ToolMessage 是既有的两类载体；同类不能重复，公开投影只选一条。
   const carrierKinds = canonicalAfter.map((item) => {
@@ -9146,13 +8937,14 @@ async function runChildFifoAndResidency(surface) {
   for (const threadId of [child.threadId, sibling.threadId]) {
     assert.equal(await owner.page.locator(`button[data-session-id="${threadId}"]`).count(), 0, "child 不得进入左侧 Session 导航");
   }
-  let childRow = threadSurface(owner).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
-  const siblingRow = threadSurface(owner).locator(`.child-thread-item[data-thread-id="${sibling.threadId}"]`);
+  const threadNavigation = await openOwnerThreads(owner);
+  let childRow = threadNavigation.locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
+  const siblingRow = threadNavigation.locator(`.child-thread-item[data-thread-id="${sibling.threadId}"]`);
   await waitUntil(async () => !(await childRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "来源报告读取后取消精确 child 未读");
   assert.ok((await siblingRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "读取一个 child 不得确认 sibling 报告");
   await childRow.locator(".child-thread-main").click();
   await (await activateOwnerTab(child)).getByTestId("composer-input").fill("child 独立草稿");
-  const childResources = await openOwnerResources(child);
+  const childResources = await openOwnerThreads(child);
   await childResources.locator(`.child-thread-item[data-thread-id="${sibling.threadId}"] .child-thread-main`).click();
   const siblingComposer = (await activateOwnerTab(sibling)).getByTestId("composer-input");
   assert.equal(await siblingComposer.inputValue(), "");
@@ -9206,7 +8998,7 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(withBlocker.runtime.residency, "resident");
   assert.equal(withBlocker.runtime.execution_state, "active", "runtime lease 必须由权威 active 状态表达");
   assert.equal(withBlocker.runtime.cold_eligible, false, "active/queued lease 必须阻止卸载");
-  childRow = (await openOwnerResources(child)).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
+  childRow = (await openOwnerThreads(child)).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
   await waitUntil(async () => {
     const text = await childRow.locator(".child-thread-runtime").innerText();
     return withBlocker.runtime.blockers.every((blocker) => text.includes(blocker.reason));
@@ -10060,8 +9852,8 @@ async function runInitialAdmissionRecovery(surfaces) {
   const childRequest = await modelRequest(childCalls[0]);
   const childInputs = childRequest.request.messages.filter(message => message.role === "user");
   assert.equal(childInputs.length, 1, "恢复后的首个 Provider 请求必须只包含一份上下文来源消息");
-  const childSources = JSON.parse(childInputs[0].content);
-  assert.equal(childSources.protocol, "boxteam-context-sources:v2");
+  const childSources = parseTaggedContextSources(childInputs[0].content);
+  assert.equal(childSources.protocol, "boxteam-context-sources:v3");
   const seedSources = childSources.sources.filter(source => source.source_kind === "thread_task_seed");
   assert.equal(seedSources.length, 1, "恢复后的真实 Provider request 必须包含唯一冻结 seed 来源");
   assert.deepEqual(seedSources[0], {
@@ -11104,9 +10896,12 @@ async function runMcpActivation(surface, boundary) {
     }
     const recoveredRequest = await modelRequest(recovered.calls[0]);
     const recoveredSources = recoveredRequest.request.messages
-      .filter(message => message.role === "user" && typeof message.content === "string"
-        && message.content.startsWith('{"protocol":"boxteam-context-sources:v2"'))
-      .flatMap(message => JSON.parse(message.content).sources)
+      .filter(message => message.role === "user" && isTaggedContextSources(message.content))
+      .flatMap(message => {
+        const context = parseTaggedContextSources(message.content);
+        assert.equal(context.protocol, "boxteam-context-sources:v3");
+        return context.sources;
+      })
       .filter(source => source.source_identity === "mcp-tool-guidance:v1" && source.revision === recoveredBinding.revision);
     assert.equal(recoveredSources.length, 1, "原 Provider 请求必须包含本次完整发布的唯一冻结指引");
     const recoveredSource = recoveredSources[0];
@@ -11369,7 +11164,7 @@ async function runForkSuccessorRewind(surfaces) {
   assert.ok(index >= 0);
   await visitTranscriptIndex(main.owner, transcript, index);
   const article = threadSurface(main.owner).locator(`.chat-turn[data-turn-id="${main.first.sent.turnId}"]`);
-  await article.getByRole("button", { name: "消息操作", exact: true }).click();
+  await article.locator(".chat-user-bubble").click({ button: "right" });
   await main.owner.page.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click();
   await article.getByRole("textbox", { name: "编辑用户消息", exact: true }).fill(replacement);
   const replayPath = `/api/v1/sessions/${main.owner.sessionId}/messages/${main.first.sent.accepted.message_id}/replay`;
@@ -11597,16 +11392,7 @@ async function closeControlledRestartRequestPage(page, window) {
   // 保留发起请求的页面，直到被杀后端恢复，避免关闭页面截断错误正文或 SSE 恢复证据。
   const binding = controlledRestartPageBinding(window, page.diagnosticId);
   assert.equal(binding?.role, "copy-request");
-  const interrupted = failedRequests.filter((failure) => failure.pageId === page.diagnosticId
-    && failure.restartWindowId === window.operationId && failure.method === "POST"
-    && failure.url === `${window.origin}/api/v1/workspace/observations/stream`
-    && failure.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING");
   const originals = new Map(binding.observationRequests.map((request) => [request.requestFactId, request]));
-  for (const failure of interrupted) {
-    const request = controlledRestartRequests.find((request) => request.requestFactId === failure.requestFactId);
-    assert.ok(request?.body?.subscriptions?.length, "中断的观察流必须保留原请求订阅");
-    originals.set(request.requestFactId, request);
-  }
   assert.ok(originals.size > 0, "重启前必须冻结原请求页的观察订阅，不能依赖中断事件是否已派发");
   for (const original of originals.values()) {
     assert.equal(original.pageId, page.diagnosticId);
@@ -11614,16 +11400,20 @@ async function closeControlledRestartRequestPage(page, window) {
     assert.equal(original.workspaceHeader, window.workspaceId);
     assert.equal(original.targetGatewayHeader, window.gatewayId);
     assert.ok(original.body?.subscriptions?.length, "重启前冻结的订阅不能为空");
-    await waitUntil(() => controlledRestartResponses.some((response) => response.pageId === original.pageId
-      && response.documentId === original.documentId && response.url === original.url
-      && response.restartWindowId === window.operationId && response.pageRole === "copy-request"
-      && response.status === 200 && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-      && response.requestId && response.cdpRequestId
-      && response.contentType?.split(";", 1)[0].trim().toLowerCase() === "text/event-stream"
-      && response.requestedAt >= window.backendRestart.startedAt
-      && hasRecoveredRestartObservations(response, original, window)),
-    "受控重启后，原请求页面必须重连存活目标，并释放已完成删除的精确 source Trace");
   }
+  const original = { ...originals.values().next().value,
+    body: { subscriptions: [...originals.values()].flatMap(item => item.body.subscriptions) } };
+  await waitUntil(() => {
+      const active = controlledRestartResponses.filter(response => response.pageId === original.pageId
+        && response.documentId === original.documentId && response.restartWindowId === window.operationId
+        && response.pageRole === 'copy-request' && response.status === 200 && !response.endedAt
+        && response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId
+        && response.requestId && response.transportId
+        && response.contentType?.split(';', 1)[0].trim().toLowerCase() === 'text/event-stream'
+        && response.requestedAt >= window.backendRestart.startedAt);
+      return hasRecoveredRestartObservations({ subscriptions: active.flatMap(item => item.subscriptions),
+        connectedSubscriptions: active.flatMap(item => item.connectedSubscriptions) }, original, window);
+    }, '重启后原页必须恢复精确存活订阅，释放已完成删除的 source Trace');
   await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await drainPageResponseBodies(page);
   await page.close();
@@ -11631,7 +11421,7 @@ async function closeControlledRestartRequestPage(page, window) {
 
 async function runControlledRestartPageCloseSelfTest() {
   const request = { requestFactId: "close-proof-original", pageId: -1, documentId: 1,
-    url: "http://127.0.0.1:19001/api/v1/workspace/observations/stream", workspaceHeader: "workspace-close", targetGatewayHeader: "gateway-close",
+    url: "http://127.0.0.1:19001/api/v1/workspace/files/events", workspaceHeader: "workspace-close", targetGatewayHeader: "gateway-close",
     body: { subscriptions: [{ subscription_id: "original", kind: "workspace_files" }] } };
   const window = { operationId: "close-proof-operation", workspaceId: request.workspaceHeader, gatewayId: request.targetGatewayHeader,
     origin: "http://127.0.0.1:19001", backendRestart: { startedAt: 100 },
@@ -11653,7 +11443,7 @@ async function runControlledRestartPageCloseSelfTest() {
     assert.equal(closed, false, "稍晚派发的中断不能被关页绕过");
     controlledRestartResponses.push({ ...request, status: 200, requestedAt: 101,
       restartWindowId: window.operationId, pageRole: "copy-request", contentType: "text/event-stream",
-      requestId: "recovered-request", cdpRequestId: "recovered-cdp-request",
+      requestId: "recovered-request", transportId: "recovered-ws-subscription",
       subscriptions: [{ subscription_id: "recovered", kind: "workspace_files" }],
       connectedSubscriptions: ["recovered"] });
     await closing;
@@ -11788,7 +11578,6 @@ function badGatewayConsoleAuditDifferences() {
   return [...counts.values()].filter((count) => count.playwright !== count.cdp);
 }
 const controlledRestartCdpSetups = new Set();
-const OBSERVATION_STREAM_PATH = "/api/v1/workspace/observations/stream";
 let diagnosticPageId = 0;
 let diagnosticObservationOrder = 0;
 let controlledRestartRequestOrdinal = 0;
@@ -12022,9 +11811,6 @@ async function installPageDiagnostics(page) {
   const requestDocuments = new WeakMap();
   const streamResponseByRequest = new WeakMap();
   const diagnosticResponseFacts = new WeakMap();
-  const cdpStreamCaptures = new Map();
-  const pendingCdpRequests = [];
-  const pendingPlaywrightRequests = [];
   const pendingCdpResponses = new Map();
   const cdpNetworkRequests = new Map();
   const bindBadGatewayResponse = () => {
@@ -12040,91 +11826,62 @@ async function installPageDiagnostics(page) {
       if (candidates.length === 1) response.cdpRequestId = candidates[0][0];
     }
   };
-  const pendingPlaywrightResponses = new Map();
   let cdpSession = null;
   const readBody = response => readDiagnosticResponseBody(response, pendingCdpResponses, cdpSession, waitUntil);
-  const bindObservationRequest = () => {
-    for (const cdpRequest of pendingCdpRequests) {
-      if (cdpRequest.bound) continue;
-      const candidates = pendingPlaywrightRequests.filter((item) => !item.bound
-        && item.fact.pageId === page.diagnosticId && item.fact.documentId === cdpRequest.documentId
-        && item.fact.url === cdpRequest.url && item.fact.method === "POST"
-        && (item.fact.workspaceHeader === cdpRequest.workspaceHeader && item.fact.targetGatewayHeader === cdpRequest.targetGatewayHeader)
-        && JSON.stringify(item.fact.body) === JSON.stringify(cdpRequest.body)
-        && Math.abs(item.fact.requestedAt - cdpRequest.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (candidates.length !== 1) continue;
-      const [playwrightRequest] = candidates;
-      const reverse = pendingCdpRequests.filter((candidate) => !candidate.bound
-        && candidate.documentId === playwrightRequest.fact.documentId
-        && candidate.url === playwrightRequest.fact.url
-        && (candidate.workspaceHeader === playwrightRequest.fact.workspaceHeader && candidate.targetGatewayHeader === playwrightRequest.fact.targetGatewayHeader)
-        && JSON.stringify(candidate.body) === JSON.stringify(playwrightRequest.fact.body)
-        && Math.abs(candidate.requestedAt - playwrightRequest.fact.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (reverse.length !== 1) continue;
-      cdpRequest.bound = true;
-      playwrightRequest.bound = true;
-      playwrightRequest.fact.cdpRequestId = cdpRequest.requestId;
-      cdpStreamCaptures.set(cdpRequest.requestId, { requestFactId: playwrightRequest.fact.requestFactId,
-        subscriptions: new Set(cdpRequest.subscriptions.map((item) => item.subscription_id)), pending: "",
-        bufferedReady: false, queuedChunks: [] });
-      bindObservationResponse(cdpRequest.requestId);
-    }
-  };
-  const bindObservationResponse = (requestId) => {
-    const capture = cdpStreamCaptures.get(requestId);
-    const cdpResponse = pendingCdpResponses.get(requestId);
-    const playwrightResponse = pendingPlaywrightResponses.get(capture?.requestFactId);
-    if (!capture || !cdpResponse || !playwrightResponse || cdpResponse.bound || playwrightResponse.bound) return;
-    if (cdpResponse.status !== playwrightResponse.fact.status
-        || cdpResponse.status !== 200
-        || cdpResponse.contentType !== playwrightResponse.fact.contentType
-        || Math.abs(cdpResponse.receivedAt - playwrightResponse.fact.receivedAt) > CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS) return;
-    cdpResponse.bound = true;
-    playwrightResponse.bound = true;
-    const responseFact = playwrightResponse.fact;
-    responseFact.cdpRequestId = requestId;
-    responseFact.connectedSubscriptions = [];
-    const parseChunk = (encoded) => {
-      capture.pending += Buffer.from(encoded, "base64").toString("utf8");
-      const blocks = capture.pending.split(/\r?\n\r?\n/);
-      capture.pending = blocks.pop() ?? "";
-      for (const block of blocks) {
-        const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart()).join("\n");
-        if (!data) continue;
-        try {
-          const envelope = JSON.parse(data);
-          if (envelope.state === "connected" && capture.subscriptions.has(envelope.subscription_id)
-              && !responseFact.connectedSubscriptions.includes(envelope.subscription_id)) {
-            responseFact.connectedSubscriptions.push(envelope.subscription_id);
-          }
-        } catch (error) {
-          controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-            requestFactId: capture.requestFactId, phase: "sse-envelope", error: String(error) });
+  const realtimeFacts = new Map();
+  observeRealtime(page, {
+    subscribe(request) {
+      const descriptor = describeRealtimeSubscription(request);
+      const restartWindow = page.controlledRestartWindow;
+      const binding = restartWindow && controlledRestartPageBinding(restartWindow, page.diagnosticId);
+      const fact = { requestFactId: `ws-subscription-${++controlledRestartRequestOrdinal}`,
+        transport: 'websocket', transportId: `ws-subscription-${controlledRestartRequestOrdinal}`,
+        url: request.url, method: request.method, body: { subscriptions: [descriptor] },
+        pageId: page.diagnosticId, documentId: page.diagnosticDocumentId, requestedAt: Date.now(),
+        workspaceHeader: request.headers['x-boxteam-workspace-id'] ?? null,
+        targetGatewayHeader: request.headers['x-boxteam-target-gateway-id'] ?? null,
+        restartWindowId: restartWindow?.operationId ?? null, pageRole: binding?.role ?? null };
+      realtimeFacts.set(request, { request: fact });
+      controlledRestartRequests.push(fact);
+      page.diagnosticObservationRequests.set(request, fact);
+    },
+    headers(request, frame) {
+      const entry = realtimeFacts.get(request), original = entry.request;
+      const headers = frame.headers;
+      const fact = { ...original, status: frame.status, receivedAt: Date.now(),
+        requestId: headers['x-request-id'] ?? null, contentType: headers['content-type'] ?? null,
+        subscriptions: original.body.subscriptions,
+        connectedSubscriptions: frame.status === 200 ? [request.subscription_id] : [] };
+      entry.response = fact;
+      controlledRestartResponses.push(fact);
+      const target = messageStreamTarget(request.url);
+      if (target) {
+        Object.assign(fact, target, { messageStreamId: headers['x-message-stream-id'] ?? null,
+          headers: { requestId: fact.requestId, messageStreamId: headers['x-message-stream-id'] ?? null,
+            contentType: fact.contentType, contentLength: headers['content-length'] ?? null } });
+        messageStreamResponses.push(fact);
+      }
+    },
+    data(request, bytes) {
+      const fact = realtimeFacts.get(request)?.response;
+      if (fact && fact.status !== 200) {
+        fact.bodyText = (fact.bodyText ?? '') + bytes.toString('utf8');
+        assert.ok(Buffer.byteLength(fact.bodyText) <= 65536, '订阅错误正文不得无界缓存');
+      }
+    },
+    end(request, frame) {
+      const fact = realtimeFacts.get(request)?.response;
+      if (fact) {
+        fact.endedAt = Date.now(); fact.endType = frame?.type ?? 'unsubscribe';
+        if (fact.status !== 200 && fact.bodyText) {
+          try { fact.body = JSON.parse(fact.bodyText); }
+          catch (error) { fact.bodyError = String(error); }
         }
       }
-    };
-    const drain = () => {
-      while (capture.queuedChunks.length) parseChunk(capture.queuedChunks.shift());
-    };
-    if (!cdpSession) {
-      controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-        requestFactId: capture.requestFactId, phase: "cdp-session-unavailable" });
-      return;
-    }
-    void cdpSession.send("Network.streamResourceContent", { requestId }).then((result) => {
-      if (result.bufferedData) parseChunk(result.bufferedData);
-      capture.bufferedReady = true;
-      drain();
-    }, (error) => {
-      controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-        requestFactId: capture.requestFactId, phase: "streamResourceContent", error: String(error) });
-    });
-    capture.receiveChunk = (encoded) => {
-      if (!capture.bufferedReady) capture.queuedChunks.push(encoded);
-      else parseChunk(encoded);
-    };
-  };
+      page.diagnosticObservationRequests.delete(request);
+      realtimeFacts.delete(request);
+    },
+  });
   const cdpSetup = page.context().newCDPSession(page).then(async (cdp) => {
     cdpSession = cdp;
     await cdp.send("Network.enable");
@@ -12148,19 +11905,7 @@ async function installPageDiagnostics(page) {
         name.toLowerCase() === "x-boxteam-target-gateway-id")?.[1] ?? null;
       cdpNetworkRequests.set(event.requestId, { method: event.request.method,
         documentId: page.diagnosticDocumentId, workspaceHeader, targetGatewayHeader });
-      if (event.request.method !== "POST" || new URL(event.request.url).pathname !== OBSERVATION_STREAM_PATH) return;
-      let body;
-      try {
-        body = JSON.parse(event.request.postData ?? "{}");
-      } catch (error) {
-        controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId, requestId: event.requestId,
-          phase: "request-body", error: String(error) });
-        return;
-      }
-      pendingCdpRequests.push({ requestId: event.requestId, url: event.request.url, body,
-        subscriptions: body.subscriptions,
-        workspaceHeader, targetGatewayHeader, documentId: page.diagnosticDocumentId, requestedAt: Date.now(), bound: false });
-      bindObservationRequest();
+
     });
     cdp.on("Network.responseReceived", (event) => {
       const request = cdpNetworkRequests.get(event.requestId);
@@ -12172,12 +11917,7 @@ async function installPageDiagnostics(page) {
         serverRequestId: Object.entries(event.response.headers ?? {}).find(([name]) => name.toLowerCase() === "x-request-id")?.[1] ?? null,
         contentType: event.response.headers?.["content-type"] ?? event.response.headers?.["Content-Type"] ?? null,
         receivedAt: Date.now(), bound: false });
-      bindObservationResponse(event.requestId);
       if (event.response.status === 502) bindBadGatewayResponse();
-    });
-    cdp.on("Network.dataReceived", (event) => {
-      const capture = cdpStreamCaptures.get(event.requestId);
-      if (capture?.receiveChunk && event.data) capture.receiveChunk(event.data);
     });
     cdp.on("Network.loadingFinished", (event) => {
       const response = pendingCdpResponses.get(event.requestId);
@@ -12252,20 +11992,7 @@ page.on("request", (request) => {
     url: requestUrl, method: request.method(), workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
     restartWindowId: restartWindow?.operationId ?? null, pageRole: pageBinding?.role ?? null };
   requestDocuments.set(request, requestDocument);
-  if (request.method() === "POST" && new URL(requestUrl).pathname === OBSERVATION_STREAM_PATH) {
-    try {
-      requestDocument.body = request.postDataJSON();
-    } catch (error) {
-      requestDocument.bodyError = String(error);
-    }
-    controlledRestartRequests.push(requestDocument);
-    page.diagnosticObservationRequests.set(request, requestDocument);
-    if (requestDocument.bodyError === undefined) {
-      pendingPlaywrightRequests.push({ fact: requestDocument,
-        subscriptions: requestDocument.body?.subscriptions ?? [], bound: false });
-      bindObservationRequest();
-    }
-  }
+
 });
 page.on("requestfinished", (request) => {
   page.diagnosticSessionReads.delete(request);
@@ -12293,8 +12020,6 @@ page.on("requestfailed", (request) => {
     restartWindowId: requestDocument?.restartWindowId ?? page.controlledRestartWindow?.operationId ?? null,
     pageRole: requestDocument?.pageRole ?? (page.controlledRestartWindow
       ? controlledRestartPageBinding(page.controlledRestartWindow, page.diagnosticId)?.role ?? null : null),
-    ...(requestDocument?.url === new URL(request.url()).origin + OBSERVATION_STREAM_PATH
-      ? { requestFactId: requestDocument.requestFactId } : {}),
     ...(streamResponse ? { responseRequestId: streamResponse.requestId, status: streamResponse.status,
       sessionId: streamResponse.sessionId, turnId: streamResponse.turnId, threadId: streamResponse.threadId,
       turnStreamId: streamResponse.turnStreamId, afterSeq: streamResponse.afterSeq,
@@ -12303,33 +12028,6 @@ page.on("requestfailed", (request) => {
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
-  if (response.request().method() === "POST" && url.pathname === OBSERVATION_STREAM_PATH && !url.search) {
-    const request = response.request();
-    const requestDocument = requestDocuments.get(request);
-    const restartWindow = page.controlledRestartWindow;
-    const pageBinding = restartWindow && controlledRestartPageBinding(restartWindow, page.diagnosticId);
-    const subscriptions = requestDocument?.body?.subscriptions;
-    controlledRestartResponses.push({ requestFactId: requestDocument?.requestFactId ?? null,
-      restartWindowId: requestDocument?.restartWindowId ?? restartWindow?.operationId ?? null,
-      url: response.url(), method: "POST", status: response.status(), pageId: page.diagnosticId,
-      documentId: requestDocument?.documentId ?? null,
-      pageRole: requestDocument?.pageRole ?? pageBinding?.role ?? null,
-      requestedAt: requestDocument?.requestedAt ?? null, receivedAt: Date.now(),
-      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
-      requestId: response.headers()["x-request-id"] ?? null,
-      contentType: response.headers()["content-type"] ?? null,
-      subscriptions: Array.isArray(subscriptions) ? subscriptions : null,
-      connectedSubscriptions: [] });
-    const responseFact = controlledRestartResponses.at(-1);
-    if (responseFact.requestFactId !== null) {
-      pendingPlaywrightResponses.set(responseFact.requestFactId, { fact: responseFact, bound: false });
-      const capture = [...cdpStreamCaptures.values()].find((item) => item.requestFactId === responseFact.requestFactId);
-      if (capture) {
-        const cdpRequestId = [...cdpStreamCaptures.entries()].find(([, item]) => item === capture)?.[0];
-        if (cdpRequestId) bindObservationResponse(cdpRequestId);
-      }
-    }
-  }
   if (response.status() === 502) {
     const request = response.request();
     const requestDocument = requestDocuments.get(request);
@@ -12434,6 +12132,7 @@ page.on("response", (response) => {
   const session = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
   const fileTreeSettings = /^\/api\/v1\/sessions\/([^/]+)\/file-tree-settings$/.exec(url.pathname);
   const goal = /^\/api\/v1\/sessions\/([^/]+)\/goal$/.exec(url.pathname);
+  const sessionTasks = url.pathname === "/api/v1/persistent-tasks" ? url.searchParams.get("session_id") : null;
   const resources = /^\/api\/v1\/sessions\/([^/]+)\/resources$/.exec(url.pathname);
   const attachmentContent = /^\/api\/v1\/sessions\/([^/]+)\/attachments\/content$/.exec(url.pathname);
   const job = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname);
@@ -12441,7 +12140,7 @@ page.on("response", (response) => {
   const forkContext = /^\/api\/v1\/sessions\/([^/]+)\/fork-context$/.exec(url.pathname);
   if (response.status() === 409 || history && [200, 404].includes(response.status())
       || (pending || breadcrumb || catalogChildren || mainThread) && response.status() === 404
-      || (session || fileTreeSettings || goal || resources || attachmentContent) && response.status() === 404
+      || (session || fileTreeSettings || goal || sessionTasks || resources || attachmentContent) && response.status() === 404
       || job && [200, 404].includes(response.status())
       || admission && response.request().method() === "POST" && response.status() === 200) {
     const request = response.request();
@@ -12449,10 +12148,10 @@ page.on("response", (response) => {
       pageId: page.diagnosticId, ...requestDocuments.get(request),
       kind: historyKind ?? (pending ? "pending" : breadcrumb ? "breadcrumb" : catalogChildren ? "catalog_children"
         : mainThread ? "main_thread" : session ? "session" : fileTreeSettings ? "file_tree_settings"
-          : goal ? "goal" : resources ? "resources" : attachmentContent ? "attachment_content" : job ? "job"
+          : goal ? "goal" : sessionTasks ? "session_tasks" : resources ? "resources" : attachmentContent ? "attachment_content" : job ? "job"
             : admission ? "admission" : forkContext ? "fork_context" : null),
       sessionId: history?.[1] ?? pending?.[1] ?? mainThread?.[1] ?? session?.[1] ?? fileTreeSettings?.[1]
-        ?? goal?.[1] ?? resources?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
+        ?? goal?.[1] ?? sessionTasks ?? resources?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
       nodeId: breadcrumb?.[1] ?? (catalogChildren ? url.searchParams.get("parent_node_id") : null), jobId: job?.[1] ?? null,
       attachmentFileId: attachmentContent ? url.searchParams.get("file_id") : null,
       threadId: history?.[3] ?? admission?.[2] ?? null,

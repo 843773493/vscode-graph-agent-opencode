@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from boxteam_plugin_sdk.lifecycle import LifetimeHandle, LifetimeScope
+
 from app.core.failures import failure_detail
-from app.core.lifecycle import LifetimeHandle, LifetimeScope
 from app.core.shielded_cleanup import run_sync_shielded
 
 

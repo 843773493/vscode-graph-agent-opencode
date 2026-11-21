@@ -45,16 +45,16 @@ export function useMessageMediaSources(
     let active = true;
     const controller = new AbortController();
     const objectUrls: string[] = [];
-    const nextSources = new Map<string, string>();
-    const nextErrors = new Map<string, string>();
+    setSources(new Map());
     setErrors(new Map());
 
-    void Promise.all(items.map(async (item) => {
+    items.forEach(async (item) => {
       if (item.kind !== "image" || item.attachment.availability === "unavailable") {
         return;
       }
       if (item.attachment.data_url?.startsWith("data:image/")) {
-        nextSources.set(item.id, item.attachment.data_url);
+        const source = item.attachment.data_url;
+        setSources((current) => new Map(current).set(item.id, source));
         return;
       }
       try {
@@ -74,19 +74,13 @@ export function useMessageMediaSources(
               loadBlob,
             )
           : await loadBlob();
+        if (!active) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.push(objectUrl);
-        nextSources.set(item.id, objectUrl);
+        setSources((current) => new Map(current).set(item.id, objectUrl));
       } catch (error) {
-        nextErrors.set(item.id, errorMessage(error));
+        if (active) setErrors((current) => new Map(current).set(item.id, errorMessage(error)));
       }
-    })).then(() => {
-      if (!active) {
-        objectUrls.forEach((url) => URL.revokeObjectURL(url));
-        return;
-      }
-      setSources(nextSources);
-      setErrors(nextErrors);
     });
 
     return () => {

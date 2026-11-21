@@ -32,6 +32,7 @@ from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.assembly import (
     reader as assembly_reader,
 )
@@ -67,12 +68,15 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    context_notice_metadata,
+)
 from app.services.mapping.itemized.canonical_langchain import (
     project_summary_source,
     summary_source_groups,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - fixture 根据当前测试文件隔离产物
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
@@ -1024,7 +1028,7 @@ def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
         "Summarize the provided conversation. Return only a concise factual plain-text summary. Do not call tools."
         if minimal_system else "尚未确认的摘要指引"
     )
-    assert json.loads(result["messages"][0].content)["sources"][0]["body"] == expected_system
+    assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == expected_system
     assert manager.prepare_pending() == pending
     assert connection.execute(
         "SELECT latest_visible_committed_revision FROM context_source_control_states"
@@ -1103,7 +1107,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     saver, session, thread, connection, manager, prepare = production_context
     first = prepare("first")
     assert [type(message) for message in first["messages"]] == [SystemMessage, HumanMessage]
-    assert json.loads(first["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(first["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert first["tools"] == []
     first_snapshot = saver._storage.assemblies.get_context_assembly(
         session, thread, assembly_id=first["assembly_id"],
@@ -1119,7 +1123,7 @@ def test_initial_and_delta_use_one_seal_and_exact_prefix(production_context):
     )
     assert second_snapshot.seal_binding.root == first_snapshot.seal_binding.root
     assert second_snapshot.seal_binding.prefix.state.frames[:2] == first_snapshot.seal_binding.prefix.state.frames
-    assert json.loads(second["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(second["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert isinstance(second["messages"][-1], HumanMessage)
     assert "基础规则第二版" in second["messages"][-1].content
     assert manager.prepare_pending() is None
@@ -1195,7 +1199,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
         assert tuple(selection_ref_identity(ref) for ref in snapshot.refs if ref.ref_type == "canonical_item") == (
             ("canonical_item", owner_item.item_id, thread),
         )
-        assert json.loads(result["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+        assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
         assert result["messages"][1].content == owner_item.payload
         assert connection.execute(
             "SELECT visible,source_kind FROM context_view_items WHERE view_id=? AND item_id=?",
@@ -1218,7 +1222,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
 def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_cold_read(
     production_context, target_format,
 ):
-    saver, session, thread, _connection, _manager, prepare = production_context
+    saver, session, thread, connection, _manager, prepare = production_context
     item = next(item for item in saver._storage.storage.read_items(session, thread)
                 if item.semantic_kind == "user_input")
     overlay_body = "同名 request-only 的独立正文"
@@ -1237,13 +1241,26 @@ def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_
     )
     first = prepare("same-id-first", target_format=target_format)
     second = prepare("same-id-inherited", target_format=target_format)
+    for attempt, result in enumerate((first, second), 1):
+        snapshot = result["snapshot"]
+        saver.register_model_call(session, thread_id=thread, execution_id=snapshot.execution_id,
+            model_call_id=snapshot.model_call_id, attempt=attempt, provider="same-id-provider",
+            assembly_id=snapshot.assembly_id, dispatch_state="dispatched")
+    markers = context_notice_metadata(connection, second["snapshot"].active_view_id,
+        turn_ids=[second["snapshot"].turn_id], execution_ids=[])
+    overlay_markers = [row for row in markers if row.kind == "overlay:workspace_policy"]
+    assert len(overlay_markers) == 1
+    assert overlay_markers[0].model_call_id == first["snapshot"].model_call_id
+    assert overlay_markers[0].item_id is None
+    assert saver.read_context_contribution(session, thread, historical_owner=(session, thread),
+        assembly_id=overlay_markers[0].assembly_id, contribution_id=overlay_markers[0].contribution_id) == overlay_body
     for result in (first, second):
         selection = tuple(entry for entry in result["snapshot"].selection if entry.ref.ref_id == item.item_id)
         assert tuple(selection_ref_identity(entry.ref) for entry in selection) == expected_keys
         assert all(entry.included for entry in selection)
-        assert json.loads(result["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+        assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
         assert result["messages"][1].content == item.payload
-        assert json.loads(result["messages"][2].content)["sources"][0]["body"] == overlay_body
+        assert parse_root_section(result["messages"][2].content, tag="context_sources")["sources"][0]["body"] == overlay_body
     assert second["snapshot"].seal_binding.prefix.state.frames == first["snapshot"].seal_binding.prefix.state.frames
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
@@ -1275,6 +1292,7 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
     first = prepare("retry")
     manager.observe("instruction:R01", "尚未发送的新 desired", revision="instructions:2")
     pending = manager.prepare_pending()
+    read_sources = manager.prepare_sources
 
     def refuse_desired():
         raise AssertionError("sealed retry 不得重新读取 desired")
@@ -1284,7 +1302,7 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
     assert retry["assembly_id"] == first["assembly_id"]
     assert retry["messages"] == first["messages"]
     assert pending is not None
-    assert tuple(manager._pending.values()) == pending.deltas
+    assert read_sources().deltas == pending.deltas
     restored = saver._storage.assemblies.get_context_assembly(session, thread, assembly_id=retry["assembly_id"])
     assert restored.seal_binding.source_revisions[0].revision == "instructions:1"
 
@@ -1303,7 +1321,7 @@ def test_late_desired_after_seal_is_preserved_and_next_call_applies_exact_base(
 
     monkeypatch.setattr(preparation, "seal_registered_plan", seal_then_observe)
     first = prepare("late-first", target_format=target_format)
-    assert json.loads(first["messages"][0].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(first["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     pending = manager.prepare_pending()
     assert pending.deltas[0].previous_revision == "instructions:1"
     assert pending.deltas[0].revision == "instructions:2"
@@ -1324,7 +1342,7 @@ def test_same_body_new_semantic_revision_is_not_discarded(production_context):
     pending = manager.prepare_pending()
     assert pending.deltas[0].revision == "instructions:2"
     second = prepare("same-body-second")
-    assert json.loads(second["messages"][-1].content)["sources"][0]["body"] == "基础规则第一版"
+    assert parse_root_section(second["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "基础规则第一版"
     assert connection.execute(
         "SELECT latest_visible_committed_revision, latest_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:2", "instructions:2")

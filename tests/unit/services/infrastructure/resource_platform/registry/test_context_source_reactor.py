@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
@@ -42,8 +42,8 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 from tests.unit.services.infrastructure.rollout_context.conftest import (
     SourceSealCase,
@@ -357,12 +357,12 @@ async def raw_overflow_case(
     ContextSourceManager, WorkspaceFileResourceRegistry, WorkspaceFileWatchService,
     ContextSourceReactor, list[str], asyncio.Event,
 ]]:
-    async def quiet_awatch(_root: Path, **_options: object):
+    async def quiet_awatch(_runtime, _root: Path, **_options: object):
         # 原生事件源在本例保持静止，防止真实 OS 通知替漏掉 overflow 的错误实现补救。
         yield set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(watch_module, "awatch", quiet_awatch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", quiet_awatch)
     monkeypatch.setattr(watch_module, "FILE_WATCH_QUEUE_SIZE", 1)
     (tmp_path / "workspace").mkdir()
     manager, registry, watcher, reactor, scope, uris = _overflow_fixture(

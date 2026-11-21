@@ -22,6 +22,8 @@ function tool(
     execution_enabled: executionEnabled,
     model_visible: modelVisible,
     test_supported: true,
+    execution_locked: false,
+    model_visibility_locked: false,
   };
 }
 
@@ -40,6 +42,7 @@ function renderTree(
       savingToolIds={new Set()}
       runs={new Map()}
       testingTools={new Set()}
+      canRunTests={true}
       collapsedGroups={new Set()}
       onToggleCollapsed={() => {}}
       onToggleGroupCapability={callbacks.onToggleGroupCapability}

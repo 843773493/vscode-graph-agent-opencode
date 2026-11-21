@@ -31,6 +31,8 @@ from app.schemas.internal_v2.turn import (
     TurnSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadItemInspectionDTO,
+    ThreadItemInspectionRequest,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
@@ -112,6 +114,9 @@ from app.services.infrastructure.rollout_context.checkpoint.runtime.langgraph_ap
 from app.services.infrastructure.rollout_context.checkpoint.writer import (
     RolloutAppendWriter,
 )
+from app.services.infrastructure.rollout_context.execution.user_questions import (
+    UserQuestionStore,
+)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
@@ -129,7 +134,7 @@ from app.services.infrastructure.rollout_history.message_search import (
 )
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+    from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 
 
 class RolloutCheckpointSaver(
@@ -179,10 +184,11 @@ class RolloutCheckpointSaver(
             sessions_dir,
             storage=self._storage,
         )
+        self.user_questions = UserQuestionStore(self._storage.storage)
         self._context_reader = context_reader or RolloutContextReader(self._storage)
         # 历史 DTO 读取器属于 Saver 内部实现，业务层只依赖本类。
         if history_reader is None:
-            from app.services.infrastructure.rollout_history_reader import (
+            from app.services.infrastructure.rollout_history.reader import (
                 RolloutHistoryReader,
             )
 
@@ -516,6 +522,9 @@ class RolloutCheckpointSaver(
         self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str,
     ) -> str | None:
         return self._storage.storage.committed_tool_result_id(session_id, thread_id, model_call_id, tool_call_id)
+
+    def inspect_history_item(self, session_id: str, thread_id: str, request: ThreadItemInspectionRequest) -> ThreadItemInspectionDTO:
+        return self._history_reader.inspect_item(session_id, thread_id, request)
 
     def list_history_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
                                   limit: int = 100, view_id: str | None = None,

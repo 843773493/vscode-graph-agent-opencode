@@ -1,29 +1,9 @@
-from google.protobuf import descriptor_pb2
-
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
+from boxteam.gateway.v2 import public_pb2 as gateway_pb2
+from boxteam.workspace.v2 import (
     job_pb2,
     public_pb2,
-    session_interaction_pb2,
 )
-
-
-def test_python_binding_preserves_cross_file_import_and_oneof() -> None:
-    event = session_interaction_pb2.SessionExecutionEvent(
-        type="job.updated",
-        header=session_interaction_pb2.SessionExecutionEventHeader(
-            event_id="event_123",
-            session_id="session_123",
-        ),
-        job_updated=job_pb2.JobProgress(
-            job_id="job_123",
-            status=job_pb2.JOB_STATUS_RUNNING,
-            progress=42,
-        ),
-    )
-
-    assert event.WhichOneof("payload") == "job_updated"
-    assert event.job_updated.progress == 42
+from google.protobuf import descriptor_pb2
 
 
 def test_current_job_and_pending_request_owner_fields_keep_distinct_wire_tags() -> None:
@@ -45,7 +25,7 @@ def test_current_job_and_pending_request_owner_fields_keep_distinct_wire_tags() 
 
 
 def test_message_owner_survives_public_binding_round_trip() -> None:
-    for message_type, tag in ((public_pb2.MessageDTO, 9), (session_interaction_pb2.MessageObservation, 8)):
+    for message_type, tag in ((public_pb2.MessageDTO, 9),):
         assert message_type.DESCRIPTOR.fields_by_name["thread_id"].number == tag
         value = message_type(session_id="ses_owner", thread_id="thr_child")
         decoded = message_type.FromString(value.SerializeToString())

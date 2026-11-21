@@ -6,6 +6,10 @@ from copy import deepcopy
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import (
+    MODEL_SOURCE_EXTENSION,
+    ModelSource,
+)
 from app.domain.itemized.records import (
     GENERATED_RESULT_ANNOTATION_FIELDS,
     CanonicalItemRecord,
@@ -50,7 +54,7 @@ def canonical_message_anchor(message: BaseMessage | Mapping[str, object]) -> str
 # 普通消息的既有控制字段保留原合同；生成结果只接受闭合的结构标记。
 ANNOTATION_FIELDS = (
     "structured_prompt_kind", "structured_prompt_schema_version",
-    "boxteam_session_provider_id",
+    "boxteam_session_model",
     "goal_id", "goal_continuation", "goal_objective", "goal_budget_limited", "goal_objective_updated",
     "team_id", "team_task_id", "coordinator_thread_id", "member_thread_id",
     "boxteam_generation_run_id", "boxteam_generator_id", "boxteam_generation_phase",
@@ -62,12 +66,18 @@ ANNOTATION_FIELDS = (
     "replay_action", "replaced_message_id",
     "parent_session_id",
     "token_usage",
+    "model_token_usage",
 )
 
 
 def message_annotations(response: Mapping[str, object]) -> dict[str, object]:
     extensions = deepcopy(response.get("extensions", {}))
     validate_extensions(extensions)
+    source = ModelSource.from_dict(response.get("model_source"))
+    if source is not None:
+        extensions[MODEL_SOURCE_EXTENSION] = {
+            "extension_version": "1", "protection": "public", "value": source.to_dict(),
+        }
     nested = response.get("message_metadata")
     nested = nested if isinstance(nested, Mapping) else {}
     generated_result = response.get("structured_prompt_kind", nested.get("structured_prompt_kind")) == "generated_session_result"
@@ -110,7 +120,7 @@ def companion_extensions(primary: CanonicalItemRecord) -> dict[str, object]:
         result[ANNOTATION_SCHEMA] = {
             **envelope,
             "value": {
-                key: child for key, child in value.items() if key != "token_usage"
+                key: child for key, child in value.items() if key not in {"token_usage", "model_token_usage"}
             },
         }
         if not result[ANNOTATION_SCHEMA]["value"]:
@@ -136,16 +146,18 @@ def project_annotations(item: CanonicalItemRecord) -> dict[str, object]:
     envelope = item.extensions.get(ANNOTATION_SCHEMA)
     display = item.payload.get("display_part") if isinstance(item.payload, Mapping) else None
     generated_result = isinstance(display, Mapping) and display.get("kind") == "generated_session_result"
+    source = ModelSource.from_extensions(item.extensions)
+    source_metadata: dict[str, object] = {"model_source": source.to_dict()} if source is not None else {}
     if not isinstance(envelope, Mapping) or envelope["extension_version"] != "1":
-        return {}
+        return source_metadata
     value = envelope["value"]
     if not isinstance(value, Mapping):
         raise TypeError("checkpoint annotations value 必须是 object")
-    result = {
+    result = {**source_metadata, **{
         name: deepcopy(value[name])
         for name in (GENERATED_RESULT_ANNOTATION_FIELDS if generated_result else ANNOTATION_FIELDS)
         if name in value
-    }
+    }}
     provenance = {
         key: result[key]
         for key in ("source", "parent_session_id", "source_address", "target", "communication_id", "kind", "reply_required", "reply_to_communication_id")

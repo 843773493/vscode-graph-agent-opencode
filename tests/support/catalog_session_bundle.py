@@ -24,6 +24,7 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import thread_id_at, thread_id_for_name_at
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
@@ -40,7 +41,7 @@ class CatalogSessionBundleSpec:
     created_at: datetime | None = None
     main_thread_id: str | None = None
     current_agent_id: str = "default"
-    current_provider_id: str | None = None
+    current_model: ModelReferenceDTO | None = None
     session_kind: SessionKind = "normal"
     context_source_session_id: str | None = None
     generation_origin: SessionGenerationOriginDTO | None = None
@@ -131,7 +132,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
                 locator,
                 main_thread_id,
                 current_agent_id=spec.current_agent_id,
-                current_provider_id=spec.current_provider_id,
+                current_model_json=spec.current_model.model_dump_json() if spec.current_model is not None else None,
                 session_kind=spec.session_kind,
                 context_source_session_id=spec.context_source_session_id,
                 generation_origin_json=(
@@ -191,7 +192,7 @@ def seed_catalog_session_bundle(
     parent_node_id: str | None = None,
     main_thread_id: str | None = None,
     current_agent_id: str = "default",
-    current_provider_id: str | None = None,
+    current_model: ModelReferenceDTO | None = None,
     session_kind: SessionKind = "normal",
     context_source_session_id: str | None = None,
     updated_at: datetime | None = None,
@@ -211,7 +212,7 @@ def seed_catalog_session_bundle(
             parent_node_id=parent_node_id,
             main_thread_id=main_thread_id,
             current_agent_id=current_agent_id,
-            current_provider_id=current_provider_id,
+            current_model=current_model,
             session_kind=session_kind,
             context_source_session_id=context_source_session_id,
             updated_at=updated_at,

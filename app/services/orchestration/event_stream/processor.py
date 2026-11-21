@@ -15,11 +15,11 @@ from app.abstractions.session_changes import (
     SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.agents.tool_result_text import tool_output_status
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
+from app.agents.tool_result_text import extract_tool_result_text, tool_output_status
 from app.core.failures import report_failure
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
@@ -41,12 +41,6 @@ from app.services.mapping.agent_content_mapper import (
     AgentStreamContentPart,
     extract_agent_stream_content_parts,
 )
-from app.services.orchestration.activity_runtime import activity_failure_message
-from app.services.orchestration.agent_stream_helpers import (
-    extract_tool_result_text,
-    is_tracked_chat_model_event,
-    normalize_tool_args,
-)
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
     AgentEventStreamResult,
@@ -60,6 +54,7 @@ from app.services.orchestration.event_stream.identity import (
     validate_stream_event_identity,
 )
 from app.services.orchestration.event_stream.model_events import (
+    is_chat_model_run_name,
     materialize_model_content_parts,
     merge_model_content_part,
     stream_chunk_token_usage,
@@ -73,13 +68,17 @@ from app.services.orchestration.event_stream.tool_events import (
     SUBAGENT_TOOL_NAMES,
     activity_result_detail,
     build_tool_display_context,
+    file_edits_from_text_mutation_result,
+    normalize_tool_args,
     resource_activity_binding_from_metadata,
     stored_edit_payload,
     text_mutation_has_file_effects,
-    text_mutation_snapshots_from_result,
     tool_message_from_output,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.activities import (
+    activity_failure_message,
+)
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 def _field_value(value: object, field_name: str) -> object | None:
@@ -340,7 +339,7 @@ async def process_agent_event_stream(
             is_model_event = (
                 isinstance(event_type, str)
                 and event_type.startswith("on_chat_model_")
-                and is_tracked_chat_model_event(name)
+                and is_chat_model_run_name(name)
             )
             is_model_failed_event = (
                 event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
@@ -389,7 +388,7 @@ async def process_agent_event_stream(
                     )
                 continue
 
-            if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_start" and is_chat_model_run_name(name):
                 latest_model_part_ids_in_order.clear()
                 latest_model_parts_by_id.clear()
                 latest_model_visible_text_seen = False
@@ -428,7 +427,7 @@ async def process_agent_event_stream(
                 )
                 continue
 
-            if event_type == "on_chat_model_stream" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_stream" and is_chat_model_run_name(name):
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
@@ -451,7 +450,7 @@ async def process_agent_event_stream(
 
                 continue
 
-            if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_end" and is_chat_model_run_name(name):
                 model_run_id = event_run_id(event)
                 is_summary_candidate = message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(model_run_id)
                 if not is_summary_candidate and not latest_model_visible_text_seen:
@@ -725,7 +724,8 @@ async def process_agent_event_stream(
                     isinstance(raw_output, ToolMessage)
                     and effective_tool_status == "success"
                 ):
-                    output = await tool_output_store.abound(
+                    output = await asyncio.to_thread(
+                        tool_output_store.limit_message,
                         session_id=session_id,
                         tool_name=display_context.tool_name,
                         tool_call_id=raw_output.tool_call_id,
@@ -744,33 +744,28 @@ async def process_agent_event_stream(
                 if display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME:
                     completed_custom_tool_names.append(display_context.tool_name)
                 stored_edits: list[StoredFileEdit] = []
-                if run_id:
-                    snapshots = None
-                    has_file_effects = effective_tool_status == "success" or (
-                        display_context.tool_name in FILE_EDIT_TOOL_NAMES and text_mutation_has_file_effects(raw_result_text)
+                if (
+                    run_id
+                    and display_context.tool_name in FILE_EDIT_TOOL_NAMES
+                    and (
+                        effective_tool_status == "success"
+                        or text_mutation_has_file_effects(raw_result_text)
                     )
-                    if (
-                        display_context.tool_name in FILE_EDIT_TOOL_NAMES
-                        and has_file_effects
+                ):
+                    for observed_edit in file_edits_from_text_mutation_result(
+                        result_text=raw_result_text,
+                        workspace_root=workspace_root,
                     ):
-                        snapshots = text_mutation_snapshots_from_result(
-                            result_text=raw_result_text,
-                            workspace_root=workspace_root,
+                        stored_edit = await session_changes_service.record_tool_file_edit(
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            tool_call_id=tool_call_id,
+                            execution_id=run_id,
+                            tool_name=display_context.tool_name,
+                            edit=observed_edit,
                         )
-                    if snapshots is not None and has_file_effects:
-                        for snapshot in snapshots:
-                            stored_edit = (
-                                await session_changes_service.record_tool_file_edit(
-                                    session_id=session_id,
-                                    turn_id=turn_id,
-                                    tool_call_id=tool_call_id,
-                                    execution_id=run_id,
-                                    tool_name=display_context.tool_name,
-                                    before=snapshot,
-                                )
-                            )
-                            if stored_edit is not None:
-                                stored_edits.append(stored_edit)
+                        if stored_edit is not None:
+                            stored_edits.append(stored_edit)
                 tool_attempt_id = message_stream_tool_attempt_ids_by_run_id.get(run_id, run_id)
                 payload = {
                     "part_id": tool_attempt_id,

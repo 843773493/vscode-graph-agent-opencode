@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.shadow_adapter import (
     ConfigShadowLifecycleAdapter,

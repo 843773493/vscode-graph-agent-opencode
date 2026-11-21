@@ -96,11 +96,17 @@ try {
     const view = page.locator('.service-plugin-packages-view');
     await expect(view).toBeVisible();
     await expect(view.getByRole('searchbox')).toHaveAttribute('aria-label', locale === 'en' ? 'Search installed plugin packages' : '搜索已安装插件包');
-    const scope = view.getByRole('combobox', { name: locale === 'en' ? 'Plugin management scope' : '插件管理范围', exact: true });
-    await expect(scope).toHaveValue('gateway');
-    await expect(scope.locator('option')).toHaveText(locale === 'en'
-      ? ['Current Gateway', 'Current Workspace', 'Future Workspaces'] : ['当前 Gateway', '当前工作区', '以后新建工作区']);
-    await expect(view.getByRole('button', { name: locale === 'en' ? 'Install Plugin Package' : '安装插件包', exact: true })).toBeVisible();
+    const scope = view.getByRole('button', { name: locale === 'en' ? 'Plugin scope and installation' : '插件管理范围及安装', exact: true });
+    await expect(view.getByRole('combobox', { name: locale === 'en' ? 'Management Gateway' : '管理 Gateway', exact: true })).toBeVisible();
+    const workspace = view.getByRole('combobox', { name: locale === 'en' ? 'Plugin Management Workspace' : '插件管理工作区', exact: true });
+    await expect(workspace).toBeEnabled();
+    expect(await workspace.inputValue()).not.toBe('');
+    await scope.click();
+    for (const name of locale === 'en' ? ['Current Workspace', 'Current Gateway', 'Future Workspaces', 'Install Plugin Package']
+      : ['当前工作区', '当前 Gateway', '以后新建工作区', '安装插件包']) {
+      await expect(page.getByRole('menuitem', { name, exact: true })).toBeVisible();
+    }
+    await page.keyboard.press('Escape');
     await command('workbench.view.explorer');
   };
   let started = performance.now();

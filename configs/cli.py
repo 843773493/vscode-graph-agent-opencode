@@ -6,17 +6,19 @@ import json
 import logging
 import os
 import sqlite3
+from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
 
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 from dotenv import load_dotenv
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.core.path_utils import resolve_boxteam_home
 from app.core.user_storage_migration import migrate_user_storage_layout
 from configs.diagnostics import diagnose_configuration, diagnostic_error
 from configs.gateway_development_assets import install_gateway_development_assets
 from configs.installer import (
+    install_bundled_plugins,
     install_source_development_configuration,
     install_user_configuration,
     resolve_config_resource_source,
@@ -48,7 +50,7 @@ def _layout_schema_sources(
     )
 
 
-def _prepare_storage(*, home: Path, boxteam_home: Path) -> None:
+def _prepare_storage(*, home: Path, boxteam_home: Path, preview: bool = False) -> None:
     configured_default_workspace = os.environ.get("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT")
     default_workspace_root = (
         Path(configured_default_workspace or boxteam_home / "boxteam_workspace")
@@ -59,36 +61,116 @@ def _prepare_storage(*, home: Path, boxteam_home: Path) -> None:
         home=home,
         boxteam_home=boxteam_home,
         default_workspace_root=default_workspace_root,
+        preview=preview,
     )
 
 
-def _reject_implicit_layout_migration(
+def _prepare_startup_configuration(
     *,
     home: Path,
     boxteam_home: Path,
     config_root: Path,
     workspace: Path | None,
-) -> None:
-    legacy_paths = [config_root / "boxteam.jsonc"]
-    if boxteam_home == (home / ".boxteams").resolve():
-        legacy_paths.extend(
-            home / ".boxteam" / name
-            for name in ("boxteam.jsonc", "config.schema.jsonc", "web_ui_settings.json")
+    project_root: Path | None,
+    preview: bool = False,
+) -> dict[str, object]:
+    from configs.maintenance.layout import (
+        migrate_legacy_user_configuration,
+        migrate_legacy_workspace_configuration,
+        plan_legacy_user_configuration,
+        plan_legacy_workspace_configuration,
+    )
+    from configs.maintenance.runtime_logging_commit import _lock_databases
+    from configs.maintenance.startup import _registry, prepare_startup_migrations
+
+    gateway_schema, workspace_schema = _layout_schema_sources(project_root)
+    gateway_root = (Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) if os.environ.get("BOXTEAM_GATEWAY_ROOT")
+                    else boxteam_home / "state/gateway").expanduser().resolve()
+    default_home = boxteam_home == (home / ".boxteams").resolve()
+    default_root = Path(os.environ.get("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT") or boxteam_home / "boxteam_workspace")
+    legacy_gateway_root = default_root.expanduser().resolve() / ".boxteam/gateway"
+    old_sources = [home / ".boxteam" / name for name in ("boxteam.jsonc", "config.schema.jsonc", "web_ui_settings.json")]
+    old_sources.append(legacy_gateway_root)
+    journals = (config_root / ".runtime-logging-migration.json", gateway_root / ".workspace-identity-migration.json")
+    if any(path.exists() and json.loads(path.read_text(encoding="utf-8"))["state"] != "completed" for path in journals):
+        return {"migrated_user_layout": False, "migrated_workspace_layout": False,
+                "upgrades": prepare_startup_migrations(
+                    boxteam_home=boxteam_home, project_root=project_root or Path.cwd(),
+                    gateway_root=gateway_root, workspaces=(workspace,) if workspace is not None else (),
+                    preview=preview,
+                )}
+    user_plan = plan_legacy_user_configuration(
+        config_root=config_root, gateway_schema_path=gateway_schema,
+        workspace_schema_path=workspace_schema,
+        legacy_path=(home / ".boxteam/boxteam.jsonc" if default_home
+                     and (home / ".boxteam/boxteam.jsonc").exists() else None),
+    )
+    # 预检读取尚未搬动的原 owner；真正启动仍使用同一个目标 Gateway 根。
+    source_gateway_root = (legacy_gateway_root if default_home and legacy_gateway_root.exists()
+                           and gateway_root == boxteam_home / "state/gateway" else gateway_root)
+    gateway_sources = [source_gateway_root]
+    if default_home and legacy_gateway_root.exists() and legacy_gateway_root not in gateway_sources:
+        gateway_sources.append(legacy_gateway_root)
+    roots = [workspace] if workspace is not None else []
+    for source_root in gateway_sources:
+        registry = _registry(source_root)
+        if registry is not None:
+            roots.extend(Path(item["root_path"]) for item in registry["targets"] if item.get("connection_kind") == "local")
+    roots = list(dict.fromkeys(root.expanduser().resolve() for root in roots))
+    workspace_plans = [plan for root in roots if (plan := plan_legacy_workspace_configuration(
+        workspace_root=root, workspace_schema_path=workspace_schema,
+    )) is not None]
+    if default_home:
+        _prepare_storage(home=home, boxteam_home=boxteam_home, preview=True)
+    layout_required = user_plan is not None or bool(workspace_plans) or default_home and any(path.exists() for path in old_sources)
+    migrated_user = migrated_workspace = False
+    if layout_required:
+        # 全来源版本、日志取舍和目标候选先在内存中确认；首个搬动或拆分之前不提交其他资产。
+        plans = ([user_plan] if user_plan is not None else []) + workspace_plans
+        planned_files = {path: content for plan in plans for path, content in plan.targets}
+        upgrades = prepare_startup_migrations(
+            boxteam_home=boxteam_home, project_root=project_root or Path.cwd(),
+            gateway_root=source_gateway_root, workspaces=tuple(roots), preview=True,
+            planned_files=planned_files,
         )
-    configured_default_workspace = os.environ.get("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT")
-    default_workspace_root = Path(
-        configured_default_workspace or config_root.parent / "boxteam_workspace"
-    ).expanduser().resolve()
-    legacy_paths.append(default_workspace_root / ".boxteam" / "gateway")
-    if workspace is not None:
-        legacy_paths.append(workspace.expanduser().resolve() / ".boxteam" / "boxteam.jsonc")
-    existing = [path for path in legacy_paths if path.exists()]
-    if existing:
-        raise RuntimeError(
-            "发现旧版用户存储布局；普通初始化不会自动迁移。请先显式运行 "
-            "`python -m configs.boxteam migrate`，并为工作区旧配置添加 "
-            f"`--workspace <path>`。路径: {existing}"
-        )
+        for source_root in gateway_sources[1:]:
+            prepare_startup_migrations(
+                boxteam_home=boxteam_home, project_root=project_root or Path.cwd(),
+                gateway_root=source_root, workspaces=tuple(roots), preview=True,
+                planned_files=planned_files,
+            )
+        upgrades["layout"] = {"state": "migration_required"}
+        if preview:
+            return {"migrated_user_layout": False, "migrated_workspace_layout": False,
+                    "upgrades": upgrades}
+        with ExitStack() as stack:
+            # 布局写入也必须先取得原数据库 owner；不能拆分完才发现服务仍在写。
+            _lock_databases([root / ".boxteam/state/workspace.sqlite" for root in roots], stack)
+            if source_gateway_root != legacy_gateway_root:
+                _lock_databases([gateway_root / "gateway.sqlite"], stack)
+            if default_home:
+                # Windows 不能搬仍有文件句柄的目录；先由原 owner 核实旧 writer 已退出。
+                if legacy_gateway_root.exists():
+                    with ExitStack() as source_access:
+                        _lock_databases([legacy_gateway_root / "gateway.sqlite"], source_access)
+                _prepare_storage(home=home, boxteam_home=boxteam_home)
+            if source_gateway_root == legacy_gateway_root:
+                _lock_databases([gateway_root / "gateway.sqlite"], stack)
+            migrated_user = migrate_legacy_user_configuration(
+                config_root=config_root, gateway_schema_path=gateway_schema,
+                workspace_schema_path=workspace_schema,
+            )
+            for root in roots:
+                migrated_workspace = migrate_legacy_workspace_configuration(
+                    workspace_root=root, workspace_schema_path=workspace_schema,
+                ) or migrated_workspace
+    upgrades = prepare_startup_migrations(
+        boxteam_home=boxteam_home, project_root=project_root or Path.cwd(),
+        gateway_root=gateway_root, workspaces=tuple(roots),
+        preview=preview,
+    )
+    return {"migrated_user_layout": migrated_user, "migrated_workspace_layout": migrated_workspace,
+            "upgrades": upgrades}
 
 
 def _validate_installed_configuration(
@@ -220,6 +302,7 @@ def main() -> None:
         default="initialize",
     )
     parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--bundled-plugins", type=json.loads, default=[])
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
@@ -240,21 +323,13 @@ def main() -> None:
     if args.recovery_output is not None and args.action != "migrate-workspace-identity":
         parser.error("--recovery-output 只用于 migrate-workspace-identity")
     if args.action != "migrate-runtime-config" and (
-        args.preview
+        args.preview and args.action != "initialize"
         or args.restore and args.action != "migrate-workspace-identity"
         or args.level is not None
         or args.pretty is not None
         or args.migration_workspace
     ):
-        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-config")
-    if args.action in {"doctor", "diagnose"}:
-        _print_configuration_diagnostic(
-            home=args.home,
-            project_root=args.project_root,
-            workspace_root=args.workspace,
-        )
-        return
-
+        parser.error("--preview 用于 initialize/migrate-runtime-config；--restore 用于原迁移；其它选择参数只用于 migrate-runtime-config")
     home = args.home.expanduser().resolve()
     boxteam_home = resolve_boxteam_home(home)
     config_root = boxteam_home / "config"
@@ -263,13 +338,34 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
+    if args.action == "install-source-development":
+        if project_root is None:
+            raise ValueError("安装源码开发配置必须提供 --project-root")
+        source_env_path = project_root / ".env"
+        if not source_env_path.is_file():
+            raise FileNotFoundError(f"源码环境配置不存在: {source_env_path}")
+        load_dotenv(source_env_path, override=False)
+    else:
+        load_dotenv(config_root / ".env", override=False)
+    if args.action in {"doctor", "diagnose"}:
+        _print_configuration_diagnostic(
+            home=home, project_root=project_root, workspace_root=args.workspace,
+        )
+        return
+    startup = {}
     if args.action in {"initialize", "install-source-development"}:
-        _reject_implicit_layout_migration(
+        startup = _prepare_startup_configuration(
             home=home,
             boxteam_home=boxteam_home,
             config_root=config_root,
             workspace=args.workspace,
+            project_root=project_root,
+            preview=args.preview,
         )
+        if args.preview:
+            print(json.dumps({"action": args.action, "read_only": True,
+                              "upgrade_required": bool(startup["upgrades"]), **startup}, ensure_ascii=False))
+            return
     if args.action in {"preview-workspace-identity", "migrate-workspace-identity"}:
         from configs.maintenance.workspace_identity_migration import (
             preview_workspace_identity_migration,
@@ -290,7 +386,7 @@ def main() -> None:
                 if args.verify_remote and not args.restore and (not journal.exists() or json.loads(journal.read_text())["state"] == "restored"):
                     verified = asyncio.run(verify_remote_workspace_identities(
                         preview_workspace_identity_migration(gateway_root=gateway_root, project_root=project_root or Path.cwd()),
-                        gateway_root=gateway_root, log_dir=load_runtime_log_contract(project_root).root_for(boxteam_home),
+                        gateway_root=gateway_root, log_dir=load_runtime_log_contract().root_for(boxteam_home),
                     ))
                 report = commit_workspace_identity_migration(
                     gateway_root=gateway_root, project_root=project_root or Path.cwd(), restore=args.restore,
@@ -302,7 +398,7 @@ def main() -> None:
                 gateway_root=gateway_root, project_root=project_root or Path.cwd(),
             )
             if args.verify_remote:
-                log_dir = load_runtime_log_contract(project_root).root_for(boxteam_home)
+                log_dir = load_runtime_log_contract().root_for(boxteam_home)
                 preview = asyncio.run(verify_remote_workspace_identities(
                     preview, gateway_root=gateway_root, log_dir=log_dir,
                 ))
@@ -342,16 +438,6 @@ def main() -> None:
                   else commit_runtime_logging_migration(**options, restore=args.restore))
         print(json.dumps({"action": args.action, "preview": args.preview, **report}, ensure_ascii=False))
         return
-    if args.action == "install-source-development":
-        if project_root is None:
-            raise ValueError("安装源码开发配置必须提供 --project-root")
-        source_env_path = project_root / ".env"
-        if not source_env_path.is_file():
-            raise FileNotFoundError(f"源码环境配置不存在: {source_env_path}")
-        load_dotenv(source_env_path, override=False)
-    else:
-        load_dotenv(config_root / ".env", override=False)
-
     if args.action == "migrate":
         _prepare_storage(home=home, boxteam_home=boxteam_home)
     gateway_schema_source, workspace_schema_source = _layout_schema_sources(
@@ -386,6 +472,8 @@ def main() -> None:
             project_root=development_root,
             config_root=config_root,
             local_only=local_only,
+            force=args.force,
+            bundled_packages=args.bundled_plugins,
         )
         gateway_development_assets = _environment_flag(
             GATEWAY_DEVELOPMENT_ASSETS_ENV
@@ -404,7 +492,7 @@ def main() -> None:
                     "schema_paths": [str(path) for path in installation.schema_paths],
                     "gateway_development_assets": gateway_development_assets,
                     "local_only": local_only,
-                    "migrated_user_layout": migrated_user_layout,
+                    **startup,
                 },
                 ensure_ascii=False,
             )
@@ -412,22 +500,25 @@ def main() -> None:
         return
 
     if args.action == "initialize":
+        bundled_plugins = install_bundled_plugins(boxteam_home=boxteam_home, packages=args.bundled_plugins)
         installation = install_user_configuration(
             config_root=config_root,
             profile="default",
             project_root=project_root,
             force=args.force,
+            bundled_packages=args.bundled_plugins,
         )
         print(
             json.dumps(
                 {
                     "action": args.action,
+                    "installed_bundled_plugins": bundled_plugins,
                     "config_paths": [str(path) for path in installation.config_paths],
                     "schema_paths": [str(path) for path in installation.schema_paths],
                     "created_config_paths": [
                         str(path) for path in installation.created_config_paths
                     ],
-                    "migrated_user_layout": migrated_user_layout,
+                    **startup,
                 },
                 ensure_ascii=False,
             )

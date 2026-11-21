@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const SUPPORTED_SCHEMA_VERSION = 1;
@@ -47,6 +47,16 @@ export function validateRuntimeManifest(value) {
     throw new Error(`未知 runtime distribution: ${String(manifest.distribution)}`);
   }
   const node = requireObject(manifest.node, "runtime manifest.node");
+  if (!Array.isArray(manifest.bundled_plugins)) throw new TypeError("runtime manifest.bundled_plugins 必须是数组");
+  const bundledPlugins = manifest.bundled_plugins.map(value => {
+    const entry = requireObject(value, "runtime manifest.bundled_plugins entry");
+    const sources = ["directory", "archive"].filter(key => Object.hasOwn(entry, key));
+    if (sources.length !== 1) throw new TypeError("内置插件必须且只能提供 directory 或 archive");
+    const source = sources[0];
+    return Object.freeze({ package_id: requireString(entry.package_id, "bundled plugin package_id"),
+      package_version: requireString(entry.package_version, "bundled plugin package_version"),
+      [source]: requireString(entry[source], `bundled plugin ${source}`) });
+  });
   const configResources = requireObject(
     manifest.config_resources,
     "runtime manifest.config_resources",
@@ -102,6 +112,7 @@ export function validateRuntimeManifest(value) {
       manifest.skill_resources,
       "runtime manifest.skill_resources",
     ),
+    bundledPlugins: Object.freeze(bundledPlugins),
     webAssets: optionalString(manifest.web_assets, "runtime manifest.web_assets"),
     chromiumExecutable: optionalString(
       manifest.chromium_executable,
@@ -137,6 +148,8 @@ export function resolveRuntimeManifest(manifestPath, value) {
       ),
     ),
     skillResources: resolveResource(runtimeRoot, manifest.skillResources),
+    bundledPlugins: Object.freeze(manifest.bundledPlugins.map(entry => Object.freeze({ ...entry,
+      [entry.directory === undefined ? "archive" : "directory"]: resolveResource(runtimeRoot, entry.directory ?? entry.archive) }))),
     webAssets:
       manifest.webAssets === null
         ? null
@@ -182,6 +195,7 @@ export function assertRuntimeResources(manifest) {
       resourcePath,
     ]),
     ["共享 Skill 资源", manifest.skillResources],
+    ...manifest.bundledPlugins.map(entry => [`内置插件 ${entry.package_id}`, entry.directory ?? entry.archive]),
     ...(manifest.webAssets === null ? [] : [["Web UI", manifest.webAssets]]),
     ...(manifest.chromiumExecutable === null
       ? []
@@ -195,6 +209,12 @@ export function assertRuntimeResources(manifest) {
         `${label}资源不存在: ${resourcePath} ` +
           `(distribution=${manifest.distribution}, manifest=${manifest.manifestPath})`,
       );
+    }
+  }
+  for (const entry of manifest.bundledPlugins) {
+    const resource = statSync(entry.directory ?? entry.archive);
+    if (entry.directory !== undefined ? !resource.isDirectory() : !resource.isFile()) {
+      throw new TypeError(`内置插件来源类型不符: ${entry.directory ?? entry.archive}`);
     }
   }
 }

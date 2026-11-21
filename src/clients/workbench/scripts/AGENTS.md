@@ -48,7 +48,17 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 `pluginCommandTransform.mjs` 将自有命令接入原 CommandService、菜单动作和 Quick Access 的冻结参数，并为原 KeybindingsRegistry 提供可释放的单条登记及 resolver 失效通知；保留键盘布局和用户覆盖。不得按目标调用全量 `setExtensionKeybindings` 或复制原解析器，不修改固定上游。新增接缝纳入实际转换源码类型检查。
 
+`harnessWelcomeTransform.mjs` 将 Provider、Agent 和 Gateway Connections 管理命令追加到原 Getting Started startEntries；只改构建／开发时转换结果，不修改固定 upstream。独立测试调用完整 sourceTransform 并确认原上游文件不变。
+
 
 原用户 Node／Web Extension Host、VSIX／Gallery 安装与专用构建脚本已退役。浏览器 scanner 只保留产品内置贡献和派生缓存，原 Worker 与 Registry 继续运行；自有包管理沿原配置及 Gateway 插件 owner。
 
+产品内置 Worker 使用随产品交付的可信同源 iframe，其无效的同源 sandbox 不作为插件隔离边界；自有用户插件仍由 Gateway 独立进程托管。窗口容器 `workbench` 不参与内置扩展的 workspaceContains 激活，业务搜索沿 `boxteam-file` 的真实工作区。浏览器文档退出通过原宿主集合同步释放内置 Worker，不登记 Web 不支持的异步 shutdown join；原 Copilot 云端自动连接与使用统计贡献不启动。
+
+没有原版 Chat／编辑会话时不创建空的异步保存任务；真实会话继续沿原存储保存。语言检测库的 CPU 分块在构建时静态合并，保留实际模型推断，不在浏览器模拟 Node require 或关闭检测。设置布局先消费细分类再消费类别父项，诊断排除主动隐藏和有意多组展示的设置，真正遗漏的类别仍报告警告。
+
 `build.mjs` 不导出无消费者的 esbuild metafile；`immutable-assets.json` 只列实际存在内容地址名称的 chunks、media 与本地化资源。固定名 manifest 保持 revalidation 缓存，不假装 immutable。
+
+内容地址文本资源的 gzip 表示在构建时生成，并与原件一起登记在同一 immutable 清单。Gateway 与本地静态宿主按 Accept-Encoding 选择已有表示，保留原 MIME、独立 ETag、HEAD／304 和 Vary；普通请求不压缩正文，也不建立第二份缓存清单。
+
+`searchModelTransform.mjs` 接线原 FileMatch 与全部派生类的 worker 依赖；首次结果直接消费已有匹配，自动更新及替换后的单行重算沿同一快照 worker。变更／重新绑定／释放取消旧计算，模型关闭仍能完成最后一份快照；替换后的单行计算取消此前排队的全模型刷新，避免自己的结果刷新被抢先取消。

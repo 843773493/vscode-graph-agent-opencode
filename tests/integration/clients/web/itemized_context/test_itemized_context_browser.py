@@ -28,7 +28,9 @@ from app.domain.itemized.records import (
     TurnScope,
 )
 from app.runtime.model_stream import configure_model_stream_from_environment
-from app.services.business.session_context_resource import context_assembly_identity
+from app.services.business.session_context_query.resources import (
+    context_assembly_identity,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )

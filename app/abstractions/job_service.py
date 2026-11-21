@@ -8,6 +8,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueRecord
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -40,6 +41,8 @@ class JobServiceProtocol(Protocol):
 
     async def get(self, job_id: str) -> JobDTO: ...
 
+    async def submission_dispatch(self, record: ExecutionQueueRecord) -> JobDispatchSnapshotDTO: ...
+
     def get_execution_binding(self, job_id: str) -> ExecutionBinding: ...
 
     def thread_input_admission(
@@ -61,7 +64,7 @@ class JobServiceProtocol(Protocol):
         require_open_admission: bool = True,
     ) -> T: ...
 
-    async def run_session_delete_operation(
+    async def run_session_control_operation(
         self,
         session_id: str,
         operation: Callable[[], Awaitable[T]],
@@ -69,7 +72,9 @@ class JobServiceProtocol(Protocol):
         deadline: float,
     ) -> T: ...
 
-    async def run_sessions_delete_operation(
+    def assert_session_control_open(self, session_id: str) -> None: ...
+
+    async def run_sessions_control_operation(
         self,
         session_ids: list[str],
         operation: Callable[[], Awaitable[T]],
@@ -85,7 +90,12 @@ class JobServiceProtocol(Protocol):
         control_request: JobControlRequest,
     ) -> JobControlResponseDTO: ...
 
-    async def delete_session_jobs(self, session_id: str) -> int: ...
+    async def stop_session_jobs(
+        self, session_id: str, *, thread_id: str | None = None,
+        delete_records: bool = True, discard_pending: bool = True,
+    ) -> int: ...
+
+    async def settle_jobs(self, job_ids: list[str]) -> None: ...
 
     async def list_pending(
         self, session_id: str, *, thread_id: str | None = None,
@@ -100,6 +110,8 @@ class JobServiceProtocol(Protocol):
     ) -> PendingRequestSummaryListDTO:
         """在调用方持有的 Session 读准入内查询；不建立写入或执行准入。"""
         ...
+
+    async def reorder_pending(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_thread_revision: int) -> PendingRequestListDTO: ...
 
     async def update_pending_policy(
         self,

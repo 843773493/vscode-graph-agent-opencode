@@ -1,0 +1,26 @@
+/* 行、图标、页头、操作与导航直接使用 upstream 的扩展样式；这里只补项目的分组与范围布局。 */
+.service-plugin-packages-view { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.service-plugin-search { margin: 5px 12px 6px 20px; }
+.service-plugin-search .monaco-inputbox { width: 100%; }
+.service-plugin-scope { margin: 0 12px 6px 20px; }
+.service-plugin-scope > .monaco-action-bar { width: 100%; }
+.service-plugin-scope .action-item.select-container { flex: 1; min-width: 0; margin-right: 4px; }
+.service-plugin-scope .action-item .monaco-select-box { width: 100%; min-width: 0; }
+.service-plugin-packages-content { overflow: auto; min-height: 0; flex: 1; }
+.service-plugin-packages-content > p { margin: 6px 12px 6px 20px; color: var(--vscode-descriptionForeground); }
+.service-plugin-package > h3 { display: flex; align-items: center; padding: 0 12px 0 20px; margin: 0; height: 26px; font-size: 11px; font-weight: 600; background: var(--vscode-sideBarSectionHeader-background); }
+.service-plugin-package > h3 > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-plugin-package > h3 > div { flex: none; }
+.service-plugin-package > p { margin: 6px 12px 6px 20px; color: var(--vscode-descriptionForeground); }
+.service-plugin-package-list .extension-list-item { cursor: pointer; }
+.service-plugin-package-list .publisher-name { font-size: 12px; color: var(--vscode-descriptionForeground); }
+.service-plugin-package-list [data-plugin-runtime-error]:not([hidden]) { color: var(--vscode-errorForeground); }
+.service-plugin-editor > .header > .details { min-width: 0; }
+.service-plugin-document { box-sizing: border-box; height: 100%; overflow: auto; padding: 10px 20px 20px; line-height: 1.5; }
+.service-plugin-document h2 { font-weight: 600; font-size: 20px; }
+.service-plugin-document pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--vscode-textCodeBlock-background); padding: 12px; }
+.service-plugin-owner { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+.service-plugin-document .monaco-button { width: fit-content; }
+.service-plugin-document [role=alert] { color: var(--vscode-errorForeground); }
+
+.service-plugin-feedback { position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px; max-height: 40%; overflow: auto; padding: 4px 8px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWidget-border); color: var(--vscode-errorForeground); font-size: 12px; overflow-wrap: anywhere; }

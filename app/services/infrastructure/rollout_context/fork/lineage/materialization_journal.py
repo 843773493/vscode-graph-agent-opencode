@@ -6,8 +6,7 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.fork.validation import (
     non_negative_int,
@@ -52,8 +51,8 @@ class ForkMaterializationJournalMixin:
         relationship = one_of_text(relationship, {"detached", "pinned"}, field="relationship")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         source_snapshot_sha256 = required_sha256(source_snapshot_sha256, field="source_snapshot_sha256")
-        materialization_id = optional_identity(materialization_id, field="materialization_id") or uuid4().hex
-        fork_id = optional_identity(fork_id, field="fork_id") or uuid4().hex
+        materialization_id = optional_identity(materialization_id, field="materialization_id") or create_uuid_hex()
+        fork_id = optional_identity(fork_id, field="fork_id") or create_uuid_hex()
         owner = (target_session_id, target_thread_id, checkpoint_ns)
         expected = (
             fork_id, target_session_id, source_session_id, source_checkpoint_id,

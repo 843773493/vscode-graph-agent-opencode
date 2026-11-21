@@ -27,6 +27,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.workspaces import clear_test_provider_api_keys
 
 _PLUGIN_SOURCE = '''
 import asyncio, hashlib, json, os, sys
@@ -34,8 +35,8 @@ sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
-from app.core.logging_config import configure_application_logging
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.logging import configure_application_logging
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='private-input-product-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
 print('plugin-instance-log ' + identity['plugin_id'] + ' ' + identity['instance_id'], flush=True)
@@ -116,9 +117,7 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
     workspace_root = Path(integration_workspace_root_path)
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "private-input-unused-key"
+    clear_test_provider_api_keys(config)
     ports = integration_port_block_for_file(Path(request.node.fspath))
     port = ports.port(20)
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"

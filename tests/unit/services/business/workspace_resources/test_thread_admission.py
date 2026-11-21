@@ -42,8 +42,8 @@ def gates(bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytes
     original = bundle.sessions.session_write_admission
 
     @asynccontextmanager
-    async def admitting(sid: str):
-        async with gate.exclusive(sid), original(sid):
+    async def admitting(sid: str, *, new_operation: bool = False):
+        async with gate.exclusive(sid), original(sid, new_operation=new_operation):
             yield
 
     monkeypatch.setattr(bundle.sessions, "session_write_admission", admitting)

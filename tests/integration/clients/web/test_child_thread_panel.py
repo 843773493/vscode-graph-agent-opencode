@@ -183,12 +183,12 @@ async def test_child_thread_panel_delegate_flow_through_real_web_surface(
         assert result["delegateTurn"]["finalText"] == "子代理任务已完成。"
         assert "已运行 task" in result["delegateTurn"]["toolText"]
 
-        # main Thread 的「运行与连接」资源面板展示 child 项。
+        # 会话资源栏的独立 Thread 标签展示 child 项。
         child = result["childThread"]
         assert child["childThreadId"], "面板未提供 child thread_id"
         assert child["title"].startswith("委派：")
         assert "完成示例任务并输出结果" in child["title"]
-        assert child["statusText"] == "运行中"
+        assert child["statusText"] == "已完成"
         assert "general-purpose" in child["metaText"]
 
         # 点击 child 项切换当前 Session 内的 Node Debug owner。

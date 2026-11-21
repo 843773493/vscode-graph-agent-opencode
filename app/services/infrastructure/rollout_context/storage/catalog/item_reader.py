@@ -26,6 +26,8 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     validate_stored_commit,
 )
 
+ItemInspectionMetadata = tuple[str, str | None, str | None, str | None, str | None, str | None, str, str, int]
+
 # 与正文 locator 同次查询提交和 owner；按 item 主键选集做索引连接，不扫描未消费历史。
 CATALOG_READ_COLUMNS = (
     STORED_COMMIT_COLUMNS
@@ -193,3 +195,33 @@ class RolloutCanonicalReadMixin:
         if item.item_id != item_id:
             raise RuntimeError(f"canonical item catalog 与 JSONL identity 冲突: {item_id}")
         return item
+
+
+def inspect_item_metadata(connection: sqlite3.Connection, view_id: str, *, item_id: str | None,
+                          message_id: str | None) -> ItemInspectionMetadata | None:
+    """先由 ID 索引缩小到单个 Item，再核当前 view 成员；不读正文。"""
+    row = connection.execute(
+        "WITH candidate AS (SELECT COALESCE(?,(SELECT source.item_id FROM messages message "
+        "JOIN item_catalog source ON source.jsonl_offset=message.jsonl_offset AND source.jsonl_length=message.jsonl_length "
+        "WHERE message.message_id=? ORDER BY source.item_sequence DESC LIMIT 1)) AS item_id),"
+        "notice_call AS (SELECT call.model_call_id,call.execution_id FROM candidate "
+        "JOIN item_catalog item ON item.item_id=candidate.item_id AND item.semantic_kind='runtime_notice' "
+        "JOIN context_assembly_selections selection ON selection.ref_type='canonical_item' AND selection.ref_id=item.item_id "
+        "JOIN model_calls call ON call.assembly_id=selection.assembly_id "
+        "WHERE selection.included=1 AND call.dispatch_state IN ('dispatched','completed') ORDER BY call.rowid LIMIT 1) "
+        "SELECT item.item_id,COALESCE(execution.turn_id,item.turn_id),execution.execution_id,execution.job_id,"
+        "COALESCE(json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'),"
+        "notice.model_call_id,CASE WHEN item.semantic_kind='user_input' THEN execution.first_model_call_id END),"
+        "COALESCE(json_extract(item.projection_manifest_json,'$.projection_identity.projection_message_id'),"
+        "(SELECT message_id FROM messages WHERE jsonl_offset=item.jsonl_offset AND jsonl_length=item.jsonl_length LIMIT 1)),"
+        "item.semantic_kind,item.content_hash,item.jsonl_length "
+        "FROM candidate JOIN item_catalog item ON item.item_id=candidate.item_id "
+        "LEFT JOIN notice_call notice ON 1=1 "
+        "LEFT JOIN executions execution ON execution.execution_id=COALESCE(notice.execution_id,item.execution_id) "
+        "WHERE (item.semantic_kind<>'runtime_notice' OR notice.model_call_id IS NOT NULL) "
+        "AND EXISTS(SELECT 1 FROM context_view_items member WHERE member.view_id=? "
+        "AND member.item_id=item.item_id AND member.visible=1 "
+        "AND (member.source_kind='canonical' OR (item.semantic_kind='runtime_notice' AND notice.model_call_id IS NOT NULL)))",
+        (item_id, message_id, view_id),
+    ).fetchone()
+    return tuple(row) if row is not None else None

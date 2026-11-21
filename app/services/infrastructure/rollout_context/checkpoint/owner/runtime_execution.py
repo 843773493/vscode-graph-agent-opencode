@@ -40,6 +40,7 @@ from app.domain.itemized.runtime_wakeup import (
     RuntimeInputConsumption,
 )
 from app.prompting import internal_message_factory
+from app.prompting.validation import validate_internal_message
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     source_lifecycle_item,
 )
@@ -67,6 +68,9 @@ if TYPE_CHECKING:
 
 class RuntimeExecutionOwnerMixin:
     _storage: RolloutContextStore
+
+    def message_submission(self, session_id: str, thread_id: str, operation_id: str) -> ExecutionQueueRecord | None:
+        return self._storage.executions.message_submission(session_id, thread_id, operation_id)
 
     def runtime_input_consumption(
         self, session_id: str, thread_id: str, *, item_id: str, source_id: str,
@@ -109,6 +113,9 @@ class RuntimeExecutionOwnerMixin:
             session_id, thread_id, job_id=job_id, claim_owner=claim_owner,
             previous_generation=previous_generation,
         )
+
+    def reorder_execution_queue(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_revision: int) -> ExecutionQueueSnapshot:
+        return self._storage.executions.reorder_execution_queue(session_id, thread_id, message_ids=message_ids, expected_revision=expected_revision)
 
     def start_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
                               claim_owner: str, claim_generation: int) -> None:
@@ -311,6 +318,7 @@ class RuntimeExecutionOwnerMixin:
                 )
             if not isinstance(created_at, str) or not created_at:
                 raise ValueError("internal execution notice 缺少稳定 created_at")
+            validate_internal_message(message.content, response_metadata)
             notice_items = self._storage.storage._codec().items_for_message(
                 message,
                 item_sequence=1,
@@ -352,9 +360,10 @@ class RuntimeExecutionOwnerMixin:
         )
         queue_input = ExecutionQueueInput(
             execution_binding=intent, message_id=intent.message_id, agent_id=wakeup.agent_id,
-            provider_id=message.response_metadata.get("boxteam_session_provider_id"),
+            model=message.response_metadata.get("boxteam_session_model"),
             delivery_policy=wakeup.delivery_policy, gateway_id=wakeup.gateway_id,
             request_id=wakeup.request_id, created_at=wakeup.message_created_at,
+            background=wakeup.source_id.startswith(("goal:", "persistent-task:", "persistent-task-check:")),
         )
         state = None if state_message is None else runtime_context_decision(
             wakeup.session_id, wakeup.thread_id, state_message, source_id=wakeup.source_id,
@@ -495,8 +504,18 @@ class RuntimeExecutionOwnerMixin:
     def runtime_execution_outcome(self, session_id: str, thread_id: str, execution_id: str) -> str:
         return self._storage.executions.runtime_execution_outcome(session_id, thread_id, execution_id)
 
-    def runtime_execution_progress(self, wakeup: RuntimeExecutionWakeup) -> RuntimeExecutionProgress:
-        return self._storage.executions.runtime_execution_progress(wakeup)
+    def runtime_execution_outcomes(self, session_id: str, executions: Mapping[str, str]) -> dict[str, str]:
+        """同批复用已核验的线程路径，结果仍从每个线程的权威 rollout 库读取。"""
+        resolver = self._storage.storage._path_resolver
+        with resolver.thread_resolution_scope():
+            resolver.resolve_thread_nodes(session_id, list(executions))
+            return {
+                thread_id: self.runtime_execution_outcome(session_id, thread_id, execution_id)
+                for thread_id, execution_id in executions.items()
+            }
+
+    def execution_progress(self, session_id: str, thread_id: str, *, job_id: str, execution_id: str) -> RuntimeExecutionProgress:
+        return self._storage.executions.execution_progress(session_id, thread_id, job_id=job_id, execution_id=execution_id)
 
     def claim_runtime_wakeup(self, wakeup: RuntimeExecutionWakeup) -> int:
         return self._storage.executions.claim_runtime_wakeup(wakeup)

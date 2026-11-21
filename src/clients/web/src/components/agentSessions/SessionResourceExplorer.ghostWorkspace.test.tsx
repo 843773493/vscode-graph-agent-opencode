@@ -10,13 +10,15 @@ import {
 } from "../../state/session/sessionCatalogOutbox";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
+  type GatewayFetchRequest,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
 
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
-import SessionResourceExplorer from "./SessionResourceExplorer";
+import SessionResourceExplorer, { type SessionResourceExplorerActions } from "./SessionResourceExplorer";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { FederatedSearchEventDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
@@ -76,7 +78,7 @@ async function renderExplorer(options: {
   navigationFails?: string | null;
   branchItems?: unknown[];
   branchError?: string | null;
-  branchResponse?: (parentNodeId: string | null) => Response | Promise<Response>;
+  branchResponse?: (parentNodeId: string | null, request: GatewayFetchRequest) => Response | Promise<Response>;
   catalogItems?: SessionCatalogNode[];
   /** 激活工作区与当前会话：用于触发「定位当前会话」链路。 */
   activeWorkspaceId?: string | null;
@@ -142,19 +144,19 @@ async function renderExplorer(options: {
       if (options.breadcrumbFails) {
         return apiErrorResponse(options.breadcrumbFails);
       }
-      return apiSuccessResponse({ items: [] });
+      return catalogReadResponse(request, { items: [] });
     }
     if (request.path === "/api/v1/session-catalog/export" && options.catalogItems) {
-      return apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3, items: options.catalogItems });
+      return catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3, items: options.catalogItems });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
       if (options.branchResponse) {
-        return options.branchResponse(new URL(request.url, "http://localhost").searchParams.get("parent_node_id"));
+        return options.branchResponse(new URL(request.url, "http://localhost").searchParams.get("parent_node_id"), request);
       }
       if (options.branchError) {
         return apiErrorResponse(options.branchError);
       }
-      return apiSuccessResponse({
+      return catalogReadResponse(request, {
         revision: "catalog",
         catalog_revision: 3,
         parent_node_id: null,
@@ -167,13 +169,16 @@ async function renderExplorer(options: {
   });
 
   let tree!: ReactTestRenderer;
+  let actions: SessionResourceExplorerActions | undefined;
   await act(async () => {
     tree = create(
       <SessionResourceExplorer
+        onActionsChange={value => { actions = value; }}
         apiPort={8014}
         workspaces={options.workspaces}
         activeWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         currentSessionId={options.currentSessionId ?? ""}
+        selectedSessionKey={null}
         currentSessionWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         searchOpen={options.searchOpen ?? false}
         searchQuery={options.searchQuery ?? ""}
@@ -185,7 +190,6 @@ async function renderExplorer(options: {
         onRefreshWorkspaceSessions={async () => undefined}
         onCreateSessionInFolder={async () => undefined}
         onSessionFolderDeleted={async () => undefined}
-        catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onCloseSearch={() => undefined}
@@ -203,7 +207,7 @@ async function renderExplorer(options: {
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   });
-  return { html: JSON.stringify(tree.toJSON()), tree, diagnostics };
+  return { html: JSON.stringify(tree.toJSON()), tree, diagnostics, refresh: () => actions!.refresh() };
 }
 
 function viewDiagnostic(tree: ReactTestRenderer, index = 0): void {
@@ -216,7 +220,7 @@ async function expandFirstWorkspace(tree: ReactTestRenderer): Promise<void> {
   const chevrons = tree.root.findAll(
     (instance) =>
       typeof instance.props.className === "string"
-      && instance.props.className.includes("session-resource-chevron"),
+      && instance.props.className.includes("session-resource-expand-toggle"),
     { deep: true },
   );
   await act(async () => {
@@ -264,7 +268,8 @@ describe("工作区导航树的空态与加载态", () => {
       workspaces: [],
       navigationPending: true,
     });
-    expect(html).toContain("正在加载工作区目录");
+    expect(html).toContain('"aria-busy":true');
+    expect(html).not.toContain("正在加载工作区目录");
     expect(html).not.toContain("还没有工作区");
   });
 
@@ -277,7 +282,7 @@ describe("工作区导航树的空态与加载态", () => {
     expect(html).toContain("无法加载工作区列表");
     expect(html).not.toContain("HTTP 500 内部错误");
     viewDiagnostic(tree);
-    expect(diagnostics[0]).toEqual({ title: "无法加载工作区列表", detail: "请求失败 500 : HTTP 500 内部错误" });
+    expect(diagnostics[0]).toEqual({ title: "无法加载工作区列表", detail: "请求失败 500 : HTTP 500 内部错误；请求=/api/gateway/workspace-navigation" });
     expect(html).not.toContain("还没有工作区");
   });
 
@@ -367,18 +372,16 @@ describe("会话目录分支的加载失败与空态", () => {
     expect(JSON.stringify(tree.toJSON())).toContain("无法读取工作区目录");
     expect(JSON.stringify(tree.toJSON())).not.toContain("HTTP 500 内部错误");
     viewDiagnostic(tree);
-    expect(diagnostics[0].detail).toBe("重新读取会话目录失败: root: 请求失败 500 : HTTP 500 内部错误");
-    // 失败时不得同时宣称「暂无会话」，否则用户无法区分空目录和加载失败
-    expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
+    expect(diagnostics[0].detail).toBe("重新读取会话目录失败: root: 请求失败 500 : HTTP 500 内部错误；请求=/api/v1/session-catalog/children?minimum_catalog_revision=0&limit=100");
   });
 
-  test("分支为空且无错时才显示暂无会话", async () => {
+  test("空分支不插入占位行", async () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
       workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
     });
     await expandFirstWorkspace(tree);
-    expect(JSON.stringify(tree.toJSON())).toContain("暂无会话或会话文件夹");
+    expect(tree.root.findByProps({ role: "group" }).findAllByType("li")).toHaveLength(0);
     expect(JSON.stringify(tree.toJSON())).not.toContain("无法读取工作区目录");
   });
 
@@ -391,7 +394,6 @@ describe("会话目录分支的加载失败与空态", () => {
     const html = JSON.stringify(tree.toJSON());
     // branch.error 为空，但工作区自身连接错误必须优先：否则用户无法区分「真没会话」和「读不到」。
     expect(html).toContain("无法读取工作区目录");
-    expect(html).not.toContain("暂无会话或会话文件夹");
   });
 
   test("节点缺 node_id 时显示可见错误卡，而不是走 React key 警告或无限递归", async () => {
@@ -436,6 +438,7 @@ describe("会话目录更新保持树行稳定", () => {
 
   function catalogPage(parent: string | null, items: SessionCatalogNode[]): SessionCatalogPage {
     return { revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
+      sync: { gateway_id: "gateway-test", workspace_id: WORKSPACE_ID, source: "authoritative", stale: false },
       items, cursor: null, total: items.length, consistency_warning: null };
   }
 
@@ -449,10 +452,10 @@ describe("会话目录更新保持树行稳定", () => {
       pages.get("parent")!.cursor = sourceCursor;
       pages.get("parent")!.total = 20;
     }
-    const { tree } = await renderExplorer({
+    const { tree, refresh } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       activeWorkspaceId: WORKSPACE_ID,
-      branchResponse: (parent) => apiSuccessResponse(pages.get(parent)),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...pages.get(parent) }),
       catalogItems: [...pages.values()].flatMap((page) => page.items),
     });
     await act(async () => {
@@ -470,8 +473,27 @@ describe("会话目录更新保持树行稳定", () => {
           }]])} />);
       });
     };
-    return { tree, pages, base, updateOutbox };
+    return { tree, pages, base, updateOutbox, refresh };
   }
+
+  test("会话图标显示展开状态，折叠与展开同步更新提示和子节点", async () => {
+    const { tree } = await mountCatalog("session");
+    const toggle = () => tree.root.findByProps({ className: "session-resource-expand-toggle", "aria-expanded": true, "aria-label": "折叠会话 parent" });
+    expect(toggle().props.title).toBe("折叠会话 parent");
+    expect(toggle().findByType("span").props.className).toBe("codicon codicon-chevron-down");
+    expect(tree.root.findAllByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toHaveLength(1);
+    expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-stable` }).findByProps({ className: "session-resource-expand-toggle" }).props['aria-expanded']).toBe(false);
+    await act(async () => toggle().props.onClick());
+    const collapsed = tree.root.findByProps({ "aria-label": "展开会话 parent" });
+    expect(collapsed.props["aria-expanded"]).toBe(false);
+    expect(collapsed.props.title).toBe("展开会话 parent");
+    expect(collapsed.findByType("span").props.className).toBe("codicon codicon-chevron-right");
+    expect(tree.root.findAllByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toHaveLength(0);
+    await act(async () => collapsed.props.onClick());
+    expect(toggle().findByType("span").props.className).toBe("codicon codicon-chevron-down");
+    expect(tree.root.findAllByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toHaveLength(1);
+    act(() => tree.unmount());
+  });
 
   for (const kind of ["folder", "session"] as const) {
     for (const otherChildren of [false, true]) {
@@ -488,7 +510,6 @@ describe("会话目录更新保持树行稳定", () => {
         const parent = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-parent` }).parent!;
         expect(parent.props["aria-expanded"]).toBe(true);
         expect(parent.findAllByProps({ role: "treeitem" }).filter((item) => item !== parent)).toHaveLength(otherChildren ? 1 : 0);
-        expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
         expect(JSON.stringify(tree.toJSON())).not.toContain("正在加载…");
         await updateOutbox(base);
         expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-parent` }).parent!.props["aria-expanded"]).toBe(true);
@@ -505,7 +526,6 @@ describe("会话目录更新保持树行稳定", () => {
       { kind: "move_node", targetNodeId: "child", parentNodeId: null },
       { baseCatalogRevision: 3, expectedRevision: 1 }));
     expect(tree.root.findByProps({ className: "session-resource-load-more" }).children.join("")).toBe("加载更多（0/20）");
-    expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
     act(() => tree.unmount());
   });
 
@@ -513,7 +533,7 @@ describe("会话目录更新保持树行稳定", () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
       workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
-      branchResponse: (parent) => apiSuccessResponse({ ...catalogPage(parent, []), cursor: "next-page", total: null }),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...catalogPage(parent, []), cursor: "next-page", total: null }),
     });
     try {
       await expandFirstWorkspace(tree);
@@ -523,7 +543,7 @@ describe("会话目录更新保持树行稳定", () => {
     }
   });
 
-  test("首次展开未加载分支仍显示加载提示，不能提前显示空态", async () => {
+  test("首次展开保留加载提示，空结果返回后移除提示行", async () => {
     const deferred = createDeferredResult<Response>();
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
@@ -531,22 +551,22 @@ describe("会话目录更新保持树行稳定", () => {
     });
     await expandFirstWorkspace(tree);
     expect(JSON.stringify(tree.toJSON())).toContain("正在加载…");
-    expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
     await act(async () => deferred.release(apiSuccessResponse(catalogPage(null, []))));
-    expect(JSON.stringify(tree.toJSON())).toContain("暂无会话或会话文件夹");
+    expect(tree.root.findByProps({ role: "group" }).findAllByType("li")).toHaveLength(0);
     act(() => tree.unmount());
   });
 
   test("后台刷新保留行身份与展开状态，不追加加载行", async () => {
-    const { tree, pages } = await mountCatalog("folder");
+    const { tree, pages, refresh } = await mountCatalog("folder");
     const child = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` });
     const deferred = createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch((request) => {
+      const { path } = request;
       if (path === "/api/gateway/workspace-navigation") {
         return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode(WORKSPACE_ID, "gw_1")] });
       }
       if (path === "/api/v1/session-catalog/export") {
-        return apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3,
+        return catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3,
           items: [catalogNode("parent", "folder"), catalogNode("stable", "session"), catalogNode("child", "session", "parent")] });
       }
       if (path === "/api/v1/session-catalog/refresh") return apiSuccessResponse(pages.get(null));
@@ -554,7 +574,7 @@ describe("会话目录更新保持树行稳定", () => {
       return undefined;
     });
     await act(async () => {
-      tree.root.findByProps({ "aria-label": "刷新资源树" }).props.onClick();
+      refresh();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
     // 根分支和展开分支一起刷新，结果在同一批次发布前均保持 busy。
@@ -569,10 +589,10 @@ describe("会话目录更新保持树行稳定", () => {
     act(() => tree.unmount());
   });
 
-  test("后端确认会话无子项后去掉箭头，不插入空态行", async () => {
+  test("后端确认会话无子项后保留统一展开图标，不插入空态行", async () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
-      branchResponse: (parent) => apiSuccessResponse(catalogPage(parent, parent === null ? [catalogNode("parent", "session")] : [])),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...catalogPage(parent, parent === null ? [catalogNode("parent", "session")] : []) }),
       catalogItems: [catalogNode("parent", "session")],
     });
     await expandFirstWorkspace(tree);
@@ -580,8 +600,9 @@ describe("会话目录更新保持树行稳定", () => {
       tree.root.findByProps({ "aria-label": "展开会话 parent" }).props.onClick();
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
-    expect(tree.root.findAllByProps({ "aria-label": "折叠会话 parent" })).toHaveLength(0);
-    expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
+    const toggle = tree.root.findByProps({ "aria-label": "折叠会话 parent" });
+    expect(toggle.props['aria-expanded']).toBe(true);
+    expect(toggle.parent!.parent!.findByProps({ role: "group" }).findAllByType("li")).toHaveLength(0);
     act(() => tree.unmount());
   });
 });
@@ -661,9 +682,9 @@ describe("工作区错误提示合并与恢复", () => {
         activations.push(workspaceId);
         if (activations.length < 3) throw new Error("原始激活诊断");
       },
-      branchResponse: (parent) => ++catalogReads === 1
+      branchResponse: (parent, request) => ++catalogReads === 1
         ? apiErrorResponse("原始目录诊断")
-        : apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
+        : catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
           items: [], cursor: null, total: 0, consistency_warning: null }),
     });
     const press = async (label: string) => {
@@ -699,7 +720,7 @@ describe("工作区错误提示合并与恢复", () => {
   });
 
   test("另一工作区的目录错误仍独立显示，刷新不叠加全局错误横幅", async () => {
-    const { tree } = await renderExplorer({
+    const { tree, refresh } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "甲"), navigationNode(OTHER_WORKSPACE_ID, "乙")],
       workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready"), gatewayWorkspace(OTHER_WORKSPACE_ID, "ready")],
       branchError: "目录请求失败",
@@ -714,7 +735,7 @@ describe("工作区错误提示合并与恢复", () => {
     });
     await act(async () => {
       tree.root.findAllByProps({ className: "session-resource-label workspace-label" })[0].props.onClick();
-      tree.root.findByProps({ "aria-label": "刷新资源树" }).props.onClick();
+      refresh();
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
     expect(tree.root.findAllByProps({ role: "alert" })).toHaveLength(2);

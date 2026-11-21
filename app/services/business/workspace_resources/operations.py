@@ -11,8 +11,10 @@ from threading import Event
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.workspace_resources import ResourceAssociationMissing
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.records import (
     OwnedResourceRecord,
     ThreadRef,

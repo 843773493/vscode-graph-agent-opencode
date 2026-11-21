@@ -48,7 +48,7 @@ try {
       assert.equal((await response).status(), 200);
     }
     await expect(row).toHaveAttribute("aria-current", "location");
-    if (await row.locator("..").getAttribute("aria-expanded") === "false") await row.locator(".session-resource-chevron").click();
+    if (await row.locator("..").getAttribute("aria-expanded") === "false") await row.locator(".session-resource-expand-toggle").click();
     summary = await sessionTasks(page, owner, 0);
     return automation(page);
   };

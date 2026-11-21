@@ -18,9 +18,11 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.prompting.factory import internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.fixture_output import commit_fixture_output
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -133,11 +135,12 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     saver = context_saver
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
     user = HumanMessage(content="读取配置", id="user-1")
+    prompt = internal_message_factory.build(kind="checkpoint_reminder", control="工具返回后重新检查")
     internal_steering = HumanMessage(
-        content="控制：工具返回后重新检查",
+        content=prompt.content,
         id="steering-1",
         response_metadata={
-            "internal": True,
+            "message_metadata": prompt.metadata,
             "source": "terminal_steering",
             "message_id": "steering-1",
             "created_at": "2026-10-05T00:00:00+00:00",
@@ -259,7 +262,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
                 version="4",
                 _summarization_event={
                     "cutoff_index": len(raw_messages),
-                    "summary_message": HumanMessage(
+                    "summary_message": compaction_summary_message(
                         content="已压缩上下文", id="summary-checkpoint-compacted"
                     ),
                 },
@@ -578,7 +581,7 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
             _checkpoint("cp-2", messages, version="2", _summarization_event={
                 "cutoff_message_id": "tool-1",
                 "cutoff_index": len(messages),
-                "summary_message": HumanMessage(
+                "summary_message": compaction_summary_message(
                     content="历史摘要", id="summary-cutoff-test"
                 ),
             }),
@@ -709,7 +712,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
             _summarization_event={
                 "cutoff_message_id": "turn-1-tool-result",
                 "cutoff_index": 3,
-                "summary_message": HumanMessage(
+                "summary_message": compaction_summary_message(
                     content="Turn-1 已压缩", id="summary-turn1-cp3"
                 ),
             },
@@ -733,7 +736,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
             _summarization_event={
                 "cutoff_message_id": "turn-1-final",
                 "cutoff_index": 4,
-                "summary_message": HumanMessage(
+                "summary_message": compaction_summary_message(
                     content="Turn-1 压缩状态继续", id="summary-turn1-cp4"
                 ),
             },

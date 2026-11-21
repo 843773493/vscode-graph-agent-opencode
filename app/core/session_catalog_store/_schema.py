@@ -28,7 +28,7 @@ _LOCATOR_PREFIX = "sessions/"
 _NODE_COLUMNS = (
     "node_id, kind, parent_node_id, display_name, title_source, state, revision, "
     "workspace_id, created_at, storage_relative_locator, main_thread_id, "
-    "session_kind, current_agent_id, current_provider_id, context_source_session_id, "
+    "session_kind, current_agent_id, current_model_json, context_source_session_id, "
     "generation_origin_json, updated_at"
 )
 

@@ -98,7 +98,7 @@ class RolloutExecutionsMixin:
         checkpoint_ns: str,
     ) -> int:
         """仅在显式 importer 的私有 staging 安装已校验的历史终态事实。"""
-        from app.services.infrastructure.rollout_context.migration.staging import (
+        from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.staging import (
             ImportStagingStorage,
         )
 
@@ -625,6 +625,11 @@ class RolloutExecutionsMixin:
                 item_ids=tuple(item.item_id for item in converged_items),
                 require_view=True,
             )
+            queued = connection.execute("SELECT phase FROM execution_queue WHERE execution_id=?", (execution_id,)).fetchone()
+            if queued == ("queued",):
+                admission = self._read_execution_admission_connection(connection, session_id=session_id,
+                    thread_id=owner_thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
+                self._publish_queued_user_turn(connection, admission, checkpoint_ns=checkpoint_ns)
             timestamp = _now()
             execution_update = connection.execute(
                 "UPDATE executions SET outcome = ?, updated_at = ? "

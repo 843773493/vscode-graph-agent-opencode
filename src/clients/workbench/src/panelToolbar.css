@@ -1,0 +1,12 @@
+/* 原生面板负责标签溢出；新增范围选择只按实际可用像素截断，不裁短原始名称。 */
+.monaco-workbench .part.panel { container: boxteam-panel / inline-size; }
+.monaco-workbench .part.panel .action-label.boxteam-panel-scope { display: flex; gap: 3px; align-items: center; }
+.boxteam-panel-scope .scope-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: clamp(48px, 10cqw, 140px); }
+.monaco-workbench .part.panel .action-label.boxteam-panel-scope .scope-icon { display: none; }
+.monaco-workbench .part.panel > .title > .title-actions .select-container { flex: 0 0 clamp(60px, 16cqw, 170px); width: clamp(60px, 16cqw, 170px); }
+.monaco-workbench .part.panel > .title > .title-actions .select-container .monaco-select-box { min-width: 0; }
+@container boxteam-panel (max-width: 480px) {
+  .monaco-workbench .part.panel .action-label.boxteam-panel-scope .scope-label,
+  .monaco-workbench .part.panel .action-label.boxteam-panel-scope > .codicon-chevron-down { display: none; }
+  .monaco-workbench .part.panel .action-label.boxteam-panel-scope .scope-icon { display: inline-block; }
+}

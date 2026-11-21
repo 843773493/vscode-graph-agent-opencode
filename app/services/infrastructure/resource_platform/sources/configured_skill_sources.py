@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.failures import mark_public_failure
-from app.core.lifecycle import LifetimeScope
 from app.core.resource_uri import parse_resource_uri
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.gateway.skill_sources import GatewaySkillSourceEntryDTO

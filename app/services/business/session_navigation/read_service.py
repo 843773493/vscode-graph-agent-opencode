@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import cast
@@ -15,6 +13,7 @@ from app.core.session_catalog_resolver import (
     SessionCatalogSessionProjection,
 )
 from app.core.shielded_cleanup import run_sync_shielded
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -22,9 +21,10 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogNodeDTO,
     SessionCatalogPageDTO,
     SessionCatalogSearchResultsDTO,
+    SessionCatalogVersionDTO,
 )
 from app.services.business.session_navigation.catalog_query import (
-    catalog_breadcrumb,
+    catalog_projection_revision,
     decode_catalog_cursor,
     encode_catalog_cursor,
     search_catalog,
@@ -44,9 +44,7 @@ class _SessionCatalogReadSnapshot:
     nodes: list[SessionCatalogNodeDTO]
     folded_search_terms: dict[str, CatalogSearchTerms]
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
-    visible_node_ids: frozenset[str]
-    child_node_ids_by_parent: dict[str | None, tuple[str, ...]]
-    default_provider_nodes: list[SessionCatalogSessionProjection]
+    default_model_nodes: list[SessionCatalogSessionProjection]
 
 
 class SessionCatalogReadService:
@@ -58,108 +56,69 @@ class SessionCatalogReadService:
         self._cached_snapshot: _SessionCatalogReadSnapshot | None = None
         self._snapshot_lock = asyncio.Lock()
 
+    @property
+    def workspace_id(self) -> str:
+        return self._path_resolver.workspace_id
+
     def invalidate(self) -> None:
         self._cached_snapshot = None
 
-    async def refresh(self) -> SessionCatalogPageDTO:
-        self.invalidate()
-        snapshot = await self._snapshot(force=True)
-        root_node_ids = snapshot.child_node_ids_by_parent.get(None, ())
-        # 刷新语义是「重载根页并校验索引」：没有 limit/cursor 入参，必须返回
-        # 完整根页且 cursor 为空，否则超过上限的根节点会既不在 items 里、也没
-        # 有可继续分页的 cursor，被静默吞掉。分页由 list_children 承担。
-        return self._build_page(
-            root_node_ids,
-            snapshot.nodes_by_id,
-            parent_node_id=None,
-            offset=0,
-            limit=None,
-            revision=snapshot.revision,
-            catalog_revision=snapshot.catalog_revision,
-            cursor_scope=None,
+    def version(self) -> SessionCatalogVersionDTO:
+        """版本确认只读两个已存在的标量，不投影、hash 或导出全目录。"""
+        with self._session_service.catalog_projection() as projection_revision:
+            return SessionCatalogVersionDTO(
+                workspace_id=self.workspace_id,
+                catalog_revision=self._path_resolver.revision,
+                projection_revision=projection_revision,
+            )
+
+    async def refresh(self, *, minimum_catalog_revision: int = 0) -> SessionCatalogPageDTO:
+        return await self.list_children(
+            parent_node_id=None, limit=None, cursor=None,
+            minimum_catalog_revision=minimum_catalog_revision,
         )
 
     async def list_children(
-        self,
-        *,
-        parent_node_id: str | None,
-        limit: int,
-        cursor: str | None,
+        self, *, parent_node_id: str | None, limit: int | None, cursor: str | None,
+        minimum_catalog_revision: int = 0,
     ) -> SessionCatalogPageDTO:
-        snapshot = await self._snapshot()
-        if (
-            parent_node_id is not None
-            and parent_node_id not in snapshot.visible_node_ids
-        ):
-            raise KeyError(f"会话目录节点不存在: {parent_node_id}")
-        child_node_ids = snapshot.child_node_ids_by_parent.get(parent_node_id, ())
-        # cursor 绑定发牌时的分页作用域（父节点）：同一个 revision 下把某个父节点的
-        # cursor 拿去翻另一个父节点的页，会让 offset 落到错误切片的中间，静默跳项。
-        scope = parent_node_id
-        offset = decode_catalog_cursor(
-            cursor,
-            snapshot.revision,
-            snapshot.catalog_revision,
-            scope,
-            collection_size=len(child_node_ids),
-        )
-        return self._build_page(
-            child_node_ids,
-            snapshot.nodes_by_id,
-            parent_node_id=parent_node_id,
-            offset=offset,
-            limit=limit,
-            revision=snapshot.revision,
-            catalog_revision=snapshot.catalog_revision,
-            cursor_scope=scope,
-        )
-
-    def _build_page(
-        self,
-        child_node_ids: tuple[str, ...],
-        nodes_by_id: dict[str, SessionCatalogNodeDTO],
-        *,
-        parent_node_id: str | None,
-        offset: int,
-        limit: int | None,
-        revision: str,
-        catalog_revision: int,
-        cursor_scope: str | None,
-    ) -> SessionCatalogPageDTO:
-        """构造目录分页页；limit 为 None 表示返回 offset 之后的全部节点。"""
-        page_node_ids = (
-            child_node_ids[offset:]
-            if limit is None
-            else child_node_ids[offset : offset + limit]
-        )
-        page = [nodes_by_id[node_id] for node_id in page_node_ids]
-        total = len(child_node_ids)
-        next_offset = offset + len(page)
-        return SessionCatalogPageDTO(
-            revision=revision,
-            catalog_revision=catalog_revision,
-            parent_node_id=parent_node_id,
-            items=page,
-            cursor=(
-                encode_catalog_cursor(
-                    next_offset, revision, catalog_revision, cursor_scope
+        def read() -> SessionCatalogPageDTO:
+            with self._session_service.catalog_projection() as projection_revision:
+                scope = self._path_resolver.catalog_store.read_catalog_children(
+                    parent_node_id, limit=limit, minimum_catalog_revision=minimum_catalog_revision,
+                    page_offset=lambda revision, total: decode_catalog_cursor(
+                        cursor, catalog_projection_revision(revision, projection_revision), revision,
+                        parent_node_id, collection_size=total,
+                    ),
                 )
-                if next_offset < total
-                else None
-            ),
-            total=total,
-        )
+                models: dict[str, ModelReferenceDTO | None] = {}
+                nodes = [self._to_catalog_node(node, scope.node_ids_with_children, models)
+                         for node in self._path_resolver.project_catalog_range(scope)]
+                next_offset = scope.offset + len(nodes)
+                revision = catalog_projection_revision(scope.catalog_revision, projection_revision)
+                return SessionCatalogPageDTO(
+                    revision=revision, catalog_revision=scope.catalog_revision, parent_node_id=parent_node_id,
+                    items=nodes, total=scope.total,
+                    cursor=encode_catalog_cursor(next_offset, revision, scope.catalog_revision, parent_node_id)
+                        if next_offset < scope.total else None,
+                )
+        return await run_sync_shielded(read)
 
-    async def breadcrumb(self, node_id: str) -> SessionCatalogBreadcrumbDTO:
-        snapshot = await self._snapshot()
-        node = snapshot.nodes_by_id.get(node_id)
-        if node is None:
-            raise KeyError(f"会话目录节点不存在: {node_id}")
-        return SessionCatalogBreadcrumbDTO(
-            revision=snapshot.revision,
-            catalog_revision=snapshot.catalog_revision,
-            items=catalog_breadcrumb(node, snapshot.nodes_by_id),
-        )
+    async def breadcrumb(self, node_id: str, *, minimum_catalog_revision: int = 0) -> SessionCatalogBreadcrumbDTO:
+        def read() -> SessionCatalogBreadcrumbDTO:
+            with self._session_service.catalog_projection() as projection_revision:
+                scope = self._path_resolver.catalog_store.read_catalog_breadcrumb(
+                    node_id, minimum_catalog_revision=minimum_catalog_revision,
+                )
+                models: dict[str, ModelReferenceDTO | None] = {}
+                return SessionCatalogBreadcrumbDTO(
+                    revision=catalog_projection_revision(scope.catalog_revision, projection_revision),
+                    catalog_revision=scope.catalog_revision, node_id=node_id,
+                    items=[self._to_catalog_node(node, scope.node_ids_with_children, models)
+                           if node.node_id in scope.visible_node_ids else self._to_pending_catalog_node(node, scope.node_ids_with_children)
+                           for node in self._path_resolver.project_catalog_range(scope)],
+                )
+        return await run_sync_shielded(read)
 
     async def search(
         self, *, query: str, limit: int, cursor: str | None, deadline_at: float | None = None,
@@ -177,120 +136,108 @@ class SessionCatalogReadService:
         )
 
     async def export_index(
-        self, *, node_ids: list[str] | None = None,
+        self, *, node_ids: list[str] | None = None, minimum_catalog_revision: int = 0,
         check: Callable[[], None] = lambda: None,
     ) -> SessionCatalogExportDTO:
-        snapshot = await self._snapshot(check=check)
-        return SessionCatalogExportDTO(
-            revision=snapshot.revision,
-            catalog_revision=snapshot.catalog_revision,
-            items=(snapshot.nodes if node_ids is None else [
-                snapshot.nodes_by_id[node_id]
-                for node_id in sorted(set(node_ids))
-                if node_id in snapshot.visible_node_ids
-            ]),
-        )
+        if node_ids is None:
+            snapshot = await self._snapshot(check=check)
+            if snapshot.catalog_revision < minimum_catalog_revision:
+                raise RuntimeError(f"会话目录权威版本低于读取下限: {snapshot.catalog_revision} < {minimum_catalog_revision}")
+            return SessionCatalogExportDTO(
+                revision=snapshot.revision, catalog_revision=snapshot.catalog_revision,
+                items=snapshot.nodes, complete=True,
+            )
+        def read() -> SessionCatalogExportDTO:
+            with self._session_service.catalog_projection() as projection_revision:
+                check()
+                scope = self._path_resolver.catalog_store.read_catalog_nodes(
+                    node_ids, minimum_catalog_revision=minimum_catalog_revision,
+                )
+                models: dict[str, ModelReferenceDTO | None] = {}
+                return SessionCatalogExportDTO(
+                    revision=catalog_projection_revision(scope.catalog_revision, projection_revision),
+                    catalog_revision=scope.catalog_revision, node_ids=sorted(set(node_ids)), complete=False,
+                    items=[self._to_catalog_node(node, scope.node_ids_with_children, models)
+                           for node in self._path_resolver.project_catalog_range(scope)
+                           if node.node_id in scope.visible_node_ids],
+                )
+        return await run_sync_shielded(read)
 
     async def _snapshot(
         self,
         *,
-        force: bool = False,
         check: Callable[[], None] = lambda: None,
     ) -> _SessionCatalogReadSnapshot:
         # 同一时刻只构建一份投影；取消须等 worker 结算再释放锁。
         async with self._snapshot_lock:
-            return await run_sync_shielded(self._read_snapshot, force=force, check=check)
+            return await run_sync_shielded(self._read_snapshot, check=check)
 
     def _read_snapshot(
         self,
         *,
-        force: bool = False,
         check: Callable[[], None] = lambda: None,
     ) -> _SessionCatalogReadSnapshot:
-        check()
-        current_revision = self._path_resolver.revision
-        cached = self._cached_snapshot
-        if (
-            not force
-            and cached is not None
-            and cached.catalog_revision == current_revision
-        ):
-            # 同一 catalog revision 的静态字段不变；默认 provider 每次请求按 Agent 解析，
-            # 配置变化时只替换受影响的 DTO，避免缓存命中仍逐会话重建完整投影。
-            provider_by_agent: dict[str, str | None] = {}
-            replacements: dict[str, SessionCatalogNodeDTO] = {}
-            for node in cached.default_provider_nodes:
-                check()
-                if node.current_agent_id not in provider_by_agent:
-                    provider_by_agent[node.current_agent_id] = (
-                        self._session_service.project_catalog_session(node).current_provider_id
-                    )
-                provider_id = provider_by_agent[node.current_agent_id]
-                cached_node = cached.nodes_by_id[node.node_id]
-                session = cast(SessionDTO, cached_node.session)
-                if session.current_provider_id != provider_id:
-                    replacements[node.node_id] = cached_node.model_copy(
-                        update={"session": session.model_copy(update={"current_provider_id": provider_id})}
-                    )
-            if replacements:
-                nodes = [
-                    replacements.get(node.node_id, node)
-                    for node in cached.nodes
-                ]
-                cached = replace(
-                    cached,
-                    nodes=nodes,
-                    nodes_by_id={
-                        **cached.nodes_by_id,
-                        **replacements,
-                    },
-                    revision=self._revision(nodes, check=check),
+        with self._session_service.catalog_projection() as projection_revision:
+            check()
+            current_revision = self._path_resolver.revision
+            revision = catalog_projection_revision(current_revision, projection_revision)
+            cached = self._cached_snapshot
+            if cached is not None and cached.revision == revision:
+                return cached
+            if cached is not None and cached.catalog_revision == current_revision:
+                models: dict[str, ModelReferenceDTO | None] = {}
+                replacements: dict[str, SessionCatalogNodeDTO] = {}
+                for node in cached.default_model_nodes:
+                    check()
+                    if node.current_agent_id not in models:
+                        models[node.current_agent_id] = self._session_service.project_catalog_session(node).current_model
+                    cached_node = cached.nodes_by_id[node.node_id]
+                    session = cast(SessionDTO, cached_node.session)
+                    replacements[node.node_id] = cached_node.model_copy(update={
+                        "session": session.model_copy(update={"current_model": models[node.current_agent_id]}),
+                    })
+                snapshot = replace(
+                    cached, revision=revision,
+                    nodes=[replacements.get(node.node_id, node) for node in cached.nodes],
+                    nodes_by_id={**cached.nodes_by_id, **replacements},
                 )
-            check()
-            self._cached_snapshot = cached
-            return cached
+                self._cached_snapshot = snapshot
+                return snapshot
 
-        catalog_revision, catalog_nodes = self._path_resolver.catalog_snapshot(check=check)
-        visible_catalog_nodes = self._visible_catalog_nodes(catalog_nodes, check=check)
-        visible_parent_ids_with_children = {
-            node.parent_node_id
-            for node in visible_catalog_nodes
-            if node.parent_node_id is not None
-        }
-        nodes = []
-        default_provider_by_agent: dict[str, str | None] = {}
-        for node in visible_catalog_nodes:
-            check()
-            nodes.append(self._to_catalog_node(
-                node, visible_parent_ids_with_children, default_provider_by_agent,
-            ))
-        nodes_by_id = {node.node_id: node for node in nodes}
-        all_nodes_by_id = dict(nodes_by_id)
-        for catalog_node in catalog_nodes:
-            check()
-            if catalog_node.node_id not in nodes_by_id:
-                all_nodes_by_id[catalog_node.node_id] = self._to_pending_catalog_node(catalog_node, visible_parent_ids_with_children)
-        self._validate_parent_graph(list(all_nodes_by_id.values()), all_nodes_by_id, check=check)
-        revision = self._revision(nodes, check=check)
-        child_node_ids_by_parent = self._index_sorted_child_ids(nodes, check=check)
-        snapshot = _SessionCatalogReadSnapshot(
-            catalog_revision=catalog_revision,
-            revision=revision,
-            nodes=nodes,
-            folded_search_terms=catalog_search_terms(nodes_by_id, check=check),
-            nodes_by_id=all_nodes_by_id,
-            visible_node_ids=frozenset(node.node_id for node in nodes),
-            child_node_ids_by_parent=child_node_ids_by_parent,
-            default_provider_nodes=[
-                node
+            catalog_revision, catalog_nodes = self._path_resolver.catalog_snapshot(check=check)
+            visible_catalog_nodes = self._visible_catalog_nodes(catalog_nodes, check=check)
+            visible_parent_ids_with_children = {
+                node.parent_node_id
                 for node in visible_catalog_nodes
-                if isinstance(node, SessionCatalogSessionProjection)
-                and node.current_provider_id is None
-            ],
-        )
-        check()
-        self._cached_snapshot = snapshot
-        return snapshot
+                if node.parent_node_id is not None
+            }
+            nodes = []
+            default_model_by_agent: dict[str, ModelReferenceDTO | None] = {}
+            for node in visible_catalog_nodes:
+                check()
+                nodes.append(self._to_catalog_node(
+                    node, visible_parent_ids_with_children, default_model_by_agent,
+                ))
+            nodes_by_id = {node.node_id: node for node in nodes}
+            all_nodes_by_id = dict(nodes_by_id)
+            for catalog_node in catalog_nodes:
+                check()
+                if catalog_node.node_id not in nodes_by_id:
+                    all_nodes_by_id[catalog_node.node_id] = self._to_pending_catalog_node(catalog_node, visible_parent_ids_with_children)
+            self._validate_parent_graph(list(all_nodes_by_id.values()), all_nodes_by_id, check=check)
+            revision = catalog_projection_revision(catalog_revision, projection_revision)
+            snapshot = _SessionCatalogReadSnapshot(
+                catalog_revision=catalog_revision,
+                revision=revision,
+                nodes=nodes,
+                folded_search_terms=catalog_search_terms(nodes_by_id, check=check),
+                nodes_by_id=all_nodes_by_id,
+                default_model_nodes=[node for node in visible_catalog_nodes
+                                        if isinstance(node, SessionCatalogSessionProjection) and node.current_model_json is None],
+            )
+            check()
+            self._cached_snapshot = snapshot
+            return snapshot
 
     @staticmethod
     def _visible_catalog_nodes(
@@ -319,7 +266,7 @@ class SessionCatalogReadService:
         self,
         node: SessionCatalogNodeProjection,
         visible_parent_ids_with_children: set[str],
-        default_provider_by_agent: dict[str, str | None],
+        default_model_by_agent: dict[str, ModelReferenceDTO | None],
     ) -> SessionCatalogNodeDTO:
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
@@ -327,16 +274,17 @@ class SessionCatalogReadService:
         session = None
         if session_projection is not None:
             if (
-                session_projection.current_provider_id is None
-                and session_projection.current_agent_id in default_provider_by_agent
+                session_projection.current_model_json is None
+                and session_projection.current_agent_id in default_model_by_agent
             ):
                 session_projection = replace(
                     session_projection,
-                    current_provider_id=default_provider_by_agent[session_projection.current_agent_id],
+                    current_model_json=(default_model_by_agent[session_projection.current_agent_id].canonical_json()
+                                        if default_model_by_agent[session_projection.current_agent_id] is not None else None),
                 )
             session = self._session_service.project_catalog_session(session_projection)
-            if session_projection.current_provider_id is None:
-                default_provider_by_agent[session.current_agent_id] = session.current_provider_id
+            if session_projection.current_model_json is None:
+                default_model_by_agent[session.current_agent_id] = session.current_model
         return SessionCatalogNodeDTO(
             node_id=node.node_id,
             kind=node.kind,
@@ -425,42 +373,3 @@ class SessionCatalogReadService:
                     )
                 current = parent
             validated.update(chain)
-
-    @staticmethod
-    def _index_sorted_child_ids(
-        nodes: list[SessionCatalogNodeDTO],
-        *, check: Callable[[], None] = lambda: None,
-    ) -> dict[str | None, tuple[str, ...]]:
-        children_by_parent: dict[str | None, list[SessionCatalogNodeDTO]] = {}
-        for node in nodes:
-            check()
-            children_by_parent.setdefault(node.parent_node_id, []).append(node)
-        return {
-            parent_node_id: tuple(
-                node.node_id
-                for node in sorted(
-                    children,
-                    key=lambda node: (
-                        node.kind != "folder",
-                        node.name.casefold(),
-                        node.node_id,
-                    ),
-                )
-            )
-            for parent_node_id, children in children_by_parent.items()
-        }
-
-    @staticmethod
-    def _revision(nodes: list[SessionCatalogNodeDTO], *, check: Callable[[], None] = lambda: None) -> str:
-        projected = []
-        for node in sorted(nodes, key=lambda item: item.node_id):
-            check()
-            projected.append(node.model_dump(mode="json"))
-        encoded = json.dumps(
-            projected,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        check()
-        return hashlib.sha256(encoded).hexdigest()

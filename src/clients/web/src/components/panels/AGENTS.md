@@ -10,7 +10,7 @@
 - `components/eventQueue/`、`components/contextInspection/`、`components/nodeDebug/`、`components/gatewayExtensions/`：各自专属面板的进一步拆分子包。
 - `components/panels/resourceTree/`：会话与 Gateway 可重连资源树的面板、行组件及其测试。
 - `components/panels/bottomPanel/`：原版工作区面板复用的终端、服务输出与 Browser 内容；标签和外壳由 Workbench 提供。
-- `components/panels/sessionPanels/`：会话导航与精确 Thread 内的子线程资源面板。
+- `components/panels/sessionPanels/`：会话导航、Session 内的 Thread 列表与选定报告展示。
 - `components/panels/inspectionPanels/`：事件视图、请求视图与 Agent State 只读诊断面板。
 - `components/overlays/`：AnchoredOverlay、WarmActionDialog、SessionNameDialog 与 SessionContextForkDialog 等覆盖层和对话框；锚定定位实现按需加载。
 

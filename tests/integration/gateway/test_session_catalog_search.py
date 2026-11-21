@@ -8,13 +8,17 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 
 import httpx
 import pytest
+from commentjson import loads as load_jsonc
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from tests.harness.performance.record import stage
+from tests.harness.performance.report import distribution
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -96,6 +100,7 @@ def catalog_network(request: pytest.FixtureRequest, integration_workspace_root_p
 async def test_gateway_catalog_owner_and_offline_mirror_share_original_pages(catalog_network: CatalogNetwork) -> None:
     network = catalog_network
     expected, originals = {}, {}
+    folders = {}
     # 关键目录必须经产品入口建立，不能把镜像或测试预写当作产品成功。
     for index, backend in enumerate(network.backends):
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend.port}", headers={**LOCAL_TOKEN_HEADERS,
@@ -103,6 +108,7 @@ async def test_gateway_catalog_owner_and_offline_mirror_share_original_pages(cat
             "X-BoxTeam-Navigation-Actor": "guest"}, timeout=25, trust_env=False) as client:
             folder = await submit_navigation_operation(client, "create_folder", name=f"目录报告 {index}")
             assert folder["state"] == "committed"
+            folders[backend.workspace_id] = folder["created_node_id"]
             ids = []
             for number in range(3):
                 session_id = await create_session(client, f"Shared Catalog Needle {number}")
@@ -151,10 +157,93 @@ async def test_gateway_catalog_owner_and_offline_mirror_share_original_pages(cat
                 await asyncio.sleep(0.1)
             assert {item["owner"]["workspace_id"] for item in cached} == set(expected)
             assert all(item["schema_version"] == 3 and item["catalog_revision"] >= 1 for item in cached)
+            # 普通浏览经真实 Gateway 使用原镜像；写后范围只向目标请求所需页。
+            owner = owners[0]
+            headers = {"X-BoxTeam-Workspace-Id": owner["workspace_id"], "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"]}
+            folder_id = folders[owner["workspace_id"]]
+            original_cache = {path: path.stat().st_mtime_ns for path in cache.glob("*.json")}
+            samples = []
+            for sample in range(21):
+                with stage("catalog.gateway.children", sample=sample, warm=sample > 0, nodes=4) as measured:
+                    started = perf_counter()
+                    response = await client.get("/api/v1/session-catalog/children", headers=headers,
+                        params={"parent_node_id": folder_id},)
+                    elapsed_ms = (perf_counter() - started) * 1000
+                    measured.update(response_bytes=len(response.content), http_status=response.status_code)
+                assert response.status_code == 200, response.text
+                page = response.json()["data"]
+                assert page["sync"]["source"] == "gateway_mirror" and not page["sync"]["stale"]
+                assert page["sync"]["gateway_id"] == owner["gateway_id"]
+                assert page["sync"]["workspace_id"] == owner["workspace_id"]
+                assert page["parent_node_id"] == folder_id
+                assert [item["node_id"] for item in page["items"]] == expected[owner["workspace_id"]]
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                samples.append({"elapsed_ms": elapsed_ms, "response_bytes": len(response.content)})
+            assert {path: path.stat().st_mtime_ns for path in cache.glob("*.json")} == original_cache
+            observations.append({"measurement": "warm_gateway_browse", "node_count": 4,
+                "first": samples[0], "samples": samples[1:], **distribution([sample["elapsed_ms"] for sample in samples[1:]])})
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.backends[0].port}",
+                headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+                    "X-BoxTeam-Gateway-Id": owner["gateway_id"], "X-BoxTeam-Navigation-Actor": "guest"}, timeout=25, trust_env=False) as authoritative:
+                receipt = await submit_navigation_operation(authoritative, "rename_node", target_node_id=folder_id, name="写后目录")
+                minimum = receipt["committed_catalog_revision"]
+                assert minimum > page["catalog_revision"]
+                for path, scope in (("children", {"parent_node_id": folder_id}),
+                    (f"breadcrumb/{folder_id}", {}), ("export", {"node_id": folder_id})):
+                    response = await client.get(f"/api/v1/session-catalog/{path}", headers=headers,
+                        params={**scope, "minimum_catalog_revision": minimum})
+                    assert response.status_code == 200, response.text
+                    confirmed = response.json()["data"]
+                    assert confirmed["catalog_revision"] >= minimum
+                    assert confirmed["sync"]["workspace_id"] == owner["workspace_id"]
+                    if path == "export":
+                        assert confirmed["node_ids"] == [folder_id] and not confirmed["complete"]
+                        assert confirmed["items"][0]["name"] == "写后目录"
+                response = await client.get("/api/v1/session-catalog/breadcrumb/missing", headers=headers,
+                    params={"minimum_catalog_revision": minimum + 1})
+                assert response.status_code == 409, response.text
+                # 配置来源走原 CAS 保存入口；只变 UI 配置同样推进目录投影 token，不改 catalog 数字。
+                source_url = "/api/v1/config/sources/workspace_root_mutable_override"
+                source = await authoritative.get(source_url)
+                assert source.status_code == 200, source.text
+                document = source.json()["data"]
+                configuration = load_jsonc(document["jsonc"])
+                configuration.setdefault("ui", {})["ignored_paths"] = ["catalog-projection-probe"]
+                previous_version = (await authoritative.get("/api/v1/session-catalog/snapshot")).json()["data"]
+                saved = await authoritative.put(source_url, json={
+                    "gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"],
+                    "source_key": document["source_key"], "jsonc": json.dumps(configuration, ensure_ascii=False),
+                    "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+                    "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+                    "expected_active_digest": document["active_digest"], "idempotency_key": "catalog-projection-config",
+                })
+                assert saved.status_code == 200, saved.text
+                version = (await authoritative.get("/api/v1/session-catalog/snapshot")).json()["data"]
+                assert version["catalog_revision"] == previous_version["catalog_revision"]
+                assert version["projection_revision"] != previous_version["projection_revision"]
+                for path, scope in (("children", {"parent_node_id": folder_id}),
+                    (f"breadcrumb/{folder_id}", {}), ("export", {"node_id": folder_id})):
+                    response = await client.get(f"/api/v1/session-catalog/{path}",
+                        headers={**headers, "X-BoxTeam-Catalog-Revision": version["projection_revision"]},
+                        params={**scope, "minimum_catalog_revision": version["catalog_revision"]})
+                    assert response.status_code == 200, response.text
+                    assert response.json()["data"]["revision"] == version["projection_revision"]
+                    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                originals[owner["workspace_id"]] = (await authoritative.get("/api/v1/session-catalog/search", params={"query": "SCN", "limit": 1})).json()["data"]
             b_first = next(event for event in pages if event["page"]["workspace_id"] == owners[1]["workspace_id"])
             continuation = {"scope": {"mode": "resume", "scope": online[0]["scope"]["scope"]}, "queries": [query],
                 "continuations": [{"branch": b_first["branch"]["branch"], "cursor": b_first["page"]["catalog"]["cursor"]}]}
             await asyncio.to_thread(close_backend_process, network.backends[1])
+            offline_owner = owners[1]
+            offline_revision = next(item["catalog_revision"] for item in cached if item["owner"]["workspace_id"] == offline_owner["workspace_id"])
+            response = await client.get("/api/v1/session-catalog/children", headers={
+                "X-BoxTeam-Workspace-Id": offline_owner["workspace_id"],
+                "X-BoxTeam-Target-Gateway-Id": offline_owner["gateway_id"],
+                "X-Request-ID": "req_catalog_disconnected_minimum",
+            }, params={"parent_node_id": folders[offline_owner["workspace_id"]], "minimum_catalog_revision": offline_revision + 1})
+            assert response.status_code == 502, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req_catalog_disconnected_minimum"
+            assert "无法连接工作区后端" in response.json()["detail"]
             stale = await search(continuation)
             b_next, = [event for event in stale if event["type"] == "page"]
             assert b_next["source"]["kind"] == "gateway_catalog_mirror" and b_next["source"]["stale"]

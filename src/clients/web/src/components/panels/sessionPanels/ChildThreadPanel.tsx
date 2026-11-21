@@ -16,42 +16,38 @@ import type { ChildThreadForkPoint } from "./ChildThreadConversation";
 const CHILD_THREAD_ICON = "codicon-git-branch";
 
 /**
- * 主窗口右侧侧边栏「运行与连接」标签中的子会话线程面板。
- * 这是会话层级资源：展示当前会话委派的 child thread，
+ * 会话标签页内独立的 Thread 索引。
+ * Thread 属于当前 Session，不是导航子 Session 或运行连接；
  * 数据由 App 层加载后通过 props 传入，组件本身不持有业务状态权威。
  */
 export default function ChildThreadPanel({
   threads,
   teams,
-  total,
   loading,
   error,
   loadedAt,
   sessionId,
-  ownerLabel,
   mainThreadId,
   activeThreadId,
   onRefresh,
-  onSelectThread,
+  onOpenMainThread,
   onOpenThread,
   onForkFromThread,
   conversation,
 }: {
   threads: ChildThreadSummary[];
   teams: ChildThreadList["teams"];
-  total: number;
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
-  ownerLabel: string;
   /** 当前会话在权威 catalog 中解析出的 canonical main thread ID。 */
   mainThreadId: string | null;
-  /** 当前调试 owner 的 thread id。 */
+  /** 当前编辑器所属的 thread id。 */
   activeThreadId: string | null;
   onRefresh: () => void;
-  onSelectThread?: (threadId: string) => void;
-  onOpenThread?: (thread: ChildThreadSummary) => void;
+  onOpenMainThread: () => void;
+  onOpenThread: (thread: ChildThreadSummary) => void;
   onForkFromThread?: (threadId: string, point: ChildThreadForkPoint) => void;
   conversation: ReturnType<typeof useChildThreadConversation>;
 }) {
@@ -81,39 +77,9 @@ export default function ChildThreadPanel({
   };
 
   return (
-    <section className="panel-view child-thread-panel" aria-label={t("child.panel")}>
-      <div className="panel-header">
-        <div
-          className="panel-title"
-          title={`${sessionId || t("child.noSession")}${loadedAt ? t("child.readAt", loadedAt) : ""}`}
-        >
-
-          {t("child.panel")} <span className="resource-total-count">{formatNumber(threads.length)}</span>
-        </div>
-        <div className="panel-header-meta">
-          {total > threads.length ? <span>{t("child.total", formatNumber(total))}</span> : null}
-        </div>
-        <button
-          type="button"
-          className="resource-icon-button"
-          onClick={onRefresh}
-          disabled={loading || !sessionId}
-          title={t("child.refresh")}
-          aria-label={t("child.refresh")}
-        >
-          <span
-            className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`}
-            aria-hidden="true"
-          />
-        </button>
-      </div>
-
-      <div className="panel-header-meta" data-child-owner-session={sessionId}>
-        {ownerLabel}
-      </div>
-
-      <div className="child-thread-notice-slot">
-        {notice ? (
+    <section className="panel-view child-thread-panel" aria-busy={loading} aria-label={t("child.panel")} data-child-owner-session={sessionId}>
+      {notice ? (
+        <div className="child-thread-notice-slot">
           <div
             className={`child-thread-notice${noticeError ? " is-error" : ""}`}
             role="status"
@@ -129,14 +95,18 @@ export default function ChildThreadPanel({
               <span className="codicon codicon-close" aria-hidden="true" />
             </button>
           </div>
-        ) : null}
-      </div>
-
-      {loading ? <div className="empty-state">{t("child.loading")}</div> : null}
-      {!loading && error ? (
-        <div className="empty-state">{t("child.loadFailed", error)}</div>
+        </div>
       ) : null}
-      {!loading && !error && threads.length === 0 && teams.length === 0 && sessionId ? (
+      {error ? (
+        <div className="panel-feedback" role="alert">
+          {t("child.loadFailed", error)}
+          <button type="button" className="resource-icon-button" onClick={onRefresh}
+            disabled={loading || !sessionId} title={t("child.refresh")} aria-label={t("child.refresh")}>
+            <span className="codicon codicon-refresh" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {!loading && !error && !mainThreadId && threads.length === 0 && teams.length === 0 && sessionId ? (
         <div className="empty-state">
 
           {t("child.empty")}
@@ -146,7 +116,7 @@ export default function ChildThreadPanel({
         <div className="empty-state">{t("child.selectSession")}</div>
       ) : null}
 
-      {!loading && !error && (threads.length > 0 || Boolean(sessionId)) ? (
+      {(threads.length > 0 || teams.length > 0 || Boolean(sessionId)) ? (
         <div className="child-thread-list" role="list">
           {teams.map((team) => (
             <article key={team.team_id} className="child-thread-item" role="listitem" data-team-id={team.team_id} data-team-version={team.version}>
@@ -178,23 +148,23 @@ export default function ChildThreadPanel({
                   type="button"
                   className="child-thread-main"
                   onClick={() => {
-                    if (mainThreadId) onSelectThread?.(mainThreadId);
+                    if (mainThreadId) onOpenMainThread();
                   }}
-                  disabled={!mainThreadId || !onSelectThread}
-                  title={t("child.mainSwitch")}
-                  aria-label={t("child.mainSwitchAria")}
+                  disabled={!mainThreadId}
+                  title={t("child.openMain")}
+                  aria-label={t("child.openMain")}
+                  aria-current={mainThreadId === activeThreadId ? "page" : undefined}
                 >
                   <span
                     className="child-thread-icon codicon codicon-home"
                     aria-hidden="true"
                   />
                   <span className="child-thread-copy">
-                    <strong>{t("child.main")}</strong>
-                    <small>{t("child.mainDescription")}</small>
+                    <strong title={t("child.mainDescription")}>{t("child.main")}</strong>
                   </span>
                   <span className="child-thread-status child-thread-status-running">
                     {mainThreadId !== null && mainThreadId === activeThreadId
-                      ? t("child.currentDebug")
+                      ? t("child.currentThread")
                       : t("child.main")}
                   </span>
                 </button>
@@ -215,7 +185,8 @@ export default function ChildThreadPanel({
                   <button
                     type="button"
                     className="child-thread-main"
-                    onClick={() => onOpenThread ? onOpenThread(thread) : conversation.selectThread(thread.thread_id)}
+                    aria-current={isCurrent ? "page" : undefined}
+                    onClick={() => onOpenThread(thread)}
                     title={t("child.openConversation", thread.title ?? thread.thread_id)}
                   >
                     <span
@@ -234,9 +205,6 @@ export default function ChildThreadPanel({
                       {childThreadStatusLabel(thread.status)}
                     </span>
                   </button>
-                  {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={t("child.debugAria", thread.thread_id)} title={isCurrent ? t("child.currentOwner") : t("child.debug")}>
-                    <span className="codicon codicon-debug" aria-hidden="true" />
-                  </button> : null}
                   {onForkFromThread ? <button type="button" className="child-thread-copy-id" onClick={() => onForkFromThread(thread.thread_id, {})} aria-label={t("child.fork")} title={t("child.fork")}>
                     <span className="codicon codicon-git-branch" aria-hidden="true" />
                   </button> : null}

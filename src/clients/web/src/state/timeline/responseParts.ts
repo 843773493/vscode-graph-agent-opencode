@@ -10,8 +10,8 @@ export interface ResponsePartsProjectionOptions {
 function internalResponsePartOrder(
   part: InternalExecutionHistory["response_parts"][number],
 ): [number, number] {
-  const logicalItemOrdinal = part.source.logical_item_ordinal;
-  const partOrdinal = part.source.part_ordinal;
+  const logicalItemOrdinal = part.kind === "context_notice" ? part.context_anchor_ordinal : part.source.logical_item_ordinal;
+  const partOrdinal = part.kind === "context_notice" ? part.context_plan_ordinal : part.source.part_ordinal;
   if (
     typeof logicalItemOrdinal !== "number"
     || !Number.isSafeInteger(logicalItemOrdinal)
@@ -213,5 +213,29 @@ export function responsePartsToTimelineItems(
       });
     }
   }
+  for (const { id, notices } of contextNoticeGroups(parts, "before_model_call")) {
+    const call = notices[0].context_model_call_id;
+    const beforeId = notices[0].context_before_item_id;
+    let index = beforeId ? items.findIndex(item => item.responseSources?.some(source => source.source.item_id === beforeId)) : -1;
+    if (index < 0) index = items.findIndex(item => item.responseSources?.some(source => source.source.model_call_id === call));
+    if (index < 0) {
+      const ordinal = notices[0].context_anchor_ordinal;
+      index = items.findIndex(item => item.responseSources?.some(source => ordinal != null
+        && source.source.logical_item_ordinal != null && source.source.logical_item_ordinal >= ordinal));
+    }
+    items.splice(index < 0 ? items.length : index, 0, { kind: "context_event", id, notices });
+  }
   return items;
+}
+
+/** 消费请求和展示锚点共同决定分组，不改变来源的 canonical／冻结引用。 */
+export function contextNoticeGroups(parts: readonly TurnResponsePart[], anchor: "before_user_message" | "before_model_call") {
+  const groups = new Map<string, TurnResponsePart[]>();
+  for (const part of parts) {
+    if (part.kind !== "context_notice" || part.context_anchor !== anchor) continue;
+    const key = `${part.context_model_call_id}:${anchor}:${part.context_before_item_id ?? ""}`;
+    const group = groups.get(key);
+    if (group) group.push(part); else groups.set(key, [part]);
+  }
+  return [...groups].map(([key, notices]) => ({ id: `context:${key}`, notices }));
 }

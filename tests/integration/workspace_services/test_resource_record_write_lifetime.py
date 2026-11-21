@@ -8,9 +8,9 @@ import threading
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.core.mounted_workspaces import MountedWorkspace
-from app.core.trace_middleware import get_current_request_id
 from app.services.business.workspace_resources.records import ResourceRecordStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.external_resource_leases import (

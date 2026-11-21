@@ -14,6 +14,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 
 
 class BackgroundWorkStore:
@@ -44,9 +45,11 @@ class BackgroundWorkStore:
     @asynccontextmanager
     async def admission(self, session_id: str) -> AsyncIterator[None]:
         async with self._topology.shared(), self._lifecycle.exclusive(session_id):
-            if self._resolver.get_node(session_id).state != "active":
-                raise SessionDeletionPendingError(f"Session 删除中，拒绝后台工作准入: {session_id}")
-            with self.control(session_id) as control:
-                if control.get_fence()[0] != "active":
-                    raise SessionDeletionPendingError(f"Session fence 删除中: {session_id}")
+            def check_fence() -> None:
+                if self._resolver.get_node(session_id).state != "active":
+                    raise SessionDeletionPendingError(f"Session 删除中，拒绝后台工作准入: {session_id}")
+                with self.control(session_id, read_only=True) as control:
+                    if control.get_fence()[0] != "active":
+                        raise SessionDeletionPendingError(f"Session fence 删除中: {session_id}")
+            await run_sync_shielded(check_fence)
             yield

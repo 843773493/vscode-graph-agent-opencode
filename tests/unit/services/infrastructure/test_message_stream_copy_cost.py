@@ -36,29 +36,29 @@ async def test_delta_reuses_untouched_branches_and_preserves_published_snapshots
     original = deepcopy(before)
     subscription = await store.subscribe(writer.turn_stream_id)
     try:
-        await writer.commit("block.delta", {
+        committed = await writer.commit("block.delta", {
             "block_id": "first", "operation": "item_patch",
             "item": {"id": "item", "new_field": "changed"},
         })
-        record = await asyncio.wait_for(subscription.get(), timeout=1)
+        event = await asyncio.wait_for(subscription.get(), timeout=1)
         after = store._states[writer.turn_stream_id]
-        assert record.checkpoint is after
+        assert event == committed
         assert before == original
         # 高频 delta 的分配只随目标块增长，不递归复制其余模型、工具和正文。
         assert after["tool_calls"] is before["tool_calls"]
         assert after["blocks"][1] is before["blocks"][1]
         assert after["blocks"][0] is not before["blocks"][0]
         assert after["blocks"][0]["items"][0]["new_field"] == "changed"
-        frozen = deepcopy(record.checkpoint)
+        frozen = deepcopy(after)
         await writer.commit("block.delta", {
             "block_id": "second", "operation": "append", "text": "next",
         })
-        assert record.checkpoint == frozen
+        assert after == frozen
         await writer.commit("tool_call.delta", {
             "tool_call_id": "known-call", "arguments": {"parts": ["updated"], "pair": ("left", "right")},
         })
         assert before == original
-        assert record.checkpoint == frozen
+        assert after == frozen
         snapshot = await writer.snapshot()
         snapshot["payload"]["tool_calls"][0]["arguments"]["parts"].append("caller")
         current = await store.get_state(writer.turn_stream_id)

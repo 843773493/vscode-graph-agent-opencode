@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from app.core.sqlite_state import utc_now_text
+from app.services.infrastructure.config.recovery import recover_expired_applies
 from app.services.infrastructure.config.state import (
     ConfigApplyClaimRecord,
     ConfigApplyJournalRecord,
@@ -244,53 +245,7 @@ class WorkspaceStateStoreApplyMixin:
     ) -> tuple[str, ...]:
         """把遗留的 applying 候选标为 recovery_required，避免启动时猜测。"""
         with self._write_transaction() as connection:
-            now = datetime.now(UTC).isoformat()
-            rows = connection.execute(
-                """
-                SELECT candidate_id
-                FROM config_pending_candidate
-                WHERE config_domain = ? AND state = 'applying'
-                  AND candidate_id NOT IN (
-                      SELECT candidate_id FROM config_apply_claim
-                      WHERE config_domain = ? AND lease_expires_at > ?
-                  )
-                """,
-                (config_domain, config_domain, now),
-            ).fetchall()
-            candidate_ids = tuple(str(row[0]) for row in rows)
-            if candidate_ids:
-                connection.executemany(
-                    """
-                    UPDATE config_pending_candidate
-                    SET state = 'recovery_required',
-                        last_error = '启动恢复发现 apply lease 已过期'
-                    WHERE config_domain = ? AND candidate_id = ? AND state = 'applying'
-                    """,
-                    ((config_domain, candidate_id) for candidate_id in candidate_ids),
-                )
-                connection.executemany(
-                    """
-                    UPDATE config_apply_journal
-                    SET state = 'recovery_required',
-                        last_error = '启动恢复发现 apply lease 已过期',
-                        updated_at = ?
-                    WHERE config_domain = ? AND candidate_id = ? AND state = 'applying'
-                    """,
-                    (
-                        (utc_now_text(), config_domain, candidate_id)
-                        for candidate_id in candidate_ids
-                    ),
-                )
-            # promotion 已提交但进程未执行 finally 时，也会留下 claim；
-            # 清理期限已到的 claim 不应依赖仍存在 applying 候选。
-            connection.execute(
-                """
-                DELETE FROM config_apply_claim
-                WHERE config_domain = ? AND lease_expires_at <= ?
-                """,
-                (config_domain, now),
-            )
-            return candidate_ids
+            return recover_expired_applies(connection, config_domain)
 
     @staticmethod
     def _apply_journal_from_row(row: sqlite3.Row) -> ConfigApplyJournalRecord:
@@ -560,27 +515,6 @@ class WorkspaceStateStoreApplyMixin:
         if result is None:
             raise RuntimeError("Workspace 补偿记录提交后无法读取")
         return result
-
-    def recover_config_apply_journals(
-        self,
-        *,
-        config_domain: str,
-    ) -> tuple[ConfigApplyJournalRecord, ...]:
-        journals = self.list_config_apply_journals(
-            config_domain=config_domain,
-            states=("applying",),
-        )
-        for journal in journals:
-            self.update_config_apply_journal(
-                apply_id=journal.apply_id,
-                expected_state="applying",
-                state="recovery_required",
-                last_error="进程恢复发现未完成的外部 apply journal",
-            )
-        return self.list_config_apply_journals(
-            config_domain=config_domain,
-            states=("recovery_required",),
-        )
 
     def begin_config_apply(
         self,

@@ -27,16 +27,14 @@ session_navigation/
 ```text
 catalog revision
 └── 可见节点投影
-    ├── nodes_by_id                  breadcrumb 查父链；也把页内节点 ID 映射回 DTO
-    ├── visible_node_ids             O(1) 校验分页父节点是否可见
-    ├── child_node_ids_by_parent     每次快照按 folder/name/id 排序一次；请求只切当前页
+    ├── nodes_by_id                  搜索查父链和页内 DTO
     └── folded_search_terms          按稳定 ID 复用名称、ID、逻辑目录和冻结 UTC 创建位置的 casefold 结果
         └── search                   大目录首屏用 top-K 取页但全量计算 total；游标页完整排序并校验 offset
 ```
 
-按数据生命周期建索引：catalog revision 变化时重建节点投影、子节点顺序和搜索键；同一快照的分页或重复搜索复用它们。子节点索引只存稳定 ID，分页时从 `nodes_by_id` 取当前 DTO，避免默认 provider 变化重投影后留下旧对象引用。
+按数据生命周期建索引：catalog revision 变化时重建全量导出和搜索所需投影与搜索键；普通 children、breadcrumb 和指定 ID 读取不依赖该全量快照。
 
-冷投影与缓存命中都在本次读取内按 Agent 解析默认 provider，不能逐会话重复解析整份配置；显式 provider 不参与默认值复用，下一次读取仍重新解析默认值。
+版本 token 只取权威 catalog revision 与配置 owner 已发布 revision；未变化不构建 DTO 摘要。children、breadcrumb 和指定 ID 确认在同一 SQLite 事务读取有界范围，全量投影只供原 export／搜索缓存；配置变化仅替换缓存中的默认 Provider 投影，显式 Provider 保持原值。
 
 目录全量匹配和分页在受保护 worker 中执行，沿用包含快照读取的同一查询期限；取消须等待查询结算，不阻塞事件循环。
 
@@ -64,7 +62,7 @@ catalog revision
 - `parent_session_id` 只从 catalog 最近祖先 Session 派生，不回写 manifest；fork、delegation、上下文来源和生成器 lineage 与导航父链分离。
 - Session 的物理 locator 为创建 intent 冻结的 UTC 日期桶 `sessions/YYYY/MM/DD/{session_id}`；导航子节点只由 catalog 父链组织，不创建物理 `children/` 树。生成器使用同一创建 owner 建立节点并指定逻辑父节点。
 - 损坏、重复或循环关系必须抛出详细错误。
-- 删除前的后台任务检查只读取冻结目标子树内的会话，在受保护 worker 中整批读取；子树内的活动任务仍拒绝删除，不为删除一个节点遍历其他会话的控制库。
+- 删除沿统一停止入口结算目标子树内的 Job、后台任务与资源；外部效果未确认时保留恢复证据并阻止数据删除，不预先拒绝能够取消的活动后台任务。
 - 移动、重命名只更新 catalog，不搬目录或改变 locator；创建、删除由对应 owner 协调 catalog 与物理存储。所有路径读取经统一解析器，手工目录漂移必须向 API/UI 暴露错误。
 - `from app.services.business.session_navigation.queue_store import X` 的外部导入路径与导出名保持稳定，拆分产物不得反向依赖门面。
 - navigation终态事件的写入回读、分页和启动校验使用唯一row parser；事件与保留operation的冻结身份在同一SQLite快照核对，不以当前node重建历史，也不比较后续settlement可变的回执错误。

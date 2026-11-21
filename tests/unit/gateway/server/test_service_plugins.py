@@ -311,6 +311,35 @@ async def test_creation_handoff_observes_completed_start_before_marking_signatur
     coordinator._refresh.assert_awaited_once()
 
 
+async def test_creation_handoff_waits_for_original_managed_runtime() -> None:
+    target = WorkspaceTarget(gateway_id="gateway_" + "a" * 32,
+        workspace_id="12345678-1234-5678-1234-567812345678", name="new", root_path="/new",
+        backend_url="", connection_kind="local", managed=True, desired_running=True,
+        plugin_creation={"intent_id": "new-default", "revision": "template-v1", "bindings": []})
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry.gateway_id = target.gateway_id
+    registry.backend_topology_lock = asyncio.Lock()
+    registry.targets.return_value = (target,)
+    registry.backend_owner.return_value = None
+    registry.has_runtime.return_value = False
+    runtime = Mock(spec=GatewayPluginRuntime)
+    runtime.slots = {}
+    coordinator = WorkspacePluginBindings(registry, runtime)
+    coordinator._task = asyncio.current_task()
+    coordinator._initialize_creation = AsyncMock()
+    coordinator._refresh = AsyncMock()
+    await coordinator.reconcile()
+    coordinator._initialize_creation.assert_not_awaited()
+    coordinator._refresh.assert_not_awaited()
+    assert coordinator.states[target.workspace_id].state == "waiting"
+
+    registry.has_runtime.return_value = True
+    target.backend_url = "http://127.0.0.1:49152"
+    await coordinator.reconcile()
+    coordinator._initialize_creation.assert_awaited_once()
+    coordinator._refresh.assert_awaited_once()
+
+
 @pytest.fixture
 def startup_plugin_handoff():
     target = WorkspaceTarget(gateway_id="gateway_" + "a" * 32,

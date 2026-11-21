@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
-    get_request_id,
+    get_llm_request_log_reader,
     get_session_turn_history_service,
     get_workspace_search_service,
     verify_local_token,
@@ -35,6 +36,8 @@ from app.schemas.internal_v2.turn import (
     TurnProjectionCorruptedErrorDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadItemInspectionDTO,
+    ThreadItemInspectionRequest,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
@@ -45,7 +48,8 @@ from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_history.workspace_search import (
     WorkspaceMessageSearchCursorError,
 )
-from app.services.infrastructure.turn_history import (
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,
@@ -85,6 +89,25 @@ async def search_workspace_history_messages(
         raise state_conflict_http_error(error) from error
     assert result.messages is not None
     return APIResponse(data=result.messages, request_id=request_id)
+
+
+@router.post("/{session_id}/threads/{thread_id}/items/inspect", response_model=APIResponse[ThreadItemInspectionDTO])
+async def inspect_thread_item(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: ThreadItemInspectionRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    history: Annotated[SessionTurnHistoryService, Depends(get_session_turn_history_service)],
+    request_logs: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
+):
+    try:
+        result = await history.inspect_item(session_id, thread_id, payload, request_logs=request_logs)
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except TimeoutError as error:
+        raise HTTPException(408, detail=str(error)) from error
+    except Exception as error:
+        raise _turn_history_http_error(session_id, error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get("/{session_id}/threads/{thread_id}/tool-results",

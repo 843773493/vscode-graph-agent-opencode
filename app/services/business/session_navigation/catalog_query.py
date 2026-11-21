@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from collections.abc import Callable, Iterator
 from heapq import nsmallest
@@ -21,6 +22,13 @@ from app.services.mapping.session_catalog_search import (
 
 _SEARCH_TOP_K_MIN_NODE_COUNT = 2_000
 _SEARCH_TOP_K_MIN_SCAN_RATIO = 16
+
+
+def catalog_projection_revision(catalog_revision: int, projection_revision: str) -> str:
+    """在线范围、搜索和 Gateway 镜像使用同一固定大小版本 token。"""
+    return hashlib.sha256(json.dumps(
+        [catalog_revision, projection_revision], separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
 
 
 class CatalogCursorError(ValueError):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -13,18 +14,16 @@ from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
-    NodeDebugConfigurationBreakpointDTO,
     NodeDebugConfigurationDTO,
     NodeDebugConfigurationInput,
+    NodeDebugSetBreakpointParams,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     inspector_breakpoint_condition,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     BreakpointSource,
-    persistable_breakpoint,
     portable_breakpoint,
-    runtime_breakpoint,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
@@ -86,22 +85,10 @@ class NodeDebugConfigurationFactory:
             if resolved_directory != self._workspace_root
             else ""
         )
-        normalized_breakpoints: list[NodeDebugBreakpointDTO] = []
-        for breakpoint in configuration.breakpoints:
-            breakpoint_path, relative_path = self.resolve_script_path(breakpoint.path)
-            normalized_breakpoints.append(
-                persistable_breakpoint(
-                    BreakpointSource(
-                        breakpoint_path, uri=self._file_paths.reference(breakpoint_path),
-                    ).reconcile(
-                        runtime_breakpoint(
-                            NodeDebugConfigurationBreakpointDTO(
-                                **breakpoint.model_dump(exclude={"path"}), path=relative_path,
-                            )
-                        )
-                    )
-                )
-            )
+        normalized_breakpoints = self._observe_breakpoints(
+            [NodeDebugBreakpointDTO(**breakpoint.model_dump()) for breakpoint in configuration.breakpoints],
+            anchor=False,
+        )
         return NodeDebugConfigurationDTO(
             **configuration.model_dump(exclude={"name", "script_path", "working_directory", "args", "breakpoints"}),
             name=configuration.name.strip(),
@@ -143,16 +130,7 @@ class NodeDebugConfigurationFactory:
             launch_profile_name=launch_profile_name,
             args=list(args),
             breakpoints=[
-                portable_breakpoint(
-                    self.create_breakpoint(
-                        path=breakpoint.path,
-                        line=breakpoint.line,
-                        column=breakpoint.column,
-                        condition=breakpoint.condition,
-                        hit_condition=breakpoint.hit_condition,
-                        log_message=breakpoint.log_message,
-                    )
-                )
+                portable_breakpoint(self._prepare_breakpoint(breakpoint))
                 for breakpoint in breakpoints
             ],
             created_at=created_at or now,
@@ -160,26 +138,46 @@ class NodeDebugConfigurationFactory:
         )
         return self.validate_configuration(configuration)
 
-    def create_breakpoint(
+    def create_breakpoints(
         self,
-        *,
-        path: str,
-        line: int,
-        column: int,
-        condition: str | None,
-        hit_condition: int | None = None,
-        log_message: str | None = None,
+        breakpoints: Sequence[NodeDebugSetBreakpointParams],
+    ) -> list[NodeDebugBreakpointDTO]:
+        return self._observe_breakpoints(
+            [self._prepare_breakpoint(breakpoint) for breakpoint in breakpoints],
+            anchor=True,
+        )
+
+    def _observe_breakpoints(
+        self, breakpoints: list[NodeDebugBreakpointDTO], *, anchor: bool,
+    ) -> list[NodeDebugBreakpointDTO]:
+        indices_by_path: dict[Path, list[int]] = {}
+        for index, breakpoint in enumerate(breakpoints):
+            path, relative_path = self.resolve_script_path(breakpoint.path)
+            breakpoints[index] = breakpoint.model_copy(update={"path": relative_path})
+            indices_by_path.setdefault(path, []).append(index)
+        # 同文件断点共用本次源码观察；逐文件释放，不建立跨请求缓存。
+        for path, indices in indices_by_path.items():
+            source = BreakpointSource(path, uri=self._file_paths.reference(path))
+            for index in indices:
+                breakpoint = breakpoints[index]
+                breakpoints[index] = source.anchor(breakpoint) if anchor else source.reconcile(breakpoint)
+            del source
+        return breakpoints
+
+    def _prepare_breakpoint(
+        self,
+        params: NodeDebugSetBreakpointParams,
     ) -> NodeDebugBreakpointDTO:
-        script_path, relative_path = self.resolve_script_path(path)
+        _, relative_path = self.resolve_script_path(params.path)
         breakpoint = NodeDebugBreakpointDTO(
             breakpoint_id=create_prefixed_id("node-bp"),
             path=relative_path,
-            line=line,
-            column=column,
-            condition=condition.strip() or None if condition is not None else None,
-            hit_condition=hit_condition,
-            log_message=log_message,
-            original_line=line,
+            line=params.line,
+            column=params.column,
+            condition=params.condition.strip() or None if params.condition is not None else None,
+            hit_condition=params.hit_condition,
+            log_message=params.log_message,
+            original_line=params.line,
             created_at=datetime.now(UTC),
         )
         inspector_breakpoint_condition(
@@ -188,7 +186,7 @@ class NodeDebugConfigurationFactory:
             hit_condition=breakpoint.hit_condition,
             log_message=breakpoint.log_message,
         )
-        return BreakpointSource(script_path, uri=self._file_paths.reference(script_path)).anchor(breakpoint)
+        return breakpoint
 
     def resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
         if not raw_path.strip():

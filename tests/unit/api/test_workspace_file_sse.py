@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -16,9 +15,9 @@ import pytest
 from fastapi import FastAPI
 
 from app.api import workspace as workspace_api
-from app.api import workspace_observation as observation_api
 from app.api.deps import (
     get_config_service,
+    get_session_catalog_service,
     get_session_service,
     get_workspace_activity_service,
     get_workspace_file_watch_service,
@@ -212,11 +211,11 @@ async def test_real_watch_failure_keeps_native_path_in_log_only(
     import app.services.infrastructure.workspace_file_watch_service as watch_module
 
     root = Path(workspace_service.root_path)
-    async def failing_watch(*_roots, **_options):
+    async def failing_watch(_runtime, *_roots, **_options):
         yield set()
         raise PermissionError(13, "Permission denied", str(root / "private.txt"))
 
-    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", failing_watch)
     watcher = watch_module.WorkspaceFileWatchService(workspace_root=root)
     response = await stream_workspace_file_events(
         WorkspaceFileWatchRequest(paths=[]), "local-dev-token",
@@ -238,11 +237,12 @@ async def file_observation_client(workspace_service: WorkspaceService):
     watcher = WorkspaceFileWatchService(workspace_root=Path(workspace_service.root_path))
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
-    app.include_router(observation_api.router, prefix="/api/v1")
+    app.include_router(workspace_api.router, prefix="/api/v1")
     app.dependency_overrides[get_workspace_service] = lambda: workspace_service
     app.dependency_overrides[get_workspace_file_watch_service] = lambda: watcher
     app.dependency_overrides[get_config_service] = lambda: object()
     app.dependency_overrides[get_session_service] = lambda: object()
+    app.dependency_overrides[get_session_catalog_service] = lambda: object()
     app.dependency_overrides[get_workspace_activity_service] = lambda: object()
     app.dependency_overrides[verify_local_token] = lambda: "local-test"
     try:
@@ -271,20 +271,13 @@ async def test_file_observation_failure_serialization_preserves_diagnostic_witho
     store = workspace_service.file_operations.store
     monkeypatch.setattr(store, "latest_event_id" if stage == "open" else "events", fail)
     response = await file_observation_client.post(
-        "/api/v1/workspace/observations/stream",
-        json={"subscriptions": [{"subscription_id": "files", "kind": "workspace_files"}]},
+        "/api/v1/workspace/files/events",
+        json={"paths": []},
         headers={"X-Request-ID": "file-observation-failure"},
     )
-    assert response.status_code == 200
+    assert response.status_code == (500 if stage == "open" else 200)
     assert response.headers["X-Request-ID"] == "file-observation-failure"
-    frames = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
-    assert [frame["state"] for frame in frames] == (["error"] if stage == "open" else ["connected", "error"])
-    failed = frames[-1]
-    assert (failed["subscription_id"], failed["status"]) == ("files", 500)
-    assert json.loads(failed["detail_json"]) == {
-        "owner": "workspace_observation", "stage": stage, "type": type(error).__name__,
-        "errno": error.errno if isinstance(error, OSError) else None,
-    }
+    assert type(error).__name__ in response.text
     assert str(root) not in response.text and filename not in response.text
     assert filename in caplog.text
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)

@@ -1,3 +1,5 @@
+import { LocalDatabaseError } from "../browserPersistence";
+
 export type IdentityUpgrade = (transaction: IDBTransaction) => void;
 
 /** 旧队列未确认归属前，不允许普通打开入口把旧项解释成新分区。 */
@@ -6,13 +8,12 @@ export function requireEmptyIdentityUpgrade(transaction: IDBTransaction, stores:
     const count = transaction.objectStore(name).count();
     count.onsuccess = () => {
       if (count.result) {
-        fail(new Error(`存在旧身份的 ${name} 记录；请显式导入工作区身份恢复材料，原记录已保留`));
+        fail(new LocalDatabaseError(transaction.db.name, "identity", new Error(`存在旧身份的 ${name} 记录，需完成工作区身份升级；原记录已保留`)));
         transaction.abort();
       }
     };
   }
 }
-
 export interface StoredEntries { keys: IDBValidKey[]; values: unknown[] }
 
 /** 规划与写入都在原事务事件内完成；异常中止整批，不给 IndexedDB 留异步提交窗口。 */

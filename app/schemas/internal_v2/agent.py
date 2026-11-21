@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+from .model_reference import ModelReferenceDTO
 
 
-class AgentProviderDTO(BaseModel):
-    provider_id: str
+class AgentModelDTO(BaseModel):
+    model_ref: ModelReferenceDTO
     model: str
+    name: str | None = None
+    provider_name: str | None = None
     custom_llm_provider: str
     workspace_default: bool = False
     available: bool = True
@@ -19,7 +23,7 @@ class AgentDTO(BaseModel):
     model: str
     tools: list[str]
     capabilities: list[str]
-    providers: list[AgentProviderDTO]
+    models: list[AgentModelDTO]
     workspace_default: bool = False
 
 
@@ -27,5 +31,7 @@ class WorkspaceDefaultAgentUpdateRequest(BaseModel):
     agent_id: str
 
 
-class WorkspaceDefaultProviderUpdateRequest(BaseModel):
-    provider_id: str
+class WorkspaceDefaultModelUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: ModelReferenceDTO

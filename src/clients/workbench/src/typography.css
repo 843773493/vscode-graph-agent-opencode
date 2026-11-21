@@ -1,0 +1,9 @@
+/* UI 先选同时覆盖中英文的字体，避免西文行盒基线与回退汉字的字形度量不一致。
+   只设置 Workbench 的继承字体；编辑器、代码和终端继续使用各自的字体设置。 */
+:root {
+  --boxteam-ui-font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN", "Source Han Sans", "Microsoft YaHei", "Hiragino Sans GB", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Ubuntu", "Droid Sans", sans-serif;
+}
+
+#workbench .monaco-workbench {
+  font-family: var(--boxteam-ui-font-family);
+}

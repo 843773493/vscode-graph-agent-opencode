@@ -6,10 +6,10 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from uuid import uuid4
 
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
@@ -123,7 +123,7 @@ class ForkMaterializationMixin:
             checkpoint_id = checkpoint["id"]
             # 标记目标侧 fork checkpoint/view/control 元数据的 UTC 记账时刻，不是源 item.created_at。
             copy_recorded_at = _now()
-            message_view = uuid4().hex
+            message_view = create_uuid_hex()
             metadata = {
                 "source": "fork", "step": -1, "parents": {},
                 "fork_materialization_id": materialization_id,

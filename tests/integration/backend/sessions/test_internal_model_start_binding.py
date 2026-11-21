@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     native_dispatch_workspace,
 )

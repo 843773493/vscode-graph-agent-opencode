@@ -17,6 +17,7 @@ import {
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import type { SessionTurnBootstrap } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
 import { timelineForScope } from "./turnLoadSupport";
 
@@ -35,6 +36,7 @@ export function partialBootstrapPollDelay(attempt: number): number {
 }
 
 export function useTurnBootstrap({
+  initialBootstrap,
   apiPort,
   sessionId,
   threadId,
@@ -48,6 +50,7 @@ export function useTurnBootstrap({
   setState,
   loadInitialTurns,
 }: {
+  initialBootstrap?: Promise<SessionTurnBootstrap>;
   apiPort: number | null;
   sessionId: string | null;
   threadId?: string;
@@ -162,15 +165,15 @@ export function useTurnBootstrap({
       };
     });
 
-    const requestBootstrap = async (pollAttempt: number): Promise<void> => {
+    const requestBootstrap = async (pollAttempt: number, suppliedBootstrap?: Promise<SessionTurnBootstrap>): Promise<void> => {
       try {
-        const bootstrap = await getSessionTurnBootstrap(
+        const bootstrap = await (suppliedBootstrap ?? getSessionTurnBootstrap(
           apiPort,
           sessionId,
           workspaceId,
           controller.signal,
           threadId,
-        );
+        ));
         if (controller.signal.aborted || generationRef.current !== targetGeneration) return;
         if (threadId !== undefined && bootstrap.thread_id !== threadId) throw new Error("Turn bootstrap 的 thread owner 与请求不一致");
         const projectionState = bootstrap.projection_state ?? "ready";
@@ -212,19 +215,8 @@ export function useTurnBootstrap({
             );
           } else {
             next.activeJobIdsBySession.delete(sessionCacheKey);
-            if (activeJobCount === 0) {
-              writePendingSnapshot(
-                next.pendingConversations,
-                next.activeJobIdsBySession,
-                {
-                  session_id: sessionId,
-                  thread_id: bootstrap.thread_id,
-                  active_job_id: null,
-                  requests: [],
-                },
-                sessionCacheKey,
-              );
-            } else {
+            // bootstrap 不带队列水位；空队列必须由后续权威 pending 读取确认。
+            if (activeJobCount > 0) {
               syncActiveJobConversation(
                 next.pendingConversations,
                 sessionId,
@@ -240,66 +232,58 @@ export function useTurnBootstrap({
             : "最新 Turn 已加载";
           return next;
         });
-        if (activeJobCount > 0) {
-          const nextPendingIdentity = [
-            bootstrap.active_job_id ?? "none",
-            activeJobCount,
-            ...(bootstrap.active_jobs ?? []).map(
-              (job) => `${job.job_id}:${job.updated_at}`,
-            ),
-          ].join(":");
-          if (nextPendingIdentity !== pendingSnapshotIdentity) {
-            pendingSnapshotIdentity = nextPendingIdentity;
-            void listThreadPendingRequests(
-              apiPort,
-              sessionId,
-              workspaceId,
-              controller.signal,
-              threadId,
-            ).then((snapshot) => {
+        const nextPendingIdentity = [
+          bootstrap.active_job_id ?? "none",
+          activeJobCount,
+          ...(bootstrap.active_jobs ?? []).map(
+            (job) => `${job.job_id}:${job.updated_at}`,
+          ),
+        ].join(":");
+        if (nextPendingIdentity !== pendingSnapshotIdentity) {
+          pendingSnapshotIdentity = nextPendingIdentity;
+          void listThreadPendingRequests(
+            apiPort,
+            sessionId,
+            workspaceId,
+            controller.signal,
+            threadId,
+          ).then((snapshot) => {
+            if (
+              controller.signal.aborted
+              || generationRef.current !== targetGeneration
+            ) {
+              return;
+            }
+            setState((previous) => {
               if (
-                controller.signal.aborted
-                || generationRef.current !== targetGeneration
+                previous.currentSession?.session_id !== sessionId
+                || (
+                  workspaceId
+                  && previous.currentSessionWorkspaceId !== workspaceId
+                )
               ) {
-                return;
+                return previous;
               }
-              setState((previous) => {
-                if (
-                  previous.currentSession?.session_id !== sessionId
-                  || (
-                    workspaceId
-                    && previous.currentSessionWorkspaceId !== workspaceId
-                  )
-                ) {
-                  return previous;
-                }
-                const next = cloneMaps(previous);
-                // replay 新 Job 启动后可能已经离开 queued requests 列表，
-                // 但 bootstrap 仍提供 active_job_id。保留这段时间的乐观
-                // replay 会话，避免回退提示在首个 SSE 到达前被清掉。
-                const snapshotWithActiveJob = snapshot.active_job_id
-                  || !activeJobId
-                  ? snapshot
-                  : { ...snapshot, active_job_id: activeJobId };
-                writePendingSnapshot(
-                  next.pendingConversations,
-                  next.activeJobIdsBySession,
-                  snapshotWithActiveJob,
-                  sessionCacheKey,
-                );
-                return next;
-              });
-            }).catch((error: unknown) => {
-              if (controller.signal.aborted) return;
-              const message = isTransientNetworkError(error)
-                ? "本地服务连接暂时变化，已保留当前队列并自动重试"
-                : errorMessage(error);
-              setState((previous) => ({
-                ...previous,
-                status: `加载待处理消息失败: ${message}`,
-              }));
+              const next = cloneMaps(previous);
+              writePendingSnapshot(
+                next.pendingConversations,
+                next.activeJobIdsBySession,
+                snapshot,
+                sessionCacheKey,
+                next.pendingQueueVersions,
+              );
+              return next;
             });
-          }
+          }).catch((error: unknown) => {
+            if (controller.signal.aborted) return;
+            const message = isTransientNetworkError(error)
+              ? "本地服务连接暂时变化，已保留当前队列并自动重试"
+              : errorMessage(error);
+            setState((previous) => ({
+              ...previous,
+              status: `加载待处理消息失败: ${message}`,
+            }));
+          });
         }
         if (
           shouldLoadInitialHistory
@@ -391,13 +375,15 @@ export function useTurnBootstrap({
         controller.abort();
       };
     }
-    void requestBootstrap(0);
+    // 宿主已有的同次权威响应只用于首次挂载；刷新和 partial 轮询仍读取后端。
+    void requestBootstrap(0, isInitialScope ? initialBootstrap : undefined);
     return () => {
       if (pollTimer !== null) globalThis.clearTimeout(pollTimer);
       controller.abort();
     };
   }, [
     apiPort,
+    initialBootstrap,
     generationRef,
     invalidatedTurnIdsRef,
     loadInitialTurns,

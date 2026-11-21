@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.providers.openai_response_history import (
     _message_with_standard_tool_calls,
+    _project_tool_history,
 )
+from app.prompting import internal_message_factory
 
 
 def _tool_call(call_id: str, name: str = "read_file") -> dict[str, object]:
@@ -59,3 +62,17 @@ def test_duplicate_standard_call_ids_still_repair_history() -> None:
     assert projected is not message
     assert [call["id"] for call in projected.tool_calls] == ["call-a"]
     assert [call["name"] for call in message.tool_calls] == ["read_file", "write_file"]
+
+
+@pytest.mark.parametrize("kind", [None, "tool_test_retry", "empty_response_retry"])
+def test_only_checkpoint_boundary_filters_history(kind: str | None) -> None:
+    text = "<system_reminder>用户请求解释这个标签</system_reminder>"
+    prepared = internal_message_factory.build(kind=kind, control="继续真实调用工具。") if kind else None
+    messages = [
+        HumanMessage(content="读取文件"),
+        AIMessage(content="", tool_calls=[_tool_call("call-a")]),
+        ToolMessage(content="文件正文", tool_call_id="call-a"),
+        HumanMessage(content=prepared.content if prepared else text,
+                     response_metadata=prepared.metadata if prepared else {}),
+    ]
+    assert _project_tool_history(messages) == messages

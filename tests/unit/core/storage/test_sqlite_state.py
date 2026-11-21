@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
@@ -310,3 +311,63 @@ def test_sqlite_state_releases_ownership_when_initialize_fails(tmp_path):
         assert database.diagnostics().schema_version == 1
     finally:
         database.close()
+
+
+def test_supported_upgrade_backs_up_wal_and_publishes_entire_chain(tmp_path):
+    path = tmp_path / "state.sqlite"
+    first = "CREATE TABLE sample (value TEXT NOT NULL);"
+    with closing(sqlite3.connect(path)) as keep_wal:
+        with SQLiteStateDatabase(path=path, schema_version=1, migrations=(first,)) as store:
+            keep_wal.execute("PRAGMA journal_mode=WAL")
+            with closing(store.connection()) as connection:
+                connection.execute("INSERT INTO sample VALUES ('original;保留')")
+        assert path.with_name(path.name + "-wal").stat().st_size > 0
+        migrations = (first,
+            "ALTER TABLE sample ADD COLUMN count INTEGER DEFAULT 0; UPDATE sample SET count=2;",
+            "CREATE TRIGGER update_count AFTER INSERT ON sample BEGIN UPDATE sample SET count=3; END;",
+        )
+        with (SQLiteStateDatabase(path=path, schema_version=3, migrations=migrations) as store,
+              closing(store.connection()) as connection):
+            assert tuple(connection.execute("SELECT * FROM sample").fetchone()) == ("original;保留", 2)
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    backups = list(tmp_path.glob("state.sqlite.v1-*.bak"))
+    assert len(backups) == 1
+    with closing(sqlite3.connect(backups[0])) as connection:
+        assert connection.execute("SELECT * FROM sample").fetchall() == [("original;保留",)]
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 1
+    with SQLiteStateDatabase(path=path, schema_version=3, migrations=migrations):
+        pass
+    assert list(tmp_path.glob("state.sqlite.v*-*.bak")) == backups
+
+
+def test_failed_supported_upgrade_rolls_back_all_steps_and_releases_owner(tmp_path):
+    path = tmp_path / "state.sqlite"
+    first = "CREATE TABLE sample (value TEXT NOT NULL);"
+    with SQLiteStateDatabase(path=path, schema_version=1, migrations=(first,)):
+        pass
+
+    def reject_final_step(connection):
+        connection.execute("INSERT INTO sample(value) VALUES ('must roll back')")
+        raise ValueError("拒绝发布")
+
+    with pytest.raises(ValueError, match="拒绝发布"):
+        SQLiteStateDatabase(path=path, schema_version=3, migrations=(
+            first, "ALTER TABLE sample ADD COLUMN count INTEGER;", reject_final_step,
+        ))
+    with SQLiteStateDatabase(path=path, schema_version=1, migrations=(first,)) as restored:
+        assert restored.diagnostics().applied_migrations == (1,)
+        with closing(restored.connection()) as connection:
+            assert connection.execute("SELECT * FROM sample").fetchall() == []
+            assert len(connection.execute("PRAGMA table_info(sample)").fetchall()) == 1
+    assert len(list(tmp_path.glob("state.sqlite.v1-*.bak"))) == 1
+
+
+def test_shared_generation_cannot_upgrade_existing_schema(tmp_path):
+    path = tmp_path / "state.sqlite"
+    first = "CREATE TABLE sample (value TEXT NOT NULL);"
+    with (SQLiteStateDatabase(path=path, schema_version=1, migrations=(first,)),
+          pytest.raises(RuntimeError, match="共享运行时升级")):
+        SQLiteStateDatabase(path=path, schema_version=2, migrations=(
+            first, "ALTER TABLE sample ADD COLUMN count INTEGER;",
+        ), allow_shared_processes=True)
+    assert not list(tmp_path.glob("*.bak"))

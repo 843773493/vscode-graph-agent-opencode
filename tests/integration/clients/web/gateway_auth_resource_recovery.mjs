@@ -45,7 +45,8 @@ async function verifyNavigationDiagnostic(thread) {
   page.on("request", observe);
   await page.route(matches, intercept);
   try {
-    await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
+    await page.locator('.pane-header').filter({ has: page.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
     const alert = page.getByRole("alert").filter({ hasText: "无法加载工作区列表" });
     await expect(alert).toBeVisible();
     await alert.getByRole("button", { name: "查看日志", exact: true }).click();

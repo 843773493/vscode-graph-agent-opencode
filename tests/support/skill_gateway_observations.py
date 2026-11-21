@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 
 import httpx
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
-from app.core.trace_middleware import get_current_request_id
 from app.gateway.federation.skill_sources import GatewaySkillSourcePort
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,

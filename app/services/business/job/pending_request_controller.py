@@ -5,8 +5,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.abstractions.execution_queue import ExecutionQueueProtocol
 from app.abstractions.job_executor import JobInputOwnerProtocol
-from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
@@ -55,32 +55,32 @@ class JobPendingRequestController:
     def __init__(
         self,
         *,
-        queue: JobPendingQueue,
+        pending_queue: JobPendingQueue,
         lock: asyncio.Lock,
         get_jobs: Callable[[], dict[str, PendingJob]],
         get_current_jobs: Callable[[], dict[tuple[str, str], str]],
         persist_terminal_status: Callable[[PendingJob, str], Awaitable[bool]],
         input_owner: JobInputOwnerProtocol | None,
-        store: PendingRequestStoreProtocol | None,
+        execution_queue: ExecutionQueueProtocol | None,
     ) -> None:
-        self._queue = queue
+        self._pending_queue = pending_queue
         self._lock = lock
         self._get_jobs = get_jobs
         self._get_current_jobs = get_current_jobs
         self._persist_terminal_status = persist_terminal_status
         self._input_owner = input_owner
-        self._store = store
+        self._execution_queue = execution_queue
 
     def _job_by_message_id(self, session_id: str, message_id: str) -> PendingJob:
         jobs = self._get_jobs()
-        for job_id in self._queue.queued_job_ids(session_id):
+        for job_id in self._pending_queue.queued_job_ids(session_id):
             job = jobs.get(job_id)
             if job is not None and job.message_id == message_id:
                 return job
         raise ValueError(f"Session {session_id} 中不存在待处理消息 {message_id}")
 
     async def _dto(self, job: PendingJob, position: int, *, display: bool) -> PendingRequestDTO:
-        entry = self._queue.entry(job.job_id)
+        entry = self._pending_queue.entry(job.job_id)
         if job.delivery_policy is None:
             raise RuntimeError(f"待处理 Job 缺少 delivery_policy: job_id={job.job_id}")
         display_projection = project_message_for_display(
@@ -116,19 +116,19 @@ class JobPendingRequestController:
             message_metadata=display_projection.metadata if display else dict(job.message_metadata),
             created_at=job.created_at,
             updated_at=job.updated_at,
-            snapshot_version=self._queue.snapshot_version(job.session_id),
+            snapshot_version=self._pending_queue.snapshot_version(job.session_id),
         )
         if self._input_owner is None:
             return result
         reference = PendingRequestControl.model_validate(result.model_dump(exclude={
-            "content", "attachments", "message_created_at", "message_metadata",
+            "content", "attachments", "message_created_at", "message_metadata", "reorderable",
         }))
         message = await run_sync_shielded(self._input_owner.accepted_job_message, reference, display=display)
         return result.model_copy(update={
             "content": message.content, "attachments": message.attachments,
             "message_created_at": message.created_at.isoformat(),
             "message_metadata": {**message.metadata,
-                                 "boxteam_session_provider_id": job.message_metadata.get("boxteam_session_provider_id")},
+                                 "boxteam_session_model": job.message_metadata.get("boxteam_session_model")},
         })
 
     def _active_job_id(self, session_id: str, thread_id: str | None) -> str | None:
@@ -152,7 +152,7 @@ class JobPendingRequestController:
     ) -> PendingRequestSummaryListDTO:
         async with self._lock:
             jobs = self._get_jobs()
-            job_ids = self._queue.queued_job_ids(session_id, thread_id)
+            job_ids = self._pending_queue.queued_job_ids(session_id, thread_id)
             summaries = []
             for job_id in job_ids[:limit]:
                 job = jobs.get(job_id)
@@ -160,7 +160,7 @@ class JobPendingRequestController:
                     raise RuntimeError(
                         f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={job_id}"
                     )
-                entry = self._queue.entry(job_id)
+                entry = self._pending_queue.entry(job_id)
                 summaries.append(
                     PendingRequestSummaryDTO(
                         job_id=job.job_id,
@@ -178,17 +178,26 @@ class JobPendingRequestController:
                 active_job_id=self._active_job_id(session_id, thread_id),
                 requests=summaries,
                 request_count=len(job_ids),
-                snapshot_version=self._queue.snapshot_version(session_id),
+                snapshot_version=self._pending_queue.snapshot_version(session_id),
                 truncated=len(summaries) < len(job_ids),
             )
 
     async def _snapshot_unlocked(
         self, session_id: str, *, display: bool = True, thread_id: str | None = None,
     ) -> PendingRequestListDTO:
+        if thread_id is not None and self._execution_queue is not None:
+            # 顺序与 CAS 版本来自同一次权威快照，不能给旧内存顺序配上新版本。
+            snapshot = await self._execution_queue.snapshot(session_id, thread_id)
+            entries = {self._get_jobs()[job_id].message_id: self._pending_queue.entry(job_id)
+                       for job_id in self._pending_queue.queued_job_ids(session_id, thread_id)}
+            return snapshot.model_copy(update={"requests": [request.model_copy(update={
+                "waiting_reason": entries[request.message_id].waiting_reason,
+                "last_boundary": entries[request.message_id].last_boundary,
+            }) if request.message_id in entries else request for request in snapshot.requests]})
         jobs = self._get_jobs()
         requests = []
         for position, job_id in enumerate(
-            self._queue.queued_job_ids(session_id, thread_id)
+            self._pending_queue.queued_job_ids(session_id, thread_id)
         ):
             job = jobs.get(job_id)
             if job is None:
@@ -201,7 +210,7 @@ class JobPendingRequestController:
             thread_id=thread_id,
             active_job_id=self._active_job_id(session_id, thread_id),
             requests=requests,
-            snapshot_version=self._queue.snapshot_version(session_id),
+            snapshot_version=self._pending_queue.snapshot_version(session_id),
         )
 
     async def update_policy(
@@ -214,15 +223,15 @@ class JobPendingRequestController:
     ) -> PendingRequestListDTO:
         async with self._lock:
             job = self._job_by_message_id(session_id, message_id)
-            if self._store is None:
+            if self._execution_queue is None:
                 raise RuntimeError("待处理消息控制缺少持久执行队列 owner")
             dto = await self._dto(job, 0, display=False)
             reference = PendingRequestControl.model_validate(dto.model_dump(exclude={
-                "content", "attachments", "message_created_at", "message_metadata",
+                "content", "attachments", "message_created_at", "message_metadata", "reorderable",
             }))
-            await self._store.update_policy(reference, delivery_policy, expected_snapshot_version=expected_snapshot_version)
-            self._queue.set_snapshot_version(session_id, await self._store.snapshot_version(session_id))
-            self._queue.update_policy(session_id, job.job_id, delivery_policy)
+            await self._execution_queue.update_policy(reference, delivery_policy, expected_snapshot_version=expected_snapshot_version)
+            self._pending_queue.set_snapshot_version(session_id, await self._execution_queue.snapshot_version(session_id))
+            self._pending_queue.update_policy(session_id, job.job_id, delivery_policy)
             job.delivery_policy = delivery_policy
             job.updated_at = datetime.now()  # noqa: DTZ005
         return await self.list(session_id)
@@ -231,7 +240,7 @@ class JobPendingRequestController:
         async with self._lock:
             job = self._job_by_message_id(session_id, message_id)
             await self._persist_terminal_status(job, "cancelled")
-            self._queue.remove(session_id, job.job_id)
+            self._pending_queue.remove(session_id, job.job_id)
             transition_job_status(
                 job,
                 JobStatus.cancelled,
@@ -243,10 +252,10 @@ class JobPendingRequestController:
         async with self._lock:
             jobs = self._get_jobs()
             now = datetime.now()  # noqa: DTZ005
-            for job_id in self._queue.queued_job_ids(session_id, thread_id):
+            for job_id in self._pending_queue.queued_job_ids(session_id, thread_id):
                 job = jobs[job_id]
                 await self._persist_terminal_status(job, "cancelled")
-                self._queue.remove(session_id, job_id)
+                self._pending_queue.remove(session_id, job_id)
                 transition_job_status(
                     job,
                     JobStatus.cancelled,
@@ -254,7 +263,3 @@ class JobPendingRequestController:
                     now=now,
                 )
         return await self.list(session_id, thread_id=thread_id)
-
-    async def reject_reorder(self, session_id: str) -> None:
-        async with self._lock:
-            self._queue.reject_reorder(session_id)

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from uuid import uuid4
 
 import httpx
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from pydantic import JsonValue
 
-from app.core.trace_middleware import get_current_request_id
+from app.core.identifier import create_uuid_hex
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
@@ -142,18 +142,22 @@ class WorkspacePluginBindings:
             async with self.registry.backend_topology_lock:
                 targets = self._targets()
                 observed_signatures = {key: self._signature(target) for key, target in targets.items()}
-            failed_initializations: set[str] = set()
+            incomplete_initializations: set[str] = set()
             for workspace_id, target in targets.items():
                 if (target.plugin_creation is None or not target.desired_running
                     or (self._signatures.get(workspace_id) == self._signature(target)
                         and workspace_id not in self._pending)):
+                    continue
+                if target.managed and not self.registry.has_runtime(target.key):
+                    self._set_state(WorkspacePluginConfigurationDTO(workspace_id=workspace_id, state="waiting"))
+                    incomplete_initializations.add(workspace_id)
                     continue
                 try:
                     await self._initialize_creation(target, WorkspacePluginCreation.model_validate(target.plugin_creation))
                 except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
                     self._set_state(WorkspacePluginConfigurationDTO(
                         workspace_id=workspace_id, state="failed", error=str(error)))
-                    failed_initializations.add(workspace_id)
+                    incomplete_initializations.add(workspace_id)
                     logger.exception("新建工作区插件初始化失败: workspace_id=%s", workspace_id)
             async with self.registry.backend_topology_lock:
                 targets = self._targets()
@@ -176,7 +180,7 @@ class WorkspacePluginBindings:
                         continue
                     if self._signatures.get(workspace_id) != signature or workspace_id in self._pending:
                         self._pending.discard(workspace_id)
-                        if workspace_id not in failed_initializations:
+                        if workspace_id not in incomplete_initializations:
                             await self._refresh(targets[workspace_id])
                 self._signatures = {key: signature for key, signature in observed_signatures.items() if key in targets}
 
@@ -283,7 +287,7 @@ class WorkspacePluginBindings:
     async def read(self, target: WorkspaceTarget, *, startup_generation: str | None = None) -> WorkspacePluginSnapshot:
         if target.connection_kind != "local" or target.gateway_id != self.registry.gateway_id:
             raise ValueError("工作区插件配置只能从原生 owner 交接")
-        request_id = get_current_request_id() or f"workspace-plugin-handoff-{uuid4().hex}"
+        request_id = get_current_request_id() or f"workspace-plugin-handoff-{create_uuid_hex()}"
         with self.registry.backend_management_routes(workspace_ids=(target.workspace_id,),
                 allow_starting=startup_generation is not None) as routes:
             if len(routes) != 1:
@@ -308,7 +312,7 @@ class WorkspacePluginBindings:
     async def deliver_parameters(self, binding: PluginBinding, revision: str) -> dict[str, JsonValue]:
         """只在新实例启动时读取原 owner；不缓存或写入接管材料。"""
         assert binding.workspace_id is not None
-        request_id = get_current_request_id() or f"plugin-parameters-{uuid4().hex}"
+        request_id = get_current_request_id() or f"plugin-parameters-{create_uuid_hex()}"
         with self.registry.backend_management_routes(workspace_ids=(binding.workspace_id,), allow_starting=True) as routes:
             route, = routes
             response = await self.runtime.client.post(route.base_url + "/api/internal/service-plugins/parameters",

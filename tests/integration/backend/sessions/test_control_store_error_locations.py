@@ -14,7 +14,7 @@ from starlette.types import ExceptionHandler
 from app import main
 from app.api.deps import (
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
     verify_local_token,
 )
 from app.api.sessions import router
@@ -33,7 +33,7 @@ async def control_client(startup_container: AppContainer):
     application.add_exception_handler(HTTPException, cast(ExceptionHandler, main.workspace_http_exception_handler))
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_session_service] = lambda: startup_container.session_service
-    application.dependency_overrides[get_session_skill_tracking_service] = lambda: startup_container.session_skill_tracking_service
+    application.dependency_overrides[get_session_skill_untrack_service] = lambda: startup_container.session_skill_untrack_service
     application.dependency_overrides[verify_local_token] = lambda: "control-location-test"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
         yield client
@@ -62,7 +62,7 @@ async def test_damaged_control_version_returns_safe_conflict_without_mutation(
     assert response.status_code == 409, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "control-version-conflict"
     assert "artifact=session_control" in response.text and "stage=schema_version" in response.text
-    assert "user_version=6, supported=18" in response.text
+    assert "user_version=6, supported=20" in response.text
     assert str(startup_container.workspace_root) not in response.text
     assert str(database) in caplog.text
     assert database.read_bytes() == before

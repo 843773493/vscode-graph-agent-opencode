@@ -1,4 +1,5 @@
 import type { WorkspaceFileDownloadRequest } from "../api";
+import { requestGatewayResponse } from "../api/http";
 
 export interface FileTransferHost {
   downloadWorkspaceFile(request: WorkspaceFileDownloadRequest): Promise<void>;
@@ -23,15 +24,7 @@ function filenameFromDisposition(value: string | null, fallback: string): string
 
 export const browserFileTransferHost: FileTransferHost = {
   async downloadWorkspaceFile(request) {
-    const response = await fetch(request.url, { headers: request.headers });
-    if (!response.ok) {
-      const payload = await response.clone().json().catch(() => null) as {
-        detail?: string;
-      } | null;
-      throw new Error(
-        `下载工作区文件失败: ${payload?.detail ?? `HTTP ${response.status}`}`,
-      );
-    }
+    const response = await requestGatewayResponse(request.port, request.path, { headers: request.headers });
     const blob = await response.blob();
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");

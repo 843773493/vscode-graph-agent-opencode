@@ -87,10 +87,10 @@ async def test_public_fork_native_failure_preserves_live_resource_facts(
             native_failure()
         return await original_get(resource_id)
 
-    async def list_resources() -> list[ResourceSnapshot]:
+    async def list_resources(**query) -> list[ResourceSnapshot]:
         if armed and fault == "committed":
             native_failure()
-        return await original_list()
+        return await original_list(**query)
 
     async def arm(operation_id: str, phase: str, *, details: dict[str, object] | None = None) -> None:
         nonlocal armed

@@ -36,6 +36,6 @@ export function useSessionLifecycleActions(context: SessionLifecycleContext) {
     switchAgent: agentModelActions.switchAgent,
     switchModel: agentModelActions.switchModel,
     setWorkspaceDefaultAgent: workspaceDefaultActions.setWorkspaceDefaultAgent,
-    setWorkspaceDefaultProvider: workspaceDefaultActions.setWorkspaceDefaultProvider,
+    setWorkspaceDefaultModel: workspaceDefaultActions.setWorkspaceDefaultModel,
   };
 }

@@ -1,42 +1,6 @@
 import React from "react";
 import type { AppState } from "../../../types/frontend";
 import { useSessionGoalController } from "../../../hooks/session/useSessionGoalController";
-import { mountReactTestHarness } from "./reactHarness";
-
-type GoalController = ReturnType<typeof useSessionGoalController>;
-
-type SessionGoalControllerHandle = GoalController;
-
-/**
- * 挂载 useSessionGoalController，用真实 React 状态机把最新 AppState 镜像到闭包。
- * 该 hook 依赖 effect 重放，必须走 create/act，不能只做一次静态渲染。
- */
-export async function mountSessionGoalControllerHarness(options: {
-  initial: AppState;
-}): Promise<{
-  unmount: () => void;
-  controller: () => SessionGoalControllerHandle;
-  state: () => AppState;
-}> {
-  const { initial } = options;
-  let controller: SessionGoalControllerHandle | null = null;
-  let latestState = initial;
-  function Harness(): React.ReactNode {
-    const [currentState, setState] = React.useState(() => initial);
-    latestState = currentState;
-    controller = useSessionGoalController({
-      currentMainThreadId: currentState.currentSession?.thread_id ?? null,
-      apiPort: 49_406,
-      currentSessionId: currentState.currentSession?.session_id ?? null,
-      currentWorkspaceId: currentState.currentSessionWorkspaceId,
-      setState,
-    });
-    return null;
-  }
-  const unmount = await mountReactTestHarness(Harness, 1);
-  if (!controller) throw new Error("useSessionGoalController Harness 未完成渲染");
-  return { unmount, controller: () => controller!, state: () => latestState };
-}
 
 /**
  * Goal 控制器 Harness 工厂：保留自持状态机，用例可切换 currentSession 并注入

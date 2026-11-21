@@ -9,7 +9,7 @@ import type {
 import SessionChangesTree from "./sessionChanges/SessionChangesTree";
 import WorkspaceFileTree from "./fileTree/WorkspaceFileTree";
 
-export type WorkspaceAuxiliaryTab = "changes" | "files" | "goal" | "resources" | "debug";
+export type WorkspaceAuxiliaryTab = "changes" | "files" | "goal" | "resources" | "threads" | "debug";
 
 interface WorkspaceAuxiliaryPanelProps {
   visible: boolean;
@@ -35,6 +35,7 @@ interface WorkspaceAuxiliaryPanelProps {
   expandedFileTreePaths: string[];
   onExpandedFileTreePathsChange: (paths: string[]) => void;
   resourcePanel: ReactNode;
+  threadPanel: ReactNode;
   attachmentPreview: ReactNode;
   runtimePreview: ReactNode;
   debugPanel: ReactNode;
@@ -77,6 +78,7 @@ export default function WorkspaceAuxiliaryPanel({
   expandedFileTreePaths,
   onExpandedFileTreePathsChange,
   resourcePanel,
+  threadPanel,
   attachmentPreview,
   runtimePreview,
   debugPanel,
@@ -193,6 +195,15 @@ export default function WorkspaceAuxiliaryPanel({
       >
         {runtimePreview}
         {resourcePanel}
+      </div>
+      <div
+        className={`auxiliary-view-body auxiliary-threads-body${tab === "threads" ? "" : " preserve-mounted-hidden"}`}
+        hidden={tab !== "threads"}
+        data-bt-surface="layout"
+        role="tabpanel"
+        aria-label={t("workspace.editor.threads")}
+      >
+        {threadPanel}
       </div>
       <div
         className={`auxiliary-view-body${tab === "goal" ? "" : " preserve-mounted-hidden"}`}

@@ -5,6 +5,7 @@ export type AttachmentMediaKind = "image" | "video" | "file";
 export type SelectedAttachment = AttachmentRef & {
   mediaKind: AttachmentMediaKind;
   previewUrl: string;
+  uploadState?: "uploading" | "failed";
 };
 
 export const MEDIA_ONLY_PROMPT = "请查看这个附件并根据附件内容回应。";

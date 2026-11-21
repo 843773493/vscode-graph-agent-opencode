@@ -1,4 +1,4 @@
-import { parseJsonInput } from "../../../shared/serverJsonRequest.mjs";
+import { parseJsonInput } from "@boxteam/plugin-sdk/http";
 import { normalizeTerminalClientMessage } from "../protocol/messages.js";
 
 function protocolFailure(message, stage, cause, logger) {

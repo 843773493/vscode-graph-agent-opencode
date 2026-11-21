@@ -8,15 +8,15 @@ import logging
 from collections.abc import Coroutine
 from dataclasses import replace
 
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
+
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.job_event_bus import EventType
 from app.core.key_lock_pool import KeyLockPool
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import PromptSection, internal_message_factory
@@ -86,7 +86,7 @@ class ThreadInitialExecutionService:
         queue_input = ExecutionQueueInput(
             execution_binding=binding, message_id=binding.message_id,
             agent_id=json.loads(record.task_seed)["agent_id"],
-            provider_id=frozen.message.metadata.get("boxteam_session_provider_id"),
+            model=frozen.message.metadata.get("boxteam_session_model"),
             delivery_policy="after_turn", gateway_id=frozen.gateway_id,
             request_id=frozen.request_id, created_at=target.intent.intent_created_at,
         )

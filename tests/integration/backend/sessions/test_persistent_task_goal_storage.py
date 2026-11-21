@@ -8,19 +8,22 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 import pytest
+import uvicorn
 
 from app.core.path_utils import get_session_path_resolver
 from app.gateway.credentials import load_or_create_gateway_id
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from tests.integration.backend.sessions.test_persistent_tasks import (
     ROOT,
     _configuration,
@@ -46,12 +49,26 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 按当前文件隔离
 )
 from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.goal_control import goal_control_payload
+from tests.support.ports import integration_port_block_for_file
 
 
 async def _goal(case, session_id: str) -> dict | None:
     response = await case.client.get(f"/api/v1/sessions/{session_id}/goal")
     assert response.status_code == 200, response.text
-    return response.json()["data"]
+    return response.json()["data"]["goal"]
+
+
+def _goal_state(case, session_id: str) -> dict:
+    """内部记账只通过原任务 owner 读取，公开 Goal 不再携带 Job 明细。"""
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    database = case.workspace / ".boxteam/state/workspace.sqlite"
+    # 真实服务持有写入所有权；观察原 owner 的读取转换，不另开写入实例。
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        goal = PersistentTaskStore._goal(connection, resolver.workspace_id, session_id, resolver.main_thread_id(session_id))
+    assert goal is not None
+    return goal.model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -60,22 +77,22 @@ async def test_goal_real_backend_restart_keeps_identity_and_clear_does_not_resur
 ) -> None:
     case = restart_source_case
     session_id, thread_id, _ = await _target(case)
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {
         "objective": "冷恢复必须保留的目标", "status": "paused", "token_budget": 123,
-    })
+    }))
     assert response.status_code == 200, response.text
-    original = response.json()["data"]
+    original = response.json()["data"]["goal"]
     assert original["thread_id"] == thread_id
     await case.restart(hard=True)
     assert await _goal(case, session_id) == original
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "重启后的修改"})
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "重启后的修改"}))
     assert response.status_code == 200, response.text
-    edited = response.json()["data"]
+    edited = response.json()["data"]["goal"]
     assert edited["goal_id"] == original["goal_id"] and edited["revision"] == original["revision"] + 1
     await case.restart(hard=False)
     assert await _goal(case, session_id) == edited
-    response = await case.client.delete(f"/api/v1/sessions/{session_id}/goal")
-    assert response.status_code == 200 and response.json()["data"]["cleared"]
+    response = await case.client.request("DELETE", f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id))
+    assert response.status_code == 200 and response.json()["data"]["status"] == "applied"
     await case.restart(hard=True)
     assert await _goal(case, session_id) is None
     assert case.requests() == []
@@ -89,11 +106,11 @@ async def test_fork_goal_install_publish_replay_and_abort_use_the_same_owner(
 ) -> None:
     case = source_case
     source_id, _, _ = await _target(case)
-    response = await case.client.put(f"/api/v1/sessions/{source_id}/goal", json={
+    response = await case.client.put(f"/api/v1/sessions/{source_id}/goal", json=await goal_control_payload(case.client, source_id, {
         "objective": "来源 Goal 必须保持独立", "status": "paused", "token_budget": 456,
-    })
+    }))
     assert response.status_code == 200, response.text
-    source_goal = response.json()["data"]
+    source_goal = response.json()["data"]["goal"]
     point = await case.client.get(f"/api/v1/sessions/{source_id}/fork-source-point", params={"mode": "full_rollout_copy"})
     assert point.status_code == 200, point.text
     frozen = point.json()["data"]
@@ -130,10 +147,10 @@ async def test_fork_goal_install_publish_replay_and_abort_use_the_same_owner(
     assert target["goal_id"] == forked["goal_id"] != source_goal["goal_id"]
     assert target["thread_id"] == forked["thread_id"] and target["status"] == "paused"
     assert target["objective"] == source_goal["objective"] and target["token_budget"] == 78
-    assert target["tokens_used"] == target["time_used_seconds"] == 0 and target["accounted_jobs"] == {}
-    response = await case.client.put(f"/api/v1/sessions/{target_id}/goal", json={"objective": "发布后独立编辑"})
+    assert target["tokens_used"] == target["time_used_seconds"] == 0 and _goal_state(case, target_id)["accounted_jobs"] == {}
+    response = await case.client.put(f"/api/v1/sessions/{target_id}/goal", json=await goal_control_payload(case.client, target_id, {"objective": "发布后独立编辑"}))
     assert response.status_code == 200, response.text
-    edited = response.json()["data"]
+    edited = response.json()["data"]["goal"]
     response = await case.client.post(f"/api/v1/sessions/{source_id}/fork-context", json=request)
     assert response.status_code == 200 and response.json()["data"] == forked
     assert await _goal(case, target_id) == edited and len(prepared) == 1
@@ -175,11 +192,11 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
     automation = await _create(case, _configuration(target))
     assert automation["application_type"] == "automation" and automation["application_version"] == "1"
     assert automation["goal"] is None
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {
         "objective": "统一列表中的目标", "status": "paused", "token_budget": 123,
-    })
+    }))
     assert response.status_code == 200, response.text
-    original = response.json()["data"]
+    original = response.json()["data"]["goal"]
     goal_id = original["goal_id"]
 
     async def snapshot(lines) -> dict:
@@ -196,11 +213,11 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
         assert set(initial) == {automation["task_id"], goal_id}
         assert initial[goal_id]["goal"] == original and initial[goal_id]["configuration"] is None
         assert initial[goal_id]["application_type"] == "goal" and initial[goal_id]["application_version"] == "1"
-        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+        response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {
             "objective": "从右侧 Goal 入口编辑", "status": "blocked",
-        })
+        }))
         assert response.status_code == 200, response.text
-        edited = response.json()["data"]
+        edited = response.json()["data"]["goal"]
         latest = await snapshot(lines)
         while latest[goal_id]["goal"] != edited:
             latest = await snapshot(lines)
@@ -221,8 +238,8 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
     async with case.client.stream("GET", ROOT + "/events") as stream:
         lines = stream.aiter_lines()
         assert (await snapshot(lines))[goal_id]["goal"] == edited
-        response = await case.client.delete(f"/api/v1/sessions/{session_id}/goal")
-        assert response.status_code == 200 and response.json()["data"]["cleared"]
+        response = await case.client.request("DELETE", f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id))
+        assert response.status_code == 200 and response.json()["data"]["status"] == "applied"
         latest = await snapshot(lines)
         while goal_id in latest:
             latest = await snapshot(lines)
@@ -231,6 +248,86 @@ async def test_unified_management_and_real_http_sse_read_the_current_goal_owner(
     assert await _goal(case, session_id) is None and case.call_count(session_id, thread_id) == 0
     assert case.requests() == []
     case.write_actual("goal-management-owner", {"original": original, "edited": edited, "projected": projected})
+
+
+@pytest.mark.asyncio
+async def test_goal_publish_failure_leaves_sse_open_and_second_observer_reads_committed_version(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 Goal owner 提交后通知失败时，独立观察者可用版本读取确认收敛。"""
+    from app import main
+
+    case = source_case
+    session_id, thread_id, _ = await _target(case)
+    headers = dict(case.client.headers)
+    port = integration_port_block_for_file(Path(__file__)).port(50)
+    server = uvicorn.Server(uvicorn.Config(
+        main.app, host="127.0.0.1", port=port, log_level="error", access_log=False,
+        log_config=None, lifespan="off",
+    ))
+    server_task = asyncio.create_task(server.serve())
+    try:
+        async with asyncio.timeout(10):
+            while not server.started:
+                if server_task.done():
+                    await server_task
+                await asyncio.sleep(0.01)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}", headers=headers, timeout=30,
+        ) as observer:
+            async def next_business_event(lines) -> str:
+                async for line in lines:
+                    if line.startswith("data:"):
+                        return line
+                raise AssertionError("Goal SSE 提前关闭")
+
+            stream = observer.stream("GET", f"/api/v1/sessions/{session_id}/traces/stream")
+            async with stream as events:
+                assert events.status_code == 200
+                lines = events.aiter_lines()
+                response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+                    "operation_id": "goal-publish-initial", "expected_control_revision": 0,
+                    "objective": "发布故障前的暂停目标", "status": "paused",
+                })
+                assert response.status_code == 200, response.text
+                original = response.json()["data"]
+                assert "data:" in await asyncio.wait_for(next_business_event(lines), timeout=2)
+                bus = case.container.goal_service._job_event_bus
+
+                async def fail_goal_publish(**event):
+                    if event.get("event_type") == "goal_updated":
+                        raise RuntimeError("goal-notification-publish-fault")
+
+                monkeypatch.setattr(bus, "publish", fail_goal_publish)
+                failed = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+                    "operation_id": "goal-publish-failed-edit",
+                    "expected_control_revision": original["control_revision"],
+                    "objective": "已经提交但没有业务通知", "status": "paused",
+                })
+                assert failed.status_code == 500, failed.text
+                assert failed.json()["message"].endswith("error=RuntimeError")
+                assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
+                committed = case.container.goal_service._store.goal_read(session_id)
+                assert committed is not None and committed.objective == "已经提交但没有业务通知"
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(next_business_event(lines), timeout=0.25)
+                confirmed = await observer.get(
+                    f"/api/v1/sessions/{session_id}/goal",
+                    params={"minimum_sync_version": original["sync_version"] + 1},
+                )
+                assert confirmed.status_code == 200, confirmed.text
+                snapshot = confirmed.json()["data"]
+                assert snapshot["sync_version"] == original["sync_version"] + 1
+                assert snapshot["goal"]["objective"] == "已经提交但没有业务通知"
+                assert snapshot["goal"]["thread_id"] == thread_id
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(server_task, timeout=10)
+    case.write_actual("goal-notification-gap", {
+        "original": original, "failed_response_status": failed.status_code,
+        "confirmed_snapshot": snapshot,
+        "observer_sse_remained_open": True, "business_event_observed": False,
+    })
 
 
 @pytest.fixture
@@ -253,11 +350,11 @@ async def test_fork_goal_publication_hard_restart_preserves_original_creation(
         case.workspace.parent / "boxteam-home/state/gateway/identity.json",
     )
     source_id, _, _ = await _target(case)
-    response = await case.client.put(f"/api/v1/sessions/{source_id}/goal", json={
+    response = await case.client.put(f"/api/v1/sessions/{source_id}/goal", json=await goal_control_payload(case.client, source_id, {
         "objective": "硬重启前冻结的来源目标", "status": "paused", "token_budget": 456,
-    })
+    }))
     assert response.status_code == 200, response.text
-    source_goal = response.json()["data"]
+    source_goal = response.json()["data"]["goal"]
     response = await case.client.get(f"/api/v1/sessions/{source_id}/fork-source-point", params={"mode": "full_rollout_copy"})
     assert response.status_code == 200, response.text
     point = response.json()["data"]
@@ -300,7 +397,7 @@ async def test_fork_goal_publication_hard_restart_preserves_original_creation(
         visible = await case.client.get(f"/api/v1/sessions/{target_id}/goal")
         assert visible.status_code == (404 if original["state"] == "preparing" else 200), visible.text
         if visible.status_code == 200:
-            assert visible.json()["data"]["goal_id"] == installed["task_id"]
+            assert visible.json()["data"]["goal"]["goal_id"] == installed["task_id"]
         case.write_actual("goal-fork-before-hard-restart", {"phase": phase, "creation": original, "goal": installed})
         await deadline.wait(case.restart(hard=True, while_stopped=lambda: case.control.release(creation_key, phase)), "Goal fork cold recovery")
         interrupted, = await asyncio.gather(operation, return_exceptions=True)
@@ -312,11 +409,12 @@ async def test_fork_goal_publication_hard_restart_preserves_original_creation(
         restored = await _goal(case, target_id)
         assert restored is not None
         assert restored["goal_id"] == installed["task_id"] and restored["thread_id"] == original["main_thread_id"]
-        assert all(restored[name] == value for name, value in json.loads(installed["application_json"]).items())
+        restored_state = _goal_state(case, target_id)
+        assert all(restored_state[name] == value for name, value in json.loads(installed["application_json"]).items())
         assert restored["status"] == "paused" and restored["objective"] == source_goal["objective"]
         assert restored["token_budget"] == 78
         assert datetime.fromisoformat(restored["created_at"]) == datetime.fromisoformat(original["created_at"])
-        assert restored["tokens_used"] == restored["time_used_seconds"] == 0 and restored["accounted_jobs"] == {}
+        assert restored["tokens_used"] == restored["time_used_seconds"] == 0 and _goal_state(case, target_id)["accounted_jobs"] == {}
         assert await _goal(case, target_id) == restored and await _goal(case, source_id) == source_goal
         response = await deadline.wait(case.client.post(f"/api/v1/sessions/{source_id}/fork-context", json=request), "Goal fork original retry")
         assert response.status_code == 200, response.text
@@ -331,9 +429,9 @@ async def test_fork_goal_publication_hard_restart_preserves_original_creation(
         if not operation.done():
             operation.cancel()
         await asyncio.gather(operation, return_exceptions=True)
-    response = await case.client.put(f"/api/v1/sessions/{target_id}/goal", json={"objective": "发布后保留的用户编辑"})
+    response = await case.client.put(f"/api/v1/sessions/{target_id}/goal", json=await goal_control_payload(case.client, target_id, {"objective": "发布后保留的用户编辑"}))
     assert response.status_code == 200, response.text
-    edited = response.json()["data"]
+    edited = response.json()["data"]["goal"]
     assert edited["goal_id"] == installed["task_id"] and edited["revision"] == restored["revision"] + 1
     await case.restart(hard=True)
     assert await _goal(case, target_id) == edited and await _goal(case, source_id) == source_goal
@@ -422,7 +520,7 @@ async def test_user_created_goal_without_a_goal_admission_root_recovers_after_ha
                 await asyncio.sleep(0.05)
         assert goal["status"] == "complete"
         assert goal["goal_id"] == goal_id and goal["objective"] == created["objective"] and goal["token_budget"] == 345
-        assert set(goal["accounted_jobs"]) == {wakeup[1]} and wakeup[0] == f"goal:{goal_id}:state"
+        assert set(_goal_state(case, session_id)["accounted_jobs"]) == {wakeup[1]} and wakeup[0] == f"goal:{goal_id}:state"
         assert _sql(case.workspace, session_id, thread_id,
                     "SELECT execution_id,job_id,turn_id,execution_origin,outcome FROM executions ORDER BY created_at") == [
                         (*original[:4], "execution_lost" if phase == "inflight_model" else "completed"),
@@ -467,9 +565,9 @@ async def test_goal_restart_before_continuation_acceptance_does_not_lose_activat
     ], thread_id=thread_id)
     barrier_id = "goal-before-continuation"
     case.control.arm_match(barrier_id, "goal.continuation.before_dispatch", {"session_id": session_id})
-    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {
         "objective": "接受续跑前中断后仍须恢复并调用 update_goal 完成",
-    }))
+    })))
     try:
         barrier = await asyncio.to_thread(case.control.acknowledged_match, barrier_id)
         goal_id = barrier["details"]["goal_id"]
@@ -518,9 +616,9 @@ async def test_goal_inflight_model_restart_preserves_loss_pause_and_new_objectiv
     session_id, thread_id, _ = await _target(case)
     stalled_call, = await case.plan(session_id, [{"content": "进程中断前尚未返回的旧目标回复"}], thread_id=thread_id)
     case.control.arm(stalled_call, "model.response_ready")
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "原目标的在途执行"})
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "原目标的在途执行"}))
     assert response.status_code == 200, response.text
-    original_goal = response.json()["data"]
+    original_goal = response.json()["data"]["goal"]
     try:
         await asyncio.to_thread(case.control.acknowledged, stalled_call, "model.response_ready", 20)
         original, = _sql(case.workspace, session_id, thread_id,
@@ -528,16 +626,16 @@ async def test_goal_inflight_model_restart_preserves_loss_pause_and_new_objectiv
         assert _sql(case.workspace, session_id, thread_id,
                     "SELECT execution_id,outcome FROM executions") == [(original[2], "unknown")]
         if operation == "pause":
-            response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"status": "paused"})
+            response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"status": "paused"}))
             assert response.status_code == 200, response.text
         elif operation == "objective":
             await case.plan(session_id, [
                 _tool_reply("update_goal", {"status": "complete"}, "call_goal_new_objective_done"),
                 {"content": "新目标在原执行丢失后独立完成"},
             ], thread_id=thread_id, usage={"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11})
-            response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "明确修改后的新目标"})
+            response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "明确修改后的新目标"}))
             assert response.status_code == 200, response.text
-            changed = response.json()["data"]
+            changed = response.json()["data"]["goal"]
             assert changed["goal_id"] == original_goal["goal_id"]
             assert changed["revision"] == original_goal["revision"] + 1
             assert case.call_count(session_id, thread_id) == 1
@@ -570,7 +668,7 @@ async def test_goal_inflight_model_restart_preserves_loss_pause_and_new_objectiv
             async with asyncio.timeout(5):
                 while (goal := await _goal(case, session_id))["tokens_used"] != 11:
                     await asyncio.sleep(0.05)
-            assert set(goal["accounted_jobs"]) == {wakeups[1][1]}
+            assert set(_goal_state(case, session_id)["accounted_jobs"]) == {wakeups[1][1]}
         else:
             assert len(wakeups) == 1 and goal["tokens_used"] == 0
         count = 3 if operation == "objective" else 1
@@ -604,9 +702,9 @@ async def test_goal_pending_read_checkpoint_resumes_the_original_execution_witho
     ], thread_id=thread_id, usage={"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11})
     read_tool = read_call + ":tool-call:call_goal_pending_read"
     case.control.arm(read_tool, "canonical.tool_result.before_commit")
-    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "读取本工作区会话目录后完成原 Goal"})
+    response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "读取本工作区会话目录后完成原 Goal"}))
     assert response.status_code == 200, response.text
-    goal_id = response.json()["data"]["goal_id"]
+    goal_id = response.json()["data"]["goal"]["goal_id"]
     try:
         await asyncio.to_thread(case.control.acknowledged, read_tool, "canonical.tool_result.before_commit", 20)
         original, = _sql(case.workspace, session_id, thread_id,
@@ -623,7 +721,7 @@ async def test_goal_pending_read_checkpoint_resumes_the_original_execution_witho
         await _job(case, original[1])
         goal = await _goal(case, session_id)
         assert goal["goal_id"] == goal_id and goal["status"] == "complete"
-        assert goal["tokens_used"] == 11 and set(goal["accounted_jobs"]) == {original[1]}
+        assert goal["tokens_used"] == 11 and set(_goal_state(case, session_id)["accounted_jobs"]) == {original[1]}
         assert _sql(case.workspace, session_id, thread_id,
                     "SELECT source_id,job_id,execution_id FROM runtime_execution_wakeups") == [original]
         assert _sql(case.workspace, session_id, thread_id,
@@ -672,9 +770,9 @@ async def test_goal_restart_after_execution_before_continuation_record_reconcile
     ], thread_id=thread_id, usage={"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11})
     barrier_id = "goal-accepted-before-record"
     case.control.arm_match(barrier_id, f"goal.continuation.{phase}", {"session_id": session_id})
-    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+    activation = asyncio.create_task(case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {
         "objective": "接受后执行结束但未登记续跑标记时仍能继续",
-    }))
+    })))
     try:
         barrier = await asyncio.to_thread(case.control.acknowledged_match, barrier_id)
         goal_id = barrier["details"]["goal_id"]
@@ -703,10 +801,12 @@ async def test_goal_restart_after_execution_before_continuation_record_reconcile
         await _job(case, wakeups[1][1])
         assert case.call_count(session_id, thread_id) == 3
         async with asyncio.timeout(5):
-            while (goal := await _goal(case, session_id))["tokens_used"] != 22:
+            while (goal := await _goal(case, session_id))["tokens_used"] != 33:
                 await asyncio.sleep(0.05)
-        assert set(goal["accounted_jobs"]) == {row[1] for row in wakeups}
-        assert all(account["tokens"] == 11 for account in goal["accounted_jobs"].values())
+        assert set(_goal_state(case, session_id)["accounted_jobs"]) == {row[1] for row in wakeups}
+        assert {job_id: account["tokens"] for job_id, account in _goal_state(case, session_id)["accounted_jobs"].items()} == {
+            wakeups[0][1]: 11, wakeups[1][1]: 22,
+        }
         assert _sql(case.workspace, session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
         await case.restart(hard=True)
         assert (await _goal(case, session_id))["status"] == "complete"

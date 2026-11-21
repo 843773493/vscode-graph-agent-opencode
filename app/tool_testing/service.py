@@ -10,15 +10,17 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.agent_factory import build_model_from_provider
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id
-from app.core.trace_middleware import get_current_request_id
+from app.core.shielded_cleanup import run_sync_shielded
+from app.runtime.provider_model import build_model_from_provider
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.tool_test import (
     ToolTestAttemptDTO,
-    ToolTestProviderResultDTO,
+    ToolTestModelResultDTO,
     ToolTestRunDTO,
     ToolTestStartRequest,
 )
@@ -75,7 +77,7 @@ class ToolTestService:
         self._tasks: set[asyncio.Task[None]] = set()
         self._active_tools: set[str] = set()
         self._active_run_states: dict[str, ToolTestRunDTO] = {}
-        self._provider_locks: dict[str, asyncio.Lock] = {}
+        self._provider_locks: dict[ModelReferenceDTO, asyncio.Lock] = {}
         self._state_lock = asyncio.Lock()
 
     @property
@@ -91,19 +93,21 @@ class ToolTestService:
         cases = self._registry.cases_for(tool_name)
         if not cases:
             raise ValueError(f"工具尚未提供模型调用测试: {tool_name}")
-        runtime_config = self._config_service.get_agent_runtime_config(request.agent_id)
-        configured_providers = runtime_config.get("providers")
-        if not isinstance(configured_providers, list) or not configured_providers:
-            raise ValueError(f"Agent 没有可测试的 provider: {request.agent_id}")
-        provider_map = {
-            str(provider.get("id")): provider
-            for provider in configured_providers
-            if isinstance(provider, dict) and provider.get("id")
-        }
-        provider_ids = request.provider_ids or list(provider_map)
-        unknown = set(provider_ids) - set(provider_map)
-        if unknown:
-            raise ValueError(f"包含未配置的 provider: {', '.join(sorted(unknown))}")
+        snapshot = self._config_service.get_snapshot()
+        with self._config_service.use_snapshot(snapshot):
+            agent_id = self._config_service.resolve_agent_id(request.agent_id)
+            runtime_config = self._config_service.get_agent_runtime_config(agent_id)
+            model_map = {
+                ModelReferenceDTO(provider_id=model["provider_id"], model_id=model["model_id"]): model
+                for model in runtime_config["models"]
+            }
+            references = request.model_refs or list(model_map)
+            unknown = set(references) - model_map.keys()
+            if unknown:
+                raise ValueError(f"包含当前 Agent 不允许的模型: {list(unknown)}")
+            credentials = await self._config_service.prepare_llm_credentials([model_map[ref] for ref in references])
+            with self._config_service.use_llm_credentials(credentials):
+                model_map = {ref: self._config_service.get_llm_model(ref) for ref in references}
         if tool_name in self._active_tools:
             raise RuntimeError(f"工具测试正在运行，不能重复启动: {tool_name}")
 
@@ -117,14 +121,14 @@ class ToolTestService:
             created_at=now,
             updated_at=now,
             repetitions=request.repetitions,
-            providers=[
-                ToolTestProviderResultDTO(
-                    provider_id=provider_id,
-                    model=str(provider_map[provider_id].get("model") or ""),
+            models=[
+                ToolTestModelResultDTO(
+                    model_ref=reference,
+                    model=model_map[reference]["model"],
                     status="queued",
                     total=total_per_provider,
                 )
-                for provider_id in provider_ids
+                for reference in references
             ],
         )
         self._store.reset_tool(tool_name)
@@ -137,7 +141,7 @@ class ToolTestService:
                     run_id=run.run_id,
                     cases=cases,
                     providers=[
-                        provider_map[provider_id] for provider_id in provider_ids
+                        model_map[reference] for reference in references
                     ],
                     runtime_config=runtime_config,
                     repetitions=request.repetitions,
@@ -232,15 +236,15 @@ class ToolTestService:
         cases: list[ToolTestCase],
         repetitions: int,
     ) -> None:
-        provider_id = str(provider["id"])
-        provider_lock = self._provider_locks.get(provider_id)
+        model_ref = ModelReferenceDTO(provider_id=provider["provider_id"], model_id=provider["model_id"])
+        provider_lock = self._provider_locks.get(model_ref)
         if provider_lock is None:
             provider_lock = asyncio.Lock()
-            self._provider_locks[provider_id] = provider_lock
+            self._provider_locks[model_ref] = provider_lock
         async with provider_lock:
             await self._mutate_run(
                 run_id,
-                lambda run: self._set_provider_status(run, provider_id, "running"),
+                lambda run: self._set_provider_status(run, model_ref, "running"),
             )
             redacted_provider = _redact_secrets(provider)
             provider_model: Any | None = None
@@ -258,9 +262,13 @@ class ToolTestService:
                         run_id,
                         lambda run, item=attempt: self._append_attempt(run, item),
                     )
+                    # 原 worker 报错时先保留失败回执，再传播已接受的取消，不能继续重试。
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
             await self._mutate_run(
                 run_id,
-                lambda run: self._set_provider_status(run, provider_id, "completed"),
+                lambda run: self._set_provider_status(run, model_ref, "completed"),
             )
 
     async def _run_attempt(
@@ -273,12 +281,12 @@ class ToolTestService:
         case: ToolTestCase,
         provider_model: Any | None,
     ) -> tuple[ToolTestAttemptDTO, Any | None]:
-        provider_id = str(provider["id"])
+        model_ref = ModelReferenceDTO(provider_id=provider["provider_id"], model_id=provider["model_id"])
         model_name = str(provider.get("model") or "")
         attempt_id = create_prefixed_id("attempt")
         case_dir = self._store.prepare_case_dir(
             tool_name=case.tool_name,
-            provider_id=provider_id,
+            model_ref=model_ref,
             case_id=case.case_id,
         )
         attempt_root = case_dir / "workspace"
@@ -323,7 +331,9 @@ class ToolTestService:
             )
             if model is None:
                 stage = "model_build"
-                model = self._model_builder(
+                # 冷加载不阻塞事件循环；取消也须等构造结束，才能释放 provider 准入。
+                model = await run_sync_shielded(
+                    self._model_builder,
                     provider=provider,
                     runtime_config=runtime_config,
                 )
@@ -361,7 +371,7 @@ class ToolTestService:
             attempt = ToolTestAttemptDTO(
                 attempt_id=attempt_id,
                 case_id=case.case_id,
-                provider_id=provider_id,
+                model_ref=model_ref,
                 model=model_name,
                 status="completed",
                 passed=evaluation.passed,
@@ -386,20 +396,20 @@ class ToolTestService:
                 tool_result = None
             error.add_note(
                 f"工具测试样本归属: run_id={run_id}, attempt_id={attempt_id}, "
-                f"provider_id={provider_id}, case_id={case.case_id}, stage={stage}"
+                f"model_ref={model_ref}, case_id={case.case_id}, stage={stage}"
             )
             detail = report_failure(
                 error, detail=tool_test_failure_detail(failure, stage=stage),
                 diagnostic_logger=logger,
                 extra={
                     "request_id": get_current_request_id(), "run_id": run_id,
-                    "attempt_id": attempt_id, "provider_id": provider_id, "case_id": case.case_id,
+                    "attempt_id": attempt_id, "model_ref": model_ref.model_dump(mode="json"), "case_id": case.case_id,
                 },
             )
             attempt = ToolTestAttemptDTO(
                 attempt_id=attempt_id,
                 case_id=case.case_id,
-                provider_id=provider_id,
+                model_ref=model_ref,
                 model=model_name,
                 status="failed",
                 passed=False,
@@ -414,14 +424,14 @@ class ToolTestService:
             )
         self._store.write_case_json(
             tool_name=case.tool_name,
-            provider_id=provider_id,
+            model_ref=model_ref,
             case_id=case.case_id,
             file_name="request.json",
             payload=request_payload,
         )
         self._store.write_case_json(
             tool_name=case.tool_name,
-            provider_id=provider_id,
+            model_ref=model_ref,
             case_id=case.case_id,
             file_name="response.json",
             payload={
@@ -434,7 +444,7 @@ class ToolTestService:
         )
         self._store.write_case_json(
             tool_name=case.tool_name,
-            provider_id=provider_id,
+            model_ref=model_ref,
             case_id=case.case_id,
             file_name="result.json",
             payload=attempt.model_dump(mode="json"),
@@ -473,11 +483,11 @@ class ToolTestService:
     @staticmethod
     def _set_provider_status(
         run: ToolTestRunDTO,
-        provider_id: str,
+        model_ref: ModelReferenceDTO,
         status: str,
     ) -> None:
         provider = next(
-            item for item in run.providers if item.provider_id == provider_id
+            item for item in run.models if item.model_ref == model_ref
         )
         provider.status = status  # type: ignore[assignment]
 
@@ -485,7 +495,7 @@ class ToolTestService:
     def _append_attempt(run: ToolTestRunDTO, attempt: ToolTestAttemptDTO) -> None:
         run.attempts.append(attempt)
         provider = next(
-            item for item in run.providers if item.provider_id == attempt.provider_id
+            item for item in run.models if item.model_ref == attempt.model_ref
         )
         provider.completed += 1
         provider.model_calls += attempt.model_calls
@@ -496,8 +506,8 @@ class ToolTestService:
         else:
             provider.failed += 1
         provider.success_rate = round(provider.passed / provider.completed * 100, 1)
-        completed = sum(item.completed for item in run.providers)
-        total = sum(item.total for item in run.providers)
+        completed = sum(item.completed for item in run.models)
+        total = sum(item.total for item in run.models)
         run.progress = int(completed / total * 100) if total else 0
 
 

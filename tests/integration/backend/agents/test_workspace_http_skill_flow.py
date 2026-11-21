@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import commentjson
@@ -25,10 +26,12 @@ from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     _job,
     _skill_reply,
     _text_reply,
+    _wait_job,
 )
 from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     scripted_model as scripted_model,  # noqa: PLC0414 - 复用唯一 model_stream 回放入口。
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -93,23 +96,52 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
             assert created.status_code == 200, created.text
             session_id = created.json()["data"]["session_id"]
             thread_id = (await client.get(f"/api/v1/sessions/{session_id}/main-thread")).json()["data"]["thread_id"]
-            state.plan(session_id, thread_id, _skill_reply("private_initial", tracked=True), _text_reply("PRIVATE_INITIAL_OK"))
-            job = await _job(client, session_id)
-            assert job["status"] in {"completed", "succeeded"}, job
-            assert "共享网络初始正文 Ω" in json.dumps(state.requests[-1], ensure_ascii=False)
+            calls = state.plan(session_id, thread_id, _skill_reply("private_initial", tracked=True), _text_reply("PRIVATE_INITIAL_OK"))
             uri = f"boxteam://workspace/{workspace_id}/resources/skills/http_private-one/SKILL.md"
+            refresh_path = "/api/v1/resources/skill-sources/refresh"
+            phase = "model.response_ready"
+            state.control.arm(calls[0], phase)
+            try:
+                accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
+                    "message": {"content": "刷新来源时保留已封存的 Skill 版本"},
+                    "run": {"mode": "single_agent", "agent_id": "default"},
+                }))
+                assert accepted.status_code == 200, accepted.text
+                await asyncio.to_thread(state.control.acknowledged, calls[0], phase)
+                # 模型请求已封存、工具尚未执行；从真实刷新入口发布不同正文。
+                source.body, source.etag = (FRONTMATTER + "封存后发布的当前正文 Ω\n").encode(), '"while-sealed"'
+                refreshed = await client.post(refresh_path)
+                assert refreshed.status_code == 200, refreshed.text
+                assert refreshed.headers["X-Request-ID"] == refreshed.json()["request_id"]
+                assert refreshed.json()["data"]["workspace_id"] == workspace_id
+                assert refreshed.json()["data"]["available"]
+                current = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"})
+                assert current.status_code == 200 and "封存后发布的当前正文 Ω" in current.text, current.text
+                receipts["refresh_while_sealed"] = refreshed.json()
+                receipts["live_read_while_sealed"] = current.json()
+            finally:
+                state.control.release(calls[0], phase)
+            job = await _wait_job(client, accepted.json()["data"]["job_id"])
+            assert job["status"] in {"completed", "succeeded"}, job
+            frozen_wire = json.dumps(state.requests[-1], ensure_ascii=False)
+            assert "共享网络初始正文 Ω" in frozen_wire
+            assert "封存后发布的当前正文 Ω" not in frozen_wire
+            loaded, = [json.loads(item["content"]) for item in state.requests[-1]["messages"]
+                       if item.get("role") == "tool" and item.get("tool_call_id") == "private_initial"]
+            assert loaded["status"] == "loaded" and loaded["tracked"] is True, loaded
+            assert loaded["content_hash"] == "sha256:" + sha256("共享网络初始正文 Ω\n".encode()).hexdigest()
+            receipts["frozen_load_after_refresh"] = loaded
             read = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"})
-            assert read.status_code == 200 and "共享网络初始正文 Ω" in read.text, read.text
-            assert len(source.requests) == 1, "目录、导航与 skill_load 只消费 accepted 快照"
+            assert read.status_code == 200 and "封存后发布的当前正文 Ω" in read.text, read.text
+            assert len(source.requests) == 2, "仅初始获取和显式刷新访问来源，导航与 skill_load 只消费快照"
 
             config["resources"]["skill_sources"]["gateway_updates"] = {"mode": "manual"}
             receipts["unrelated_reload"] = await _reload(client, config_path, config)
-            assert len(source.requests) == 1, "无关配置发布不得刷新 manual 来源"
+            assert len(source.requests) == 2, "无关配置发布不得刷新 manual 来源"
             source.body, source.etag = (FRONTMATTER + "私有来源手动更新 Ω\n").encode(), '"manual-update"'
-            refresh_path = "/api/v1/resources/skill-sources/refresh"
             async with httpx.AsyncClient(base_url=base_url, headers={"X-Local-Token": "wrong"}, timeout=10, trust_env=False) as denied:
                 assert (await denied.post(refresh_path)).status_code == 401
-            assert len(source.requests) == 1
+            assert len(source.requests) == 2
             refreshed = await client.post(refresh_path)
             assert refreshed.status_code == 200, refreshed.text
             assert refreshed.headers["X-Request-ID"] == refreshed.json()["request_id"]

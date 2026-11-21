@@ -17,6 +17,7 @@ import { IEditorService } from '../../../../../src/clients/workbench/upstream/sr
 import { IExtensionService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/extensions/common/extensions.js';
 import { ISearchService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/search/common/search.js';
 import { WorkspaceSearchService } from '../../../../../src/clients/workbench/src/search/searchService.js';
+import { OpenModelSearchWorker } from '../../../../../src/clients/workbench/src/search/openModelSearchWorker.js';
 export { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 export { ResourceSet } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/map.js';
 export { textSearchResultToMatches } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/browser/searchTreeModel/match.js';
@@ -42,6 +43,7 @@ export function model(resource: URI, text: string) {
     setValue(value: string) { lines = value.split('\n'); version++; changed.fire(); },
     dispose() { disposed = true; disposing.fire(); changed.dispose(); disposing.dispose(); },
     getLineContent(line: number) { return lines[line - 1]; },
+    getValue() { return lines.join('\n'); },
     getLineCount() { return lines.length; },
     getLanguageId() { return 'plaintext'; },
     findMatches(pattern: string, _scope: false, regex: boolean, sensitive: boolean, separators: string | null, captures: boolean, limit: number) {
@@ -52,7 +54,11 @@ export function model(resource: URI, text: string) {
   };
 }
 
-export function fixture(models: ReturnType<typeof model>[], open = models.map(model => model.uri), identity: IExtUri = extUri) {
+export function fixture(models: ReturnType<typeof model>[], open = models.map(model => model.uri), identity: IExtUri = extUri,
+  workers = { createWorkerClient() {
+    const engine = new OpenModelSearchWorker();
+    return { proxy: { $findMatches: async (...args: Parameters<OpenModelSearchWorker['$findMatches']>) => engine.$findMatches(...args) }, dispose() {} };
+  } }) {
   // 按真实 web.main 的顺序消费全体描述符；同一 ServiceCollection 最终只能得到项目实现。
   const services = new ServiceCollection(...getSingletonServiceDescriptors());
   const descriptor = services.get(ISearchService);
@@ -64,7 +70,8 @@ export function fixture(models: ReturnType<typeof model>[], open = models.map(mo
   services.set(ITelemetryService, { publicLog2() {} } as never);
   services.set(IExtensionService, { activateByEvent: async () => {}, whenInstalledExtensionsRegistered: async () => {} } as never);
   services.set(IUriIdentityService, { extUri: identity, onDidChange: Event.None } as never);
-  services.set(IWebWorkerService, { createWorkerClient() { throw new Error('业务查询启动了浏览器文件 worker'); } } as never);
+  // 仅跨线程传输为装具边界，正则仍执行产品 worker 的真实上游匹配器。
+  services.set(IWebWorkerService, workers as never);
   const instantiation = new InstantiationService(services, true);
   const search = instantiation.invokeFunction(accessor => accessor.get(ISearchService));
   return { search, editors, descriptor, instantiation };

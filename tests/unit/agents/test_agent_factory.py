@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,7 +9,7 @@ import pytest
 
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.policy import ToolPolicyResolver
+from app.agents.policy import ToolPolicyResolver, parse_custom_tool_specs
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -70,7 +71,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "tools": [],
         "enabled_tool_names": {"read_file"},
         "background_task_registry": MagicMock(),
-        "background_message_bus": MagicMock(),
+        "background_mailbox": MagicMock(),
         "job_event_bus": MagicMock(),
         "job_service": MagicMock(),
         "message_service": MagicMock(),
@@ -93,7 +94,6 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
     with (
         patch.object(agent_factory, "ContextSourceManager", return_value=ContextSourceManager()),
         patch.object(agent_factory, "build_workspace_backend"),
-        patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(agent_factory, "build_deep_agent_middleware", return_value=[]),
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
@@ -101,14 +101,13 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         patch.object(
             agent_factory, "create_model_call_agent", return_value=built_agent
         ) as create_agent,
-        patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
         patch.object(
             agent_factory,
             "create_extension_tool_invoker_tool",
             wraps=agent_factory.create_extension_tool_invoker_tool,
         ) as create_invoker,
     ):
-        result = agent_factory.create_my_deep_agent(**required)
+        result = agent_factory.assemble_deep_agent(**required)
 
     assert result is configured_agent
     assert graph_observations == [{
@@ -135,11 +134,9 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     config_service = MagicMock()
     config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
         policy_defaults={},
-        policy_rules={},
+        policy_rules={"by_group": {"extension:testing": {"execution_enabled": False}}},
         restrictions={},
     )
-    built_agent = MagicMock()
-    built_agent.with_config.return_value = built_agent
     checkpointer = RolloutCheckpointSaver(tmp_path / "sessions")
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     resource_registry = ResourceRegistry()
@@ -148,7 +145,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
     required = {
-        "model": MagicMock(),
+        "model": None,
         "instruction_producers": runtime_instruction_producers(
             agent_id="default", content="测试提示词", config_revision="config:1",
             runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
@@ -156,13 +153,14 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         "checkpointer": checkpointer,
         "session_id": "tools_inspection_session",
-        "owns_thread": False,
+        "assembly_mode": "tool_catalog",
         "thread_id": "thr_00000000400070008000000000000002",
         "agent_id": "default",
-        "tools": [],
+        "custom_tool_specs": parse_custom_tool_specs([{"tool_id": "test_tool_2"}]),
+        "browser_resource_owner": MagicMock(),
         "enabled_tool_names": {"read_file"},
         "background_task_registry": MagicMock(),
-        "background_message_bus": MagicMock(),
+        "background_mailbox": MagicMock(),
         "job_event_bus": MagicMock(),
         "job_service": MagicMock(),
         "message_service": MagicMock(),
@@ -190,21 +188,20 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         ),
         patch.object(agent_factory, "ContextSourceManager", wraps=ContextSourceManager) as context_manager,
         patch.object(agent_factory, "build_workspace_backend"),
+        patch.object(agent_factory, "build_default_tools", return_value=[]),
         patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
-        patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(
-            agent_factory, "build_deep_agent_middleware", return_value=[]
+            agent_factory, "build_deep_agent_middleware", side_effect=AssertionError("目录不构建执行中间件")
         ) as build_middleware,
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
         patch.object(agent_factory, "ContextSourceReactor") as reactor,
         patch.object(agent_factory, "ModelCallExecution"),
-        patch.object(agent_factory, "create_model_call_agent", return_value=built_agent),
-        patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
+        patch.object(agent_factory, "create_model_call_agent", side_effect=AssertionError("目录不编译图")),
     ):
         gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
         try:
-            agent_factory.create_my_deep_agent(**required)
+            tools = agent_factory.assemble_deep_agent(**required)
         finally:
             reset_current_gateway_id(gateway_token)
 
@@ -214,7 +211,13 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     assert call["lifecycle_event_sink"] is None
     reactor.assert_not_called()
     build_catalog.assert_not_called()
-    middleware_kwargs = build_middleware.call_args.kwargs
-    assert middleware_kwargs["resolved_skills"] is None
-    assert middleware_kwargs["source_registry"] is None
-    assert middleware_kwargs["context_source_reactor"] is None
+    build_middleware.assert_not_called()
+    invoker = next(tool for tool in tools if tool.name == EXTENSION_TOOL_INVOKER_NAME)
+    result = asyncio.run(invoker.ainvoke({
+        "type": "tool_call", "id": "call_disabled_extension", "name": invoker.name,
+        "args": {"tool_name": "test_tool_2", "arguments": {}},
+    }))
+    assert result.status == "error"
+    assert result.text == "扩展工具 'test_tool_2' 已被策略禁用"
+    names = {tool.name for tool in tools}
+    assert {"read_file", "write_todos", "compact_conversation", "read_compaction_history"} <= names

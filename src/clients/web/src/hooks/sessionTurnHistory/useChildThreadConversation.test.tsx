@@ -1,8 +1,10 @@
 import { afterEach, expect, jest, test } from "bun:test";
+import "fake-indexeddb/auto";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
 import type { ChildThreadSummary, MessageRunAccepted } from "../../types/backend";
 import { gatewayWorkspaceKey, type WorkspaceOwner } from "../../api/workspaceIdentity";
+import { loadMessageSubmissions, releaseMessageSubmission } from "../../state/messageSubmissions/storage";
 import { resolveTerminalResourceTarget, useChildThreadConversation } from "./useChildThreadConversation";
 
 const OWNER_A = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
@@ -23,6 +25,14 @@ const response = (data: unknown) => Response.json({ code: 0, message: "ok", requ
 const history = (threadId: string) => ({
   thread_id: threadId, source_view_id: `view-${threadId}`, source_view_revision: 1,
   items: [], internal_executions: [], projection_epoch: 1, has_before: false,
+});
+const acceptedMessage = (threadId: string, operationId: string, jobId: string, messageId: string): MessageRunAccepted => ({
+  operation_id: operationId, message_id: messageId, job_id: jobId, turn_id: `turn-${jobId}`,
+  thread_id: threadId, status: "queued",
+  dispatch: {
+    session_id: SESSION, thread_id: threadId, job_id: jobId, job_status: "queued",
+    queued_jobs_ahead: 0, queued_job_count: 1, pending_job_count: 1, queue_snapshot_version: 1,
+  },
 });
 
 function Harness({
@@ -53,12 +63,18 @@ async function drainMicrotasks(): Promise<void> {
   for (let round = 0; round < 50; round += 1) await Promise.resolve();
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (renderer) act(() => renderer?.unmount());
   renderer = null;
   renderCount = 0;
   jest.useRealTimers();
   unwrapSessionApiFetch();
+  for (const workspaceKey of [WORKSPACE_A, WORKSPACE_B]) {
+    for (const thread of CHILDREN) {
+      const owner = { workspaceKey, sessionId: SESSION, threadId: thread.thread_id };
+      for (const record of await loadMessageSubmissions(owner)) await releaseMessageSubmission(record);
+    }
+  }
 });
 
 test("终端目标遵循可见 child pair，未解析时停用，隐藏或关闭后回到主线程", () => {
@@ -131,6 +147,23 @@ test("fork 初选在新 owner 未解析时保留 owner，加载后可选择并�
   expect(current.selectionIntent).toBeNull();
 });
 
+test("消息恢复入口只暴露已选 child 的完整 owner 与端口", () => {
+  installSessionApiFetchMock(({ path }) => response(history(path.split("/").slice(-2)[0]!)));
+  act(() => { renderer = create(<Harness enabled={false} />); });
+  expect(current.submissionRecovery).toBeNull();
+
+  act(() => current.selectThread(CHILDREN[0]!.thread_id));
+  expect(current.submissionRecovery).toBeNull();
+  act(() => renderer!.update(<Harness enabled />));
+  expect(current.submissionRecovery).toEqual({
+    port: 49199,
+    owner: { workspaceKey: WORKSPACE_A, sessionId: SESSION, threadId: CHILDREN[0]!.thread_id },
+  });
+
+  act(() => renderer!.update(<Harness threads={[]} enabled />));
+  expect(current.submissionRecovery).toBeNull();
+});
+
 test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独立保存", async () => {
   const requests: { path: string; body: Record<string, unknown>; owner: WorkspaceOwner }[] = [];
   installSessionApiFetchMock(({ path, init }) => {
@@ -158,55 +191,68 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   await until(() => !current.snapshot.loading);
   expect(current.snapshot.draft).toBe("child A 的草稿");
   expect(current.isUnread(CHILDREN[0]!)).toBe(true);
-  await act(async () => { await current.openReport(); });
-  expect(current.isUnread(CHILDREN[0]!)).toBe(false);
-  expect(current.isUnread(CHILDREN[1]!)).toBe(true);
+  let navigation!: ReturnType<typeof useChildThreadConversation>;
+  function NavigationMirror() {
+    navigation = useChildThreadConversation({ apiPort: 49199, workspaceId: WORKSPACE_A,
+      sessionId: SESSION, threads: CHILDREN, enabled: false });
+    return null;
+  }
+  let mirror!: ReactTestRenderer;
+  act(() => { mirror = create(<NavigationMirror />); });
+  try {
+    expect(navigation.isUnread(CHILDREN[0]!)).toBe(true);
+    await act(async () => { await current.openReport(); });
+    expect(current.isUnread(CHILDREN[0]!)).toBe(false);
+    expect(navigation.isUnread(CHILDREN[0]!)).toBe(false);
+    expect(navigation.isUnread(CHILDREN[1]!)).toBe(true);
+  } finally { act(() => mirror.unmount()); }
   expect(requests.every((request) => request.owner.gatewayId === OWNER_A.gatewayId
     && request.owner.workspaceId === OWNER_A.workspaceId && request.path.includes("/threads/thr_"))).toBe(true);
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
 });
 
-test("静默轮询遇到相同历史版本不触发重渲染，版本变化时刷新历史", async () => {
+test("静默轮询只读版本，变化才补正文；失败恢复和手动刷新仍读完整历史", async () => {
   jest.useFakeTimers();
   let historyRevision = 7;
-  let requests = 0;
-  let completePoll: ((reply: Response) => void) | null = null;
-  let completeManualRefresh: ((reply: Response) => void) | null = null;
-  installSessionApiFetchMock(({ path }) => {
-    requests += 1;
-    const threadId = path.split("/").slice(-2)[0]!;
-    const page = response({
-      ...history(threadId),
-      source_view_id: `view-${threadId}`,
-      source_view_revision: historyRevision,
-    });
-    if (requests === 2) return new Promise<Response>((resolve) => { completePoll = resolve; });
-    if (requests === 4) return Response.json({ detail: "轮询读取失败" }, { status: 503 });
-    if (requests === 6) return new Promise<Response>((resolve) => { completeManualRefresh = resolve; });
-    return page;
+  let pauseNext = false;
+  let failNext = false;
+  let completeRead!: (reply: Response) => void;
+  const requests: { include: string[]; turns: number }[] = [];
+  const page = () => response({
+    ...history(CHILDREN[0]!.thread_id), source_view_revision: historyRevision,
+  });
+  installSessionApiFetchMock(({ init }) => {
+    requests.push(JSON.parse(String(init?.body)));
+    if (pauseNext) {
+      pauseNext = false;
+      return new Promise<Response>((resolve) => { completeRead = resolve; });
+    }
+    if (failNext) {
+      failNext = false;
+      return Response.json({ detail: "轮询读取失败" }, { status: 503 });
+    }
+    return page();
   });
 
   act(() => { renderer = create(<Harness />); });
   act(() => current.selectThread(CHILDREN[0]!.thread_id));
   await act(async () => { await drainMicrotasks(); });
   expect(current.snapshot.history?.source_view_revision).toBe(7);
-
+  const fullRead = requests[0]!;
+  expect(fullRead.include).toContain("tool_result");
+  const initialHistory = current.snapshot.history;
   const renderedAfterInitialRead = renderCount;
-  const requestsAfterInitialRead = requests;
+
+  pauseNext = true;
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(requestsAfterInitialRead + 1);
+  expect(requests.at(-1)).toMatchObject({ include: ["metadata"], turns: 1 });
   expect(renderCount).toBe(renderedAfterInitialRead);
-  await act(async () => {
-    completePoll!(response({
-      ...history(CHILDREN[0]!.thread_id),
-      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
-      source_view_revision: historyRevision,
-    }));
-    await drainMicrotasks();
-  });
+  await act(async () => { completeRead(page()); await drainMicrotasks(); });
+  expect(current.snapshot.history).toBe(initialHistory);
+  expect(requests.at(-1)!.include).toEqual(["metadata"]);
   expect(renderCount).toBe(renderedAfterInitialRead);
 
   historyRevision = 8;
@@ -214,41 +260,32 @@ test("静默轮询遇到相同历史版本不触发重渲染，版本变化时�
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
+  expect(requests.slice(-2)).toMatchObject([
+    { include: ["metadata"], turns: 1 }, fullRead,
+  ]);
   expect(current.snapshot.history?.source_view_revision).toBe(8);
   expect(renderCount).toBeGreaterThan(renderedAfterInitialRead);
 
+  failNext = true;
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(4);
   expect(current.snapshot.error).toContain("轮询读取失败");
-
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(5);
+  expect(requests.at(-1)).toEqual(fullRead);
   expect(current.snapshot.error).toBeNull();
   expect(current.snapshot.history?.source_view_revision).toBe(8);
 
+  pauseNext = true;
   let manualRefresh!: Promise<void>;
-  const requestsBeforeManualRefresh = requests;
-  await act(async () => {
-    manualRefresh = current.refresh();
-    await drainMicrotasks();
-  });
-  expect(requests).toBe(requestsBeforeManualRefresh + 1);
+  await act(async () => { manualRefresh = current.refresh(); await drainMicrotasks(); });
+  expect(requests.at(-1)).toEqual(fullRead);
   expect(current.snapshot.loading).toBe(true);
-  await act(async () => {
-    completeManualRefresh!(response({
-      ...history(CHILDREN[0]!.thread_id),
-      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
-      source_view_revision: historyRevision,
-    }));
-    await manualRefresh;
-    await drainMicrotasks();
-  });
+  await act(async () => { completeRead(page()); await manualRefresh; await drainMicrotasks(); });
   expect(current.snapshot.loading).toBe(false);
   expect(current.snapshot.history?.source_view_revision).toBe(8);
 });
@@ -466,12 +503,13 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
 
 test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 sibling 历史", async () => {
   let completeSend: ((reply: Response) => void) | null = null;
-  const sends: { path: string; owner: WorkspaceOwner; content: string }[] = [];
+  const sends: { path: string; owner: WorkspaceOwner; content: string; operationId: string }[] = [];
   installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
       const body = JSON.parse(String(init?.body));
       const headers = new Headers(init?.headers);
-      sends.push({ path, owner: { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! }, content: body.message.content });
+      sends.push({ path, owner: { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! },
+        content: body.message.content, operationId: body.operation_id });
       return new Promise<Response>((resolve) => { completeSend = resolve; });
     }
     return response(history(path.split("/").slice(-2)[0]!));
@@ -486,10 +524,15 @@ test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 siblin
   act(() => current.selectThread(CHILDREN[1]!.thread_id));
   await until(() => current.snapshot.history !== null && !current.snapshot.loading);
   await act(async () => {
-    completeSend!(response({ message_id: "message-a", job_id: "job-a", turn_id: "turn-a", thread_id: CHILDREN[0]!.thread_id, status: "queued", dispatch: {} }));
+    completeSend!(response(acceptedMessage(CHILDREN[0]!.thread_id, sends[0]!.operationId, "job-a", "message-a")));
     await pending!;
   });
-  expect(sends).toEqual([{ path: `/api/v1/sessions/${SESSION}/threads/${CHILDREN[0]!.thread_id}/messages`, owner: OWNER_A, content: "只发给 child A" }]);
+  expect(sends).toEqual([expect.objectContaining({
+    path: `/api/v1/sessions/${SESSION}/threads/${CHILDREN[0]!.thread_id}/messages`,
+    owner: OWNER_A,
+    content: "只发给 child A",
+  })]);
+  expect(sends[0]!.operationId).toMatch(/^op_[0-9a-f]{32}$/);
   expect(current.selectedThread?.thread_id).toBe(CHILDREN[1]!.thread_id);
   expect(current.snapshot.history?.thread_id).toBe(CHILDREN[1]!.thread_id);
   expect(current.snapshot.accepted).toBeNull();
@@ -500,13 +543,20 @@ test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的
   let completeSend: ((reply: Response) => void) | null = null;
   const requestOwners: WorkspaceOwner[] = [];
   const sendOwners: WorkspaceOwner[] = [];
+  let operationId: string | undefined;
   installSessionApiFetchMock(({ path, init }) => {
     const headers = new Headers(init?.headers);
     const owner = { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! };
     requestOwners.push(owner);
     if (path.endsWith("/messages")) {
       sendOwners.push(owner);
+      operationId = JSON.parse(String(init?.body)).operation_id;
       return new Promise<Response>((resolve) => { completeSend = resolve; });
+    }
+    if (path.includes("/message-submissions/")) {
+      const id = decodeURIComponent(path.split("/").at(-1)!);
+      return response({ session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
+        operation_id: id, status: "unknown", accepted: null });
     }
     return response(history(path.split("/").slice(-2)[0]!));
   });
@@ -526,14 +576,10 @@ test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的
   expect(requestOwners).toContainEqual(OWNER_B);
   expect(requestOwners.every(owner => owner.workspaceId === OWNER_A.workspaceId
     && [OWNER_A.gatewayId, OWNER_B.gatewayId].includes(owner.gatewayId))).toBe(true);
-  const accepted: MessageRunAccepted = {
-    message_id: "message-a", job_id: "job-a", turn_id: "turn-a", thread_id: CHILDREN[0]!.thread_id, status: "queued",
-    dispatch: { session_id: SESSION, thread_id: CHILDREN[0]!.thread_id, job_id: "job-a", job_status: "queued",
-      queued_jobs_ahead: 1, queued_job_count: 1, pending_job_count: 1 },
-  };
+  const accepted = acceptedMessage(CHILDREN[0]!.thread_id, operationId!, "job-a", "message-a");
   await act(async () => {
     completeSend!(outcome === "accepted" ? response(accepted)
-      : Response.json({ detail: "原工作区拒绝消息" }, { status: 409 }));
+      : Response.json({ detail: "原工作区拒绝消息" }, { status: 422 }));
     await pending!;
   });
   expect(current.snapshot).toMatchObject({ draft: "另一工作区草稿", sending: false, accepted: null, error: null });
@@ -543,20 +589,31 @@ test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的
   act(() => current.selectThread(CHILDREN[0]!.thread_id));
   await until(() => current.snapshot.history !== null && !current.snapshot.loading);
   expect(current.snapshot.sending).toBe(false);
-  expect(current.snapshot.draft).toBe(outcome === "accepted" ? "" : "原工作区请求");
+  expect(current.snapshot.draft).toBe("");
   expect(current.snapshot.accepted).toEqual(outcome === "accepted" ? accepted : null);
-  if (outcome === "rejected") expect(current.snapshot.error).toContain("原工作区拒绝消息");
+  const frozen = await loadMessageSubmissions({
+    workspaceKey: WORKSPACE_A, sessionId: SESSION, threadId: CHILDREN[0]!.thread_id,
+  });
+  if (outcome === "rejected") {
+    expect(current.snapshot.error).toContain("原工作区拒绝消息");
+    expect(frozen).toHaveLength(1);
+    expect(frozen[0]).toMatchObject({ state: "rejected", request: { message: { content: "原工作区请求" } } });
+  } else {
+    expect(frozen).toHaveLength(0);
+  }
 });
 
 test("消息已接受后，历史读取未返回仍允许向同一 child 继续发送", async () => {
-  const sends: string[] = [];
+  const sends: { content: string; operationId: string }[] = [];
   const reads: ((reply: Response) => void)[] = [];
   let holdReads = false;
   installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
-      sends.push(JSON.parse(String(init?.body)).message.content);
+      const body = JSON.parse(String(init?.body));
+      sends.push({ content: body.message.content, operationId: body.operation_id });
       holdReads = true;
-      return response({ message_id: `message-${sends.length}`, job_id: `job-${sends.length}`, turn_id: `turn-${sends.length}`, thread_id: CHILDREN[0]!.thread_id, status: "queued", dispatch: {} });
+      return response(acceptedMessage(CHILDREN[0]!.thread_id, body.operation_id,
+        `job-${sends.length}`, `message-${sends.length}`));
     }
     return holdReads ? new Promise<Response>((resolve) => { reads.push(resolve); }) : response(history(CHILDREN[0]!.thread_id));
   });
@@ -572,7 +629,8 @@ test("消息已接受后，历史读取未返回仍允许向同一 child 继续�
     act(() => current.setDraft("第二条"));
     act(() => { second = current.send(); });
     await until(() => sends.length === 2);
-    expect(sends).toEqual(["第一条", "第二条"]);
+    expect(sends.map(({ content }) => content)).toEqual(["第一条", "第二条"]);
+    expect(new Set(sends.map(({ operationId }) => operationId)).size).toBe(2);
   } finally {
     holdReads = false;
     await act(async () => {
@@ -586,15 +644,22 @@ test("旧发送失败的历史刷新结算不能释放后继仍待回执的发�
   let sends = 0;
   let firstRead: ((reply: Response) => void) | null = null;
   let secondSend: ((reply: Response) => void) | null = null;
+  let secondOperationId: string | undefined;
   let holdRead = false;
-  installSessionApiFetchMock(({ path }) => {
+  installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
       sends += 1;
       if (sends === 1) {
         holdRead = true;
-        return Response.json({ detail: "首条发送失败" }, { status: 409 });
+        return Response.json({ detail: "首条发送失败" }, { status: 422 });
       }
+      secondOperationId = JSON.parse(String(init?.body)).operation_id;
       return new Promise<Response>((resolve) => { secondSend = resolve; });
+    }
+    if (path.includes("/message-submissions/")) {
+      const id = decodeURIComponent(path.split("/").at(-1)!);
+      return response({ session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
+        operation_id: id, status: "unknown", accepted: null });
     }
     return holdRead ? new Promise<Response>((resolve) => { firstRead = resolve; }) : response(history(CHILDREN[0]!.thread_id));
   });
@@ -622,7 +687,7 @@ test("旧发送失败的历史刷新结算不能释放后继仍待回执的发�
     holdRead = false;
     await act(async () => {
       firstRead?.(response(history(CHILDREN[0]!.thread_id)));
-      secondSend?.(response({ message_id: "message-2", job_id: "job-2", turn_id: "turn-2", thread_id: CHILDREN[0]!.thread_id, status: "queued", dispatch: {} }));
+      secondSend?.(response(acceptedMessage(CHILDREN[0]!.thread_id, secondOperationId!, "job-2", "message-2")));
       await Promise.all([first!, second]);
     });
   }

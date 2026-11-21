@@ -37,7 +37,7 @@ from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.plugin_package import install_plugin_async
 from tests.support.resource_owners.lease_storage import read_lease_snapshot
@@ -73,11 +73,7 @@ def integration_workspace_config_path(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     # 会话测试的 Gateway 装具登记本组唯一回放 Provider；不解析无关真实密钥。
-    config["llm"]["providers"] = []
-    for target in config["agents"]["default"]["tools"]["custom"]:
-        if target.get("tool_id") == "fetch_webpage":
-            # 网页扩展使用无 embedding 的默认模式，移除旧 Provider 引用。
-            target["options"] = {}
+    config["llm"]["providers"] = {}
     config["mcp"] = {"servers": {}}
     runtime = config.setdefault("runtime", {})
     runtime.setdefault("debug", {}).setdefault("launch_profiles", {})
@@ -155,10 +151,10 @@ async def test_product_discovery_parallel_results_and_cold_checkpoint(
         ),
     ).raw["interactions"][0] for index, delta in enumerate(deltas)]
     state.call_ids = state.control.plan_model_calls(session, thread, interactions)
-    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "发现 MCP probe，然后并发执行 success 与 error，读取回执后结束。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     await wait_for_job_done(client, accepted.json()["data"]["job_id"], max_attempts=120)
     records = [json.loads((state.artifacts / f"{call_id}.json").read_text()) for call_id in state.call_ids]
@@ -254,10 +250,10 @@ async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
         ),
     ).raw["interactions"][0] for index, delta in enumerate(deltas)]
     state.call_ids = state.control.plan_model_calls(session, thread, interactions)
-    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "先调用进度工具，再验证断线回执；不要重试断线调用。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     admission = accepted.json()["data"]
     await wait_for_job_done(client, admission["job_id"], max_attempts=90)

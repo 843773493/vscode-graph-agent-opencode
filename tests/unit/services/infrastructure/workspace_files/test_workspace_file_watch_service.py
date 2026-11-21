@@ -4,10 +4,12 @@ import asyncio
 import errno
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
 
 import pytest
 from watchfiles import Change
+from watchfiles._rust_notify import WatchfilesRustInternalError
 
 import app.services.infrastructure.workspace_file_watch_service as watch_module
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -51,7 +53,7 @@ async def test_watch_failure_publishes_original_error_and_releases_subscribers(
     release_failure = asyncio.Event()
     stream_closed = asyncio.Event()
 
-    async def failing_watch(_root: Path, **_options):
+    async def failing_watch(_runtime, _root: Path, **_options):
         try:
             yield set()
             await release_failure.wait()
@@ -59,7 +61,7 @@ async def test_watch_failure_publishes_original_error_and_releases_subscribers(
         finally:
             stream_closed.set()
 
-    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", failing_watch)
     service = WorkspaceFileWatchService(workspace_root=root)
     stream = service.subscribe_roots((root,))
     next_batch = asyncio.create_task(anext(stream))
@@ -100,6 +102,58 @@ def test_watch_roots_deduplicate_nested_shortcuts(tmp_path: Path) -> None:
     roots = service.resolve_watch_roots([str(nested), str(external), str(external)])
 
     assert roots == (external.resolve(), workspace.resolve())
+
+
+async def test_native_initialization_error_survives_process_transport(tmp_path: Path, caplog) -> None:
+    service = WorkspaceFileWatchService(workspace_root=tmp_path)
+    missing = tmp_path / "missing"
+    stream = service.subscribe_roots((missing,))
+    try:
+        batch = await asyncio.wait_for(anext(stream), 5)
+        assert batch.error is not None and "FileNotFoundError" in batch.error
+        assert str(missing) not in batch.error
+        assert str(missing) in caplog.text
+    finally:
+        await stream.aclose()
+        await service.shutdown()
+
+
+def test_native_extension_error_preserves_type_and_diagnostic_across_transport() -> None:
+    error = WatchfilesRustInternalError("原生监听失败")
+    error.add_note("原生错误详情")
+    transported = ForkingPickler.loads(ForkingPickler.dumps(error))
+    assert type(transported) is type(error)
+    assert transported.args == error.args and transported.__notes__ == error.__notes__
+
+
+async def test_native_process_death_is_reported_and_reaped(tmp_path: Path, caplog) -> None:
+    service = WorkspaceFileWatchService(workspace_root=tmp_path)
+    stream = service.subscribe_roots((tmp_path,))
+    pending = asyncio.create_task(anext(stream))
+    try:
+        await asyncio.wait_for(service.wait_until_ready((tmp_path,)), 5)
+        process = service._runtime._process
+        assert process is not None
+        process.kill()
+        batch = await asyncio.wait_for(pending, 5)
+        assert batch.error is not None and "error=RuntimeError" in batch.error
+        assert "文件监听进程意外断开" in caplog.text
+        await stream.aclose()
+        retry = service.subscribe_roots((tmp_path,))
+        try:
+            repeated = await asyncio.wait_for(anext(retry), 5)
+            assert repeated.error is not None and "error=RuntimeError" in repeated.error
+        finally:
+            await retry.aclose()
+        with pytest.raises(RuntimeError, match="文件监听进程退出失败"):
+            await asyncio.wait_for(service.shutdown(), 5)
+        with pytest.raises(ValueError, match="process object is closed"):
+            process.is_alive()
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await stream.aclose()
+        await asyncio.gather(service.shutdown(), return_exceptions=True)
 
 
 def test_watch_roots_reject_filesystem_root(tmp_path: Path) -> None:
@@ -428,11 +482,11 @@ async def test_change_filter_drops_irrelevant_changes_before_queue_overflow(
     )
     queue.put_nowait(queued_batch)
 
-    async def fake_awatch(_root: Path, **_options):
+    async def fake_awatch(_runtime, _root: Path, **_options):
         yield {(Change.modified, str(irrelevant))}
         yield {(Change.modified, str(irrelevant))}
 
-    monkeypatch.setattr(watch_module, "awatch", fake_awatch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", fake_awatch)
 
     def only_kept_changes(change: WorkspaceFileChange) -> bool:
         return change.path.endswith("kept.txt")

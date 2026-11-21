@@ -25,10 +25,10 @@ from app.schemas.search_federation import (
     GatewayContextSearchRequest,
     GatewayContextSearchResultDTO,
 )
-from app.services.business.gateway_context_query_service import (
+from app.services.business.session_context_query.gateway import (
     GatewayContextQueryService,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,

@@ -1,6 +1,6 @@
 # 目录用途
 
-终端状态 SQLite 的独立写入线程、唯一 schema 和显式旧 JSON 导入入口。
+终端状态 SQLite 的独立写入线程、唯一 schema，以及 `migrations/` 下按两端版本与格式命名的显式旧 JSON 转换。
 
 # 可修改内容
 

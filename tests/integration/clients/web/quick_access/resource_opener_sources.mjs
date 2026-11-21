@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../support/operation_ids.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -46,7 +47,7 @@ try {
     return payload.data;
   }, { path, data, owner });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
   const workspaceOwner = { gatewayId: health.gateway_id, workspaceId: expectedWorkspaceId };
   const activeWorkspace = { gateway_id: workspaceOwner.gatewayId, workspace_id: workspaceOwner.workspaceId };
@@ -66,7 +67,7 @@ try {
   await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId,
     interactions: JSON.parse(process.env.BOXTEAM_SOURCE_INTERACTIONS) });
   const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,
-    { message: { content: '生成完整工具结果' }, run: {} }, owner);
+    { operation_id: newOperationId(), message: { content: '生成完整工具结果' }, run: {} }, owner);
   expect(accepted.thread_id).toBe(owner.threadId);
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, undefined, owner);

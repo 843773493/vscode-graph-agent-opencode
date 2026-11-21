@@ -46,7 +46,7 @@ from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
 )
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 
 logger = logging.getLogger(__name__)
@@ -359,7 +359,7 @@ def _gateway_pending_consumer_health_digests(
     if not isinstance(controller, GatewayWorkspaceRuntimeController):
         raise RuntimeError("Gateway pending proof 缺少 health controller consumer")
     port_forward_manager = getattr(app.state, "port_forward_manager", None)
-    if not isinstance(port_forward_manager, SshPortForwardManager):
+    if not isinstance(port_forward_manager, PortForwardManager):
         raise RuntimeError("Gateway pending proof 缺少 SSH tunnel consumer")
 
     catalog_proof = catalog.runtime_health_proof(
@@ -436,7 +436,7 @@ def _gateway_pending_runtime_consumer_stages(
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise RuntimeError("Gateway pending consumer protocol 缺少 registry")
     port_forward_manager = getattr(app.state, "port_forward_manager", None)
-    if not isinstance(port_forward_manager, SshPortForwardManager):
+    if not isinstance(port_forward_manager, PortForwardManager):
         raise RuntimeError("Gateway pending consumer protocol 缺少 SSH tunnel consumer")
 
     previous_registry_generation: str | None = None

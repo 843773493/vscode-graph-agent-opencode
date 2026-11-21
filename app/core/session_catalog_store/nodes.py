@@ -29,6 +29,7 @@ from app.core.session_catalog_store.validators import (
     validate_path_budget,
     validate_session_storage_identity,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
 class CatalogNodesMixin:
@@ -88,7 +89,7 @@ class CatalogNodesMixin:
             ),
             session_kind=row["session_kind"],
             current_agent_id=row["current_agent_id"],
-            current_provider_id=row["current_provider_id"],
+            current_model_json=row["current_model_json"],
             context_source_session_id=row["context_source_session_id"],
             generation_origin_json=row["generation_origin_json"],
             updated_at=row["updated_at"],
@@ -241,7 +242,7 @@ class CatalogNodesMixin:
         title_source: str = "user",
         *,
         current_agent_id: str,
-        current_provider_id: str | None = None,
+        current_model_json: str | None = None,
         session_kind: str = "normal",
         context_source_session_id: str | None = None,
         generation_origin_json: str | None = None,
@@ -256,7 +257,7 @@ class CatalogNodesMixin:
         self._validate_locator_budget(storage_relative_locator)
         updated_at = updated_at or created_at
         self._validate_session_fields(
-            session_kind, current_agent_id, current_provider_id,
+            session_kind, current_agent_id, current_model_json,
             context_source_session_id, generation_origin_json, updated_at,
         )
         transaction = self.write_transaction() if connection is None else nullcontext(connection)
@@ -273,7 +274,7 @@ class CatalogNodesMixin:
                 "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
                 "title_source, state, revision, workspace_id, created_at, "
                 "storage_relative_locator, main_thread_id, session_kind, current_agent_id, "
-                "current_provider_id, context_source_session_id, generation_origin_json, updated_at) "
+                "current_model_json, context_source_session_id, generation_origin_json, updated_at) "
                 "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     node_id,
@@ -286,7 +287,7 @@ class CatalogNodesMixin:
                     main_thread_id,
                     session_kind,
                     current_agent_id,
-                    current_provider_id,
+                    current_model_json,
                     context_source_session_id,
                     generation_origin_json,
                     updated_at.isoformat(),
@@ -298,17 +299,22 @@ class CatalogNodesMixin:
     def _validate_session_fields(
         session_kind: str,
         current_agent_id: str,
-        current_provider_id: str | None,
+        current_model_json: str | None,
         context_source_session_id: str | None,
         generation_origin_json: str | None,
         updated_at: datetime,
     ) -> None:
         if not isinstance(current_agent_id, str) or not current_agent_id:
             raise ValueError(f"current_agent_id 不能为空: {current_agent_id!r}")
-        if current_provider_id is not None and (
-            not isinstance(current_provider_id, str) or not current_provider_id
+        if current_model_json is not None and (
+            not isinstance(current_model_json, str) or not current_model_json
         ):
-            raise ValueError(f"current_provider_id 非法: {current_provider_id!r}")
+            raise ValueError(f"current_model_json 非法: {current_model_json!r}")
+        if current_model_json is not None:
+            try:
+                ModelReferenceDTO.model_validate_json(current_model_json)
+            except ValueError as error:
+                raise ValueError("current_model_json 必须是合法 ModelReference JSON") from error
         if session_kind not in ("normal", "context_fork") or (
             session_kind == "normal" and context_source_session_id is not None
         ) or (
@@ -333,7 +339,7 @@ class CatalogNodesMixin:
         node_id: str,
         *,
         current_agent_id: str,
-        current_provider_id: str | None,
+        current_model_json: str | None,
         updated_at: datetime,
     ) -> SessionCatalogNode:
         """持有 Session 写准入时更新业务配置，允许删除 drain 等待中的已准入写完成。"""
@@ -342,13 +348,13 @@ class CatalogNodesMixin:
             if node["kind"] != "session":
                 raise RuntimeError(f"会话配置更新要求 session 节点: {node_id}")
             self._validate_session_fields(
-                node["session_kind"], current_agent_id, current_provider_id,
+                node["session_kind"], current_agent_id, current_model_json,
                 node["context_source_session_id"], node["generation_origin_json"], updated_at,
             )
             connection.execute(
-                "UPDATE nodes SET current_agent_id = ?, current_provider_id = ?, "
+                "UPDATE nodes SET current_agent_id = ?, current_model_json = ?, "
                 "updated_at = ? WHERE node_id = ?",
-                (current_agent_id, current_provider_id, updated_at.isoformat(), node_id),
+                (current_agent_id, current_model_json, updated_at.isoformat(), node_id),
             )
             return self._node_from_row(self._require_node(connection, node_id))
 

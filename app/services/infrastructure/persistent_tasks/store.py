@@ -14,6 +14,7 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.time_schedule import evaluate_schedule
 from app.domain.itemized.execution_queue import ExecutionCompletionPage
 from app.domain.itemized.hashing import sha256_jcs
+from app.schemas.internal_v2.goal import goal_public_view
 from app.schemas.internal_v2.persistent_task import (
     AutomationTaskDTO,
     PersistentTaskCheckRequest,
@@ -35,9 +36,12 @@ from app.schemas.internal_v2.session_navigation.generation_state import (
     GENERATION_STATE,
     GenerationActionState,
 )
+from app.schemas.internal_v2.task_usage import TaskUsageStateDTO
+from app.services.business.persistent_tasks.usage import budget_reached
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 from .goals import TaskGoals
+from .progress import TaskProgress, task_application
 
 _INSERT_RUN = (
     "INSERT INTO persistent_task_runs (run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,"
@@ -54,7 +58,7 @@ _RUN_SUMMARY = (
 )
 
 
-class PersistentTaskStore(TaskGoals):
+class PersistentTaskStore(TaskGoals, TaskProgress):
     def __init__(self, store: WorkspaceStateStore, *, workspace_id: str,
                  paths: SessionCatalogPathResolver | None = None) -> None:
         self._store = store
@@ -81,6 +85,7 @@ class PersistentTaskStore(TaskGoals):
         if row["configuration_json"] is None:
             raise RuntimeError("自动化当前任务缺少不可变定义")
         schedule = connection.execute("SELECT next_run_at FROM persistent_task_schedules WHERE task_id=?", (task_id,)).fetchone()
+        usage = TaskUsageStateDTO.model_validate(task_application(row))
         return AutomationTaskDTO(
             task_id=row["task_id"], workspace_id=row["workspace_id"], revision=row["revision"],
             definition_revision=row["definition_revision"], lifecycle=row["lifecycle"],
@@ -88,6 +93,8 @@ class PersistentTaskStore(TaskGoals):
             phase="waiting_trigger" if row["lifecycle"] == "active" else row["lifecycle"],
             reason=row["reason"], created_at=row["created_at"], updated_at=row["updated_at"],
             next_run_at=schedule[0] if schedule else None,
+            tokens_used=usage.tokens_used, time_used_seconds=usage.time_used_seconds,
+            sync_version=row["revision"] + usage.sync_version,
         )
 
     def get_automation(self, task_id: str) -> AutomationTaskDTO:
@@ -116,9 +123,10 @@ class PersistentTaskStore(TaskGoals):
             raise RuntimeError("Goal 管理投影与当前任务身份不一致")
         return PersistentTaskDTO(
             task_id=task_id, workspace_id=self.workspace_id, revision=row["revision"],
-            definition_revision=row["definition_revision"], application_type="goal", goal=goal,
+            definition_revision=row["definition_revision"], application_type="goal", goal=goal_public_view(goal),
             lifecycle=row["lifecycle"], phase=goal.status.value,
             created_at=goal.created_at, updated_at=goal.updated_at,
+            tokens_used=goal.tokens_used, time_used_seconds=goal.time_used_seconds, sync_version=goal.sync_version,
         )
 
     def get(self, task_id: str) -> PersistentTaskDTO:
@@ -134,19 +142,24 @@ class PersistentTaskStore(TaskGoals):
             return [self._view(connection, row["task_id"]) for row in rows
                     if row["application_type"] == "automation" or row["owner_session_id"] in active]
 
-    def generated_for_session(self, session_id: str) -> set[str]:
+    def generated_for_session(self, session_id: str, *, task_id: str | None = None) -> set[str]:
         """关联原生成输出，不另存会话到任务的可变索引。"""
+        scope = "task_id=? AND " if task_id is not None else ""
+        limit = " LIMIT 1" if task_id is not None else ""
+        parameters = (task_id,) if task_id is not None else ()
         with closing(self._store.connection()) as connection:
             return {row[0] for row in connection.execute(
-                "SELECT DISTINCT task_id FROM persistent_task_runs WHERE "
+                f"SELECT DISTINCT task_id FROM persistent_task_runs WHERE {scope}("
                 "(json_extract(generation_json,'$.kind')='action' AND json_extract(generation_json,'$.session_id')=?) "
                 "OR EXISTS (SELECT 1 FROM json_each(generation_json,'$.value.outputs') output "
-                "WHERE json_extract(output.value,'$.session_id')=? AND json_extract(output.value,'$.workspace_id')=?)",
-                (session_id, session_id, self.workspace_id),
+                "WHERE json_extract(output.value,'$.session_id')=? AND json_extract(output.value,'$.workspace_id')=?))" + limit,
+                parameters + (session_id, session_id, self.workspace_id),
             )}
 
     def create(self, request: PersistentTaskCreateRequest, now: datetime, *, source_cursor: int | None = None) -> PersistentTaskDTO:
         payload = request.model_dump(mode="json")
+        if request.configuration.token_budget is None:
+            payload["configuration"].pop("token_budget")
         if request.configuration.context.mode == "event":
             payload["configuration"]["context"].pop("mode")
         if request.configuration.trigger.source_uri is None:
@@ -201,8 +214,10 @@ class PersistentTaskStore(TaskGoals):
             revision = task.definition_revision + 1
             connection.execute("INSERT INTO persistent_task_definitions VALUES (?,?,?)",
                                (task_id, revision, configuration.model_dump_json()))
-            connection.execute("UPDATE persistent_tasks SET revision=revision+1,definition_revision=?,updated_at=? WHERE task_id=?",
-                               (revision, now.isoformat(), task_id))
+            exhausted = task.lifecycle == "active" and budget_reached(task.tokens_used, configuration.token_budget)
+            connection.execute("UPDATE persistent_tasks SET revision=revision+1,definition_revision=?,lifecycle=?,reason=?,updated_at=? WHERE task_id=?",
+                               (revision, "needs_attention" if exhausted else task.lifecycle,
+                                "任务累计 Token 预算已耗尽" if exhausted else task.reason, now.isoformat(), task_id))
             if task.configuration.trigger != configuration.trigger:
                 self._set_schedule(connection, task_id, configuration, revision, now)
             else:
@@ -289,6 +304,8 @@ class PersistentTaskStore(TaskGoals):
         with self._transaction() as connection:
             task = self._task(connection, task_id)
             self._require_revision(task, expected_revision)
+            if lifecycle == "active" and budget_reached(task.tokens_used, task.configuration.token_budget):
+                raise ClientStateConflictError("任务累计 Token 预算已耗尽，请先调整预算")
             if lifecycle == "active" and task.lifecycle != "active" and task.configuration.trigger.source_uri is not None:
                 self._set_execution_source(connection, task_id, task.configuration, task.definition_revision, source_cursor)
             connection.execute("UPDATE persistent_tasks SET revision=revision+1,lifecycle=?,reason=?,updated_at=? WHERE task_id=?",

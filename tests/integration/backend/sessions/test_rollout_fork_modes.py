@@ -25,6 +25,11 @@ from xml.etree.ElementTree import fromstring
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -76,11 +81,8 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.domain.itemized.enums import (
@@ -112,8 +114,8 @@ from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
-from app.gateway.federation.grants import ForkGrantTarget
 from app.prompting.factory import PromptSection, internal_message_factory
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
@@ -140,7 +142,7 @@ from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnHistoryPage
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
 from app.services.business.session_service import SessionService
@@ -229,7 +231,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
@@ -253,6 +255,7 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
+from tests.support.messages import compaction_summary_message
 from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
@@ -261,6 +264,7 @@ from tests.support.session_navigation.catalog_intents import (
     submit_catalog_intent,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     prepare_default_test_workspace,
     render_test_workspace_config,
 )
@@ -359,10 +363,7 @@ def production_fork_container(request: pytest.FixtureRequest,
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "fork-contract-unused-key"
-        provider["endpoint"] = "http://127.0.0.1:1/v1"
-        provider.pop("auth", None)
+    clear_test_provider_api_keys(config, endpoint="http://127.0.0.1:1/v1")
     (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -1230,7 +1231,7 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         initial_execution_id="execution-turn-1",
         queue_input=ExecutionQueueInput(
             execution_binding=UserExecutionIdentity("job-turn-1", "turn-1", "admission-turn-1"),
-            message_id="u1", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            message_id="u1", agent_id="default", model=None, delivery_policy="after_turn",
             gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
             created_at=datetime.now(UTC).isoformat(),
         ),
@@ -1298,7 +1299,7 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         initial_execution_id="execution-turn-2",
         queue_input=ExecutionQueueInput(
             execution_binding=UserExecutionIdentity("job-turn-2", "turn-2", "admission-turn-2"),
-            message_id="u2", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            message_id="u2", agent_id="default", model=None, delivery_policy="after_turn",
             gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
             created_at=datetime.now(UTC).isoformat(),
         ),
@@ -1568,7 +1569,7 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
     identity = container.job_service.reserve_user_execution_identity()
     container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
         execution_binding=identity, message_id=message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=message.created_at.isoformat(),
     ))
     admission = container.message_service.execution_admission_for_job(
@@ -1624,7 +1625,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         identity = production_fork_container.job_service.reserve_user_execution_identity()
         messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=message.created_at.isoformat(),
         ))
         job_id = identity.job_id
@@ -1643,7 +1644,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
             attachments=message.attachments, message_metadata=message.metadata,
             message_created_at=message.created_at.isoformat(),
         )
-        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         frozen = context.saver.accepted_internal_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id, intent=intent,
         )
@@ -1707,7 +1708,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
                 MessageCreateRequest(content="读取继承附件"), thread_id=result.thread_id)
             target_identity = production_fork_container.job_service.reserve_user_execution_identity()
             target_messages.accept_user_message(target_message, execution_identity=target_identity, queue_input=ExecutionQueueInput(
-                execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", provider_id=None,
+                execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=target_message.created_at.isoformat(),
             ))
             new_turn = {"turn_id": target_identity.turn_id}
@@ -1786,7 +1787,7 @@ async def test_fork_settlement_retries_retained_upload_pin_without_restart(
     identity = container.job_service.reserve_user_execution_identity()
     container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
         execution_binding=identity, message_id=message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=message.created_at.isoformat(),
     ))
     admission = container.message_service.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=identity.job_id)
@@ -4060,9 +4061,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     admitted_root = next(item for item in saver._storage.storage.read_items(source.session_id, source_thread)
                          if item.item_id == "compaction-source-root")
     user = messages_from_dict([LangChainMessageCodec().project_message((admitted_root,))])[0]
-    summary = HumanMessage(content="旧上下文摘要", id="compaction-summary", response_metadata={
-        "internal": True,
-        "compaction_summary": True,
+    summary = compaction_summary_message(content="旧上下文摘要", id="compaction-summary", response_metadata={
         "provenance_relations": [ItemProvenanceRelation(
             relation="derived_from", target_kind="canonical_item", target_id="compaction-old-root",
             target_session_id=source.session_id, target_thread_id=source_thread,
@@ -4218,7 +4217,8 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     assert [message.response_metadata.get("canonical_item_manifests") for message in target_messages] == expected_manifest_groups
     summary_messages = [message for message in target_messages if message.id == "compaction-summary"]
     assert len(summary_messages) == 1
-    assert summary_messages[0].content == "旧上下文摘要"
+    assert summary_messages[0].content == summary.content
+    assert summary_messages[0].response_metadata["structured_prompt_kind"] == "compaction_summary"
     source_checkpoint_id = selected_checkpoint.checkpoint["id"]
     source_restored = await _get_tuple(
         fork_context, source.session_id, saver=cold, checkpoint_id=source_checkpoint_id,
@@ -4384,7 +4384,7 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
     user = messages_from_dict([LangChainMessageCodec().project_message((root,))])[0]
     retained = [result, final, user]
     summarized = [message for message in old_messages if message.id not in {"queue-tool-result", "queue-tool-final"}]
-    summary = HumanMessage(content="已压缩的前置说明", id="queue-summary")
+    summary = compaction_summary_message(content="已压缩的前置说明", id="queue-summary")
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
                                  preserved_messages=retained, state_cutoff=len(summarized)),
@@ -9099,7 +9099,7 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         admitted = next(item for item in context.saver._storage.storage.read_items(source.session_id, thread_id)
                         if item.item_id == "unclaimed-copy-root")
         user = messages_from_dict([LangChainMessageCodec().project_message((admitted,))])[0]
-        summary = HumanMessage(content="旧附件的检查已经完成", id="unclaimed-copy-summary", response_metadata={
+        summary = compaction_summary_message(content="旧附件的检查已经完成", id="unclaimed-copy-summary", response_metadata={
             "provenance_relations": [ItemProvenanceRelation(
                 relation="derived_from", target_kind="canonical_item", target_id="item-retry-user",
                 target_session_id=source.session_id, target_thread_id=thread_id, target_turn_id="turn-retry",

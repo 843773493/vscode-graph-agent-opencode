@@ -4,17 +4,18 @@ import logging
 import sqlite3
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from boxteam_plugin_sdk.http import get_request_id
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
 from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
     get_message_service,
-    get_request_id,
+    get_rollout_checkpoint_saver,
     get_session_communication_service,
     get_session_orchestrator,
     get_session_service,
@@ -24,7 +25,10 @@ from app.api.deps import (
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.runtime.session_orchestrator import SessionOrchestrator
+from app.domain.itemized.execution_queue import (
+    MessageSubmissionConflictError,
+    QueueOrderConflictError,
+)
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.communication import (
@@ -34,27 +38,55 @@ from app.schemas.internal_v2.communication import (
 )
 from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
+    AttachmentRef,
     MessageDTO,
     MessageReplayAccepted,
     MessageReplayRequest,
     MessageRunAccepted,
     MessageRunRequest,
+    MessageSubmissionResultDTO,
 )
 from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
+    PendingRequestReorderRequest,
 )
 from app.schemas.internal_v2.turn import ThreadAttachmentListDTO
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.orchestration.communication.service import SessionCommunicationService
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 logger = logging.getLogger(__name__)
+
+
+@router.put("/{session_id}/threads/{thread_id}/pending-requests/order", response_model=APIResponse[PendingRequestListDTO])
+async def reorder_pending_requests(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: PendingRequestReorderRequest,
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    jobs: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    sessions: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+):
+    try:
+        async with sessions.session_read_admission(session_id):
+            await sessions.resolve_thread(session_id, thread_id)
+            snapshot = await jobs.reorder_pending(session_id, thread_id, message_ids=tuple(payload.message_ids),
+                                                  expected_thread_revision=payload.expected_thread_revision)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except (QueueOrderConflictError, SessionDeletionPendingError) as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=snapshot, request_id=request_id)
 
 
 @router.get(
@@ -67,7 +99,7 @@ async def list_pending_requests(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     thread_id: CanonicalThreadId | None = None,
 ):
     try:
@@ -91,10 +123,10 @@ async def list_pending_requests(
 )
 async def list_main_thread_pending_requests(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
-    session_service: TurnSessionLookupProtocol = Depends(get_session_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -115,9 +147,9 @@ async def list_main_thread_pending_requests(
 async def remove_pending_request(
     session_id: CanonicalSessionId,
     message_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.remove_pending(session_id, message_id)
@@ -140,7 +172,7 @@ async def clear_pending_requests(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     thread_id: CanonicalThreadId | None = None,
 ):
     try:
@@ -166,9 +198,9 @@ async def update_pending_request_policy(
     session_id: CanonicalSessionId,
     message_id: str,
     payload: PendingRequestPolicyUpdateRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.update_pending_policy(
@@ -194,14 +226,15 @@ async def update_pending_request_policy(
 async def create_message_and_run(
     session_id: CanonicalSessionId,
     payload: MessageRunRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
-    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
 ):
     try:
-        result = await session_orchestrator.create_message(session_id, payload)
+        result = await session_orchestrator.submit_user_message(session_id, payload)
     except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except MessageSubmissionConflictError as error:
         raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -218,18 +251,39 @@ async def create_message_and_run(
 async def create_thread_message_and_run(
     session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: MessageRunRequest,
     _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
-    session_orchestrator: Annotated[SessionOrchestrator, Depends(get_session_orchestrator)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
 ):
     try:
-        result = await session_orchestrator.create_message(session_id, payload, thread_id=thread_id)
+        result = await session_orchestrator.submit_user_message(session_id, payload, thread_id=thread_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except MessageSubmissionConflictError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/threads/{thread_id}/message-submissions/{operation_id}",
+    response_model=APIResponse[MessageSubmissionResultDTO],
+    summary="按原操作身份查询消息接收事实",
+)
+async def get_message_submission(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, operation_id: str,
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
+):
+    try:
+        result = await session_orchestrator.message_submission(session_id, thread_id, operation_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except MessageSubmissionConflictError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -313,12 +367,12 @@ async def observe_communication(
 )
 async def list_messages(
     session_id: CanonicalSessionId,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -339,6 +393,52 @@ async def list_messages(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.post("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[AttachmentRef],
+             summary="预上传附件；完整接收后返回引用，不创建用户消息")
+async def upload_thread_attachment(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    request: Request,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    name: str = Query(min_length=1, max_length=255),
+) -> APIResponse[AttachmentRef]:
+    content_type = request.headers.get("content-type", "application/octet-stream").split(";", 1)[0].strip()
+    try:
+        result = await attachment_store.upload_attachment(session_id, thread_id, name=name,
+            content_type=content_type, chunks=request.stream())
+    except FileNotFoundError as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.delete("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[None],
+               summary="移除未发送的预上传；已接受消息的附件不受影响")
+async def discard_thread_attachment(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    messages: Annotated[RolloutCheckpointSaver, Depends(get_rollout_checkpoint_saver)],
+    file_id: str = Query(min_length=1),
+) -> APIResponse[None]:
+    try:
+        await attachment_store.discard_upload(session_id, thread_id, file_id, messages=messages)
+    except FileNotFoundError as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=None, request_id=request_id)
+
+
 @router.get("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[ThreadAttachmentListDTO],
             summary="列出精确 Thread 的受管附件元数据")
 async def list_thread_attachments(
@@ -347,7 +447,7 @@ async def list_thread_attachments(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     after: str = Query(default="", pattern=r"^(?:att_[0-9a-f]{32})?$"),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> APIResponse[ThreadAttachmentListDTO]:
@@ -365,12 +465,12 @@ async def list_thread_attachments(
 @router.get("/{session_id}/attachments/content", summary="读取会话附件")
 async def get_session_attachment_content(
     session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
     file_id: str = Query(min_length=1),
     variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
     max_edge: int = Query(default=512, ge=64, le=1024),
-    _: str = Depends(verify_local_token),
-    attachment_store: AttachmentBlobStore = Depends(get_attachment_blob_store),
-    job_service: JobServiceProtocol = Depends(get_job_service),
 ) -> Response:
     async def read_content():
         return (
@@ -408,10 +508,10 @@ async def get_session_attachment_content(
 )
 async def get_agent_state_messages(
     session_id: CanonicalSessionId,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -431,10 +531,10 @@ async def get_agent_state_messages(
 async def get_message(
     session_id: CanonicalSessionId,
     message_id: str,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -462,12 +562,12 @@ async def replay_message_turn(
     session_id: CanonicalSessionId,
     message_id: str,
     payload: MessageReplayRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    replay_service: Annotated[SessionTurnReplayService, Depends(get_session_turn_replay_service)],
 ):
     try:
-        result = await replay_service.replay(session_id, message_id, payload)
+        result = await replay_service.replay_message(session_id, message_id, payload)
     except (KeyError, NotFoundError) as exc:
         # 回退入口先解析权威 main thread，缺失时由 owner 查询抛出明确错误。
         raise not_found_http_error(exc) from exc
@@ -491,9 +591,9 @@ async def replay_turn(
     session_id: CanonicalSessionId,
     turn_id: str,
     payload: MessageReplayRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    replay_service: Annotated[SessionTurnReplayService, Depends(get_session_turn_replay_service)],
 ):
     try:
         result = await replay_service.replay_turn(session_id, turn_id, payload)

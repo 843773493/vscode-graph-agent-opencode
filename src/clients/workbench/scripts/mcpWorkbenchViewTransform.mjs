@@ -31,14 +31,12 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
     contents = replaceOnce(contents, 'DelayedPagedModel, IPagedModel, PagedModel, IterativePagedModel', 'DelayedPagedModel, IPagedModel, PagedModel');
     contents = replaceOnce(contents, "private currentQuery = '@mcp';", "private currentQuery = '@mcp';\nprivate queryCancellation: CancellationTokenSource | undefined;");
     contents = replaceOnce(contents, '@IConfigurationService private readonly marketplaceConfigurationService:', '@IConfigurationService configurationService:');
-    contents = replaceOnce(contents, '\t\t@ILogService private readonly logService: ILogService,', '\t\t@INotificationService private readonly notificationService: INotificationService,\n\t\t@ILogService private readonly logService: ILogService,');
     contents = replaceOnce(contents, 'contextMenuService, marketplaceConfigurationService, contextKeyService', 'contextMenuService, configurationService, contextKeyService');
     contents = replaceOnce(contents, '\t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {\n\t\t\tif (event.affectsConfiguration(CustomizationMarketplaceConfiguration.MarketplaceEnabled) && this.isBodyVisible()) {\n\t\t\t\tvoid this.show(this.currentQuery);\n\t\t\t}\n\t\t}));\n', '');
     contents = replaceOnce(contents, '\t\tthis._register(observeWorkspaceMcpView(this, this.mcpWorkbenchService));', `\t\tthis._register(toDisposable(() => this.queryCancellation?.dispose(true)));
 \t\tthis._register(observeWorkspaceMcpView(this, this.mcpWorkbenchService));`);
     contents = replaceOnce(contents, '\t\t\t\tmultipleSelectionSupport: false,', `\t\t\t\tonResolveError: error => {
 \t\t\t\t\tthis.updateBody({ text: getErrorMessage(error), severity: Severity.Error });
-\t\t\t\t\tthis.notificationService.error(error instanceof Error ? error : getErrorMessage(error));
 \t\t\t\t},
 \t\t\t\tmultipleSelectionSupport: false,`);
 
@@ -47,14 +45,14 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\tconst cancellation = this.queryCancellation = new CancellationTokenSource();
 \t\tthis.currentQuery = query;
 \t\tthis.workspaceMcpQueryFailed = false;
-\t\tthis.input?.disposables.dispose();
-\t\tthis.input = undefined;
+\t\tconst progress = this.getProgressIndicator().show(true, 300);
 \t\ttry {
 \t\t\tconst input = await this.query(query, cancellation.token);
 \t\t\tif (this.queryCancellation !== cancellation || cancellation.token.isCancellationRequested) {
 \t\t\t\tinput.disposables.dispose();
 \t\t\t\tthrow new CancellationError();
 \t\t\t}
+\t\t\tthis.input?.disposables.dispose();
 \t\t\tthis.input = input;
 \t\t\tthis.renderInput();
 \t\t\tif (input.onDidChangeModel) input.disposables.add(input.onDidChangeModel(model => {
@@ -68,6 +66,8 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\t\tthis.workspaceMcpQueryFailed = true;
 \t\t\tif (!isCancellationError(error)) this.updateBody({ text: getErrorMessage(error), severity: Severity.Error });
 \t\t\tthrow error;
+\t\t} finally {
+\t\t\tprogress.done();
 \t\t}
 \t}
 `, replaceOnce);
@@ -75,9 +75,6 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\tconst disposables = new DisposableStore();
 \t\tlet servers = await this.mcpWorkbenchService.queryLocal();
 \t\tif (token.isCancellationRequested) throw new CancellationError();
-\t\tif (this.mcpWorkbenchService instanceof WorkspaceMcpWorkbenchService && !this.mcpWorkbenchService.isLocalCatalogAvailable) {
-\t\t\tthrow new Error('当前 Gateway 没有可读取的工作区 MCP 目录');
-\t\t}
 \t\tconst text = query.replace('@mcp', '').trim().toLocaleLowerCase();
 \t\tconst filter = (items: IWorkbenchMcpServer[]) => text
 \t\t\t? items.filter(server => (server.label + ' ' + server.description).toLocaleLowerCase().includes(text))
@@ -90,6 +87,7 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\t\t\tservers = updated;
 \t\t\t\tonDidChangeModel.fire(new PagedModel(servers));
 \t\t\t}
+\t\t\tthis.updateBody();
 \t\t}));
 \t\tdisposables.add(this.mcpWorkbenchService.onReset(() => {
 \t\t\tservers = filter([...this.mcpWorkbenchService.local]);
@@ -98,6 +96,16 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\treturn { model: new PagedModel(servers), onDidChangeModel: onDidChangeModel.event, disposables };
 \t}
 `, replaceOnce);
+    contents = replaceOnce(contents, '\tprivate updateBody(message?: Message): void {', `\tprivate updateBody(message?: Message): void {
+\t\tconst catalogError = this.mcpWorkbenchService instanceof WorkspaceMcpWorkbenchService ? this.mcpWorkbenchService.localCatalogError : undefined;
+\t\tif (!message && catalogError) message = { text: catalogError, severity: Severity.Error };
+\t\tif (!this.input && !message && this.bodyTemplate) {
+\t\t\tthis.bodyTemplate.mcpServersList.classList.add('hidden');
+\t\t\tthis.bodyTemplate.messageContainer.classList.add('hidden');
+\t\t\treturn;
+\t\t}
+\t\tthis.bodyTemplate?.messageContainer.parentElement?.classList.toggle('has-mcp-items', (this.input?.model.length ?? 0) > 0);`);
+    contents = replaceOnce(contents, "localize('no extensions found', \"No MCP Servers found.\")", "localize('workbench.mcp.emptyConnections', 'No MCP connections configured in this workspace. Add a plugin MCP service or external HTTP server. Manage browser, terminal and debugging in Extensions.')");
     contents = replaceOnce(contents, 'new SyncDescriptor(McpServersListView, [{ showMarketplaceWelcome: true }])', 'new SyncDescriptor(McpServersListView)');
     contents = replaceOnce(contents, 'new SyncDescriptor(McpServersListView, [{}])', 'new SyncDescriptor(McpServersListView)');
   }

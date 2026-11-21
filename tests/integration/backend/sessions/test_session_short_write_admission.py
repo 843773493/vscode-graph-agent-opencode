@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
-from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
-from app.agents.context_compaction_adapter import ContextCompactionCheck
+from app.agents.manual_compaction_checkpoint import ManualCompactionSnapshot
 from app.api.deps import (
     get_context_compaction_service,
     get_goal_service,
     get_persistent_task_runtime,
-    get_request_id,
     get_session_service,
     verify_local_token,
 )
@@ -28,13 +29,16 @@ from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.schemas.internal_v2.goal import SessionGoalDTO
+from app.runtime.context_compaction import ContextCompactionCheck
+from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationUpdateRequest,
+    NodeDebugDebuggerContributionDTO,
 )
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService, JobState
+from app.services.business.persistent_tasks.goal import GoalProgressSample
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
@@ -52,10 +56,14 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from tests.harness.python.run_context import TestRunContext
-from tests.support.node_debug_dependencies import node_debug_file_paths
+from tests.support.node_debug_dependencies import (
+    node_debug_binding_snapshot,
+    node_debug_file_paths,
+)
 from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
@@ -68,31 +76,31 @@ class _InstantJobExecutor:
         return "done"
 
 
-class _RecordingCheckpointStore:
+class _RecordingCheckpointAdapter:
     def __init__(self, workspace: CatalogWorkspaceContext) -> None:
         self.workspace = workspace
-        self.checkpoint: ContextCompactionCheckpoint | None = None
+        self.snapshot: ManualCompactionSnapshot | None = None
         self.load_calls = 0
         self.save_calls = 0
 
-    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint:
+    async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot:
         assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
         self.load_calls += 1
         messages = [HumanMessage(content="旧消息"), HumanMessage(content="新消息")]
-        self.checkpoint = ContextCompactionCheckpoint(
+        self.snapshot = ManualCompactionSnapshot(
             owner=owner,
             raw_messages=list(messages),
-            event=None,
-            _tuple=cast(CheckpointTuple, object()),
-            _checkpoint=cast(Checkpoint, {"channel_versions": {}}),
-            _channel_values={"messages": messages},
+            summarization_event=None,
+            source_tuple=cast(CheckpointTuple, object()),
+            graph_checkpoint=cast(Checkpoint, {"channel_versions": {}}),
+            channel_values={"messages": messages},
         )
-        return self.checkpoint
+        return self.snapshot
 
-    async def save_compaction_request(
-        self, *, checkpoint: ContextCompactionCheckpoint
+    async def request_compaction(
+        self, *, snapshot: ManualCompactionSnapshot
     ) -> None:
-        assert checkpoint is self.checkpoint
+        assert snapshot is self.snapshot
         self.save_calls += 1
 
 
@@ -137,8 +145,13 @@ class _StartBarrier:
 class _RuntimeProbe:
     def __init__(self, session_service: SessionService) -> None:
         self._session_service = session_service
-        self.probe_settle_admission = True
+        self.probe_sample_admission = True
         self.calls: list[str] = []
+        self.items: list[SimpleNamespace] = []
+        self.jobs = SimpleNamespace(list=self.list_jobs)
+
+    async def list_jobs(self, *, session_id):
+        return self.items
 
     async def _assert_admission_released(self, session_id: str) -> None:
         async def acquire() -> None:
@@ -147,10 +160,11 @@ class _RuntimeProbe:
 
         await asyncio.wait_for(acquire(), timeout=2)
 
-    async def settle_active_progress(self, session_id: str) -> None:
-        if self.probe_settle_admission:
+    async def sample_active_progress(self, session_id: str) -> tuple[GoalProgressSample, ...]:
+        if self.probe_sample_admission:
             await self._assert_admission_released(session_id)
-        self.calls.append("settle")
+        self.calls.append("sample")
+        return await sample_goal_progress(self, session_id)
 
     async def request_goal(self, session_id: str, *, objective: SessionGoalDTO | None = None) -> None:
         await self._assert_admission_released(session_id)
@@ -166,7 +180,7 @@ class _Harness:
     goal_service: SessionGoalService
     runtime: _RuntimeProbe
     compaction_service: ContextCompactionService
-    checkpoint_store: _RecordingCheckpointStore
+    checkpoint_adapter: _RecordingCheckpointAdapter
     compactor: _CompactorProbe
 
 
@@ -199,16 +213,17 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         job_event_bus=JobEventBus(),
     )
     runtime = _RuntimeProbe(session_service)
+    runtime.goals = goal_service
 
-    async def settle_probe(_runtime, session_id):
+    async def sample_probe(_runtime, session_id):
         assert _runtime is runtime
-        await runtime.settle_active_progress(session_id)
+        return await runtime.sample_active_progress(session_id)
 
-    monkeypatch.setattr("app.api.sessions.settle_goal_progress", settle_probe)
-    checkpoint_store = _RecordingCheckpointStore(workspace)
+    monkeypatch.setattr("app.api.sessions.sample_goal_progress", sample_probe)
+    checkpoint_adapter = _RecordingCheckpointAdapter(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
-        checkpoint_store=checkpoint_store,
+        checkpoint_adapter=checkpoint_adapter,
         job_service=job_service,
         session_service=session_service,
         summarization_compactor=compactor,
@@ -238,7 +253,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
                 goal_service=goal_service,
                 runtime=runtime,
                 compaction_service=compaction_service,
-                checkpoint_store=checkpoint_store,
+                checkpoint_adapter=checkpoint_adapter,
                 compactor=compactor,
             )
         finally:
@@ -252,7 +267,7 @@ async def test_active_short_write_endpoints_keep_their_contracts(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "原始标题",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
 
     update = await harness.client.patch(
@@ -267,31 +282,66 @@ async def test_active_short_write_endpoints_keep_their_contracts(
     compact = await harness.client.post(f"/api/v1/sessions/{session_id}/compact")
     assert compact.status_code == 200, compact.text
     assert compact.json()["data"]["status"] == "scheduled"
-    assert harness.checkpoint_store.load_calls == 1
-    assert harness.checkpoint_store.save_calls == 1
+    assert harness.checkpoint_adapter.load_calls == 1
+    assert harness.checkpoint_adapter.save_calls == 1
     assert harness.compactor.check_calls == 1
 
     created = await harness.client.put(
         f"/api/v1/sessions/{session_id}/goal",
-        json={"objective": "完成第一目标"},
+        json={"objective": "完成第一目标", "operation_id": "create-goal", "expected_control_revision": 0},
     )
     assert created.status_code == 200, created.text
-    assert created.json()["data"]["objective"] == "完成第一目标"
+    assert created.json()["data"]["goal"]["objective"] == "完成第一目标"
 
     updated = await harness.client.put(
         f"/api/v1/sessions/{session_id}/goal",
-        json={"objective": "完成更新后的目标"},
+        json={"objective": "完成更新后的目标", "operation_id": "edit-goal", "expected_control_revision": 1},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["data"]["objective"] == "完成更新后的目标"
+    assert updated.json()["data"]["goal"]["objective"] == "完成更新后的目标"
 
-    cleared = await harness.client.delete(f"/api/v1/sessions/{session_id}/goal")
+    cleared = await harness.client.request("DELETE", f"/api/v1/sessions/{session_id}/goal",
+        json={"operation_id": "clear-goal", "expected_control_revision": 2})
     assert cleared.status_code == 200, cleared.text
     main = harness.workspace.resolver.main_thread_id(session_id)
     assert created.json()["data"]["thread_id"] == updated.json()["data"]["thread_id"] == main
-    assert cleared.json()["data"] == {"session_id": session_id, "thread_id": main, "cleared": True}
+    assert cleared.json()["data"] == {"session_id": session_id, "thread_id": main, "operation_id": "clear-goal",
+        "status": "applied", "control_revision": 3, "sync_version": 3, "goal": None}
     assert await harness.goal_service.get(session_id) is None
-    assert harness.runtime.calls == ["ensure", "apply", "ensure", "settle"]
+    assert harness.runtime.calls == ["ensure", "apply", "ensure", "sample"]
+
+
+@pytest.mark.parametrize("action", ["pause", "replace", "clear"])
+async def test_stale_goal_control_request_cannot_freeze_current_job_time(harness: _Harness, action):
+    from datetime import UTC, datetime, timedelta
+
+    session_id = await harness.workspace.create_session("CAS 前只读采样")
+    goal = await harness.goal_service.set(session_id, objective="继续累计当前目标用时")
+    await harness.goal_service.account_job(session_id, job_id="job-running", tokens=5, elapsed_seconds=3)
+    from app.schemas.internal_v2.task_usage import TaskExecutionReferenceDTO
+    harness.goal_service._store.bind_execution(goal.goal_id, "job-running", TaskExecutionReferenceDTO(
+        session_id=session_id, thread_id=goal.thread_id, execution_id="execution-running",
+        started_at=datetime.now(UTC) - timedelta(seconds=10), control_revision=goal.control_revision), datetime.now(UTC))
+    harness.runtime.items = [SimpleNamespace(job_id="job-running", status=SimpleNamespace(value="running"),
+        created_at=datetime.now(UTC) - timedelta(seconds=10))]
+
+    if action == "clear":
+        response = await harness.client.request("DELETE", f"/api/v1/sessions/{session_id}/goal",
+            json={"operation_id": f"stale-{action}", "expected_control_revision": 0})
+    else:
+        response = await harness.client.put(f"/api/v1/sessions/{session_id}/goal", json={
+            "operation_id": f"stale-{action}", "expected_control_revision": 0,
+            **({"status": "paused"} if action == "pause" else {"objective": "不得覆盖", "replace": True}),
+        })
+
+    assert response.status_code == 409, response.text
+    unchanged = await harness.goal_service.get(session_id)
+    assert unchanged.goal_id == goal.goal_id and unchanged.status == GoalStatus.active
+    assert unchanged.time_used_seconds == 3
+    assert not unchanged.accounted_jobs["job-running"].time_closed
+    accounted = await harness.goal_service.account_job(session_id, job_id="job-running", tokens=8, elapsed_seconds=20)
+    assert accounted.time_used_seconds == 20 and accounted.tokens_used == 8
+    assert (await harness.goal_service.get_operation(session_id, f"stale-{action}")).status == "unknown"
 
 
 @pytest.mark.asyncio
@@ -337,7 +387,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "删除前标题",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     initial_updated_at = harness.workspace.node(session_id).updated_at.isoformat()
     write_admitted = asyncio.Event()
@@ -389,7 +439,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
     try:
         await asyncio.wait_for(write_admitted.wait(), timeout=3)
         delete_task = asyncio.create_task(
-            harness.job_service.run_session_delete_operation(
+            harness.job_service.run_session_control_operation(
                 session_id,
                 lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
                 deadline=asyncio.get_running_loop().time() + 30,
@@ -456,7 +506,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "保持原状",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
 
     async def fail_drain(current_session_id: str) -> None:
@@ -466,12 +516,12 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
 
     harness.workspace.delete_service.set_session_drain_callback(fail_drain)
     with pytest.raises(RuntimeError, match="injected drain failure"):
-        await harness.job_service.run_session_delete_operation(
+        await harness.job_service.run_session_control_operation(
             session_id,
             lambda: harness.workspace.resolver.delete_subtree(idempotency_key=f"short-write-delete-{session_id}", root_node_id=session_id),
             deadline=asyncio.get_running_loop().time() + 30,
         )
-    harness.runtime.probe_settle_admission = False
+    harness.runtime.probe_sample_admission = False
 
     update = await harness.client.patch(
         f"/api/v1/sessions/{session_id}",
@@ -480,9 +530,10 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     compact = await harness.client.post(f"/api/v1/sessions/{session_id}/compact")
     goal_set = await harness.client.put(
         f"/api/v1/sessions/{session_id}/goal",
-        json={"objective": "不得创建"},
+        json={"objective": "不得创建", "operation_id": "deleted-set", "expected_control_revision": 0},
     )
-    goal_clear = await harness.client.delete(f"/api/v1/sessions/{session_id}/goal")
+    goal_clear = await harness.client.request("DELETE", f"/api/v1/sessions/{session_id}/goal",
+        json={"operation_id": "deleted-clear", "expected_control_revision": 0})
 
     responses = [update, compact, goal_set, goal_clear]
     assert [response.status_code for response in responses] == [409, 409, 409, 409]
@@ -493,15 +544,16 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     assert harness.workspace.node(session_id).name == "保持原状"
     assert (await harness.session_service.get(session_id)).title == "保持原状"
     assert await harness.goal_service.get(session_id) is None
-    assert harness.checkpoint_store.load_calls == 0
-    assert harness.checkpoint_store.save_calls == 0
+    assert harness.checkpoint_adapter.load_calls == 0
+    assert harness.checkpoint_adapter.save_calls == 0
     assert harness.compactor.check_calls == 0
     assert harness.workspace.node(session_id).state == "deleting"
     assert harness.workspace.session_dir(session_id).is_dir()
 
 
-def _node_debug_service(harness: _Harness) -> NodeDebugService:
-    return NodeDebugService(
+@pytest.fixture
+def node_debug(harness: _Harness, monkeypatch: pytest.MonkeyPatch) -> NodeDebugService:
+    service = NodeDebugService(
         workspace_root=harness.workspace.workspace_root,
         file_paths=node_debug_file_paths(harness.workspace.workspace_root),
         config_service=ConfigService(workspace_root=harness.workspace.workspace_root),
@@ -512,6 +564,12 @@ def _node_debug_service(harness: _Harness) -> NodeDebugService:
         ),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
+    # 本组验证 Session 准入／删除竞争；插件发现是明确替身，不访问开发 Gateway。
+    contribution = NodeDebugDebuggerContributionDTO(
+        **node_debug_binding_snapshot().model_dump(), label="Node Inspector", configuration_schema={},
+    )
+    monkeypatch.setattr(service, "resolve_node_debugger_binding", AsyncMock(return_value=contribution))
+    return service
 
 
 @pytest.mark.asyncio
@@ -519,16 +577,16 @@ def _node_debug_service(harness: _Harness) -> NodeDebugService:
 @pytest.mark.parametrize("blocked_stage", ["claim", "source"])
 async def test_node_debug_state_read_finishes_before_delete_drain(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
     reader: str,
     blocked_stage: str,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "状态读取等待删除 drain", current_provider_id="test-provider"
+        "状态读取等待删除 drain", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
     session_path = harness.workspace.session_dir(session_id)
-    node_debug = _node_debug_service(harness)
     harness.workspace.resolver.bind_session_drain_callback(node_debug.drain_session)
     read_entered = asyncio.Event()
     release_read = asyncio.Event()
@@ -619,20 +677,20 @@ async def test_node_debug_state_read_finishes_before_delete_drain(
 @pytest.mark.asyncio
 async def test_cross_session_configuration_copy_releases_source_gate_after_snapshot(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_session_id = await harness.workspace.create_session(
-        "复制来源", current_provider_id="test-provider"
+        "复制来源", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     target_session_id = await harness.workspace.create_session(
-        "复制目标", current_provider_id="test-provider"
+        "复制目标", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     source_thread_id = harness.workspace.resolver.main_thread_id(source_session_id)
     target_thread_id = harness.workspace.resolver.main_thread_id(target_session_id)
     (harness.workspace.workspace_root / "main.mjs").write_text(
         "console.log('copy');\n", encoding="utf-8"
     )
-    node_debug = _node_debug_service(harness)
     source_state = await node_debug.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=source_session_id,
@@ -653,9 +711,11 @@ async def test_cross_session_configuration_copy_releases_source_gate_after_snaps
     paused_source_once = False
 
     @asynccontextmanager
-    async def track_session_gate(current_session_id: str) -> AsyncIterator[None]:
+    async def track_session_gate(
+        current_session_id: str, *, new_operation: bool = False,
+    ) -> AsyncIterator[None]:
         nonlocal max_active_sessions, paused_source_once
-        async with original_admission(current_session_id):
+        async with original_admission(current_session_id, new_operation=new_operation):
             active_sessions.add(current_session_id)
             admitted_sessions.append(current_session_id)
             max_active_sessions = max(max_active_sessions, len(active_sessions))
@@ -732,13 +792,13 @@ async def test_cross_session_configuration_copy_releases_source_gate_after_snaps
 @pytest.mark.asyncio
 async def test_admitted_node_debug_start_finishes_before_delete_drain(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "等待调试启动完成", current_provider_id="test-provider"
+        "等待调试启动完成", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
-    node_debug = _node_debug_service(harness)
     launch_entered = asyncio.Event()
     release_start = asyncio.Event()
     drain_attempted = asyncio.Event()
@@ -764,6 +824,8 @@ async def test_admitted_node_debug_start_finishes_before_delete_drain(
             path="main.mjs",
             args=[],
             breakpoints=[],
+            gateway_id="gateway_test",
+            request_id="request_admitted_start",
         )
     )
     delete_task: asyncio.Task[object] | None = None
@@ -799,13 +861,13 @@ async def test_admitted_node_debug_start_finishes_before_delete_drain(
 @pytest.mark.asyncio
 async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "排空后的调试启动", current_provider_id="test-provider"
+        "排空后的调试启动", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
-    node_debug = _node_debug_service(harness)
     drain_finished = asyncio.Event()
     release_rename = asyncio.Event()
     admission_attempted = asyncio.Event()
@@ -823,11 +885,11 @@ async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
 
     @asynccontextmanager
     async def observe_start_admission(
-        current_session_id: str,
+        current_session_id: str, *, new_operation: bool = False,
     ) -> AsyncIterator[None]:
         if current_session_id == session_id:
             admission_attempted.set()
-        async with original_admission(current_session_id):
+        async with original_admission(current_session_id, new_operation=new_operation):
             yield
 
     monkeypatch.setattr(
@@ -854,6 +916,8 @@ async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
                 path="main.mjs",
                 args=[],
                 breakpoints=[],
+                gateway_id="gateway_test",
+                request_id="request_after_drain",
             )
         )
         await asyncio.wait_for(admission_attempted.wait(), timeout=3)

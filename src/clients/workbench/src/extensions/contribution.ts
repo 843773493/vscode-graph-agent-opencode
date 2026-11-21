@@ -8,6 +8,13 @@ import { gatewayWorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js
 import { gateway } from '../agentApi.js';
 import { loadSearchScope } from '../search/target.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
+import type { PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { manageServicePluginSources } from './servicePluginManagement.js';
+
+registerAction2(class extends Action2 {
+  constructor() { super({ id: 'boxteam.plugins.manageSources', title: { value: t('plugins.manageSources'), original: actionTitles['plugins.manageSources'] }, f1: true }); }
+  run(accessor: ServicesAccessor, target?: PluginTarget): Promise<void> { return manageServicePluginSources(accessor, target); }
+});
 
 registerAction2(class AttachExtensionWorkspaceViews extends Action2 {
   constructor() { super({ id: 'boxteam.extensions.attachWorkspaceViews', title: { value: t('plugins.attachWorkspaceTitle'), original: actionTitles['plugins.attachWorkspaceTitle'] }, f1: true }); }

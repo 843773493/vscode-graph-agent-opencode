@@ -20,8 +20,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
@@ -183,6 +185,14 @@ def test_schema19_upgrade_deduplicates_or_rejects_conflicting_history(version_ca
         saver._storage.storage.migrate_schema(
             admission.thread_id, session_id=SESSION_ID, to_version=26,
             migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+        )
+        saver._storage.storage.migrate_schema(
+            admission.thread_id, session_id=SESSION_ID, to_version=27,
+            migration_name="execution_queue_026_027", migration_sql=EXECUTION_SCHEDULING_MIGRATION_SQL,
+        )
+        saver._storage.storage.migrate_schema(
+            admission.thread_id, session_id=SESSION_ID, to_version=28,
+            migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
         )
         with _execution_scope(admission):
             assert RolloutCheckpointSaver(saver._storage.storage.sessions_dir).get_tuple(child).checkpoint["channel_values"]["state"] == value

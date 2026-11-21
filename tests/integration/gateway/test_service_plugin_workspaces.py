@@ -49,9 +49,9 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
     for workspace in [gateway_workspace, *workspaces]:
         config_path = workspace / ".boxteam/workspace.jsonc"
         payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        for provider in payload["llm"]["providers"]:
-            if "api_key" in provider:
-                provider["api_key"] = "plugin-workspace-unused-key"
+        for provider in payload["llm"]["providers"].values():
+            if "api_key" in provider["defaults"]:
+                provider["defaults"]["api_key"] = ""
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -479,16 +479,16 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         # 新目录尚无配置；只给用户配置提供本测试的服务地址及不调用模型的依赖。
         config_path = context.boxteam_home_for_node(request.node.nodeid) / "config/workspace.jsonc"
         source = commentjson.loads((workspaces[0] / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-        source["llm"]["providers"] = [{"id": "primary", "model": "unused", "endpoint": "http://127.0.0.1:1/v1",
-            "api_key": "unused", "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
-                "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                "supports_reasoning": {"reasoning_content": False}}}]
+        source["llm"]["providers"] = {"primary": {
+            "defaults": {"endpoint": "http://127.0.0.1:1/v1", "api_key": "", "custom_llm_provider": "openai",
+                "api_mode": {"protocol": "chat_completions",
+                    "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                    "supports_reasoning": {"reasoning_content": False}}},
+            "models": {"default": {"model": "unused"}},
+        }}
         for agent in source["agents"].values():
             if "model" in agent:
-                agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
-            for tool in agent.get("tools", {}).get("custom", []):
-                if tool.get("name") == "fetch_webpage":
-                    tool.setdefault("embedding", {})["provider_id"] = "primary"
+                agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         config_path.write_text(json.dumps(source), encoding="utf-8")
 
         missing = defaults([binding])

@@ -16,7 +16,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts
@@ -24,7 +24,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _completed,
     _prepare_workspace,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication import federation
 from tests.support.communication.federation import (
     CommunicationNode,
@@ -114,7 +114,7 @@ class SkillGatewayCase:
     async def send(self, gateway: str, session_id: str, content: str, request_id: str) -> dict[str, object]:
         response = await self.nodes[gateway].client.post(
             f"/api/v1/sessions/{session_id}/messages", headers={"X-Request-ID": request_id},
-            json={"message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"}},
+            json=with_message_run_operation_id({"message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"}}),
         )
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id

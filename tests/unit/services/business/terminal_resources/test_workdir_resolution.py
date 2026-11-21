@@ -11,16 +11,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.resource_uri import ParsedResourceUri, resource_display_uri
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.services.business.terminal_resources import owner as owner_module
 from app.services.business.terminal_resources.operations import TerminalOperations

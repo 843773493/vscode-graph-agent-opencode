@@ -94,7 +94,7 @@ try {
   // 进程/静态资源启动独立于已就绪后的交互预算，原始启动耗时仍要报告。
   const startup = performance.now();
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   result.startupMs = performance.now() - startup;
   const pickerStart = performance.now();
   await command('workbench.action.configureLocale');

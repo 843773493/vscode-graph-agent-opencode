@@ -11,6 +11,7 @@ import pytest
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.common import JobStatus
+from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobState
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
@@ -78,6 +79,9 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
     )
     service._jobs[job.job_id] = job
     if boundary == "task_callback":
+        # _start_job_task 是调度边界的低层方法；建立与真实 FIFO 出队相同的运行态和活动槽。
+        service._thread_current_job[(session_id, job.thread_id)] = job.job_id
+        transition_job_status(job, JobStatus.running)
         async def fail_before_body(*_args: object) -> None:
             raise native_error
         monkeypatch.setattr(service, "_run_job_background", fail_before_body)

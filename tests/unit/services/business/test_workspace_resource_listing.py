@@ -69,9 +69,9 @@ async def test_slow_list_keeps_independent_queries_available(
     original = bundle.transport.list_resources
     held = False
 
-    async def list_receipt() -> list[dict[str, object]]:
+    async def list_receipt(**query) -> list[dict[str, object]]:
         nonlocal held
-        receipt = await original()
+        receipt = await original(**query)
         if not held:
             held = True
             entered.set()
@@ -105,8 +105,8 @@ async def test_late_list_cannot_replace_a_committed_command(
     entered, release = asyncio.Event(), asyncio.Event()
     original = bundle.transport.list_resources
 
-    async def list_receipt() -> list[dict[str, object]]:
-        receipt = await original()
+    async def list_receipt(**query) -> list[dict[str, object]]:
+        receipt = await original(**query)
         entered.set()
         await release.wait()
         return receipt
@@ -142,9 +142,9 @@ async def test_late_list_cannot_replace_a_same_revision_external_observation(
     original = bundle.transport.list_resources
     held = False
 
-    async def list_receipt() -> list[dict[str, object]]:
+    async def list_receipt(**query) -> list[dict[str, object]]:
         nonlocal held
-        receipt = await original()
+        receipt = await original(**query)
         if not held:
             held = True
             entered.set()
@@ -184,8 +184,8 @@ async def test_cancelled_list_preserves_records_and_independent_commands(
     before = owner._store.path.read_bytes()
     ledger = bundle.leases._state_path.read_bytes()
 
-    async def list_receipt() -> list[dict[str, object]]:
-        await original()
+    async def list_receipt(**query) -> list[dict[str, object]]:
+        await original(**query)
         entered.set()
         await asyncio.Event().wait()
         raise AssertionError("已取消的清单不能返回")
@@ -234,9 +234,9 @@ async def test_list_total_deadline_or_cancel_drains_only_its_waiter(
             await release.wait()
         await recover(selected)
 
-    async def receiving():
+    async def receiving(**query):
         nonlocal acquired
-        result = await transport_list()
+        result = await transport_list(**query)
         if is_listing() and stage in {"receipt", "lock"}:
             if stage == "lock":
                 await lock.acquire()
@@ -295,7 +295,7 @@ async def test_list_recovery_and_receipt_share_one_deadline(
         if calls == 1:
             advance_clock(20)
 
-    async def receiving():
+    async def receiving(**query):
         entered.set()
         await release.wait()
         raise AssertionError("到期后不应返回清单")
@@ -322,7 +322,7 @@ async def test_list_preserves_the_transport_own_timeout(
     await bundle.create()
     failure = TimeoutError("原清单传输超时")
 
-    async def failed_list():
+    async def failed_list(**query):
         raise failure
 
     monkeypatch.setattr(bundle.transport, "list_resources", failed_list)
@@ -345,8 +345,8 @@ async def test_interrupted_list_keeps_committed_batches_without_publishing_pendi
     entered, release = asyncio.Event(), asyncio.Event()
     original = bundle.transport.list_resources
 
-    async def receiving():
-        receipt = await original()
+    async def receiving(**query):
+        receipt = await original(**query)
         entered.set()
         await release.wait()
         return receipt

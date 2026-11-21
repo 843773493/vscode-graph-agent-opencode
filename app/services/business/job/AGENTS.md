@@ -14,21 +14,21 @@ Job业务
 ├── 用户控制
 │   └── control_service.py            pause/resume/cancel与活动槽收尾
 └── 待处理消息
-    ├── pending_request_service.py     查询、修改、持久化协调入口
+    ├── pending_request_service.py     待处理查询、修改与持久执行队列协调
     ├── pending_request_controller.py  DTO投影及队列状态操作
-    └── pending_queue.py               FIFO顺序、投递策略和快照版本
+    └── pending_queue.py               持久调度顺序的内存镜像与投递策略
 ```
 
 执行链从 `service.py` 开始，队列状态转换统一经过 `lifecycle.py`；用户控制由
 `control_service.py` 协调执行任务和活动槽。待处理消息由
-`pending_request_service.py` 串联 `pending_request_controller.py` 与队列，持久化仍通过
-注入的 store 协议完成。队列按 `(session_id, thread_id)` 保持各 thread 的 FIFO，Session
+`pending_request_service.py` 串联 `pending_request_controller.py`、内存 `pending_queue` 与注入的
+`execution_queue` 编排端口。`ExecutionQueueProtocol` 负责持久执行记录的读取、领取和状态更新，实际写入仍归 rollout owner。队列按 `(session_id, thread_id)` 保持各 Thread 的权威调度顺序，Session
 级查询、删除与清空再聚合全部 thread。
 
 # 可修改内容
 
 - Job 状态模型与调度规则。
-- Steering、Queued、取消和立即发送的业务语义。
+- 普通用户消息重排、投递策略和取消的业务语义。
 - 待处理请求的持久化协调逻辑。
 
 # 不可修改内容
@@ -40,8 +40,9 @@ Job业务
 
 - 同一 `(session_id, thread_id)` 最多只能有一个 active Job；同 Session 的不同 thread 可以并行，parent 等待 child 不得占用 child 的执行槽。
 - 队列、active 槽、幂等准入和恢复保持精确 thread 归属；会话查询、删除和排空仍聚合该 Session 的全部 thread。
-- 队列快照版本只由 `JobPendingQueue` 按 Session 保存；`QueueEntry` 只承载单条消息状态，位置理由只在对应 thread 队首变动时更新。
+- 队列版本由 rollout SQLite owner 发布；Session 聚合版本只用于既有聚合查询，重排必须使用精确 Thread 的 revision CAS。`JobPendingQueue` 只维护镜像；`QueueEntry` 只承载单条消息状态，位置理由只在对应 thread 队首变动时更新。
 - 持久化能力通过 abstractions 协议注入。
+- 调度状态只保留查询、控制和准入所需字段，不缓存最终回复正文；完整回复沿原消息历史和Session Trace读取，JobExecutionService的完成事件仍携带原结果。
 - 所有队列状态变更必须在调度锁内完成。
 - bootstrap 的待处理摘要由外层 Session 读准入保护，只读摘要不再通过新消息 preparation 检查 active；已准入历史允许在 catalog deleting 后、原 guard 释放前完成。
 - 恢复始终刷新 SQLite 权威队列的内存投影，不能用已装载标志忽略新 acceptance；刷新不得替换原 active Job、claim 或 task。取队首、落盘及创建任务按精确 thread 串行；硬错误重试沿用原活动槽和 Job，不能重放已启动 sibling。

@@ -27,6 +27,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_test_workspace,
 )
@@ -50,8 +51,8 @@ import asyncio, json, os, sys
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
 import uvicorn
-from app.core.logging_config import configure_application_logging
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.logging import configure_application_logging
+from boxteam_plugin_sdk.commands import plugin_command_router
 from plugin_dependency import VALUE
 configure_application_logging(service='dependency-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
@@ -179,9 +180,7 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
     gateway_url = f"http://127.0.0.1:{unused_tcp_port}"
     config_path = gateway_workspace / ".boxteam/workspace.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in payload["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "plugin-dependency-unused-key"
+    clear_test_provider_api_keys(payload)
     payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(

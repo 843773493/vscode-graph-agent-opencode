@@ -24,7 +24,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 跨文件复用正式进程 fixture
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication.federation import CommunicationNode
 from tests.support.e2e_control.harness import control_request
 
@@ -63,10 +63,10 @@ async def test_pinned_outbox_recovers_after_channel_epoch_without_discovery(
     )
     phase = "communication.source.receipt_received"
     control.arm(operation_id, phase)
-    accepted = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "Send once, then recover the pinned outbox."},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     try:
         await asyncio.to_thread(control.acknowledged, operation_id, phase, 30)

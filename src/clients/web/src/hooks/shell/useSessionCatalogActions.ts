@@ -1,12 +1,11 @@
 import { t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
   DEFAULT_SESSION_TITLE,
 } from "../../api";
 import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
-import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage, isErrorReported } from "../../utils/errorMessage";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { HttpRequestError } from "../../api/http";
@@ -28,7 +27,6 @@ interface SessionCatalogActionsInput extends Pick<
   apiPort: number;
   activeGatewayWorkspaceId: string | null;
   activeSessionId: string | null;
-  sessionsByWorkspace: ReadonlyMap<string, Session[]>;
   gatewayWorkspaces: GatewayWorkspace[];
   confirm: (options: {
     title: string;
@@ -72,7 +70,6 @@ export function useSessionCatalogActions({
   apiPort,
   activeGatewayWorkspaceId,
   activeSessionId,
-  sessionsByWorkspace,
   gatewayWorkspaces,
   confirm,
   setStatus,
@@ -99,10 +96,6 @@ export function useSessionCatalogActions({
   const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
     useState<ReadonlyMap<string, number>>(new Map());
 
-  const sessionCatalogSyncKeys = useMemo(
-    () => buildSessionCatalogSyncKeys(sessionsByWorkspace),
-    [sessionsByWorkspace],
-  );
   const invalidateSessionCatalog = useCallback((workspaceId: string) => {
     setSessionCatalogRefreshVersions((previous) => {
       const next = new Map(previous);
@@ -332,8 +325,7 @@ export function useSessionCatalogActions({
       }
       assertAccess?.();
       await deleteSession(sessionId, workspaceId);
-      // 生命周期动作已刷新并对账被删会话的真实父分支；会话集合变化再驱动
-      // sessionCatalogSyncKeys 刷新其余已展开分支。
+      // 其余已加载分支由权威 navigation 版本失效。
     } catch (error) {
       setStatus(t('navigation.sessions.deleteError', errorMessage(error)));
       if (!isErrorReported(error)) onError(t('navigation.sessions.deleteOwnerError', workspaceId, sessionId, errorMessage(error)));
@@ -390,7 +382,6 @@ export function useSessionCatalogActions({
     nameDialogSubmitting,
     nameDialogError,
     sessionCatalogRefreshVersions,
-    sessionCatalogSyncKeys,
     invalidateSessionCatalog,
     createSessionInCatalog,
     createSessionInFolder,

@@ -25,7 +25,10 @@ jobs:
         with:
           node-version: "22"
 
+      - run: bun scripts/plugins/prepare-product-sdk.mjs --check node python
+      - run: uv sync --frozen --no-editable
       - run: bun install --frozen-lockfile
+      - run: bun run check:protocol:application
       - run: bun run worktree create release HEAD
       - run: bun run package:linux-x64
         working-directory: out/worktrees/release

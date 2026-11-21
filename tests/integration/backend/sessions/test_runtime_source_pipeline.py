@@ -23,7 +23,6 @@ from fastapi import FastAPI
 
 from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
-from app.agents import agent_factory
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer
 from app.core import identifier, phase_observer
@@ -46,17 +45,21 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.secrets import router as gateway_secrets_router
 from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.gateway.secrets.vault import SecretVault
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.message_display import project_message_for_display
-from app.services.business.system_reminder_checkpoint_service import (
-    persist_interrupt_checkpoint,
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_execution_interruption_reminder,
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
+from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_GUIDANCE_SOURCE_ID,
+)
 from app.services.infrastructure.resource_platform.virtual_resources import (
     workspace_agent_spec_display_uri,
 )
@@ -96,7 +99,11 @@ from tests.integration.backend.sessions.test_session_generation_strategies impor
     _create_generation,
     _generation_configuration,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import (
+    create_session,
+    read_job_trace,
+    with_message_run_operation_id,
+)
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.e2e_control.runtime_ports import (
     ControlledIdentifiers,
@@ -104,6 +111,7 @@ from tests.support.e2e_control.runtime_ports import (
 )
 from tests.support.e2e_control.tool_observations import ObservedCanonicalItemSink
 from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.goal_control import goal_control_payload
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
@@ -139,7 +147,7 @@ class ModelReplayCase:
             assert main_thread.status_code == 200, main_thread.text
             thread_id = main_thread.json()["data"]["thread_id"]
         config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+        endpoint = config["llm"]["providers"]["primary"]["defaults"]["endpoint"]
         interactions = [build_cassette(
             asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
             frames=chat_completion_frames(
@@ -211,19 +219,20 @@ def _prepare_source_workspace(
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        provider.update({
-            "endpoint": f"http://127.0.0.1:{port}/v1", "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
+    for provider in config["llm"]["providers"].values():
+        if "auth" in provider["defaults"]:
+            continue
+        provider["defaults"] = {
+            "endpoint": f"http://127.0.0.1:{port}/v1",
+            "api_key": "${BOXTEAM_E2E_MODEL_KEY}", "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "model_info": {
                 "supports_function_calling": True, "supports_reasoning": True,
             }, "supports_reasoning": {"reasoning_content": True}},
-        })
-        provider.pop("auth", None)
-        provider.pop("request_options", None)
+        }
+        provider["models"] = {"default": {"model": "e2e-stub-model"}}
     config.setdefault("runtime", {}).setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
     for agent in config["agents"].values():
-        agent["model"]["fallback_providers"] = []
+        agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         agent.setdefault("execution", {})["require_delegated_report"] = delegated_report
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return workspace
@@ -256,9 +265,12 @@ async def _managed_gateway_skill_source(
     ))
     api = FastAPI()
     api.include_router(gateway_skill_sources_router)
+    api.include_router(gateway_secrets_router)
     api.add_middleware(TraceMiddleware)
+    api.state.gateway_id = gateway_id
     api.state.registry = registry
     api.state.skill_source_owner = owner
+    api.state.secret_vault = SecretVault(gateway_root / "credentials" / "secrets")
     server = uvicorn.Server(uvicorn.Config(
         api, host="127.0.0.1", port=port, log_level="error", access_log=False,
         log_config=None, lifespan="off",
@@ -302,6 +314,7 @@ async def source_case(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RuntimeSourceCase]:
+    monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port = integration_port_block_for_file(Path(request.node.path)).port(10)
     options = getattr(request, "param", {})
@@ -422,9 +435,9 @@ async def _job(case: RuntimeSourceCase | RestartRuntimeSourceCase, job_id: str, 
 
 
 async def _send(case: RuntimeSourceCase | RestartRuntimeSourceCase, session_id: str, content: str) -> dict[str, object]:
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     return response.json()["data"]
@@ -503,7 +516,7 @@ def _assert_generated_notice(
     assert private_result not in canonical_json_bytes(notice.extensions).decode()
     assert notice.content_hash == content_hash(notice.payload_kind, notice.payload)
     annotations = notice.extensions["boxteam.checkpoint.annotations"]["value"]
-    assert set(annotations) == {"structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id"}
+    assert set(annotations) == {"structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_model"}
     # 从权威持久 item 构造全新 codec 冷投影，再核对封存 selection 和 hash。
     assemblies = storage.assemblies.list_context_assemblies(session_id, thread_id)
     report_assemblies = tuple(a for a in assemblies if a.execution_id == notice.producer_ref["invocation_id"])
@@ -545,29 +558,30 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
         raise AssertionError("缺失模型凭据必须失败")
 
     with monkeypatch.context() as patch:
-        patch.setattr(agent_factory, "build_model_from_provider", build_failure)
+        patch.setattr("app.runtime.provider_model.build_model_from_provider", build_failure)
         provider_response = await case.client.get("/api/v1/agents/default")
         assert provider_response.status_code == 200, provider_response.text
-        providers = provider_response.json()["data"]["providers"]
-        assert providers and all(not provider["available"] for provider in providers)
-        assert all("FileNotFoundError" in provider["configuration_error"] for provider in providers)
+        models = provider_response.json()["data"]["models"]
+        assert models and all(model["available"] and model["configuration_error"] is None for model in models)
+        assert errors == [], "模型定义读取不应构造 SDK"
         accepted = await _send(case, session_id, "验证模型构建错误")
         job_id = accepted["job_id"]
         assert isinstance(job_id, str)
         failed = await _job(case, job_id, "failed")
         message = failed["error_message"]
         assert isinstance(message, str)
-        assert "provider_id=primary" in message and "FileNotFoundError" in message
+        assert "provider_id=primary, model_id=default" in message and "FileNotFoundError" in message
         # Job先提交终态再发布事件，等原事件链完成，不把状态可见误当作事件已发布。
         async with asyncio.timeout(10):
             while True:
-                events = await case.client.get(f"/api/v1/jobs/{job_id}/events")
-                assert events.status_code == 200, events.text
-                if terminal := [event for event in events.json()["data"] if event["type"] == "job_failed"]:
+                events = await read_job_trace(case.client, session_id, job_id)
+                if terminal := [event for event in events if event["type"] == "job_failed"]:
                     break
                 await asyncio.sleep(0.05)
         assert len(terminal) == 1 and terminal[0]["payload"]["error"] == message
-        assert str(missing) not in provider_response.text + json.dumps(failed) + events.text
+        assert str(missing) not in provider_response.text
+        # 诊断保留目标机器上的实际 I/O 位置；定义读取仍不执行模型构造。
+        assert str(missing) in message and "errno=2" in message
         assert case.requests() == []
         assert case.sql(session_id, thread_id, "SELECT outcome FROM executions") == [("failed",)]
         assert all(error.filename == str(missing) for error in errors)
@@ -584,10 +598,10 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
     assert sorted(case.sql(session_id, thread_id, "SELECT outcome FROM executions")) == [("completed",), ("failed",)]
     history = await case.client.get(f"/api/v1/sessions/{session_id}/bootstrap", params={"thread_id": thread_id})
     assert history.status_code == 200, history.text
-    assert "同一会话已恢复模型执行" in history.text and str(missing) not in history.text
+    assert "同一会话已恢复模型执行" in history.text
     case.write_actual("provider-build-recovery", {
         "provider": provider_response.json(), "failed_job": failed,
-        "events": events.json(), "completed_job": completed, "history": history.json(),
+        "events": events, "completed_job": completed, "history": history.json(),
     })
 
 
@@ -712,9 +726,9 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         before = case.sql(session_id, thread_id,
             "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
             "FROM executions")
-        queue_store = case.container.job_service._pending_requests.store
-        queue_record = await queue_store.record(session_id, thread_id, accepted.job_id)
-        assert await queue_store.before_dispatch(queue_record)
+        execution_queue = case.container.job_service._pending_requests.execution_queue
+        queue_record = await execution_queue.record(session_id, thread_id, accepted.job_id)
+        assert await execution_queue.before_dispatch(queue_record)
         assert len(before) == 1 and before[0][-1] == "unknown"
         assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM model_calls") == [(0,)]
         assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM context_assemblies") == [(0,)]
@@ -726,8 +740,8 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         assert case.sql(session_id, thread_id,
             "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
             "FROM executions") == before
-        assert await queue_store.record(session_id, thread_id, accepted.job_id) == queue_record
-        assert await queue_store.before_dispatch(queue_record)
+        assert await execution_queue.record(session_id, thread_id, accepted.job_id) == queue_record
+        assert await execution_queue.before_dispatch(queue_record)
         assert case.container.trace_event_store.read_events(session_id) == trace_before
         assert case.sql(session_id, thread_id,
             "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome "
@@ -738,7 +752,7 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
         assert wakeup is not None
         repeated = await dispatcher.dispatch(wakeup)
         assert repeated.job_id == accepted.job_id and job.task is original_task
-        assert await queue_store.record(session_id, thread_id, accepted.job_id) == queue_record
+        assert await execution_queue.record(session_id, thread_id, accepted.job_id) == queue_record
         trace = case.container.trace_event_store.read_events(session_id)
         own_trace = [event for event in trace if event.job_id == accepted.job_id]
         assert [event.type for event in own_trace].count("job_created") == 1
@@ -747,9 +761,9 @@ async def test_runtime_wakeup_before_provider_preserves_started_job_and_frozen_a
     finally:
         release.set()
     await _job(case, accepted.job_id)
-    terminal_record = await queue_store.record(session_id, thread_id, accepted.job_id)
+    terminal_record = await execution_queue.record(session_id, thread_id, accepted.job_id)
     assert terminal_record.phase == "terminal" and terminal_record.outcome == "completed"
-    assert not await queue_store.before_dispatch(terminal_record)
+    assert not await execution_queue.before_dispatch(terminal_record)
     assert case.sql(session_id, thread_id,
         "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash FROM executions",
     ) == [before[0][:-1]]
@@ -824,7 +838,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
         {"content": "H2-goal-completed"},
     ])
     thread_id = await case.container.session_service.resolve_main_thread(session_id)
-    goal_response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "H2-goal：完成目标并调用 update_goal。"})
+    goal_response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "H2-goal：完成目标并调用 update_goal。"}))
     assert goal_response.status_code == 200, goal_response.text
     await _wait_until(lambda: bool(case.sql(session_id, thread_id, "SELECT job_id FROM executions")))
     goal_job_id = case.sql(session_id, thread_id, "SELECT job_id FROM executions")[0][0]
@@ -832,7 +846,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
     tracker = case.container.agent_execution_service._residency_tracker
     source_generation = tracker.snapshot(session_id, thread_id).generation
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions") == [("internal", None)]
-    assert (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["status"] == "complete"
+    assert (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["goal"]["status"] == "complete"
 
     terminal_call, = await case.plan(session_id, [
         _tool_reply("exec_command", {"cmd": "sleep 3; printf 'H2-terminal-completed\\n'", "yield_time_ms": 1000}, "call_h2_terminal"),
@@ -870,7 +884,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
         await asyncio.to_thread(case.control.acknowledged, interrupted_call, "model.response_ready", 20)
         admission = case.container.checkpointer.execution_admission_for_job(session_id, thread_id=thread_id, job_id=accepted["job_id"])
         for _attempt in range(2):
-            submit_checkpoint_reminder(checkpointer=case.container.checkpointer,
+            submit_runtime_reminder(checkpointer=case.container.checkpointer,
                 session_id=session_id, thread_id=thread_id, reminder="H2 同一真实执行事件提醒",
                 response_metadata={"source": "h2-boundary"}, checkpoint_source="h2-boundary",
                 event_identity="h2-stable-event", execution_id=admission.execution_id)
@@ -1014,7 +1028,7 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
                "tool_dispatch_timeout", "execution_lost", "execution_error", "resource_cancel")
     for reason in reasons:
         for _attempt in range(2):
-            persist_interrupt_checkpoint(checkpointer=saver, session_id=session_id, thread_id=thread_id,
+            submit_execution_interruption_reminder(checkpointer=saver, session_id=session_id, thread_id=thread_id,
                 active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
                 checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
     source_ids = {f"checkpoint:{reason}:{active.execution_id}:{reason}" for reason in reasons}
@@ -1035,13 +1049,13 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
         assert canonical_json_bytes([item.to_dict() for item in cold._storage.storage.read_items(
             session_id, thread_id, item_ids=item_ids)]) == canonical_json_bytes([item.to_dict() for item in items])
         for reason in reasons:
-            persist_interrupt_checkpoint(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+            submit_execution_interruption_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
                 active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
                 checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
         assert not any(value.source_id in source_ids for value in cold.load_context_source_control_states(
             ContextSourceOwnerKey(session_id, thread_id)))
         with pytest.raises((RuntimeError, ValueError)):
-            submit_checkpoint_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+            submit_runtime_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
                 reminder="同一事件正文漂移必须拒绝", response_metadata={"source": "interrupt"}, checkpoint_source="interrupt",
                 event_identity=f"{active.execution_id}:interrupt", execution_id=active.execution_id)
     assert case.sql(session_id, thread_id, "SELECT * FROM checkpoints ORDER BY checkpoint_id") == checkpoint_headers
@@ -2039,7 +2053,9 @@ class RestartRuntimeSourceCase(ModelReplayCase):
 @pytest.fixture
 async def restart_source_case(
     request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RestartRuntimeSourceCase]:
+    monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))
@@ -2172,10 +2188,10 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
     ])
     team_call = first_call + ":tool-call:call_h6_team"
     case.control.arm(team_call, "test.tool_result.committed")
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "h6-team-trigger：创建团队并启动成员。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     try:

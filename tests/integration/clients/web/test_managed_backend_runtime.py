@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,8 +26,10 @@ from tests.support.paths import chromium_temporary_environment
 
 
 @pytest.fixture(autouse=True)
-def managed_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def managed_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_RUNTIME_MANAGEMENT_WEB_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
 @pytest.mark.asyncio
@@ -49,6 +53,10 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
     screenshot_path = case.context.artifacts_dir / "managed-backend-web.png"
     result_path.unlink(missing_ok=True)
     screenshot_path.unlink(missing_ok=True)
+    assets = Path(os.environ["BOXTEAM_WEB_ASSETS"])
+    (case.context.artifacts_dir / "assets.json").write_text(json.dumps({
+        "path": str(assets), "main_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
+    }) + "\n")
     environment = {
         **os.environ,
         "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"),
@@ -62,16 +70,19 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
     }
     temporary = case.context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+    supervisor = case.context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "420",
+        "--", "bun", "tests/integration/clients/web/managed_backend_runtime.mjs"]
     with chromium_temporary_environment(temporary) as temporary_environment:
         process = await asyncio.to_thread(
             subprocess.run,
-            ["bun", "tests/integration/clients/web/managed_backend_runtime.mjs"],
+            command,
             cwd=Path.cwd(), env={**environment, **temporary_environment},
-            capture_output=True, text=True, timeout=420, check=False,
+            capture_output=True, text=True, timeout=435, check=False,
         )
     (case.context.artifacts_dir / "browser.stdout.raw").write_text(process.stdout)
     (case.context.artifacts_dir / "browser.stderr.raw").write_text(process.stderr)
-    (case.context.artifacts_dir / "browser-process.json").write_text(json.dumps({"exit_code": process.returncode}) + "\n")
+    (case.context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": process.returncode}) + "\n")
     assert process.returncode == 0, process.stdout + process.stderr
     result = json.loads(result_path.read_text())
     assert result["cancel"]["lifecycle_posts"] == 0
@@ -84,6 +95,9 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
     assert not any(item["workspace_id"] == secondary["workspace_id"] for item in result["deleted"]["workspaces"]["items"])
     assert result["route_stubs"] == []
     assert result["errors"] == []
+    assert result["first_available_ms"] <= 3000
+    assert result["warm_api_budget"]["p95"] <= 500
+    assert result["warm_api_budget"]["max"] <= 1500
     # 公开错误正文不复制诊断原文，按请求 ID 对齐真实服务异常链，避免误认其它 409。
     diagnostic = Path(case.gateway.stderr_file.name).read_text()
     entries = re.split(r"(?m)(?=^\d{4}-\d{2}-\d{2}T)", diagnostic)

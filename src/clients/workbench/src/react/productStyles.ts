@@ -11,6 +11,7 @@ import sessions from '../../../web/src/styles/session/agentSessionsPanel.css?tex
 import explorer from '../../../web/src/styles/workspace/sessionResourceExplorer.css?text';
 import layout from '../../../web/src/styles/foundation/workbenchLayout.css?text';
 import tools from '../../../web/src/styles/session/toolControl.css?text';
+import threadStatus from '../../../web/src/styles/session/threadStatus.css?text';
 import chat from '../../../web/src/styles/session/chatMessages.css?text';
 import diagnostics from '../../../web/src/styles/workspace/gatewayDiagnostics.css?text';
 import connections from '../../../web/src/styles/workspace/gatewayConnections.css?text';
@@ -21,4 +22,4 @@ import surfaces from '../../../web/src/styles/foundation/themeSurfaces.css?text'
 
 /** 原 Web 的完整产品样式，统一限制在各个 React ShadowRoot 内。 */
 export const productStyles = [product, panel, agentState, eventQueue, requestLog, resources, tasks, childThread,
-  workspace, sessions, explorer, layout, tools, chat, diagnostics, connections, gateway, debug, surfaces, contextInspection];
+  workspace, sessions, explorer, layout, tools, threadStatus, chat, diagnostics, connections, gateway, debug, surfaces, contextInspection];

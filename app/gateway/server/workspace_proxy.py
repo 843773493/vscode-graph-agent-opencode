@@ -9,6 +9,8 @@ from typing import Annotated
 from urllib.parse import unquote
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from fastapi import (
     APIRouter,
     Depends,
@@ -18,7 +20,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -27,10 +29,10 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from app.core.async_channel import close_channel, run_channel
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.resource_uri import ResourceUriGrammarError
-from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
+from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
+from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.federation.errors import FederationError
-from app.gateway.federation.grants import ContextGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.federation.policy import (
     federation_capability_allowed,
@@ -41,6 +43,7 @@ from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
     TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    ProxyStreamingResponse,
     UpstreamResponseBody,
     build_upstream_url,
     close_upstream_response,
@@ -49,7 +52,6 @@ from app.gateway.proxy_upstream import (
     parse_target_gateway_id,
     relay_websocket_client_to_upstream,
     relay_websocket_upstream_to_client,
-    run_cleanup_shielded,
     send_upstream_request,
 )
 from app.gateway.registry import (
@@ -64,6 +66,7 @@ from app.schemas.canonical_params import (
     CanonicalThreadId,
     CanonicalWorkspaceId,
 )
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
@@ -71,7 +74,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
 )
 from app.schemas.internal_v2.sse import SseErrorDTO
-from app.services.business.session_context_resource import parse_session_context_ref
+from app.services.business.session_context_query.resources import (
+    parse_session_context_ref,
+)
+from app.services.business.session_navigation.catalog_query import CatalogCursorError
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -112,13 +118,11 @@ def _http_client(request: Request, *, streaming: bool = False) -> httpx.AsyncCli
 
 def _is_streaming_workspace_path(path: str) -> bool:
     """判断工作区 API 是否会返回长期占用连接的 SSE。"""
-    return (
-        path.endswith("/traces/stream")
-        or path.endswith("/events/stream")
-        or path.endswith("/files/events")
-        or path.endswith("/message-stream")
-        or path.endswith("/observations/stream")
-    )
+    path = "/" + path.lstrip("/")
+    return path.endswith((
+        "/traces/stream", "/events/stream", "/files/events", "/message-stream",
+        "/snapshot/events", "/resources/events", "/persistent-tasks/events", "/questions/events",
+    ))
 
 
 def _workspace_path_segments(path: str) -> list[str]:
@@ -407,6 +411,29 @@ async def _proxy_workspace_request(
         if retry_availability
         else ()
     )
+    catalog_read = request.method == "GET" and (
+        segments in (["session-catalog", "children"], ["session-catalog", "roots"], ["session-catalog", "export"])
+        or len(segments) == 3 and segments[:2] == ["session-catalog", "breadcrumb"]
+    )
+    if request.method == "GET" and segments[:1] == ["session-catalog"] and auth is not None:
+        require_federation_capability(request, auth, "read")
+    if catalog_read:
+        mirror = getattr(request.app.state, "session_catalog_search_service", None)
+        if isinstance(mirror, GatewaySessionCatalogSearchService):
+            registry.acquire_route_reference(target.key, streaming=False, gateway_connection_id=connection_id)
+            try:
+                # 先核当前凭据和明确连接，再披露缓存；离线镜像不等待本地运行时启动。
+                _proxy_headers(request, target, gateway_id=local_gateway_id, include_credentials=include_credentials)
+                result = mirror.browse_mirror(target, path=segments, query=httpx.QueryParams(request.query_params.multi_items()),
+                    request_id=get_request_id(request), known_revision=request.headers.get("X-BoxTeam-Catalog-Revision"))
+                if result is not None:
+                    return JSONResponse(APIResponse(data=result, request_id=get_request_id(request)).model_dump(mode="json"))
+            except CatalogCursorError as error:
+                raise HTTPException(status_code=409, detail=error.detail()) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            finally:
+                registry.release_route_reference(target.key, streaming=False)
     # 恢复发布需要原路由引用排空；等待就绪时不能先占用待发布路由。
     if target.connection_kind == "local":
         await _wait_for_workspace_runtime(request, target)
@@ -626,7 +653,7 @@ async def _proxy_workspace_request(
             reference_streaming = True
             route_reference_released = False
             route_reference_handed_off = True
-            return StreamingResponse(
+            return ProxyStreamingResponse(
                 _stream_proxy_response(
                     response,
                     route_lease,
@@ -653,7 +680,7 @@ async def _proxy_workspace_request(
         headers = _response_headers(response)
         # 非 SSE 的流式响应体仍持有这份引用，直到 body 真正结束才由 on_close 归还。
         route_reference_handed_off = True
-        return StreamingResponse(
+        return ProxyStreamingResponse(
             UpstreamResponseBody(response, release_route_reference),
             status_code=response.status_code,
             headers=headers,

@@ -16,14 +16,17 @@ from app.domain.itemized.execution_queue import (
     ExecutionQueueRecord,
 )
 from app.schemas.internal_v2.message import MessageDTO
-from app.schemas.internal_v2.pending_request import PendingRequestDTO
+from app.schemas.internal_v2.pending_request import (
+    PendingRequestDTO,
+    PendingRequestListDTO,
+)
 from app.services.business.job.service import JobService
 from app.services.business.message_display import project_message_for_display
 
 
 def queue_input(job) -> ExecutionQueueInput:
     return ExecutionQueueInput(execution_binding=job.execution_binding, message_id=job.message_id,
-        agent_id=job.agent_id, provider_id=job.message_metadata.get("boxteam_session_provider_id"),
+        agent_id=job.agent_id, model=job.message_metadata.get("boxteam_session_model"),
         delivery_policy=job.delivery_policy or "after_turn", gateway_id=job.gateway_id,
         request_id=job.request_id, created_at=job.message_created_at)
 
@@ -103,6 +106,14 @@ def job_service_factory():
             handle.close = AsyncMock()
             return handle
 
+        async def snapshot(session_id, thread_id):
+            return PendingRequestListDTO(session_id=session_id, thread_id=thread_id,
+                requests=[item.model_copy(update={"position": position}) for position, item in enumerate(
+                    item for item in await load(session_id) if item.thread_id == thread_id)],
+                active_job_id=next((identity for identity, record in records.items()
+                    if record.phase in {"claimed", "started"} and record.cursor.admission.thread_id == thread_id), None),
+                snapshot_version=revision, thread_revision=revision)
+
         async def update(reference, policy, *, expected_snapshot_version):
             nonlocal revision
             if expected_snapshot_version is not None and expected_snapshot_version != revision:
@@ -114,10 +125,11 @@ def job_service_factory():
         owner.accepted_job_message.side_effect = message
         owner.accepted_job_outcome.return_value = "unknown"
         store.load = AsyncMock(side_effect=load)
+        store.snapshot = AsyncMock(side_effect=snapshot)
         store.record = AsyncMock(side_effect=lambda _session, _thread, identity: records[identity])
         store.records = AsyncMock(return_value=())
         store.snapshot_version = AsyncMock(side_effect=lambda _session: revision)
         store.claim = AsyncMock(side_effect=claim)
         store.update_policy = AsyncMock(side_effect=update)
-        return JobService(input_owner=owner, pending_request_store=store, **kwargs)
+        return JobService(input_owner=owner, execution_queue_service=store, **kwargs)
     return make

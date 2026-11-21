@@ -20,18 +20,16 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
-    extension_dispatch_from_activation,
-)
 from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
-    tool_catalog_from_activation,
+    restore_frozen_extension_dispatch,
+    restore_frozen_tool_catalog,
 )
 from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
@@ -182,7 +180,7 @@ class ResourceActivationOwnerMixin:
         body_store = ResourceActivationBodyStore(self._storage, self._detail_store)
         # 复用仅限本次同步目录读取；每份正文仍检查归属、manifest 和摘要。
         with self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as current:
-            return tool_catalog_from_activation(
+            return restore_frozen_tool_catalog(
                 activation, lambda frozen, binding: body_store.read_payload(
                     snapshot=frozen, binding=binding, storage_owner=(session_id, thread_id),
                     checkpoint_ns=checkpoint_ns, read_snapshot=current,
@@ -204,7 +202,7 @@ class ResourceActivationOwnerMixin:
         if len(parents) != 1:
             raise ExtensionCatalogUnavailableError("tool_call sealed snapshot 缺少唯一 MCP parent")
         binding = parents[0]
-        return extension_dispatch_from_activation(
+        return restore_frozen_extension_dispatch(
             snapshot=snapshot, binding=binding,
             payload=self.read_resource_activation_payload(
                 snapshot, binding, storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,

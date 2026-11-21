@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getWorkspaceFiles,
+  readWorkspaceRawFile,
+  getWorkspaceRawFileBlob,
   getWorkspaceRawFileMimeType,
   pasteWorkspaceFileEntries,
   uploadWorkspaceFileEntries,
 } from "./workspaceFilesystem";
 
+import { invalidateGatewayToken } from "./http";
 import type { WorkspaceFileMutationIntent } from "../types/backend";
 import { gatewayWorkspaceKey } from "./workspaceIdentity";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "./session/sessionApiFetchMock";
@@ -157,5 +160,82 @@ describe("批量文件操作的条目上限前置校验", () => {
       pasteWorkspaceFileEntries(48_322, "dest", { source_paths: sourcePaths, intent }),
     ).rejects.toThrow("粘贴一次最多 100 项，当前 101 项，请分批操作");
     expect(requests).toBe(0);
+  });
+});
+
+describe("原文件逐块读取", () => {
+  test("响应头前 401 沿统一屏障刷新一次，仍能完整读取正文", async () => {
+    const port = 48_325;
+    invalidateGatewayToken(port);
+    let credentials = 0, requests = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).pathname.endsWith("/local-credential")) {
+        return Response.json({ data: { token: ++credentials === 1 ? "stale" : "fresh" } });
+      }
+      requests++;
+      expect(init?.signal?.aborted).toBe(false);
+      return new Headers(init?.headers).get("X-Local-Token") === "stale"
+        ? Response.json({ detail: "invalid local token" }, { status: 401 })
+        : new Response("完整正文");
+    }, { preconnect: originalFetch.preconnect });
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    await readWorkspaceRawFile(port, ROOT + "/refresh.txt", WORKSPACE_KEY, chunk => { chunks.push(new Uint8Array(chunk)); });
+    expect(await new Blob(chunks).text()).toBe("完整正文");
+    expect(credentials).toBe(2);
+    expect(requests).toBe(2);
+  });
+
+  test("正文结束前就交付首块，Blob 沿同一链路保留 MIME", async () => {
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    installFetchMock(() => new Response(new ReadableStream({ start(controller) { body = controller; } }),
+      { headers: { "Content-Type": "text/plain" } }), "/api/v1/workspace/files/raw");
+    let first!: () => void;
+    const seen = new Promise<void>(resolve => { first = resolve; });
+    const chunks: number[][] = [];
+    const reading = readWorkspaceRawFile(48_320, ROOT + "/stream.txt", WORKSPACE_KEY, chunk => {
+      chunks.push([...chunk]); first();
+    });
+    // 等真实 API 发出请求，随后只交付首块，不关闭正文。
+    while (!body) await new Promise(resolve => setTimeout(resolve, 0));
+    body.enqueue(new Uint8Array([1, 2]));
+    await seen;
+    expect(chunks).toEqual([[1, 2]]);
+    body.enqueue(new Uint8Array([3])); body.close();
+    expect(await reading).toBe("text/plain");
+    expect(chunks).toEqual([[1, 2], [3]]);
+    installFetchMock(() => new Response(new TextEncoder().encode("中文🙂"), { headers: { "Content-Type": "text/plain" } }), "/api/v1/workspace/files/raw");
+    const blob = await getWorkspaceRawFileBlob(48_321, ROOT + "/blob.txt", WORKSPACE_KEY);
+    expect(await blob.text()).toBe("中文🙂"); expect(blob.type).toBe(new Blob([], { type: "text/plain" }).type);
+  });
+
+  test.each(["signal", "credential"])("%s 取消等待中的正文，并释放流", async kind => {
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = false;
+    installFetchMock(() => new Response(new ReadableStream({
+      start(controller) { body = controller; }, cancel() { cancelled = true; },
+    })), "/api/v1/workspace/files/raw");
+    const controller = new AbortController();
+    const chunks: Uint8Array[] = [];
+    const reading = readWorkspaceRawFile(48_322, ROOT + "/cancel.txt", WORKSPACE_KEY, chunk => { chunks.push(chunk); }, controller.signal);
+    const result = reading.then(() => null, error => error);
+    while (!body) await new Promise(resolve => setTimeout(resolve, 0));
+    if (kind === "signal") controller.abort(); else invalidateGatewayToken(48_322);
+    expect(await result).toMatchObject({ name: "AbortError" });
+    expect(cancelled).toBe(true); expect(chunks).toEqual([]);
+  });
+
+  test("Range 必须得到 206，不能消费整文件冒充范围", async () => {
+    const ranges: (string | null)[] = [];
+    installSessionApiFetchMock(({ init }) => {
+      ranges.push(new Headers(init?.headers).get("Range"));
+      return new Response(new Uint8Array([9]), { status: 206 });
+    });
+    const chunks: number[][] = [];
+    await readWorkspaceRawFile(48_323, ROOT + "/range.txt", WORKSPACE_KEY, chunk => { chunks.push([...chunk]); }, undefined, { start: 2, end: 2 });
+    expect(ranges).toEqual(["bytes=2-2"]); expect(chunks).toEqual([[9]]);
+    installFetchMock(() => new Response("whole"), "/api/v1/workspace/files/raw");
+    await expect(readWorkspaceRawFile(48_324, ROOT + "/range.txt", WORKSPACE_KEY, () => {
+      throw new Error("不得交付整文件");
+    }, undefined, { start: 2 })).rejects.toThrow("字节范围");
   });
 });

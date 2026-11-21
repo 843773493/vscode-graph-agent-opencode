@@ -14,11 +14,11 @@ from pathlib import Path
 import httpx
 import portalocker
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import sessions
 from app.api.deps import (
-    get_request_id,
     get_session_context_fork_service,
     verify_local_token,
 )
@@ -66,7 +66,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 
 
@@ -162,10 +162,10 @@ async def test_message_attachment_commit_serializes_with_catalog_delete(
         assert fence[0] == "active"
         upload = asyncio.create_task(history_client.post(
             f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages",
-            json={"run": {}, "message": {"content": "删除竞争中的真实上传", "attachments": [{
+            json=with_message_run_operation_id({"run": {}, "message": {"content": "删除竞争中的真实上传", "attachments": [{
                 "file_id": "inline:race", "name": "race.txt", "content_type": "text/plain",
                 "data_url": "data:text/plain;base64," + base64.b64encode(b"attachment-topology").decode(),
-            }]}},
+            }]}}),
         ))
         try:
             await asyncio.wait_for(entered.wait(), 5)
@@ -235,12 +235,12 @@ async def fork_client(runtime_case: RuntimeCase, runner_compaction_gateway_conte
 
 async def _source_with_attachment(case: RuntimeCase, client: httpx.AsyncClient) -> tuple[str, str]:
     session_id, thread_id = await _session(case.runner)
-    response = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "run": {}, "message": {"content": "生成可 fork 的真实附件历史", "attachments": [{
             "file_id": "inline:source", "name": "source.txt", "content_type": "text/plain",
             "data_url": "data:text/plain;base64," + base64.b64encode(b"fork-topology-source").decode(),
         }]},
-    })
+    }))
     assert response.status_code == 200, response.text
     job = case.runner.container.job_service._jobs[response.json()["data"]["job_id"]]
     await asyncio.wait_for(asyncio.shield(job.task), 20)
@@ -521,7 +521,7 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
         "file_id": "inline:process-loss", "name": "recovery.txt", "content_type": "text/plain",
         "data_url": "data:text/plain;base64," + base64.b64encode(body).decode(),
     }]}}
-    upload = asyncio.create_task(case.client.post(f"/api/v1/sessions/{session}/messages", json=payload))
+    upload = asyncio.create_task(case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id(payload)))
     try:
         crash = await asyncio.to_thread(control.acknowledged_match, barrier)
         assert crash["pid"] == case.backend.process.pid
@@ -580,7 +580,7 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
         else:
             assert not (case.replay.artifacts / (call + ".json")).exists()
             # 未接受的上传明确失败，重新走相同产品入口上传，不能替产品补写准入。
-            retry = await case.client.post(f"/api/v1/sessions/{session}/messages", json=payload)
+            retry = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id(payload))
             assert retry.status_code == 200, retry.text
             job_id = retry.json()["data"]["job_id"]
         await _completed(case.client, job_id)

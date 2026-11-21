@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { HttpRequestError as GatewayRequestError } from '../../../../src/clients/web/src/api/http.js';
 import { CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { Action } from '../../../../src/clients/workbench/upstream/src/vs/base/common/actions.js';
+import { Disposable, toDisposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
+import { Emitter } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { DeferredPromise, raceTimeout } from '../../../../src/clients/workbench/upstream/src/vs/base/common/async.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
@@ -15,14 +18,21 @@ const localizedFunction = (...parts) => new Function('t', 'pluginStateLabel', ..
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/service_plugin_management_ownership.test.mjs').prepare();
 const sourcePath = 'src/clients/workbench/src/extensions/servicePluginManagement.ts';
 const source = await readFile(sourcePath, 'utf8');
-const sourceFingerprint = createHash('sha256').update(source).digest('hex');
+const scopePath = 'src/clients/workbench/src/extensions/pluginScope.ts';
+const scopeSource = await readFile(scopePath, 'utf8');
+const editorPath = 'src/clients/workbench/src/extensions/pluginEditor.ts';
+const editorSource = await readFile(editorPath, 'utf8');
+const sourceFingerprint = createHash('sha256').update(source).update(scopeSource).update(editorSource).digest('hex');
 const managementTargetPath = 'src/clients/workbench/src/managementTarget.ts';
 const managementTargetSource = await readFile(managementTargetPath, 'utf8');
 const configurationPath = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
 const configurationSource = await readFile(configurationPath, 'utf8');
+const mcpCommandPath = 'src/clients/workbench/src/mcp/commands.ts';
+const mcpCommandSource = await readFile(mcpCommandPath, 'utf8');
 
 function declaration(name) {
-  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const scopeOwner = ['pluginStateLabel', 'pluginActions', 'PluginScope'].includes(name);
+  const parsed = ts.createSourceFile(scopeOwner ? scopePath : name === 'readPluginInstanceLog' ? editorPath : sourcePath, scopeOwner ? scopeSource : name === 'readPluginInstanceLog' ? editorSource : source, ts.ScriptTarget.Latest, true);
   const node = parsed.statements.find(statement => statement.name?.text === name
     || (ts.isVariableStatement(statement)
       && statement.declarationList.declarations.some(declaration => declaration.name.getText(parsed) === name)));
@@ -92,6 +102,7 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
   function visit(node) {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
       && node.expression.name.text === 'addEventListener' && node.getText(parsed).includes(sourceFragment)) callback = node.arguments[1];
+    if (ts.isNewExpression(node) && node.expression.getText(parsed) === 'Action' && node.getText(parsed).includes(sourceFragment)) callback = node.arguments.at(-1);
     ts.forEachChild(node, visit);
   }
   if (method) visit(method.body);
@@ -99,7 +110,7 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
   const body = ts.isBlock(callback.body) ? callback.body : ts.factory.createBlock([
     ts.factory.createReturnStatement(callback.body),
   ], true);
-  const functionNode = ts.factory.createFunctionExpression(undefined, undefined, undefined, undefined,
+  const functionNode = ts.factory.createFunctionExpression(callback.modifiers, undefined, undefined, undefined,
     callback.parameters, callback.type, body);
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
   const javascript = ts.transpile(`const callback = ${printed};`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
@@ -179,7 +190,7 @@ function operation(gatewayId = 'gateway-original', operationId = 'operation-orig
 }
 
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), `${JSON.stringify({
-  path: sourcePath, sha256: sourceFingerprint,
+  paths: [sourcePath, scopePath, editorPath], sha256: sourceFingerprint,
 }, null, 2)}\n`));
 
 test('安装入口只为当前原生 Gateway 提供本机包，远端只提供自有来源与原操作查询', async () => {
@@ -418,10 +429,12 @@ test('View 安装按钮委派原安装命令，与 F1 对同一 Gateway 制品�
   await entered.promise;
 
   let viewCommand;
-  const onInstallClick = classCallback('ServicePluginPackagesView', 'renderBody', "boxteam.plugins.installPackage");
+  const frozenTarget = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const onInstallClick = classCallback('ServicePluginPackagesView', 'renderBody', "boxteam.plugins.installPackage", { target: frozenTarget });
   let refreshCount = 0;
-  const view = { commands: { executeCommand(id) {
+  const view = { commands: { executeCommand(id, target) {
     expect(id).toBe('boxteam.plugins.installPackage');
+    expect(target).toEqual(frozenTarget);
     viewCommand = installCommand();
     return viewCommand;
   } }, notifications, async refresh() { refreshCount += 1; } };
@@ -502,19 +515,15 @@ test('批量开关保留各插件绑定版本，未绑定项采用所选版本�
     const manifest = { package_id: 'sample', version: '2.0.0', plugins: [...matching,
       { id: 'excluded', instance_scope: pluginScope === 'gateway' ? 'workspace' : 'gateway' }] };
     for (const enabled of [true, false]) {
-      const batches = [], confirmations = [], batchButtons = [{ disabled: false }, { disabled: false }];
+      const batches = [], confirmations = [], batchButtons = [{ enabled: true }, { enabled: true }];
       const click = classCallback('ServicePluginPackagesView', 'renderPackages', 'setPluginBindings', {
         target, workspace, scope, pluginScope, matching, manifest, enabled, batchButtons,
         pluginTarget: target, entryGatewayId: target.gateway_id,
+        state: { binding: (_packageId, pluginId) => pluginId === 'bound' ? { package_version: '1.0.0' } : undefined },
         async setPluginBindings(...args) { batches.push(args[4]); return undefined; },
       });
       let completed;
       click.call({
-        configuredBinding(packageId, pluginId, workspaceId) {
-          expect(packageId).toBe('sample'); expect(workspaceId).toBe(workspace?.workspace_id);
-          return pluginId === 'bound' ? { package_id: packageId, plugin_id: pluginId,
-            package_version: '1.0.0', enabled: !enabled } : undefined;
-        },
         runTargetOperation(operation) { completed = operation({ check() {} }); return completed; },
         dialogs: { async confirm(options) { confirmations.push(options.detail); return { confirmed: true }; } },
       });
@@ -523,52 +532,47 @@ test('批量开关保留各插件绑定版本，未绑定项采用所选版本�
         { package_id: 'sample', plugin_id: 'new', package_version: '2.0.0', enabled }]]);
       expect(confirmations[0]).toContain('bound@1.0.0'); expect(confirmations[0]).toContain('new@2.0.0');
       expect(confirmations[0]).toContain('保留已有绑定版本');
-      expect(batchButtons.every(button => !button.disabled)).toBe(true);
+      expect(batchButtons.every(button => button.enabled)).toBe(true);
     }
   }
 });
 
-test('卸载按钮在发起确认与请求流程前立即禁用，阻止同一按钮重复提交', () => {
-  const uninstall = { disabled: false };
+test('卸载菜单在发起确认与请求流程前立即禁用，结算后恢复', async () => {
+  const uninstall = { enabled: true }, release = Promise.withResolvers();
   let operationStarted = false;
-  const onUninstallClick = classCallback('ServicePluginPackagesView', 'renderPackages', 'uninstallPackageFromView', {
-    uninstall,
-    entryGatewayId: 'entry-gateway',
-    pluginTarget: { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
-    manifest: { package_id: 'sample', version: '1.0.0' },
-    uninstallPackageFromView: async () => {},
+  const click = classCallback('ServicePluginPackagesView', 'renderPackages', 'uninstallPackageFromView', {
+    uninstall, entryGatewayId: 'entry-gateway', pluginTarget: { gateway_id: 'gateway-original' },
+    manifest: { package_id: 'sample', version: '1.0.0' }, uninstallPackageFromView: async () => {},
   });
-
-  onUninstallClick.call({ runTargetOperation() { operationStarted = uninstall.disabled; return Promise.resolve(); } });
-
-  expect(uninstall.disabled).toBe(true);
-  expect(operationStarted).toBe(true);
+  const pending = click.call({ runTargetOperation() { operationStarted = !uninstall.enabled; return release.promise; } });
+  expect(uninstall.enabled).toBe(false); expect(operationStarted).toBe(true);
+  release.resolve(); await pending; expect(uninstall.enabled).toBe(true);
 });
 
-test('重启按钮在请求运行时立即禁用，阻止同一 revision 重复重启', () => {
-  const restart = { disabled: false };
-  let operationStarted = false;
-  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', {
-    restart, entryGatewayId: 'entry-gateway',
-  });
-
-  onRestartClick.call({ runTargetOperation() { operationStarted = restart.disabled; return Promise.resolve(); } });
-
-  expect(restart.disabled).toBe(true);
-  expect(operationStarted).toBe(true);
-});
-
-test('秘密参数按钮在向导启动前立即禁用，避免重复创建不可变秘密版本', () => {
-  const secret = { disabled: false };
-  let operationStarted = false;
-  const onSecretClick = classCallback('ServicePluginPackagesView', 'showDetails', 'false, field', {
-    secret, entryGatewayId: 'entry-gateway',
-  });
-
-  onSecretClick.call({ runTargetOperation() { operationStarted = secret.disabled; return Promise.resolve(); } });
-
-  expect(secret.disabled).toBe(true);
-  expect(operationStarted).toBe(true);
+function actionHarness(state, request = async () => {}, manage = async () => {}) {
+  const make = localizedFunction('Action', 'manageConfig', 'writeOnlyFields', 'gateway', 'pluginError',
+    `${declaration('pluginActions')}\nreturn pluginActions;`)(Action, manage,
+    () => [{ pointer: '/credential' }], { request }, error => error.message);
+  return make(state, { package_id: 'sample', version: state.version ?? '1.0.0' },
+    { id: 'command', runtime: 'python' }, {}, { error: message => state.errors.push(message) });
+}
+function actionState() {
+  const controller = new AbortController();
+  return { scope: 'gateway', target: { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
+    errors: [], desired: { package_version: '1.0.0', enabled: true },
+    active: { revision: 'r1', binding: { package_version: '1.0.0', enabled: true } },
+    binding() { return this.desired; }, slot() { return this.active; },
+    lifecycle: { signal: controller.signal, check() { if (controller.signal.aborted) throw new Error('原入口失效'); } },
+    async refreshBindings() { this.refreshes = (this.refreshes ?? 0) + 1; }, controller };
+}
+for (const id of ['plugin.restart', 'plugin.secret./credential']) test(`${id} 请求或向导开始前立即禁用，结算后恢复`, async () => {
+  const state = actionState(), release = Promise.withResolvers();
+  let disabledAtEntry = false, action;
+  const operation = async () => { disabledAtEntry = !action.enabled; await release.promise; };
+  action = actionHarness(state, operation, operation).find(item => item.id === id);
+  const pending = action.run(); expect(action.enabled).toBe(false); expect(disabledAtEntry).toBe(true);
+  release.resolve(); await pending;
+  expect(action.enabled).toBe(true); expect(state.refreshes).toBe(1);
 });
 
 test('旧操作结算不刷新用户已切换的范围，当前视图操作完成仍读取权威状态', async () => {
@@ -595,197 +599,84 @@ test('旧操作结算不刷新用户已切换的范围，当前视图操作完�
   expect(refreshes).toBe(2);
 });
 
-test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前按钮', () => {
-  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
-  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
-  const members = owner.members.filter(member => ts.isMethodDeclaration(member)
-    && ['showDetails', 'runtimeSlot', 'configuredBinding', 'runtimeConfigurationLabel'].includes(member.name?.getText(parsed)));
-  const printed = members.map(member => ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)).join('\n');
-  const compiled = ts.transpile(`class DetailView { ${printed} }`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  const elements = [], requests = [], logIds = [];
-  const element = tag => ({ tag, dataset: {}, children: [], textContent: '', listeners: {},
-    setAttribute() {}, remove() {}, querySelector() { return undefined; },
-    addEventListener(event, listener) { this.listeners[event] = listener; } });
-  const View = localizedFunction('append', '$', 'clearNode', 'writeOnlyFields', 'manageConfig', 'gateway',
-    `${compiled}\nreturn DetailView;`)((parent, child) => {
-      parent.children.push(child); elements.push(child); return child;
-    }, element, parent => { parent.children = []; }, () => [], async (...args) => requests.push(args), { request() {} });
-  const view = new View();
-  const initial = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true };
-  let status = { binding: initial, revision: 'r1', instance: { instance_id: 'instance-first' }, log_id: 'log-first' };
-  view.configuredBindings = [initial];
-  view.runtimeStatus = { configured_bindings: [initial], plugins: [status], workspace_configurations: [] };
-  view.runtimeLabel = () => 'ready'; view.runtimeActualLabel = () => 'ready';
-  view.renderInstanceLog = (_container, _target, logId) => logIds.push(logId);
-  view.runTargetOperation = operation => operation({ check() {}, token: {}, signal: new AbortController().signal });
-  view.showDetails(element('container'), 'gateway', { gateway_id: 'gateway-original' }, undefined,
-    { package_id: 'sample', version: '1.0.0' }, { id: 'command', runtime: 'python' }, initial, status, 'entry');
-  const actions = elements.find(item => item.tag === '.service-plugin-detail-actions');
-  const buttons = () => actions.children.filter(item => item.tag === 'button').map(item => item.textContent);
-  expect(buttons()).toContain('停用此范围'); expect(buttons()).toContain('重启实例');
-  const originalButton = actions.children[0];
-  view.runtimeStatus.plugins = [status, { revision: 'sibling' }];
-  view.updateDetailsStatus();
-  expect(actions.children[0]).toBe(originalButton);
-  expect(logIds).toEqual(['log-first']);
-  const identity = elements.find(item => item.textContent.includes('instance-first'));
-  status = { ...status, instance: { instance_id: 'instance-second' }, log_id: 'log-second' };
-  view.runtimeStatus.plugins = [status];
-  view.updateDetailsStatus();
-  expect(identity.textContent).toContain('instance-second');
-  expect(identity.textContent).not.toContain('instance-first');
-  expect(logIds).toEqual(['log-first', 'log-second']);
-  expect(actions.children[0]).toBe(originalButton);
-  view.updateDetailsStatus();
-  expect(logIds).toEqual(['log-first', 'log-second']);
-  const disabled = { ...initial, enabled: false };
-  status = { binding: disabled, revision: 'r2' };
-  view.configuredBindings = [disabled];
-  view.runtimeStatus = { configured_bindings: [disabled], plugins: [status], workspace_configurations: [] };
-  view.updateDetailsStatus();
-  expect(identity.textContent).not.toContain('instance-second');
-  expect(logIds.at(-1)).toBeUndefined();
-  expect(buttons()).toContain('启用此范围'); expect(buttons()).not.toContain('停用此范围'); expect(buttons()).not.toContain('重启实例');
-  actions.children.find(item => item.textContent === '启用此范围').listeners.click();
-  expect(requests).toHaveLength(1); expect(requests[0][5]).toMatchObject({ package_version: '1.0.0' });
-  expect(requests[0][6]).toBe(true);
-  const newer = { ...initial, package_version: '2.0.0' };
-  view.configuredBindings = [newer];
-  view.runtimeStatus = { configured_bindings: [newer], plugins: [{ binding: newer, revision: 'r3' }], workspace_configurations: [] };
-  view.updateDetailsStatus();
-  expect(buttons()).toContain('切换到此版本（保留开关）'); expect(buttons()).not.toContain('重启实例');
-  expect(buttons()).not.toContain('编辑参数 JSON'); expect(buttons()).not.toContain('停用此范围');
-  view.configuredBindings = [];
-  view.runtimeStatus = { configured_bindings: [], plugins: [], workspace_configurations: [] };
-  view.updateDetailsStatus();
-  expect(buttons()).toContain('启用此范围'); expect(buttons()).not.toContain('解除此范围绑定');
-
-  // Gateway 来源与工作区来源遵守同一规则；pending 停用不借 active 的开关生成反向操作。
-  const gatewayDesired = { ...initial, enabled: false };
-  view.configuredBindings = [gatewayDesired];
-  view.runtimeStatus = { configured_bindings: [initial], plugins: [{ binding: initial, revision: 'active-gateway' }], workspace_configurations: [] };
-  view.showDetails(element('container'), 'gateway', { gateway_id: 'gateway-original' }, undefined,
-    { package_id: 'sample', version: '1.0.0' }, { id: 'command', runtime: 'python' }, gatewayDesired,
-    view.runtimeStatus.plugins[0], 'entry');
-  const gatewayActions = elements.filter(item => item.tag === '.service-plugin-detail-actions').at(-1);
-  const gatewayButtons = gatewayActions.children.filter(item => item.tag === 'button').map(item => item.textContent);
-  expect(view.runtimeConfigurationLabel('sample', 'command', undefined)).toBe('停用 @1.0.0');
-  expect(gatewayButtons).toContain('启用此范围'); expect(gatewayButtons).not.toContain('重启实例');
-  gatewayActions.children.find(item => item.textContent === '启用此范围').listeners.click();
-  expect(requests.at(-1)[6]).toBe(true);
-
-  // 来源已有 v2 停用期望，Gateway 仍交接 v1 启用态；详情不能改回旧版本或反向开关。
-  const workspace = { gateway_id: 'gateway-original', workspace_id: 'workspace-a' };
-  const desired = { ...initial, workspace_id: workspace.workspace_id, package_version: '2.0.0', enabled: false };
-  const active = { ...initial, workspace_id: workspace.workspace_id };
-  view.configuredBindings = [desired];
-  view.runtimeStatus = { configured_bindings: [active], plugins: [{ binding: active, revision: 'active-r1' }],
-    workspace_configurations: [] };
-  view.showDetails(element('container'), 'workspace', workspace, workspace,
-    { package_id: 'sample', version: '2.0.0' }, { id: 'command', runtime: 'python' }, desired,
-    view.runtimeStatus.plugins[0], 'entry');
-  const workspaceActions = elements.filter(item => item.tag === '.service-plugin-detail-actions').at(-1);
-  const workspaceButtons = () => workspaceActions.children.filter(item => item.tag === 'button').map(item => item.textContent);
-  expect(view.runtimeConfigurationLabel('sample', 'command', workspace.workspace_id)).toBe('停用 @2.0.0');
-  expect(workspaceButtons()).toContain('启用此范围');
-  expect(workspaceButtons()).not.toContain('切换到此版本（保留开关）');
-  expect(workspaceButtons()).not.toContain('重启实例');
-  view.runtimeStatus = { configured_bindings: [], plugins: [], workspace_configurations: [] };
-  view.updateDetailsStatus();
-  expect(view.runtimeConfigurationLabel('sample', 'command', workspace.workspace_id)).toBe('停用 @2.0.0');
-  expect(workspaceButtons()).toContain('解除此范围绑定');
-  workspaceActions.children.find(item => item.textContent === '启用此范围').listeners.click();
-  expect(requests.at(-1)[5]).toMatchObject({ package_version: '2.0.0' });
-  expect(requests.at(-1)[6]).toBe(true);
+test('动作跟随来源绑定，pending 期望不被旧 active 状态覆盖，版本冲突不暴露参数或重启', async () => {
+  const state = actionState(), calls = [];
+  const actions = () => actionHarness(state, async () => {}, async (...args) => calls.push(args));
+  expect(actions().map(action => action.label)).toContain('停用此范围');
+  expect(actions().map(action => action.label)).toContain('重启实例');
+  state.desired = { ...state.desired, enabled: false };
+  expect(actions().map(action => action.label)).toContain('启用此范围');
+  expect(actions().map(action => action.label)).not.toContain('重启实例');
+  await actions().find(action => action.id === 'plugin.toggle').run(); expect(calls.at(-1)[6]).toBe(true);
+  state.desired = { package_version: '2.0.0', enabled: false };
+  expect(actions().map(action => action.label)).toEqual(['切换到此版本（保留开关）']);
+  await actions()[0].run(); expect(calls.at(-1)[6]).toBe('preserve');
+  state.version = '2.0.0'; state.scope = 'workspace'; state.workspace = { ...state.target, workspace_id: 'workspace-a' };
+  const labels = actions().map(action => action.label);
+  expect(labels).toContain('启用此范围'); expect(labels).toContain('解除此范围绑定');
+  expect(labels).not.toContain('切换到此版本（保留开关）'); expect(labels).not.toContain('重启实例');
+  await actions()[0].run(); expect(calls.at(-1)[5].package_version).toBe('2.0.0'); expect(calls.at(-1)[6]).toBe(true);
+  state.desired = undefined;
+  expect(actions().map(action => action.label)).not.toContain('解除此范围绑定');
 });
 
-function runtimeStatusView() {
-  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
-  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
-  const members = owner.members.filter(member => ts.isMethodDeclaration(member)
-    && ['observeRuntimeStatus', 'stopRuntimeStatus'].includes(member.name?.getText(parsed)));
-  const printed = members.map(member => ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)).join('\n');
-  const compiled = ts.transpile(`class StatusView { ${printed} }`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  const streams = [], errors = [], rendered = [];
-  const View = localizedFunction('DeferredPromise', 'raceTimeout', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'watchPluginRuntimeStatus', 'errorsText',
-    `${compiled}\nreturn StatusView;`)(DeferredPromise, raceTimeout, 100,
+function runtimeScope(workspaceId, gatewayId = 'gateway-original') {
+  const streams = [], errors = [], rendered = [], reads = [];
+  const controller = new AbortController();
+  const Scope = localizedFunction('Disposable', 'toDisposable', 'Emitter', 'DeferredPromise', 'raceTimeout',
+    'DEFAULT_API_REQUEST_TIMEOUT_MS', 'createManagementTargetLifecycle', 'watchPluginRuntimeStatus', 'readPluginBindings', 'pluginError',
+    `${declaration('PluginScope')}\nreturn PluginScope;`)(Disposable, toDisposable, Emitter, DeferredPromise, raceTimeout, 1000,
+    () => ({ signal: controller.signal, dispose() { controller.abort(); } }),
     (target, signal, next) => new Promise((resolve, reject) => {
-      streams.push({ target, signal, next, reject });
-      signal.addEventListener('abort', resolve, { once: true });
-    }), error => error instanceof Error ? error.message : String(error));
-  const view = new View();
-  view.notifications = { error: error => errors.push(error) };
-  view.updateRuntimeStatusPresentation = () => rendered.push(view.runtimeStatus);
-  return { view, streams, errors, rendered };
+      streams.push({ target, signal, next, reject }); signal.addEventListener('abort', resolve, { once: true });
+    }), async (scope, target) => { reads.push({ scope, target }); return []; }, error => error.message);
+  const target = { gateway_id: gatewayId };
+  const state = new Scope(workspaceId ? 'workspace' : 'gateway', target,
+    workspaceId ? { ...target, workspace_id: workspaceId } : undefined, { error: error => errors.push(error) });
+  state.onDidChange(() => rendered.push(state.runtime));
+  return { state, streams, errors, rendered, reads };
 }
+const snapshot = { plugins: [], configured_bindings: [], workspace_configurations: [] };
 
-test('管理初始化等待同一状态流首快照，后续快照更新原投影，停止即释放订阅', async () => {
-  const { view, streams, errors, rendered } = runtimeStatusView();
-  const initial = view.observeRuntimeStatus({ gateway_id: 'gateway-original' });
-  const first = { plugins: [], configured_bindings: [], workspace_configurations: [] };
-  expect(view.runtimeStatus).toBeUndefined();
-  expect(streams).toHaveLength(1);
-  streams[0].next(first);
-  expect(await initial).toBe(first);
-  const next = { ...first, workspace_configurations: [{ workspace_id: 'workspace-a', state: 'waiting' }] };
-  streams[0].next(next);
-  expect(view.runtimeStatus).toBe(next);
-  expect(rendered).toEqual([first, next]);
-  view.stopRuntimeStatus();
-  expect(streams[0].signal.aborted).toBe(true);
-  expect(view.runtimeStatus).toBeUndefined();
-  streams[0].next(first);
-  expect(rendered).toEqual([first, next]);
-  expect(errors).toEqual([]);
+test('管理初始化等同一状态流首快照，后续投影更新；释放后迟到帧不可覆盖', async () => {
+  const { state, streams, errors, rendered } = runtimeScope();
+  const initial = state.load(); expect(state.runtime).toBeUndefined(); expect(streams).toHaveLength(1);
+  streams[0].next(snapshot); await initial; expect(state.runtime).toBe(snapshot);
+  const next = { ...snapshot, workspace_configurations: [{ workspace_id: 'a', state: 'waiting' }] };
+  streams[0].next(next); expect(state.runtime).toBe(next);
+  state.dispose(); expect(streams[0].signal.aborted).toBe(true);
+  streams[0].next(snapshot); expect(state.runtime).toBe(next); expect(rendered.at(-1)).toBe(next); expect(errors).toEqual([]);
 });
 
-test('状态流仅在本范围 active 绑定变化时重读来源，兄弟与实例变化保持原投影', async () => {
+test('仅本范围 active 绑定变化重读来源；兄弟与实例变化不重订阅或重读库存', async () => {
   for (const workspaceId of [undefined, 'workspace-a']) {
-    const { view, streams, errors } = runtimeStatusView();
-    view.scope = workspaceId ? 'workspace' : 'gateway';
-    view.workspaceTarget = workspaceId ? { workspace_id: workspaceId } : undefined;
-    let refreshes = 0;
-    view.refresh = async () => { refreshes++; view.stopRuntimeStatus(); };
-    const binding = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true,
-      ...(workspaceId ? { workspace_id: workspaceId } : {}) };
-    const first = { plugins: [], configured_bindings: [binding], workspace_configurations: [] };
-    const initial = view.observeRuntimeStatus({ gateway_id: 'gateway-original' });
-    streams[0].next(first); await initial;
-    expect(refreshes).toBe(0);
+    const { state, streams, reads, errors } = runtimeScope(workspaceId);
+    const binding = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true, workspace_id: workspaceId };
+    const first = { ...snapshot, configured_bindings: [binding] };
+    const initial = state.load(); streams[0].next(first); await initial; expect(reads).toHaveLength(1);
     const sibling = { ...binding, workspace_id: 'workspace-b', enabled: false };
-    streams[0].next({ ...first, configured_bindings: [binding, sibling], plugins: [{ gateway_id: 'gateway-original', revision: 'instance-next' }] });
-    expect(refreshes).toBe(0);
+    streams[0].next({ ...first, configured_bindings: [binding, sibling], plugins: [{ revision: 'instance-next' }] });
+    expect(reads).toHaveLength(1);
     streams[0].next({ ...first, configured_bindings: [{ ...binding, enabled: false }, sibling] });
-    expect(refreshes).toBe(1);
-    expect(streams[0].signal.aborted).toBe(true);
-    expect(errors).toEqual([]);
+    await Promise.resolve(); expect(reads).toHaveLength(2); expect(streams).toHaveLength(1);
+    expect(streams[0].signal.aborted).toBe(false); expect(errors).toEqual([]); state.dispose();
   }
 });
 
-test('首快照前换目标取消旧等待，迟到旧快照不能覆盖新目标；流错误保留原原因', async () => {
-  const { view, streams, errors } = runtimeStatusView();
-  const old = view.observeRuntimeStatus({ gateway_id: 'gateway-old' });
-  const cancelled = old.catch(error => error);
-  const current = view.observeRuntimeStatus({ gateway_id: 'gateway-new' });
+test('首快照前销毁取消等待，旧范围不能覆盖新范围；流失败保留原原因', async () => {
+  const old = runtimeScope(undefined, 'gateway-old');
+  const cancelled = old.state.load().catch(error => error); old.state.dispose();
   expect((await cancelled).message).toBe('Canceled');
-  expect(streams[0].signal.aborted).toBe(true);
-  streams[0].next({ plugins: [], configured_bindings: [{ package_id: 'old' }], workspace_configurations: [] });
-  expect(view.runtimeStatus).toBeUndefined();
-  const snapshot = { plugins: [], configured_bindings: [], workspace_configurations: [] };
-  streams[1].next(snapshot);
-  expect(await current).toBe(snapshot);
-  streams[1].reject(new Error('原目标连接中断'));
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(errors).toEqual(['原目标连接中断']);
-  expect(streams[1].signal.aborted).toBe(true);
-
-  const rejected = view.observeRuntimeStatus({ gateway_id: 'gateway-failed' });
-  const failure = rejected.catch(error => error);
-  streams[2].reject(new Error('原目标拒绝订阅'));
-  expect((await failure).message).toBe('原目标拒绝订阅');
-  view.stopRuntimeStatus();
-  expect(streams[2].signal.aborted).toBe(true);
-  expect(errors).toEqual(['原目标连接中断']);
+  old.streams[0].next(snapshot); expect(old.state.runtime).toBeUndefined();
+  const current = runtimeScope(undefined, 'gateway-new');
+  const ready = current.state.load(); current.streams[0].next(snapshot); await ready;
+  current.streams[0].reject(new Error('原目标连接中断')); await new Promise(resolve => setTimeout(resolve, 0));
+  expect(current.errors).toEqual(['原目标连接中断']); expect(current.state.error).toBe('原目标连接中断');
+  expect(current.state.runtime).toBe(snapshot); current.state.dispose(); expect(current.streams[0].signal.aborted).toBe(true);
+  const failed = runtimeScope();
+  const rejected = failed.state.load().catch(error => error);
+  failed.streams[0].reject(new Error('原目标拒绝订阅'));
+  expect((await rejected).message).toBe('原目标拒绝订阅'); failed.state.dispose(); expect(failed.errors).toEqual([]);
 });
 
 test('插件管理生命周期仅由入口 Gateway 或凭据失效，管理目标选择保持原 owner', () => {
@@ -848,36 +739,15 @@ test('卸载确认前失效不提交，已发送卸载请求在入口变化后�
 });
 
 test('重启提交前核入口，已经提交后不因入口变化改投目标', async () => {
-  const state = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
-  const harness = managementLifecycleHarness(state);
-  const restart = { disabled: false }, target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
-  const calls = [];
-  let pending;
-  const gateway = { async request(path, options) {
-    calls.push({ path, options });
-    harness.invalidateGateway('entry-other');
-  } };
-  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', {
-    restart, entryGatewayId: 'entry-gateway', target, gateway,
-    manifest: { package_id: 'sample', version: '1.0.0' }, plugin: { id: 'sample.plugin' },
-    status: { revision: 'revision-original' }, workspace: undefined,
-  });
-
-  onRestartClick.call({ runTargetOperation(operation, expectedEntryGatewayId) {
-    const lifecycle = harness.create('原 Gateway 已改变', expectedEntryGatewayId);
-    pending = (async () => {
-      try { lifecycle.check(); await operation(lifecycle); }
-      finally { lifecycle.dispose(); }
-    })();
-    return pending;
-  } });
-  await pending;
-  expect(restart.disabled).toBe(true);
-  expect(calls).toHaveLength(1);
-  expect(calls[0].path).toBe('/api/gateway/service-plugins/restart');
-  expect(calls[0].options.signal).toBeUndefined();
-  expect(JSON.parse(calls[0].options.body)).toMatchObject({ gateway_id: 'gateway-original',
-    gateway_connection_id: 'connection-original', package_id: 'sample', package_version: '1.0.0', revision: 'revision-original' });
+  const state = actionState(), calls = [];
+  const action = actionHarness(state, async (path, options) => {
+    calls.push({ path, options }); state.controller.abort();
+  }).find(item => item.id === 'plugin.restart');
+  await action.run(); expect(calls).toHaveLength(1);
+  expect(calls[0].path).toBe('/api/gateway/service-plugins/restart'); expect(calls[0].options.signal).toBeUndefined();
+  expect(JSON.parse(calls[0].options.body)).toEqual({ ...state.target, package_id: 'sample', package_version: '1.0.0', plugin_id: 'command', revision: 'r1' });
+  expect(state.refreshes).toBeUndefined();
+  await action.run(); expect(calls).toHaveLength(1);
 });
 
 test('秘密写入已返回原 owner 回执后，入口失效仍提交该回执而不产生无主引用', async () => {
@@ -943,26 +813,147 @@ test('秘密写入已返回原 owner 回执后，入口失效仍提交该回执�
 test('实例日志只读取原 Gateway 回执的精确日志，保留限长及不可用错误', async () => {
   const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
   const calls = [];
+  const signal = new AbortController().signal;
   let receipt = { gateway_id: target.gateway_id, selected_log_id: 'opaque-log-id',
     logs: [{ log_id: 'opaque-log-id', status: 'available', truncated: true, tail: 'probe stdout\nprobe stderr' }] };
   const read = localizedFunction('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({
     request: async (path, options) => { calls.push({ path, options }); return receipt; },
   });
-  expect(await read(target, 'opaque-log-id')).toBe('仅显示最近的日志尾部。\nprobe stdout\nprobe stderr');
+  expect(await read(target, 'opaque-log-id', signal)).toBe('仅显示最近的日志尾部。\nprobe stdout\nprobe stderr');
   const query = new URL(calls[0].path, 'http://local.invalid');
   expect(query.pathname).toBe('/api/gateway/diagnostics');
   expect(query.searchParams.get('log_id')).toBe('opaque-log-id');
   expect(query.searchParams.get('gateway_connection_id')).toBe('route-original');
   expect(calls[0].options.headers).toEqual({ 'X-BoxTeam-Target-Gateway-Id': target.gateway_id });
+  expect(calls[0].options.signal).toBe(signal);
   receipt = { ...receipt, gateway_id: 'other' };
-  await expect(read(target, 'opaque-log-id')).rejects.toThrow('不属于原 Gateway 或日志');
+  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('不属于原 Gateway 或日志');
   receipt = { ...receipt, gateway_id: target.gateway_id, selected_log_id: 'other' };
-  await expect(read(target, 'opaque-log-id')).rejects.toThrow('不属于原 Gateway 或日志');
+  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('不属于原 Gateway 或日志');
   receipt = { ...receipt, selected_log_id: 'opaque-log-id', logs: [] };
-  await expect(read(target, 'opaque-log-id')).rejects.toThrow('原实例日志不在目标诊断回执中');
+  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('原实例日志不在目标诊断回执中');
   receipt.logs = [{ log_id: 'opaque-log-id', status: 'empty' }];
-  expect(await read(target, 'opaque-log-id')).toBe('当前实例日志为空。');
+  expect(await read(target, 'opaque-log-id', signal)).toBe('当前实例日志为空。');
   receipt.logs = [{ log_id: 'opaque-log-id', status: 'unavailable', error: '原日志已删除' }];
-  await expect(read(target, 'opaque-log-id')).rejects.toThrow('原日志已删除');
+  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('原日志已删除');
   expect(calls).toHaveLength(6);
+});
+
+test('关闭原插件范围后，迟到日志不再交付正文', async () => {
+  const pending = Promise.withResolvers(), controller = new AbortController();
+  const read = localizedFunction('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({ request: () => pending.promise });
+  const reading = read({ gateway_id: 'gateway-original' }, 'opaque-log-id', controller.signal);
+  controller.abort(new Error('原插件范围已关闭'));
+  pending.resolve({ gateway_id: 'gateway-original', selected_log_id: 'opaque-log-id',
+    logs: [{ log_id: 'opaque-log-id', status: 'available', tail: '迟到正文' }] });
+  await expect(reading).rejects.toThrow('原插件范围已关闭');
+});
+
+test('精确插件参数入口在首次等待前冻结 owner 与版本，不再询问范围或工作区', async () => {
+  const waiting = Promise.withResolvers(), calls = [], notifications = [];
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original', workspace_id: 'workspace-a',
+    package_id: 'sample', package_version: '1.0.0', plugin_id: 'probe' };
+  const plugin = { ...target, instance_scope: 'workspace', configuration_schema: { type: 'object' } };
+  class Owner {
+    constructor(target) { calls.push({ owner: target }); }
+    async configurationSchemas() { return { gateway_id: 'gateway-original', plugins: [plugin] }; }
+  }
+  const quickToken = {}, notificationToken = {}, dialogToken = {};
+  const lifecycle = { check() {}, token: {}, signal: new AbortController().signal, dispose() {} };
+  const run = localizedFunction('IQuickInputService', 'INotificationService', 'IDialogService', 'workspaceContext',
+    'createManagementTargetLifecycle', 'managementGateway', 'managementTargetDisplayName', 'ConfigurationSourceOwner',
+    'choosePluginWorkspace', 'writeOnlyFields', 'manageConfig', `${configurationDeclaration('configureServicePlugin')}\nreturn configureServicePlugin;`)(
+    quickToken, notificationToken, dialogToken, { ensureReady: () => waiting.promise }, () => lifecycle,
+    () => { throw new Error('精确入口不读当前管理选择'); }, () => '', Owner,
+    () => { throw new Error('精确入口不重选工作区'); }, () => [{ pointer: '/credential' }], async (...args) => calls.push({ manage: args }));
+  const accessor = { get(token) {
+    if (token === quickToken) return { async pick(items) { calls.push({ picks: items.map(item => item.label) }); return items.find(item => item.action === 'secret'); } };
+    if (token === notificationToken) return { info: text => notifications.push(text) };
+    if (token === dialogToken) return {};
+    throw new Error('未知服务');
+  } };
+  const promise = run(accessor, target);
+  target.gateway_id = 'gateway-later'; target.workspace_id = 'workspace-b'; target.package_version = '9.0.0';
+  waiting.resolve({ gatewayId: 'entry-gateway' });
+  await promise;
+  expect(calls[0].owner).toEqual({ gateway_id: 'gateway-original', gateway_connection_id: 'route-original', workspace_id: 'workspace-a' });
+  expect(calls.filter(call => call.picks)).toHaveLength(1);
+  const managed = calls.find(call => call.manage).manage;
+  expect(managed[0]).toBe('workspace');
+  expect(managed[1]).toEqual({ gateway_id: 'gateway-original', gateway_connection_id: 'route-original' });
+  expect(managed[2].workspace_id).toBe('workspace-a');
+  expect(managed[5]).toEqual({ package_id: 'sample', package_version: '1.0.0', plugin_id: 'probe', enabled: false });
+  expect(managed[8]).toEqual({ pointer: '/credential' });
+  expect(notifications).toEqual([]);
+});
+
+test('下载源入口冻结 Gateway 路由与发起组，只打开同一正式来源的原 Settings', async () => {
+  const waiting = Promise.withResolvers(), calls = [], parentToken = {}, editorToken = {}, groupsToken = {};
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
+  const captured = { location: { gateway_id: 'gateway-original', source_key: 'gateway_mutable_override' }, document: { jsonc: '{}' } };
+  const lifecycle = { entryGatewayId: 'entry-gateway', token: {}, check() {}, dispose() { calls.push('disposed'); } };
+  const parent = { createInstance(...args) { calls.push({ created: args }); return captured; } };
+  const editors = { async openEditor(...args) { calls.push({ opened: args }); } };
+  const groups = { activeGroup: { id: 17 }, getGroup: id => id === 17 ? {} : undefined };
+  class Input {}
+  const run = localizedFunction('IInstantiationService', 'IEditorService', 'IEditorGroupsService', 'createManagementTargetLifecycle',
+    'managementGateway', 'captureSettingsLocation', 'SettingsEditor2Input', `${declaration('manageServicePluginSources')}\nreturn manageServicePluginSources;`)(
+    parentToken, editorToken, groupsToken, () => lifecycle, () => { throw new Error('明确目标不能读取另一入口'); },
+    async (_parent, _token, target, scope) => { calls.push({ target, scope }); return waiting.promise; }, Input);
+  const promise = run({ get: token => token === parentToken ? parent : token === editorToken ? editors : groups }, target);
+  target.gateway_id = 'gateway-later'; target.gateway_connection_id = 'route-later'; groups.activeGroup.id = 44;
+  waiting.resolve(captured); await promise;
+  expect(calls[0]).toEqual({ target: { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
+    name: 'gateway-original', connection_kind: 'remote_gateway' }, scope: {} });
+  expect(calls.find(call => call.created).created).toEqual([Input, captured.location, captured.document]);
+  expect(calls.find(call => call.opened).opened).toEqual([captured, { pinned: true, query: 'plugins.sources.entries' }, 17]);
+  expect(calls.at(-1)).toBe('disposed');
+});
+
+test('MCP 配置和插件私有参数交给各自原命令，Gateway 插件不误写工作区实例', async () => {
+  const parsed = ts.createSourceFile(mcpCommandPath, mcpCommandSource, ts.ScriptTarget.Latest, true);
+  const node = parsed.statements.find(statement => statement.name?.text === 'configureWorkspaceMcpServer');
+  const compiled = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, ''),
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  class Service { constructor(server) { this.servers = { get: () => [server] }; } }
+  const serviceToken = {}, commandToken = {}, commands = [];
+  const server = { data: { service: { gateway_id: 'gateway-original', workspace_id: null, package_id: 'sample', package_version: '1.0.0', plugin_id: 'probe' } },
+    catalog: { target: { gateway_id: 'gateway-original', gateway_connection_id: 'route-original', workspace_id: 'workspace-a' }, snapshot: {} } };
+  const service = new Service(server);
+  const run = localizedFunction('IMcpService', 'ICommandService', 'WorkspaceMcpService', 'workspaceContext', compiled + '\nreturn configureWorkspaceMcpServer;')(
+    serviceToken, commandToken, Service, { getSnapshot: () => ({ gatewayId: 'entry-gateway' }) });
+  const accessor = { get: token => token === serviceToken ? service : { async executeCommand(...args) { commands.push(args); } } };
+  await run(accessor, server);
+  expect(commands[0]).toEqual(['boxteam.settings.openTarget', { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
+    name: 'gateway-original', connection_kind: 'remote_gateway' }, { workspace_id: 'workspace-a' }]);
+  await run(accessor, server, true);
+  expect(commands[1]).toEqual(['boxteam.settings.pluginParameters', { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
+    workspace_id: undefined, package_id: 'sample', package_version: '1.0.0', plugin_id: 'probe' }]);
+  server.data.service.workspace_id = 'workspace-a';
+  await run(accessor, server, true);
+  expect(commands[2][1].workspace_id).toBe('workspace-a');
+  server.catalog.snapshot.error = '原工作区已移除';
+  await expect(run(accessor, server, true)).rejects.toThrow('原工作区已移除');
+  expect(commands).toHaveLength(3);
+});
+
+test('Quick Access 打开工作区插件详情时没有工作区明确报错', async () => {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
+  const method = owner?.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === 'openPlugin');
+  if (!method) throw new Error(`实际源码缺少 ${sourcePath}#ServicePluginPackagesView.openPlugin`);
+  const compiled = ts.transpile(`class View { ${ts.createPrinter().printNode(ts.EmitHint.Unspecified, method, parsed)} }`,
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  class PluginInput { constructor(...args) { this.args = args; } }
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
+  const View = localizedFunction('managementGateway', 'PluginEditorInput', `${compiled}\nreturn View;`)(() => target, PluginInput);
+  const view = new View(), opened = [], searched = [];
+  view.search = value => searched.push(value);
+  view.refresh = async () => { view.workspaceTarget = undefined; };
+  view.editors = { async openEditor(input) { opened.push(input); } };
+  await expect(view.openPlugin(target, 'sample', '1.0.0', 'probe', 'workspace')).rejects.toThrow(t('plugins.noWorkspaces'));
+  expect(searched).toEqual(['']);
+  expect(opened).toEqual([]);
+  await view.openPlugin(target, 'sample', '1.0.0', 'probe', 'gateway');
+  expect(opened[0].args).toEqual([target, undefined, 'gateway', 'sample', '1.0.0', 'probe', 'probe']);
 });

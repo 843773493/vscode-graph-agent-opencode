@@ -1,0 +1,83 @@
+.configuration-entity-content { position: relative;
+  height: 100%; overflow: auto; padding: 8px 24px 24px; box-sizing: border-box;
+  color: var(--vscode-foreground); container-type: inline-size;
+}
+.configuration-entity-content button {
+  color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
+  border: 1px solid var(--vscode-button-secondaryBorder, transparent); border-radius: 2px;
+  padding: 4px 10px; min-height: 26px; cursor: pointer;
+}
+.configuration-entity-content button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.configuration-entity-content button:disabled { opacity: .5; cursor: default; }
+.configuration-entity-content :is(button,input,textarea,select):focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.configuration-entity-columns { display: grid; grid-template-columns: minmax(140px, 200px) minmax(0, 1fr); gap: 24px; }
+.configuration-entity-columns nav { display: flex; flex-direction: column; min-width: 0; align-self: start; }
+.configuration-entity-columns nav button {
+  display: flex; flex-direction: column; flex-shrink: 0; text-align: left; overflow-wrap: anywhere;
+  color: var(--vscode-foreground); background: transparent; border: 0; border-radius: 0; padding: 6px 8px;
+}
+.configuration-entity-columns nav button strong { font-weight: 400; }
+.configuration-entity-columns nav button:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-list-hoverForeground); }
+.configuration-entity-columns nav button[aria-pressed=true] { background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-list-inactiveSelectionForeground); }
+.configuration-entity-columns nav:focus-within button[aria-pressed=true] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.configuration-entity-columns small { margin-top: 3px; font-size: var(--bt-font-size-small); color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+.configuration-entity-columns article { min-width: 0; max-width: 730px; }
+.configuration-entity-columns article h2 { margin: 6px 0 16px; font-size: 20px; font-weight: 600; }
+.configuration-entity-columns article :is(h3,h4) { margin: 12px 0 6px; font-size: var(--bt-font-size); font-weight: 600; }
+.configuration-entity-columns article > button { margin-right: 8px; margin-bottom: 8px; }
+.configuration-entity-columns article p { margin: 4px 0 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.configuration-entity-field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0 18px; font-weight: 600; }
+.configuration-entity-field :is(input,textarea,select) {
+  box-sizing: border-box; width: 100%; max-width: 480px; min-height: 26px; padding: 4px 6px;
+  color: var(--vscode-settings-textInputForeground, var(--vscode-input-foreground));
+  background: var(--vscode-settings-textInputBackground, var(--vscode-input-background));
+  border: 1px solid var(--vscode-settings-textInputBorder, var(--vscode-input-border, transparent));
+  border-radius: 2px; font: inherit; font-weight: 400;
+}
+.configuration-entity-field textarea { max-width: 640px; resize: vertical; }
+.configuration-entity-field small { font-weight: 400; }
+.configuration-entity-field > button { align-self: flex-start; font-weight: 400; }
+.configuration-entity-content .configuration-field-reset {
+  color: var(--vscode-textLink-foreground); background: transparent; border: 0; padding: 0; min-height: 20px;
+}
+.configuration-entity-content .configuration-field-reset:hover { color: var(--vscode-textLink-activeForeground); background: transparent; text-decoration: underline; }
+.configuration-definition-details { margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
+.configuration-entity-content summary { cursor: pointer; line-height: 26px; }
+.configuration-model-overrides { margin: 12px 0 18px; }
+.configuration-credential { margin: 12px 0 18px; }
+.configuration-credential h4 { margin-bottom: 6px; }
+.configuration-credential p { margin: 6px 0; }
+.configuration-credential button { margin-inline-end: 8px; }
+.configuration-credential small { display: block; margin-top: 8px; }
+.configuration-entity-content [role=alert] { color: var(--vscode-errorForeground); }
+/* 依据编辑器内的实际宽度收起列表列，分屏时不借用整个浏览器的宽度。 */
+@container (max-width: 650px) {
+  .configuration-entity-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .configuration-entity-columns nav { max-height: 120px; overflow: auto; }
+}
+
+.configuration-entity-feedback { position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px; max-height: 120px; overflow: auto; padding: 4px 8px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWidget-border); }
+.configuration-entity-feedback p { margin: 0; }
+
+.configuration-model-reference { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.configuration-model-reference .configuration-entity-field { flex: 1; min-width: 120px; }
+
+.configuration-model-probe { margin-top: 24px; border-top: 1px solid var(--vscode-widget-border); }
+.configuration-probe-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.configuration-probe-models { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; margin: 12px 0; }
+.configuration-probe-models label { overflow-wrap: anywhere; }
+.configuration-probe-result { padding: 8px 0; border-bottom: 1px solid var(--vscode-widget-border); }
+.configuration-probe-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+
+.configuration-model-options { margin: 16px 0; }
+.configuration-model-options summary { cursor: pointer; }
+.configuration-model-options :is(button, small) { margin-block: 4px; margin-inline-end: 8px; }
+.configuration-option-json textarea { font-family: var(--monaco-monospace-font); font-weight: 400; }
+.configuration-request-parameter { border-top: 1px solid var(--vscode-widget-border); padding-block: 12px; }
+.configuration-request-parameter .configuration-entity-field { margin-block: 8px; }
+.configuration-option-json small { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.configuration-model-inspection { margin-block: 16px; min-width: 0; }
+.configuration-model-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.configuration-model-inspection dd { margin-inline-start: 0; overflow-wrap: anywhere; }
+.configuration-model-inspection table { width: 100%; border-collapse: collapse; }
+.configuration-model-inspection th, .configuration-model-inspection td { text-align: start; vertical-align: top; padding: 4px; overflow-wrap: anywhere; }

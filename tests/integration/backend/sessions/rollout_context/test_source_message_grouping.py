@@ -13,9 +13,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 正式隔离工作区
-)
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 真实 prepare/seal
 )
@@ -27,6 +24,9 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case,
 )
 from tests.support.api_helpers import create_session
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 __all__ = ["cold_fork_deadlines", "source_case"]
 
@@ -138,7 +138,7 @@ async def test_product_tools_freeze_mixed_tracking_and_fork(
             assert selected.source_revision == ref.source_revision
             occurrence, = [index for index, message in enumerate(wire)
                            if isinstance(message.get("content"), str)
-                           and message["content"].startswith('{"protocol":"boxteam-context-sources:')
+                           and message["content"].startswith('<context_sources ')
                            and any(candidate.body == block.body for candidate in parse_source_blocks(message["content"]))]
             assert occurrence > call_index + 2
         if previous is not None:

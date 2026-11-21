@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.hashing import canonical_json_bytes_and_hash
@@ -70,7 +70,7 @@ class ContextPlanDetailStore:
     ) -> PreparedDetail:
         """冻结唯一精确正文与完整 manifest；sensitive 只控制访问，不改变持久化。"""
         ref = DetailRef(
-            session_id, thread_id, assembly_id, "detail-" + secrets.token_hex(16)
+            session_id, thread_id, assembly_id, "detail-" + create_uuid_hex()
         )
         _manifest_bool(required, field="required")
         _manifest_bool(sensitive, field="sensitive")
@@ -197,7 +197,10 @@ class ContextPlanDetailStore:
         if record.status != "available" or record.availability != "available":
             raise DetailUnavailableError(f"assembly detail 不可用: {record.detail_ref}")
         expires = expiry_time(record.expires_at)
-        if expires is not None and expires <= datetime.now(UTC):
+        # 必需的请求回放正文由 assembly 引用保护和原 GC 决定何时删除。
+        # 保留期届满只使其成为 GC 候选，不能让仍被保留的历史突然无法读取。
+        required_replay = record.required and record.retention_class == "request_replay"
+        if expires is not None and expires <= datetime.now(UTC) and not required_replay:
             raise DetailUnavailableError(f"assembly detail 已过期: {record.detail_ref}")
         if record.sensitive and not include_sensitive:
             raise PermissionError(f"detail 受保护，未授权读取: {record.detail_ref}")

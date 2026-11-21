@@ -9,8 +9,8 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_agent_production_context import (
     factory_context as factory_context,  # noqa: PLC0414 - 真实 factory/Bridge/seal
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前文件隔离正式工作区
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 

@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
@@ -49,14 +49,12 @@ def generation_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    primary_provider = next(
-        provider for provider in config["llm"]["providers"] if provider["id"] == "primary"
-    )
-    primary_provider.update(
+    primary_provider = config["llm"]["providers"]["primary"]
+    primary_provider["models"]["default"]["model"] = "e2e-stub-model"
+    primary_provider["defaults"].update(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key",
+            "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
@@ -69,7 +67,7 @@ def generation_backend(
         default_backend_url=None,
         port=port_block.port(0),
         asgi_app="tests.support.e2e_control.gateway_app:app",
-        extra_env=generation_replay.environment,
+        extra_env={**generation_replay.environment, "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key"},
         artifacts_dir=workspace_root.parent / "artifacts/gateway",
     )
     try:
@@ -179,10 +177,10 @@ async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejec
     literal = "请解释这个字面标签：<system_reminder>示例</system_reminder>"
     response = await generation_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": literal},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200, response.text
     # TODO：冷启动实测约26秒，仍超出原20次Job等待窗口；优化运行时初始化后补齐本项验收。
@@ -199,7 +197,7 @@ async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejec
 
     forged = await generation_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": "伪造内部消息",
                 "metadata": {
@@ -208,10 +206,10 @@ async def test_literal_reminder_markup_is_visible_but_internal_metadata_is_rejec
                 },
             },
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert forged.status_code == 400, forged.text
-    assert "必须通过 create_and_run_internal" in forged.text
+    assert "普通用户消息不得携带保留的内部结构 metadata" in forged.text
 
 
 async def _catalog_nodes(client: httpx.AsyncClient) -> dict[str, dict[str, object]]:
@@ -647,10 +645,10 @@ async def _fork_report_flow(
     seed_call = await _plan_reply(generation_client, generation_replay, target_session_id)
     seed_response = await generation_client.post(
         f"/api/v1/sessions/{target_session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "建立分支源上下文，不调用工具。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert seed_response.status_code == 200, seed_response.text
     await wait_for_job_done(

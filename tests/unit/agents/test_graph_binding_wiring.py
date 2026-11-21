@@ -16,16 +16,18 @@ from app.agents.graph_binding import (
     GraphFactoryRegistry,
     resolve_graph_binding,
 )
-from app.runtime.agent_runtime import build_session_agent_runtime
+from app.runtime.agent_runtime import assemble_agent
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 
-def test_runtime_layer_passes_graph_binding_store_through() -> None:
+def test_runtime_selects_factory_from_injected_graph_binding_store() -> None:
     config_service = MagicMock()
     config_service.resolve_agent_id.return_value = "default"
+    config_service.get_agent_tool_config.return_value = {"custom": []}
+    config_service.resolve_agent_confirmation_tool_names.return_value = set()
     dependency_provider = MagicMock()
     dependency_provider.get_checkpointer.return_value = MagicMock()
     store = MagicMock(spec=GraphBindingStorePort)
@@ -33,10 +35,13 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
     resource_activation = MagicMock()
     skill_catalog = MagicMock()
 
-    with patch(
-        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
-    ) as create_runtime:
-        build_session_agent_runtime(
+    store.load_graph_binding.return_value = DEEP_AGENT_GRAPH_BINDING
+    with (
+        patch("app.runtime.agent_runtime.prepare_agent_model"),
+        patch("app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve") as resolve_factory,
+    ):
+        create_runtime = resolve_factory.return_value
+        assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
@@ -44,7 +49,7 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
             workspace_root=Path("/workspace"),
             config_service=config_service,
             background_task_registry=MagicMock(),
-            background_message_bus=MagicMock(),
+            background_mailbox=MagicMock(),
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
@@ -54,25 +59,31 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
             graph_binding_store=store,
         )
 
-    assert create_runtime.call_args.kwargs["graph_binding_store"] is store
+    assert store.load_graph_binding.call_args.args == (GraphBindingOwnerKey("session_test", "thread_test"),)
+    assert resolve_factory.call_args.args == (DEEP_AGENT_GRAPH_BINDING,)
     assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
-def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> None:
+def test_tool_catalog_uses_builtin_factory_without_persisted_owner() -> None:
     config_service = MagicMock()
     config_service.resolve_agent_id.return_value = "default"
+    config_service.get_agent_tool_config.return_value = {"custom": []}
+    config_service.resolve_agent_confirmation_tool_names.return_value = set()
     dependency_provider = MagicMock()
     dependency_provider.get_checkpointer.return_value = MagicMock()
     resource_registry = ResourceRegistry()
     resource_activation = MagicMock()
     skill_catalog = MagicMock()
 
+    store = MagicMock(spec=GraphBindingStorePort)
+    store.load_graph_binding.return_value = None
     with patch(
-        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
-    ) as create_runtime:
-        build_session_agent_runtime(
+        "app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve"
+    ) as resolve_factory:
+        create_runtime = resolve_factory.return_value
+        assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
@@ -80,18 +91,20 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
             workspace_root=Path("/workspace"),
             config_service=config_service,
             background_task_registry=MagicMock(),
-            background_message_bus=MagicMock(),
+            background_mailbox=MagicMock(),
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
             resource_registry=resource_registry,
             resource_activation=resource_activation,
             skill_catalog=skill_catalog,
-            graph_binding_store=MagicMock(spec=GraphBindingStorePort),
-            owns_thread=False,
+            graph_binding_store=store,
+            assembly_mode="tool_catalog",
         )
 
-    assert create_runtime.call_args.kwargs["owns_thread"] is False
+    assert create_runtime.call_args.kwargs["assembly_mode"] == "tool_catalog"
+    assert create_runtime.call_args.kwargs["model"] is None
+    assert resolve_factory.call_args.args == (DEEP_AGENT_GRAPH_BINDING,)
     assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
@@ -107,7 +120,7 @@ def test_execution_service_passes_store_to_runtime() -> None:
     service = AgentExecutionService(
         config_service=MagicMock(),
         background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
+        background_mailbox=MagicMock(),
         job_event_bus=MagicMock(),
         dependency_provider=MagicMock(),
         session_changes_service=MagicMock(),
@@ -123,15 +136,15 @@ def test_execution_service_passes_store_to_runtime() -> None:
     )
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as build_runtime:
-        service._build_agent(
+        service._assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
             execution_overrides={},
             model_visibility_overrides={},
-            preferred_provider_id=None,
+            preferred_model=None,
             include_team_tools=False,
             mcp_tools=[],
             resource_registry=resource_registry,

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cached_property
@@ -20,11 +19,21 @@ from app.gateway.registry.owners import workspace_owner
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import (
+    SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
     SessionCatalogNodeDTO,
+    SessionCatalogPageDTO,
     SessionCatalogSearchResultsDTO,
+    SessionCatalogSyncDTO,
+    SessionCatalogVersionDTO,
 )
-from app.services.business.session_navigation.catalog_query import search_catalog
+from app.services.business.session_navigation.catalog_query import (
+    catalog_breadcrumb,
+    catalog_projection_revision,
+    decode_catalog_cursor,
+    encode_catalog_cursor,
+    search_catalog,
+)
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
@@ -33,11 +42,6 @@ from app.services.mapping.session_catalog_search import (
 
 logger = logging.getLogger(__name__)
 
-# 分片锁池：同一 workspace_id 恒得同一把锁（保住同步互斥），池大小恒定，
-# 工作区被删除后也不会留下永不回收的锁对象。
-_SYNC_LOCK_SHARDS = 64
-
-
 @dataclass(frozen=True)
 class _CatalogSnapshot:
     owner: GatewaySearchWorkspaceOwnerDTO
@@ -45,6 +49,14 @@ class _CatalogSnapshot:
     revision: str
     updated_at: datetime
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
+
+    @cached_property
+    def children_by_parent(self) -> dict[str | None, tuple[str, ...]]:
+        children: dict[str | None, list[SessionCatalogNodeDTO]] = {}
+        for node in self.nodes_by_id.values():
+            children.setdefault(node.parent_node_id, []).append(node)
+        return {parent: tuple(node.node_id for node in sorted(nodes, key=lambda node: (node.kind != "folder", node.name.casefold(), node.node_id)))
+                for parent, nodes in children.items()}
 
     @cached_property
     def folded_search_terms(self) -> dict[str, CatalogSearchTerms]:
@@ -72,9 +84,8 @@ class GatewaySessionCatalogSearchService:
         self._request_timeout_seconds = request_timeout_seconds
         self._snapshots: dict[GatewaySearchWorkspaceOwnerDTO, _CatalogSnapshot] = {}
         self._workspace_errors: dict[tuple[str, str], str] = {}
-        self._sync_locks: tuple[asyncio.Lock, ...] = tuple(
-            asyncio.Lock() for _ in range(_SYNC_LOCK_SHARDS)
-        )
+        self._confirmed_at: dict[GatewaySearchWorkspaceOwnerDTO, datetime] = {}
+        self._in_flight: dict[GatewaySearchWorkspaceOwnerDTO, asyncio.Task[_CatalogSnapshot]] = {}
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -166,6 +177,68 @@ class GatewaySessionCatalogSearchService:
         except asyncio.CancelledError:
             pass
         self._task = None
+        pending = tuple(self._in_flight.values())
+        for request in pending:
+            request.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        self._in_flight.clear()
+
+    def browse_mirror(
+        self, target: WorkspaceTarget, *, path: list[str], query: httpx.QueryParams, request_id: str,
+        known_revision: str | None = None,
+    ) -> SessionCatalogPageDTO | SessionCatalogBreadcrumbDTO | SessionCatalogExportDTO | None:
+        """原代理已核准入后读取适用镜像；缺页或写后下限不满足交原有界权威路由。"""
+        owner = workspace_owner(target)
+        self._require_owner(target, owner)
+        snapshot = self._snapshots.get(owner)
+        projection_changed = snapshot is not None and known_revision is not None and snapshot.revision != known_revision
+        minimum = int(query.get("minimum_catalog_revision", "0"))
+        if minimum < 0:
+            raise ValueError("minimum_catalog_revision 不能为负")
+        confirmed_at = self._confirmed_at.get(owner)
+        if (snapshot is None or snapshot.catalog_revision < minimum or projection_changed or confirmed_at is None
+            or (datetime.now(UTC) - confirmed_at).total_seconds() >= self._refresh_interval_seconds):
+            self._request_sync(target, request_id=request_id)
+        if snapshot is None or snapshot.catalog_revision < minimum or projection_changed:
+            return None
+        sync = SessionCatalogSyncDTO(
+            gateway_id=owner.gateway_id, workspace_id=owner.workspace_id, source="gateway_mirror",
+            stale=owner not in self._confirmed_at or owner in self._in_flight or target.key in self._workspace_errors,
+            authoritative_confirmed_at=self._confirmed_at.get(owner), error=self._workspace_errors.get(target.key),
+        )
+        if path in (["session-catalog", "children"], ["session-catalog", "roots"]):
+            parent = query.get("parent_node_id") if path[-1] == "children" else None
+            if parent is not None and parent not in snapshot.nodes_by_id:
+                return None
+            children = snapshot.children_by_parent.get(parent, ())
+            limit = int(query.get("limit", "100"))
+            if not 1 <= limit <= 500:
+                raise ValueError("目录分页 limit 必须位于 1–500")
+            offset = decode_catalog_cursor(query.get("cursor"), snapshot.revision, snapshot.catalog_revision, parent, collection_size=len(children))
+            next_offset = offset + limit
+            return SessionCatalogPageDTO(
+                revision=snapshot.revision, catalog_revision=snapshot.catalog_revision, parent_node_id=parent,
+                items=[snapshot.nodes_by_id[node_id] for node_id in children[offset:next_offset]], total=len(children),
+                cursor=encode_catalog_cursor(next_offset, snapshot.revision, snapshot.catalog_revision, parent) if next_offset < len(children) else None, sync=sync,
+            )
+        if len(path) == 3 and path[:2] == ["session-catalog", "breadcrumb"]:
+            node = snapshot.nodes_by_id.get(path[2])
+            if node is None:
+                return None
+            return SessionCatalogBreadcrumbDTO(
+                revision=snapshot.revision, catalog_revision=snapshot.catalog_revision, node_id=node.node_id,
+                items=catalog_breadcrumb(node, snapshot.nodes_by_id), sync=sync,
+            )
+        if path == ["session-catalog", "export"]:
+            node_ids = sorted(set(query.get_list("node_id")))
+            # 全量导出只能来自权威 owner；不存在的 ID 也不能用旧镜像作否定证明。
+            if not node_ids or any(node_id not in snapshot.nodes_by_id for node_id in node_ids):
+                return None
+            return SessionCatalogExportDTO(
+                revision=snapshot.revision, catalog_revision=snapshot.catalog_revision, node_ids=node_ids, complete=False,
+                items=[snapshot.nodes_by_id[node_id] for node_id in node_ids], sync=sync,
+            )
+        raise ValueError("非目录镜像读取范围")
 
     def search_mirror(
         self, owner: GatewaySearchWorkspaceOwnerDTO, *, query: str, limit: int,
@@ -213,6 +286,7 @@ class GatewaySessionCatalogSearchService:
         live_owners = {workspace_owner(target) for target in targets}
         for owner in self._snapshots.keys() - live_owners:
             self._snapshots.pop(owner)
+            self._confirmed_at.pop(owner, None)
         for workspace_id in set(self._workspace_errors) - live_workspace_ids:
             self._workspace_errors.pop(workspace_id, None)
         for target in targets:
@@ -229,62 +303,91 @@ class GatewaySessionCatalogSearchService:
             if target.connection_kind == "remote_gateway"
             or target.backend_url.strip()
         )
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(sync(target, request_id) for target, request_id in sync_requests),
             return_exceptions=True,
         )
-        for (target, request_id), result in zip(sync_requests, results, strict=True):
-            if isinstance(result, BaseException):
+
+    def _require_owner(self, target: WorkspaceTarget, owner: GatewaySearchWorkspaceOwnerDTO) -> None:
+        if (not self._registry.has_target(target.key)
+            or workspace_owner(self._registry.resolve(target.key)) != owner):
+            self._snapshots.pop(owner, None)
+            self._confirmed_at.pop(owner, None)
+            raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
+
+    def _request_sync(self, target: WorkspaceTarget, *, request_id: str) -> asyncio.Task[_CatalogSnapshot]:
+        owner = workspace_owner(target)
+        pending = self._in_flight.get(owner)
+        if pending is not None:
+            return pending
+        async def sync() -> _CatalogSnapshot:
+            try:
+                return await self._read_authoritative_version(target, request_id=request_id)
+            except Exception as error:
                 self._workspace_errors[target.key] = failure_detail(
-                    result, stage="session_catalog_sync",
+                    error, stage="session_catalog_sync",
                     label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
-                           + (f", status={result.response.status_code}" if isinstance(result, httpx.HTTPStatusError) else "")),
+                           + (f", status={error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else "")),
                 )
+                if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in {401, 403, 404}:
+                    self._snapshots.pop(owner, None)
+                    self._confirmed_at.pop(owner, None)
+                    await run_sync_shielded(self._cache_path(owner).unlink, missing_ok=True)
+                raise
+            finally:
+                self._in_flight.pop(owner, None)
+        task = asyncio.create_task(sync(), name=f"catalog-confirm:{target.workspace_id}")
+        # 请求可先返回镜像，后台失败仍写入原错误面并消费 task 异常。
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        self._in_flight[owner] = task
+        return task
 
-    async def _sync_workspace(
-        self,
-        target: WorkspaceTarget,
-        *,
-        request_id: str,
-    ) -> _CatalogSnapshot:
-        lock = self._sync_lock_for(target.key)
-        async with lock:
-            owner = workspace_owner(target)
-            url, headers = self._target_request(target, request_id=request_id)
-            response = await self._http_client.get(
-                url,
-                headers=headers,
-                timeout=self._request_timeout_seconds,
-            )
-            response.raise_for_status()
-            exported = await run_sync_shielded(
-                lambda: SessionCatalogExportDTO.model_validate(response.json()["data"]),
-            )
-            nodes_by_id = {node.node_id: node for node in exported.items}
-            if len(nodes_by_id) != len(exported.items):
-                raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
-            if (not self._registry.has_target(target.key)
-                or workspace_owner(self._registry.resolve(target.key)) != owner):
-                raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
-            snapshot = _CatalogSnapshot(
-                owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
-                updated_at=datetime.now(UTC), nodes_by_id=nodes_by_id,
-            )
-            await run_sync_shielded(self._save_snapshot, snapshot)
-            # 落盘期间允许控制面继续处理请求，发布前核验当前登记归属。
-            if (not self._registry.has_target(target.key)
-                or workspace_owner(self._registry.resolve(target.key)) != owner):
-                raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
-            self._snapshots[owner] = snapshot
+    async def _sync_workspace(self, target: WorkspaceTarget, *, request_id: str) -> _CatalogSnapshot:
+        return await asyncio.shield(self._request_sync(target, request_id=request_id))
+
+    async def _read_authoritative_version(self, target: WorkspaceTarget, *, request_id: str) -> _CatalogSnapshot:
+        owner = workspace_owner(target)
+        self._require_owner(target, owner)
+        url, headers = self._target_request(target, request_id=request_id)
+        response = await self._http_client.get(url.removesuffix("/export") + "/version", headers=headers, timeout=self._request_timeout_seconds)
+        response.raise_for_status()
+        version = SessionCatalogVersionDTO.model_validate(response.json()["data"])
+        if version.workspace_id != owner.workspace_id:
+            raise RuntimeError("会话目录版本响应工作区归属不一致")
+        self._require_owner(target, owner)
+        cached = self._snapshots.get(owner)
+        if cached is not None and cached.revision == catalog_projection_revision(version.catalog_revision, version.projection_revision):
+            self._confirmed_at[owner] = datetime.now(UTC)
             self._workspace_errors.pop(target.key, None)
-            return snapshot
-
-    def _sync_lock_for(self, workspace_id: tuple[str, str]) -> asyncio.Lock:
-        # 分片锁池：同一 workspace_id 恒得同一把锁（保住同一工作区同步互斥），
-        # 池大小恒定（有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入
-        # hash 随机化导致的锁分布漂移。
-        shard = zlib.crc32("\0".join(workspace_id).encode("utf-8")) % len(self._sync_locks)
-        return self._sync_locks[shard]
+            return cached
+        if cached is not None and cached.catalog_revision > version.catalog_revision:
+            raise RuntimeError("会话目录权威版本回退")
+        response = await self._http_client.get(
+            url, headers=headers, params={"minimum_catalog_revision": version.catalog_revision}, timeout=self._request_timeout_seconds,
+        )
+        response.raise_for_status()
+        exported = await run_sync_shielded(lambda: SessionCatalogExportDTO.model_validate(response.json()["data"]))
+        if (not exported.complete or exported.catalog_revision < version.catalog_revision
+            or exported.sync is None or exported.sync.workspace_id != owner.workspace_id
+            or exported.sync.gateway_id != owner.gateway_id or exported.sync.source != "authoritative" or exported.sync.stale):
+            raise RuntimeError("会话目录导出未确认目标 owner 的完整权威版本")
+        # 目录可在导出前继续推进；同一配置投影的完整更新仍可直接原子发布。
+        if exported.revision != catalog_projection_revision(exported.catalog_revision, version.projection_revision):
+            raise RuntimeError("会话目录导出期间版本已推进，保留旧镜像并等待下一次确认")
+        nodes_by_id = {node.node_id: node for node in exported.items}
+        if len(nodes_by_id) != len(exported.items):
+            raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
+        self._require_owner(target, owner)
+        snapshot = _CatalogSnapshot(
+            owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
+            updated_at=datetime.now(UTC), nodes_by_id=nodes_by_id,
+        )
+        await run_sync_shielded(self._save_snapshot, snapshot)
+        self._require_owner(target, owner)
+        self._snapshots[owner] = snapshot
+        self._confirmed_at[owner] = datetime.now(UTC)
+        self._workspace_errors.pop(target.key, None)
+        return snapshot
 
     def _load_snapshot(self, owner: GatewaySearchWorkspaceOwnerDTO) -> _CatalogSnapshot | None:
         path = self._cache_path(owner)

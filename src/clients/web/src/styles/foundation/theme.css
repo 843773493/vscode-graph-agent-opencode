@@ -2,11 +2,13 @@
   color-scheme: var(--boxteam-color-scheme);
 
   /* 字体与排版 */
-  --bt-font-family: var(--vscode-font-family);
+  --bt-font-family: var(--boxteam-ui-font-family, var(--vscode-font-family, inherit));
   --bt-font-family-mono: var(--monaco-monospace-font);
   --bt-font-size: 13px;
+  --bt-font-size-small: 12px;
   --bt-font-size-heading: 18px;
-  --bt-font-size-label: 11px;
+  --bt-line-height: 20px;
+  --bt-line-height-small: 18px;
   --bt-font-weight: 400;
 
   /* 配色仅来自 Workbench；--bt-* 是共享组件的语义别名。 */
@@ -172,4 +174,6 @@
   font-family: var(--bt-font-family);
   font-size: var(--bt-font-size);
   font-weight: var(--bt-font-weight);
+  /* 紧凑界面共享基线；正文、Markdown 与代码在所属样式中定义行距。 */
+  line-height: var(--bt-line-height);
 }

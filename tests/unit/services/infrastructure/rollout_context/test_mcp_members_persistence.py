@@ -8,6 +8,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import empty_checkpoint
@@ -15,7 +16,6 @@ from langgraph.checkpoint.base import empty_checkpoint
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -25,7 +25,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -40,20 +40,16 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
+from tests.support.mcp.frozen_catalog import (
+    catalog_workspace as catalog_workspace,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    CatalogSessionFactory,
+from tests.support.mcp.frozen_catalog import (
+    prepare_tool_context as prepare_tool_context,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    catalog_workspace as catalog_workspace,  # noqa: PLC0414 - 完整正式工作区 fixture
+from tests.support.mcp.session_doubles import MutableSchemaSessionFactory
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    guidance_prepare as guidance_prepare,  # noqa: PLC0414 - 复用实际 freeze/seal owner
-)
-
-TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
 
 
 @pytest.mark.asyncio
@@ -132,7 +128,7 @@ async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
 
 @pytest.fixture
 async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
-    factory = CatalogSessionFactory()
+    factory = MutableSchemaSessionFactory()
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
         raw_config={"servers":{"mini":{
@@ -162,13 +158,12 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver):
         await owner.shutdown()
 
 
-
-
 @pytest.mark.asyncio
 async def test_complete_mixed_members_survive_five_real_persistence_paths(
-    catalog_runtime, registry_db, guidance_prepare, session_bundle_factory, monkeypatch,
+    catalog_runtime, registry_db, prepare_tool_context, session_bundle_factory, monkeypatch,
     fork_deadlines,
 ):
+    target_session_id = f"ses_{create_uuid_hex()}"
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
@@ -187,7 +182,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         raise AssertionError("冻结、before-model 和持久恢复不得调用 MCP tools/list")
 
     monkeypatch.setattr(factory.session, "list_tools", forbid_list)
-    result, frozen = guidance_prepare("members-five-paths")
+    result, frozen = prepare_tool_context("members-five-paths")
     parent_row = next(binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent_row.display_uri is None and parent_row.members == published.members
     assert [member.to_dict() for member in parent_row.members] == [
@@ -216,7 +211,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         raise AssertionError("sealed retry、restart 和 fork 不得读取 live Registry")
 
     monkeypatch.setattr(registry, "capture", forbid_capture)
-    retry, retry_ref = guidance_prepare("members-five-paths")
+    retry, retry_ref = prepare_tool_context("members-five-paths")
     assert retry["messages"] == result["messages"]
     assert retry_ref.to_dict() == frozen.to_dict()
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
@@ -226,19 +221,19 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         )
         assert restored.to_dict() == frozen.to_dict()
         assert restored.parent.to_dict() == frozen.parent.to_dict()
-        session_bundle_factory(restarted._storage.storage.sessions_dir, TARGET_SESSION_ID)
+        session_bundle_factory(restarted._storage.storage.sessions_dir, target_session_id)
         await copy_rollout_snapshot(
-            restarted, session, TARGET_SESSION_ID, fork_deadlines=fork_deadlines,
+            restarted, session, target_session_id, fork_deadlines=fork_deadlines,
         )
-        target_thread = restarted._storage.storage.main_thread_id(TARGET_SESSION_ID)
-        target_path = restarted._storage.storage.index_path(TARGET_SESSION_ID, "", thread_id=target_thread)
+        target_thread = restarted._storage.storage.main_thread_id(target_session_id)
+        target_path = restarted._storage.storage.index_path(target_session_id, "", thread_id=target_thread)
         with closing(sqlite3.connect(target_path)) as connection:
             target_assembly = connection.execute(
                 "SELECT assembly_id,plan_hash,request_hash FROM context_assemblies WHERE assembly_id=?",
                 (assembly.assembly_id,),
             ).fetchone()
         forked = restarted.load_sealed_resource_activation(
-            TARGET_SESSION_ID, thread_id=target_thread, assembly_id=target_assembly[0],
+            target_session_id, thread_id=target_thread, assembly_id=target_assembly[0],
             plan_hash=target_assembly[1], request_hash=target_assembly[2],
         )
         assert forked.to_dict() == frozen.to_dict()
@@ -251,7 +246,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             assert target_binding.source_lineage_ref == source_binding.source_lineage_ref
             assert target_binding.source_lineage_digest == source_binding.source_lineage_digest
             assert restarted.read_resource_activation_payload(
-                forked, target_binding, storage_owner=(TARGET_SESSION_ID, target_thread),
+                forked, target_binding, storage_owner=(target_session_id, target_thread),
             ) == (
                 saver.read_resource_activation_payload(
                     frozen, source_binding, storage_owner=(session, thread),
@@ -269,7 +264,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
             placeholders = ",".join("?" for _ in protected_keys)
         # 以未来 GC cutoff 取得原 manifest 一致的候选，不篡改不可变正文的到期字段。
         candidates = restarted._storage.assemblies.list_expired_context_plan_details(
-            TARGET_SESSION_ID, target_thread,
+            target_session_id, target_thread,
             expired_before=datetime.now(UTC) + timedelta(days=31),
         )
         candidate_keys = {
@@ -278,7 +273,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
         assert set(protected_keys) <= candidate_keys
         with pytest.raises(RuntimeError, match="detail-retention-protected"):
             restarted._storage.assemblies.mark_context_plan_details_unavailable(
-                TARGET_SESSION_ID, target_thread,
+                target_session_id, target_thread,
                 detail_refs=tuple(DetailRef.from_dict(json.loads(key)) for key in protected_keys),
             )
         with closing(sqlite3.connect(target_path)) as connection:
@@ -287,7 +282,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
                 protected_keys,
             )) == {("available", "available")}
         retained = restarted.load_sealed_resource_activation(
-            TARGET_SESSION_ID, thread_id=target_thread, assembly_id=target_assembly[0],
+            target_session_id, thread_id=target_thread, assembly_id=target_assembly[0],
             plan_hash=target_assembly[1], request_hash=target_assembly[2],
         )
         assert retained.to_dict() == forked.to_dict()
@@ -302,7 +297,7 @@ async def test_complete_mixed_members_survive_five_real_persistence_paths(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("copy_before_restore", (False, True), ids=("source", "full-copy"))
 async def test_checkpoint_restore_preserves_frozen_mcp_parent_and_members(
-    catalog_runtime, registry_db, guidance_prepare, session_bundle_factory, monkeypatch,
+    catalog_runtime, registry_db, prepare_tool_context, session_bundle_factory, monkeypatch,
     fork_deadlines, copy_before_restore,
 ):
     _owner, factory, registry, _scope = catalog_runtime
@@ -321,7 +316,7 @@ async def test_checkpoint_restore_preserves_frozen_mcp_parent_and_members(
         raise AssertionError("checkpoint 持久恢复不得调用 MCP tools/list")
 
     monkeypatch.setattr(factory.session, "list_tools", forbid_list)
-    prepared, frozen = guidance_prepare("members-checkpoint-restore")
+    prepared, frozen = prepare_tool_context("members-checkpoint-restore")
     parent_row = next(
         binding for binding in frozen.bindings
         if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
@@ -363,7 +358,7 @@ async def test_checkpoint_restore_preserves_frozen_mcp_parent_and_members(
     monkeypatch.setattr(registry, "snapshot", forbid_registry_read)
     target_session = session
     if copy_before_restore:
-        target_session = TARGET_SESSION_ID
+        target_session = f"ses_{create_uuid_hex()}"
         session_bundle_factory(saver._storage.storage.sessions_dir, target_session)
         await copy_rollout_snapshot(
             saver, session, target_session, fork_deadlines=fork_deadlines,

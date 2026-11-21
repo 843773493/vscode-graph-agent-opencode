@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import ModelSource
 from app.domain.itemized.identity.refs import (
     ToolSetRef,
     ref_identity,
@@ -19,9 +20,11 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
 )
+from app.services.mapping.itemized.canonical_langchain import project_reasoning_carrier
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
 from app.services.mapping.itemized.provider_request import (
+    project_ai_message_content,
     project_responses_tool_content,
     project_runtime_notice_content,
     project_user_message_content,
@@ -32,18 +35,11 @@ from app.services.mapping.itemized.selection import (
     validate_projection_selection,
 )
 
-_NON_TEXT_BLOCK_TYPES = frozenset(
-    {
-        "reasoning",
-        "reasoning_content",
-        "reasoning_items",
-        "thinking",
-        "redacted_thinking",
-    }
-)
 
-
-def _summary_message_inputs(body: object) -> list[dict[str, object]]:
+def _summary_message_inputs(
+    body: object, *, target_source: ModelSource | None,
+    target_capabilities: frozenset[str],
+) -> tuple[list[dict[str, object]], list[str]]:
     """候选正文来自同一封存 frame；直接按其声明角色编码 Responses。"""
     if not isinstance(body, Mapping) or set(body) != {"message", "item_ids", "retry_source_item_ids"}:
         raise ValueError("source-mismatch: 摘要候选缺少精确 message manifest")
@@ -60,7 +56,9 @@ def _summary_message_inputs(body: object) -> list[dict[str, object]]:
             raise ValueError("source-mismatch: 摘要候选 tool result 缺少 call_id")
         output = project_responses_tool_content(data.get("content"))
         return [{"type": "function_call_output", "call_id": call_id,
-                 "output": output if isinstance(output, str) else canonical_json_bytes(output).decode("utf-8")}]
+                 "output": output if isinstance(output, str) else canonical_json_bytes(output).decode("utf-8")}], []
+    inputs: list[dict[str, object]] = []
+    losses: list[str] = []
     if role == "user":
         projection = project_user_message_content(data.get("content"), target_format="responses", image_input=True)
         if projection["diagnostics"]:
@@ -68,15 +66,22 @@ def _summary_message_inputs(body: object) -> list[dict[str, object]]:
         content = projection["content"]
         content = _text_blocks(content, role=role) if isinstance(content, str) else content
     else:
-        content = _text_blocks(data.get("content"), role=role)
-    inputs = [{"role": role, "content": content}] if content else []
+        projection = project_ai_message_content(
+            data.get("content"), response_metadata=data.get("response_metadata"),
+            target_source=target_source, target_capabilities=target_capabilities,
+        )
+        inputs.extend(projection.get("reasoning_items", ()))
+        losses.extend(diagnostic["detail"] for diagnostic in projection["diagnostics"])
+        content = _text_blocks(projection["content"], role=role) if projection["content"] else []
+    if content:
+        inputs.append({"role": role, "content": content})
     if role == "assistant":
         for call in data.get("tool_calls", []):
             if not isinstance(call, Mapping) or not call.get("id") or not call.get("name"):
                 raise ValueError("source-mismatch: 摘要候选 tool call identity 非法")
             inputs.append({"type": "function_call", "call_id": call["id"], "name": call["name"],
                            "arguments": canonical_json_bytes(call["args"]).decode("utf-8")})
-    return inputs
+    return inputs, losses
 
 
 def _text_blocks(body: object, *, role: str) -> list[dict[str, object]]:
@@ -88,15 +93,6 @@ def _text_blocks(body: object, *, role: str) -> list[dict[str, object]]:
     for block in blocks:
         if isinstance(block, str):
             result.append({"type": block_type, "text": block})
-        elif (
-            role == "assistant"
-            and isinstance(block, Mapping)
-            and block.get("type") in _NON_TEXT_BLOCK_TYPES
-        ):
-            # Responses 的 reasoning 扩展不是 message content text block。
-            # 它们是否可回放由 provider 能力决定；native projector 没有能力
-            # 上下文时不能把扩展伪装成普通文本，也不能因此阻断可见正文重放。
-            continue
         elif (
             isinstance(block, Mapping)
             and block.get("type")
@@ -121,6 +117,8 @@ def project_native_context(
     request_only_content: Mapping[str, object],
     *, seal_binding: ContextSealBinding | None = None,
     attachment_projector: Callable[[object], object] | None = None,
+    target_source: ModelSource | None = None,
+    target_capabilities: frozenset[str] = frozenset(),
 ) -> tuple[list[BaseMessage] | None, dict[str, object]]:
     """编码封存消息、Native 请求与来源映射；assembly 身份由调用 owner 附加。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
@@ -183,7 +181,11 @@ def project_native_context(
             if source is not None and source.contribution_kind == "model_message":
                 if plan.selection_policy != "summary_candidate":
                     raise ValueError("source-mismatch: model_message 只能属于摘要候选")
-                inputs.extend(_summary_message_inputs(body))
+                summary_inputs, summary_losses = _summary_message_inputs(
+                    body, target_source=target_source, target_capabilities=target_capabilities,
+                )
+                inputs.extend(summary_inputs)
+                losses.extend(f"{ref.ref_id}:{loss}" for loss in summary_losses)
             else:
                 role = "user" if seal_binding is not None else "system"
                 content = _text_blocks(body, role=role)
@@ -202,7 +204,7 @@ def project_native_context(
             if ref_identity(ref) in superseded:
                 continue
             kind = item.semantic_kind
-            if kind in {"user_input", "assistant_output"}:
+            if kind in {"user_input", "assistant_output", "reasoning"}:
                 role = "user" if kind == "user_input" else "assistant"
                 if role == "user":
                     projection = project_user_message_content(
@@ -218,7 +220,19 @@ def project_native_context(
                     if isinstance(content, str):
                         content = _text_blocks(content, role=role)
                 else:
-                    content = _text_blocks(item.payload, role=role)
+                    body = project_reasoning_carrier(item) if kind == "reasoning" else item.payload
+                    if body is None:
+                        losses.append(f"{item.item_id}:{kind}/{item.payload_kind}")
+                        continue
+                    source = ModelSource.from_extensions(item.extensions)
+                    projection = project_ai_message_content(
+                        [body] if isinstance(body, Mapping) else body,
+                        target_source=target_source, target_capabilities=target_capabilities,
+                        response_metadata={"model_source": source.to_dict()} if source is not None else None,
+                    )
+                    inputs.extend(projection.get("reasoning_items", ()))
+                    losses.extend(f"{item.item_id}:{diagnostic['detail']}" for diagnostic in projection["diagnostics"])
+                    content = _text_blocks(projection["content"], role=role) if projection["content"] else []
                 if content:
                     inputs.append({"role": role, "content": content})
             elif kind == "tool_call":

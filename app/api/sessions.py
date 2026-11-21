@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated, Literal
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -15,19 +16,18 @@ from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
-    get_file_tree_settings_service,
+    get_file_tree_shortcut_store,
     get_goal_service,
-    get_llm_request_log_service,
+    get_llm_request_log_reader,
     get_persistent_task_runtime,
-    get_request_id,
     get_rollout_checkpoint_saver,
     get_session_changes_service,
     get_session_context_fork_service,
     get_session_information_service,
-    get_session_interrupt_service,
     get_session_resource_service,
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
+    get_session_stop_service,
     get_team_service,
     get_thread_residency_tracker,
     get_trace_event_store,
@@ -51,9 +51,11 @@ from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.goal import (
-    SessionGoalClearResultDTO,
-    SessionGoalDTO,
+    SessionGoalClearRequest,
+    SessionGoalOperationResultDTO,
     SessionGoalSetRequest,
+    SessionGoalSnapshotDTO,
+    goal_public_view,
 )
 from app.schemas.internal_v2.llm_request_log import (
     LLMRequestLogLocationDTO,
@@ -65,6 +67,7 @@ from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
     ChildThreadRuntimeDTO,
     SessionCompactResultDTO,
+    SessionControlResultDTO,
     SessionCreateRequest,
     SessionDTO,
     SessionForkMode,
@@ -91,10 +94,12 @@ from app.schemas.internal_v2.session_fork_transfer import (
 from app.schemas.internal_v2.session_resource import (
     SessionResourceControlRequest,
     SessionResourceControlResultDTO,
+    SessionResourceDTO,
     SessionResourceKind,
     SessionResourceListDTO,
 )
 from app.schemas.internal_v2.sse import sse_responses
+from app.schemas.internal_v2.team import TeamBoardDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
 from app.schemas.internal_v2.workspace import (
@@ -102,45 +107,44 @@ from app.schemas.internal_v2.workspace import (
     SessionFileTreeSettingsDTO,
 )
 from app.services.business.context_compaction_service import ContextCompactionService
-from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_goal_service import (
     TOKEN_BUDGET_UNSET,
     SessionGoalService,
 )
 from app.services.business.session_information_service import SessionInformationService
-from app.services.business.session_interrupt_service import SessionInterruptService
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
-from app.services.infrastructure.llm_request_log_service import (
+from app.services.infrastructure.llm_request_log_reader import (
     LLMRequestLogError,
-    LLMRequestLogService,
+    LLMRequestLogReader,
 )
+from app.services.infrastructure.persistent_tasks.goals import GoalOperationReplayError
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     IncompleteForkSourceCaptureError,
 )
-from app.services.infrastructure.trace_event_store import (
-    TraceCursorGoneError,
-    TraceEventStore,
-)
-from app.services.infrastructure.turn_history.trace_page import (
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.infrastructure.session_trace.trace_cursor import TraceCursorGoneError
+from app.services.infrastructure.session_trace.trace_page import (
     TracePageBudgetExceededError,
 )
-from app.services.infrastructure.turn_history.trace_search import TraceSearchError
-from app.services.orchestration.persistent_tasks.goal import settle_goal_progress
+from app.services.infrastructure.session_trace.trace_search import TraceSearchError
+from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
+from app.services.orchestration.session_stop import SessionStopService
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -155,25 +159,30 @@ def _not_found_or_invalid_input_http_error(error: Exception) -> HTTPException:
 
 @router.get(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalDTO | None],
+    response_model=APIResponse[SessionGoalSnapshotDTO],
     summary="获取会话 Goal",
 )
 async def get_session_goal(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    goal_service: SessionGoalService = Depends(get_goal_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+    minimum_sync_version: Annotated[int, Query(ge=0)] = 0,
 ):
     try:
-        goal = await goal_service.get(session_id)
+        snapshot = await goal_service.get_snapshot(session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
-    return APIResponse(data=goal, request_id=request_id)
+    if snapshot.sync_version < minimum_sync_version:
+        raise state_conflict_http_error(ClientStateConflictError(
+            f"Goal 同步版本落后: {snapshot.sync_version} < {minimum_sync_version}"
+        ))
+    return APIResponse(data=snapshot, request_id=request_id)
 
 
 @router.put(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalDTO],
+    response_model=APIResponse[SessionGoalOperationResultDTO],
     summary="设置会话 Goal",
 )
 async def set_session_goal(
@@ -191,11 +200,20 @@ async def set_session_goal(
         else TOKEN_BUDGET_UNSET
     )
     try:
+        replay = await goal_service.replay_set(
+            session_id, objective=payload.objective, status=payload.status,
+            token_budget=token_budget, replace=payload.replace,
+            expected_control_revision=payload.expected_control_revision,
+            operation_id=payload.operation_id,
+        )
+        if replay is not None:
+            return APIResponse(data=replay, request_id=request_id)
         previous_goal = await goal_service.get(session_id)
+        progress = ()
         if payload.replace or (
             payload.status is not None and payload.status.value != "active"
         ):
-            await settle_goal_progress(runtime, session_id)
+            progress = await sample_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
             goal = await goal_service.set(
                 session_id,
@@ -203,8 +221,11 @@ async def set_session_goal(
                 status=payload.status,
                 token_budget=token_budget,
                 replace=payload.replace,
+                expected_control_revision=payload.expected_control_revision,
+                operation_id=payload.operation_id,
+                progress=progress,
             )
-        if goal.status.value == "active":
+        if goal.status.value == "active" and goal.control_revision == payload.expected_control_revision + 1:
             if (
                 not payload.replace
                 and payload.objective is not None
@@ -213,20 +234,30 @@ async def set_session_goal(
             ):
                 await runtime.request_goal(session_id, objective=goal)
             await runtime.request_goal(session_id)
+    except GoalOperationReplayError as replay:
+        return APIResponse(data=SessionGoalOperationResultDTO.model_validate(replay.result), request_id=request_id)
     except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ClientStateConflictError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
-    return APIResponse(data=goal, request_id=request_id)
+    return APIResponse(data=SessionGoalOperationResultDTO(
+        session_id=session_id, thread_id=goal.thread_id,
+        operation_id=payload.operation_id, status="applied",
+        control_revision=goal.control_revision, sync_version=goal.sync_version,
+        goal=goal_public_view(goal),
+    ), request_id=request_id)
 
 
 @router.delete(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalClearResultDTO],
+    response_model=APIResponse[SessionGoalOperationResultDTO],
     summary="清除会话 Goal",
 )
 async def clear_session_goal(
     session_id: CanonicalSessionId,
+    payload: SessionGoalClearRequest,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
@@ -234,10 +265,23 @@ async def clear_session_goal(
     session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
-        await settle_goal_progress(runtime, session_id)
+        replay = await goal_service.replay_clear(
+            session_id, operation_id=payload.operation_id,
+            expected_control_revision=payload.expected_control_revision,
+        )
+        if replay is not None:
+            return APIResponse(data=replay, request_id=request_id)
+        progress = await sample_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
-            cleared = await goal_service.clear(session_id)
+            cleared = await goal_service.clear(
+                session_id,
+                operation_id=payload.operation_id,
+                expected_control_revision=payload.expected_control_revision,
+                progress=progress,
+            )
     except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ClientStateConflictError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
@@ -245,6 +289,25 @@ async def clear_session_goal(
         data=cleared,
         request_id=request_id,
     )
+
+
+@router.get(
+    "/{session_id}/goal-operations/{operation_id}",
+    response_model=APIResponse[SessionGoalOperationResultDTO],
+    summary="查询 Goal 原操作回执",
+)
+async def get_session_goal_operation(
+    session_id: CanonicalSessionId,
+    operation_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+):
+    try:
+        result = await goal_service.get_operation(session_id, operation_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/fork-transfer", response_model=APIResponse[SessionForkTransferResultDTO], summary="执行精确 fork 来源导出或目标创建")
@@ -350,9 +413,14 @@ async def list_session_child_threads(
         async with session_service.session_read_admission(session_id):
             result = await session_service.list_child_threads(session_id)
             main_thread_id = await session_service.resolve_main_thread(session_id)
-            result.teams = (await team_service.list_teams(
+            result.teams = await team_service.list_summaries(
                 requester_session_id=session_id, requester_thread_id=main_thread_id,
-            )).items
+            )
+            outcomes = await run_sync_shielded(
+                saver.runtime_execution_outcomes, session_id,
+                {item.thread_id: item.report_execution_id for item in result.items
+                 if item.report_execution_id is not None and item.admission_state == "bound"},
+            )
             for item in result.items:
                 snapshot = residency_tracker.snapshot(session_id, item.thread_id)
                 item.runtime = ChildThreadRuntimeDTO(
@@ -362,7 +430,7 @@ async def list_session_child_threads(
                     blockers=[{"kind": blocker.kind, "reason": blocker.reason} for blocker in snapshot.blockers],
                 )
                 if item.report_execution_id is not None and item.admission_state == "bound":
-                    item.report_status = saver.runtime_execution_outcome(session_id, item.thread_id, item.report_execution_id)
+                    item.report_status = outcomes[item.thread_id]
                     if item.report_status in {"completed", "completed_empty"}:
                         item.status = "completed"
                     elif item.report_status in {"failed", "cancelled", "interrupted", "execution_lost"}:
@@ -371,6 +439,26 @@ async def list_session_child_threads(
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/teams/{team_id}", response_model=APIResponse[TeamBoardDTO])
+async def get_session_team_board(
+    session_id: CanonicalSessionId,
+    team_id: Annotated[str, Path(pattern=r"^team_[0-9a-f]{32}$")],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
+    team_service: Annotated[TeamCoordinationService, Depends(get_team_service)],
+):
+    try:
+        async with session_service.session_read_admission(session_id):
+            thread_id = await session_service.resolve_main_thread(session_id)
+            result = await team_service.get_board(requester_session_id=session_id, requester_thread_id=thread_id, team_id=team_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except (RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -411,12 +499,12 @@ async def untrack_session_skill(
     payload: SessionSkillUntrackRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    skill_tracking_service: SessionSkillTrackingService = Depends(
-        get_session_skill_tracking_service
+    skill_untrack_service: SessionSkillUntrackService = Depends(
+        get_session_skill_untrack_service
     ),
 ):
     try:
-        result = await skill_tracking_service.untrack(
+        result = await skill_untrack_service.untrack(
             session_id=session_id,
             thread_id=thread_id,
             name=payload.name,
@@ -582,12 +670,12 @@ async def list_session_llm_request_logs(
     session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    llm_request_log_service: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    llm_request_log_reader: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
         async with sessions.session_read_admission(session_id):
-            result = await run_sync_shielded(llm_request_log_service.list_session_logs, session_id)
+            result = await run_sync_shielded(llm_request_log_reader.list_session_log_summaries, session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:
@@ -601,7 +689,7 @@ async def read_session_llm_request_log(
     file_name: Annotated[str, Path(pattern=r"^[0-9]+\.json$")],
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    logs: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
@@ -620,7 +708,7 @@ async def locate_session_llm_request_log(
     reference: LLMRequestLogReferenceDTO,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    logs: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     if reference.session_id != session_id:
@@ -660,6 +748,24 @@ async def list_session_resources(
         raise state_conflict_http_error(exc) from exc
     except (KeyError, NotFoundError) as exc:
         raise not_found_http_error(exc) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/resources/{kind}/{resource_id}", response_model=APIResponse[SessionResourceDTO])
+async def get_session_resource(
+    session_id: CanonicalSessionId,
+    kind: SessionResourceKind,
+    resource_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_resource_service: Annotated[SessionResourceService, Depends(get_session_resource_service)],
+):
+    try:
+        result = await session_resource_service.get_resource(session_id, kind, resource_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -882,10 +988,10 @@ async def get_session_file_tree_settings(
     session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = service.get(session_id)
+        result = shortcut_store.read_session_shortcuts(session_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -901,10 +1007,10 @@ async def add_session_file_tree_shortcut(
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.add_session_shortcut,
+        result = await asyncio.to_thread(shortcut_store.add_session_shortcut,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -926,10 +1032,10 @@ async def remove_session_file_tree_shortcut(
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.remove_session_shortcut,session_id, path=path)
+        result = await asyncio.to_thread(shortcut_store.remove_session_shortcut,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
@@ -947,10 +1053,10 @@ async def apply_file_tree_shortcut_to_workspace(
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.apply_to_workspace,
+        result = await asyncio.to_thread(shortcut_store.set_workspace_default,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -972,10 +1078,10 @@ async def remove_workspace_file_tree_shortcut(
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.remove_workspace_shortcut,session_id, path=path)
+        result = await asyncio.to_thread(shortcut_store.remove_workspace_default,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
@@ -1016,7 +1122,27 @@ async def compact_session_context(
     ),
 ):
     try:
-        result = await context_compaction_service.compact(session_id=session_id)
+        result = await context_compaction_service.request_compaction(session_id=session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/{session_id}/stop",
+    response_model=APIResponse[SessionControlResultDTO],
+    summary="按停止策略排空会话资源，保留会话数据",
+)
+async def stop_session(
+    session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_stop_service: Annotated[SessionStopService, Depends(get_session_stop_service)],
+):
+    try:
+        result = await session_stop_service.stop(session_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
@@ -1031,15 +1157,13 @@ async def compact_session_context(
 )
 async def interrupt_session(
     session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_stop_service: Annotated[SessionStopService, Depends(get_session_stop_service)],
     thread_id: CanonicalThreadId | None = None,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_interrupt_service: SessionInterruptService = Depends(
-        get_session_interrupt_service
-    ),
 ):
     try:
-        result = await session_interrupt_service.interrupt(session_id=session_id, thread_id=thread_id)
+        result = await session_stop_service.interrupt(session_id=session_id, thread_id=thread_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:

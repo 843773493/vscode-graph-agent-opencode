@@ -59,7 +59,7 @@ class _MissingChangesService:
 
 
 class _MissingReplayService:
-    async def replay(self, session_id: str, target_message_id: str, request):
+    async def replay_message(self, session_id: str, target_message_id: str, request):
         raise CATALOG_KEY_ERROR
 
     async def replay_turn(self, session_id: str, turn_id: str, request):

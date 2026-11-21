@@ -1,0 +1,1161 @@
+本清单追踪实现与验收进度；已获授权按纵向切片推进，完成项须附实际证据。章节编号用于定位，不代表排期；领域合同、真实查询和客户端消费的必要依赖须满足，可独立的任务不要求串行。每个实现项完成时须同时迁齐直接／间接调用方及相关测试，删除失去消费者的同义旧链路。不得把文档齐备、入口可打开或单项辅助函数通过当作产品完成。
+
+## 1. 合同与真实类型
+
+覆盖规范：搜索结果必须明确类别归属与目标；索引必须由各搜索 owner 自主负责。
+
+- [x] 1.1 按 design 的具名 owner 对照现行 schema、查询入口与所有直接／间接消费者，确认目录使用 SQLite catalog、Thread 使用精确 SessionThread，不沿用物理目录重建条文。
+  - 已核当前Provider注册、原API、Gateway／工具／React／Workbench消费者：目录沿SQLite locator与逻辑导航，folder不映射物理树；Thread经原Session读准入及控制库事务核不可变main_thread_id，消息／工具继续canonical owner。六组Provider相关生产源码与已接受收据逐文件SHA一致，复用原名称／正文／生命周期验收，并以16.6当前83项及真实双Backend调度检查承接调用链。准确归属及证据索引见 `out/tests/temp/2026/11/05/search_owner_inventory/artifacts/verification.json`；本项仅关闭盘点，不代替后续公开合同、跨平台文件身份或完整资源打开验收。
+- [x] 1.2 为领域搜索新增的请求、命中、独立位置和分支状态补齐原 owner 的 typed 合同；涉及公开 API 时同步其 delta、OpenAPI 与生成客户端。Provider／联邦共享信封按第 16 组统一生命周期，领域 payload 不被通用对象 DTO 取代，不创建第二客户端。
+  - 2026-11-08 合同收口：现有请求／能力、7个具名领域页及联邦分支合同已迁齐；15个descriptor根及7个原入口／调度／客户端文件逐项核对，37项真实OpenAPI／嵌套候选漂移／绑定合同通过，生成一致性检查通过且未改写产物。两套客户端绑定及实际Web流31项／260断言通过。源文件指纹、命令和原始结果见 `out/tests/temp/2026/11/08/search_contract_closure/artifacts/verification-v5.json`；只关闭公开结构及唯一链路，不代替完整交互、Electron或1.4的全前端类型验收。
+- [x] 1.3 为文件、目录、消息、工具、请求和日志分别确定必要的查询预算、上限和覆盖说明，复用原 owner 配置／常量；索引技术各自决定，不强建全局索引。
+  - design「领域查询预算与覆盖」逐项登记原声明：文件／目录、catalog、Thread、canonical消息／工具、请求、Trace、运行日志及联邦外层；明确1秒领域调度与15秒总准入分别生效、原导航参数与Provider上限区别，以及受限／错误／合法续点的覆盖语义。24份原owner／schema／调度源码只读清点及SHA见 `out/tests/temp/2026/11/05/search_budget_inventory/artifacts/verification.json`；无新生产参数、配置或查询链，不重复未变化的产品测试。本项只完成预算确定，不代替第15／16组剩余验收。
+- [x] 1.4 完成共享签名和生成类型的真实检查，核真实序列化结果、Unicode 位置单位和错误归属，阻止只改 TS 声明但后端不提供数据的接入。
+  - 2026-11-08 共享类型及位置收口：原搜索流按项目既有错误类写法直接保存cause，定向真实ES2021类型检查零诊断，26项生产流检查保留原异常身份、request_id、取消与期限。26项后端／协议与2项实际Workbench Provider检查验证码点和UTF-16、emoji／多行／裁短片段、原JSON及二进制往返、错误归属；前轮公开结构、3套生成绑定和独立runtime消费证据经当前输入SHA核对复用。正式Workbench构建通过；完整Web类型前后均为相同29条既有诊断，无新增，全前端验收仍归15.2。准确命令、源码指纹、原始结果与复用边界见 `out/tests/temp/2026/11/08/search_contract_types/artifacts/verification-v1.json`；本片不代替完整页面、Electron或插件验收。
+
+## 2. 稳定目标与统一打开
+
+覆盖规范：规范 URI 必须按资源引用与重开需求补齐；URI 解析与定位参数必须消费唯一合同；打开动作必须保留原版编辑器行为和入口差异。
+
+- [x] 2.1 将 ThreadInput 的匹配、去重和恢复绑定稳定 Gateway／workspace／Session／Thread 身份，重开时重新解析已登记 route；失效或歧义不改投当前目标。
+- [x] 2.2 在原 opener／resolver 接入规范资源 URI 的唯一解析与编辑器投影，覆盖精确 child、文本、媒体、Diff 和只读资源；位置和版本使用独立参数。
+  - 2026-11-13 收口：唯一URI parser／Opener／resolver及精确child、文本、媒体、Diff、只读来源已由原产品页面覆盖；本轮直接只读恢复的8个身份失效反例转绿，最终29项／396断言、真实类型及正式构建通过。通用PDF不猜测Session语义，保留既有附件预览边界。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-12 音视频规范 URI 的真实重开子片：现有正式 v6 官方隔离 Webview 已可用，无产品改动；A/B同名 WAV 以0.5秒／1秒真实解码区分完整 owner，双组正常恢复、复制零新增原件读取及关闭后公开URI重开通过；原 MP4 核320×180／3秒、复制／重开／恢复，原raw请求／范围及request_id均保留。正式Gateway／Backend／Workbench完整页面1 passed／107.61秒，零模型调用、文件写入和pageError；原关闭join的console错误如实保留。复用紧邻13.3通过的174份转换类型及79扩展正式构建（产品指纹一致），新增Python Ruff／MJS语法／差异检查通过；证据 `out/tests/temp/2026/11/12/media_reopen/artifacts/verification.json`。历史v4失败记录仍保留为当时事实；无扩展名受管附件、Windows／真实远端／Electron未由本片证明，2.2／2.3／2.4／2.5仍未勾选。
+  - 2026-11-12 统一原 Opener 身份生命周期：解析、重解目标、main查询和只读模型取得共用一次凭据监听与最终准入，拒绝迟到打开并释放引用，不增加HTTP／健康探测／重试。原实现三个身份反例先失败，修改后来源／配置44项292断言、文件／Session／child等30项215断言及最终受影响8项54断言通过；172份实际转换类型、正式79扩展Web构建和真实Gateway／Workbench双工作区来源页面通过（1 passed／42.63秒）。原组／预览／侧开／后台和删除来源行为保留；身份变化为具名宿主合同，未代替真实撤权、Windows／远端／Electron，整项仍未完成。准确命令、指纹、原始输出及最小复审见 `out/tests/temp/2026/11/12/resource_open_lifetime/artifacts/verification.json`。
+  - 2026-11-13 原资源入口生命周期继续收口：Opener／复制及隐藏来源 picker 后的两个二级等待均监听本次 Gateway，离开后切回仍拒绝迟到结果并释放订阅，不加 parser、HTTP、缓存或恢复存储。七个打开／复制 A→B→A 反例在原实现全部失败；最终来源41项、配置33项通过，联合检查的Thread浏览器超时原件保留，同源码独立Thread9项57断言通过。182份实际转换的类型检查退出0（83.11秒），正式79扩展Web构建退出0（57.31秒），两次1087输入均未变；证据见 `out/tests/temp/2026/11/13/uri_editor_closure/artifacts/verification.json`。本片只补当前Linux Web链路，不代替当前Windows／真实远端／Electron或真实撤权验收，整项不勾选。
+  - 2026-11-13 原文件读取身份边界：沿原 readBytes 的取消控制器监听 Gateway，响应、Blob 与字节转换期间离开再切回均拒绝旧字节且不推进 CAS；首次身份发布、同 Gateway 切换活动工作区及后续新读取保持可用，结束释放订阅。三个旧实现反例先失败；修后16项、原 input／规范化备份8项95断言通过，禁止已删除的冗余 resolveWorkspace 预读并保留完整 owner／100条分批／草稿原件。183份实际转换源码类型与79扩展正式 Web 构建通过；完整 Web 类型唯一诊断来自并发的 TerminalContent 测试回调，不计为本片全绿，终端源码的并发变化也不由本片验收。最小复审未加探测、缓存或恢复框架；准确命令、指纹、红绿原件及适用范围见 `out/tests/temp/2026/11/13/file_read_identity/artifacts/verification.json`。真实撤权／跨平台和其余打开矩阵继续由宽任务追踪。
+- [x] 2.3 清点需要复制引用或重开的对象，已有规范 URI 直接复用，确有模板缺口时由唯一寻址 owner 登记并迁齐消费者；命令与瞬时状态不造 URI。
+  - 2026-11-12 配置来源复制复用同一资源 Command／URI parser：候选直接使用原目录 URI，已打开 JSONC 只按原 target／source_key 查目录，不读正文；无 URI 的逻辑来源不展示复制按钮，显式命令明确拒绝，编辑仍保留。配置／Thread合同41项251断言、最终配置／Skill合同73项470断言通过，172份实际转换类型及79扩展正式构建通过。真实Gateway／Backend／Workbench页面1 passed／73.09秒，核两类来源候选／编辑器复制、焦点保持、零正文新增读取及逻辑来源拒绝，原CAS／未知保存／草稿恢复继续通过；pageErrors为空，原console错误保留。最小复审及独立只读审查未发现确定缺陷，无新模板或映射；命令、源码指纹及失败归因见 `out/tests/temp/2026/11/12/config_resource_reference/artifacts/verification.json`。仅Linux本机页面，Windows／远端／Electron及Diff／固定版本继续未完成，整项不勾选。
+  - 2026-11-13 已清点Session／main／child、普通文件媒体、受管附件、AGENTS／Skill／工具产物、正式配置、当前Diff、消息／日志位置以及仅执行命令的对象，登记各自唯一URI与打开owner及复用边界；既有grammar继续统一提供公开引用，位置／领域版本保持独立，普通引用不新增固定版本或snapshot，命令与瞬时状态不造URI。逐文件复用差异与权威源指纹见同证据目录的 `uri-object-inventory-1.json`、`reuse-inputs-1.json`；该清点不代替其余运行面的完整验收。
+  - 主线程复核上述对象清点、唯一 grammar／地址投影与打开／复制消费者，15份登记源码的当前 SHA-256 均与清点原件一致；本项按对象清点与调用方接入范围完成。真实远端、Windows／Electron及其余打开／恢复行为继续由2.2／2.4／2.5与15组追踪，不把清点完成扩大为跨平台验收通过。
+- [x] 2.4 验证原编辑器组、预览／固定、侧边／后台打开、目标组及视图恢复，文件树单击仍在会话资源内预览，多种打开方式由明确动作触发。
+  - 2026-11-13 文件菜单固定右键发起组，侧开遵守原方向配置；原组关闭后五种打开动作明确拒绝，打开方式取消零打开。旧生产4通过／9失败，修后连同文件输入16项／69断言通过。正式Gateway／Workbench完整页1 passed／99.10秒：文件树单击只更新会话内预览、零新Tab，随后原右键打开、三入口共享dirty模型、跨owner和逻辑链接隔离、正常重载保存及外部变化后409／备份保留均通过，pageErrors=[]。原英文状态栏断言按已发布中文资源迁齐，未改保存或身份预期。完整Web类型、185份转换源码类型及79扩展正式构建通过；main SHA256为`370ac7f92b3e3deeedfdd1b6b3df3c617b3f93db464e3fff4d78f24be2de9a9b`。命令、源码指纹、失败归因及最小复审见 `out/tests/temp/2026/11/13/file_menu_group/artifacts/verification.json`，页面原件为 `out/tests/integration/clients/web/quick_access/test_file_canonical/runs/run-722e00646cc5/nodes/node-199ef6414b9a/artifacts/file-canonical.json`；并行MCP源码变化未进入此冻结产物，不据此证明MCP或新一轮跨平台验收。后台接受／原组分屏沿14.2已核真实交互，媒体／只读恢复沿2.2和13组已核原件。
+  - 2026-11-13 来源首次可接受项沿原Quick Input聚焦，增量更新按稳定ID保留，目标消失清空而不改投；聚焦不合成selected，原Controller单／多选Esc零交付。真实AGENTS与运行资源补页2 passed／156.38秒；同一正式资产的受管图片／双owner WAV／视频页在首批通过，核真实解码、零原件复制、公开URI关闭重开及原组刷新恢复。AGENTS页仍以正常方向键定位后Enter／Alt+Enter接受，保留只读、owner、零正文与零空分屏断言；原broad定位器匹配回收行及无条件方向键的装具失败原件保留。两批1751输入均未变，main SHA256=`0bae45fe8ed5037362008474f9f7fd5e7f94ca8ccee69182f205b3093da739e6`；文件树单击链路未改，整项仍未完成。
+- [x] 2.5 用同名跨工作区、route 改变／被复用、main／child、只读与不可文本资源的真实打开入口验证目标隔离，不能只测投影函数。
+  - 2026-11-13 收口：真实双Gateway／独立Backend以相同workspace UUID和同名文件核owner隔离，B停止及C复用旧端口时旧URI明确409且零错误交付，新登记原B后恢复；媒体按真实解码结果区分双工作区。SSH配对沿既有loopback装具，不称真实跨机验收。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-13 双 Gateway 页面复现 HTTP/1 六连接耗尽：原四条命令流加两条观察流持续占满同源连接，浏览器 health 5 秒超时，独立 socket 同地址 200／31.77ms。窗口现复用原工作区完整命令快照中的 Gateway 贡献，每个 Gateway 选一个明确工作区来源；来源移交、断流、重连、凭据失效与关闭沿原 Registry／reader 释放，无新协议或第二快照缓存。14项原订阅／贡献合同160断言、183份实际转换源码类型及79扩展正式Web构建通过，1125前端输入前后未变。真实容量补验 `run-be1252368a1c`，1 passed／81.25秒／exit0，四条活跃SSE为两条命令＋两条观察，浏览器health 200／11.4ms，原request_id一致；pageErrors为空，关页两条上游shutdown console错误保留。原红证据、新容量收据及独占产物指纹见 `out/tests/temp/2026/11/13/plugin_command_connections/artifacts/` 和 `out/tests/temp/2026/11/13/quick_access_remote/artifacts/capacity-2.json`。只证明本次双目标容量，不据此宣称任意数量工作区容量或整项远端验收完成。
+  - 2026-11-13 当前页面补验同名跨工作区AGENTS及无扩展名附件媒体的精确owner、只读与失效来源，pageErrors为空；普通媒体、Diff、配置等旧证据按实际源码差异复用，未把旧主包当作含本片修复。route／main／child与Gateway切回反例来自真实Opener／HTTP客户端的具名宿主边界，不等同真实跨Gateway撤权；通用PDF URI不推断当前Session或扩展原附件预览，Windows／真实远端／Electron仍未由本片证明。
+  - 2026-11-13 双真实 Gateway／独立 Backend 的规范 URI 闭环：两端相同 workspace UUID、同名文件，B 经一次 model_stream 消息及原 fork 生成 main／durable child。正式 Workbench 页面核 B 文本和只读 AGENTS、精确 main／child、复制零正文、两组草稿及正常刷新；B 停机与 C 复用旧端口时，旧引用各一次精确 B 409，零 Backend 交付、正文、新 Tab、空组或改投。显式删除旧连接并在新端口重新登记同 B Home 后，稳定 Gateway／workspace 不变、connection ID 改变，同一 URI 重开并恢复草稿；10条成功正文逐 request_id 核到 B，A 无同ID。完整节点 `run-e06c8942f306` 为 `1 passed / 177.14s / exit 0`，外层181.57秒；Ruff、Node语法通过，1125项前端构建输入与正式主包指纹匹配，复用同批类型／构建。pageErrors为空，28条原console错误与旧凭据双发现401原件保留；SSH配对／隧道为既有loopback边界，不能称跨机器E2E，也未证明认证成功后的Gateway ID错配或Windows／Electron。运行期他任务records.py变动及恢复指纹如实登记，不证明其SQLite版本。测试提交 `2b2f73c69`，准确命令、原件和边界见 `out/tests/temp/2026/11/13/quick_access_remote/artifacts/verification.json`；整项继续保留剩余场景。
+
+## 3. 目录与 Thread 发现
+
+覆盖规范：项目目标和既有业务动作必须逐类接入。
+
+- [x] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
+- [x] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
+- [x] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
+- [x] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
+
+## 4. 文件 owner 与真实目录根
+
+覆盖规范：文件搜索与文本定位必须共享实际资源目标。
+
+- [x] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
+- [x] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
+- [x] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
+- [x] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
+
+## 5. 原版文件搜索服务
+
+覆盖规范：文件搜索与文本定位必须共享实际资源目标；搜索范围必须明确且请求保持原目标。
+
+- [x] 5.1 通过原 singleton 注册唯一项目 SearchService 和同一文件 file／text Provider，核最终 ServiceCollection 与生命周期，不依赖偶然 import 顺序。
+- [x] 5.2 对明确业务根的 textSearchSplitSyncAsync 使用完整 owner／URI 过滤本地未保存模型，先限制再发送 progress，当前模型覆盖同文件后端旧命中，不自动保存。
+- [x] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
+- [x] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
+- [x] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
+- [x] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
+
+## 6. 原搜索视图与 Search Editor
+
+覆盖规范：搜索编辑器必须按输入持久保存明确范围。
+
+- [x] 6.1 在原 SearchView descriptor 选择项目子类，并在原 ViewPaneContainer.createView 以 child 创建；移动到其它容器仍保持唯一视图 ID、用户布局、全局 SearchViewModel 和 ReplaceService。
+- [x] 6.2 将 `%` 到 SearchView 的 replaceSearchModel 与 SearchView 到 Search Editor 的两个 rawData 分支携带同一明确范围，后续修改查询不跟随导航。
+- [x] 6.3 在原 SearchConfiguration 增加 typed、版本化 scope，贯穿 factory 三种入口、控件重建、updateConfig 和命令参数；priorConfig 只复用查询选项，不继承 scope。
+- [x] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。
+- [x] 6.5 在原 Pane 贡献选择 SearchEditor 子类，setInput／clearInput、模型 await、原 searchModel 取消及异步完成均检查 input／scope 代际，复用仅匹配同 scope。
+- [x] 6.6 让原 JSON serializer、copy、磁盘／backup header 读写保留 scope，修复固定六行 header 读取；缺 scope 的旧结果只读查看至明确选范围，未知／损坏版本明确报错。
+- [x] 6.7 用两个工作区同时分屏验证再次查询、复制、保存／另存、关闭重开、backup 恢复和 route 变更，检查 query 对象与真实 HTTP 目标；不以保存字段存在替代运行时接线证明。
+
+## 7. 默认 Provider 与模式帮助
+
+覆盖规范：默认入口必须统一组织资源并明确工作区范围；输入必须直接可用并解释当前模式和匹配；列表必须分层展示并保持动作可辨认；原入口调用方式必须保持兼容语义而不增加重复入口。
+
+- [x] 7.1 复用既有 sourceTransform 在原贡献登记处选择唯一空前缀及 `%` descriptor，保留原元数据；固定 commit、锚点恰好一次且失配失败，dev／预构建／build 使用同一管线。
+- [x] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
+- [x] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
+- [x] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
+- [x] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
+- [x] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
+
+## 8. 查询范围与异步结果
+
+覆盖规范：搜索语义和异步边界必须真实；加载必须渐进反馈并避免更新误选；每个查询分支必须独立表达完成与受限状态；续页必须绑定原查询并保持选择目标。
+
+本组已完成项保留原前端调度切片的历史证据，不表示已完成 2026-11-03 扩展的两级后端架构。跨目标调度迁入 Gateway、显式 all、工具／脚本入口及旧链清理另由第 16 组未完成项追踪，不能复用本组勾选宣称新增合同已经落地。
+
+- [x] 8.1 用原 Quick Input 提供已登记范围集合选择，明确显示当前范围；取消保持原查询，确认才发起新范围查询，选择停止目标不自动连接／启动／激活。
+- [x] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
+- [x] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
+  - 2026-11-13 新 Search Editor／SearchView 等完整范围加载在目录根读取前订阅原凭据及 Gateway 身份，取消路由／根请求并拒绝迟到元数据；普通工作区导航和初次 Gateway 发布仍保留发起 owner，完成后释放订阅。四个身份反例修前失败，修后与原转换／序列化共389项／1473断言通过；现有 Quick Access 根加载沿原生命周期，不重复注册或增加HTTP。提交 `21c29724b`，准确命令、红绿原件及最小实现复审见 `out/tests/temp/2026/11/13/search_scope_identity/artifacts/verification.json`；本片为真实HTTP客户端及身份事件、具名延迟响应的服务合同，不称完整页面撤权验收。
+- [x] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
+- [x] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
+- [x] 8.6 记录实际请求证明只 A 或明确 A+B，不访问 C；覆盖取消、超时、离线、旧 cursor、重复输入与迟到 progress，不仅查看 UI 结果。
+
+## 9. 五类正文查询与精确定位
+
+覆盖规范：内容搜索必须覆盖明确选择的正文类别；正文命中必须能够加载并精确恢复位置。
+
+- [x] 9.1 接入 `content ` 的类别选择与按 owner 分支组织，默认 Ctrl+P 不扫描正文；仅选类别发请求，`%` 固定文件并复用同一文件条件。
+  - 原QuickInput按集合确认／取消，完整迁掉单值选项；相同协议类别／操作合为一条查询，工作区与Gateway日志仍按明确source独立分支。31项后端检查、37项客户端合同、真实Workbench类型及正式构建通过；四类真实Gateway页面验证消息＋工具和两类日志各自的真实非空命中、未选零查询、取消恢复及零新增执行。组合页面3通过／1驱动失败，消息页修复原悬浮提示及文件流收尾竞态后单独通过，原断言与失败原件保留。证据`out/tests/temp/2026/11/05/content_selection_audit/artifacts/verification-024.json`；协议本地结构核对完成，全量生成比对因Buf远端插件不可用未完成。9.7／9.8及Electron不由本片代验。
+- [x] 9.2 文件类复用第 4／5 组的唯一搜索链，提供有界片段和独立文本位置，不另建正文文件扫描器。
+- [x] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
+  - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 原文定位及真实 Gateway／Workbench 页面验收已完成，详见本文件消息正文切片证据。
+- [x] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
+- [x] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
+- [x] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
+  - 2026-11-13 Trace SQLite 接线复验：规范及设计对齐原 owner 已提交的唯一 SQLite 正文／索引和事务快照，保留原 URI、逻辑记录区间、机器原因及预算。真实 Gateway／Backend／正式 Workbench 页面 `1 passed / 178.15s / exit 0`：产品执行及 fork 生成未打开 child，五次查询只选 Trace，精确打开及同 pane 新位置、追加后原记录读取、旧版本／删除409、独立旧 cursor409与 request_id 均通过，零全量 Trace 读取、页面错误为空。首次准备阶段默认5秒早于成功模块加载，按已有完整页面30秒门槛核初始化；搜索／执行期限未改。复用不可变 Web 资产及准备包，相关 Trace 输入前后未变；唯一并发变化为未执行的文件补丁 matcher。Ruff、ESM、严格规范及差异检查通过；准确命令、指纹、两轮原件与最小复审见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/trace-sqlite-verification.json`。本片不代表重建当前完整前端、原生客户端或其它日志来源验收。
+  - Trace 的原事件查询、独立续点及精确 Thread／原行定位沿 2026-11-04 切片证据；运行日志已迁齐原 diagnostics owner、公开协议、联邦客户端、Quick Access 和原诊断视图，验收及适用边界见 2026-11-05 运行日志切片证据。
+- [x] 9.7 将命中通过精确 owner、目标组与请求代际交给 React 虚拟列表／原详情加载，等待缺页与实际挂载后定位，失效记录明确报错而不回顶部。
+- [x] 9.8 用各类独有词、未打开 child、未加载工具／日志、多行与 emoji、截断片段及已删除记录验证真实 owner 查询和位置，未选类别没有请求。
+
+## 10. Thread 大纲与原版导航
+
+覆盖规范：Thread 大纲必须复用非文本编辑器导航语义；项目编辑器和视图必须进入原版导航机制。
+
+- [x] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
+- [x] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
+  - 2026-11-11 明确范围符号增量与单分支重试：原聚合器公布逐Provider结果，增量与最终结果共用原去重／评分／接受；快分支先出，失败按钮只重试原Provider。原Picker逐次token覆盖输入、关闭及在途重试，成功兄弟与活动符号保持，不访问部分窗口范围。真实原Picker／聚合／评分和项目子类的6项定向检查（37断言）、167份实际转换源码类型及规定正式Web构建通过，严格OpenSpec校验通过；语言Provider及窗口服务为DI，不冒充页面／远端语言宿主验收。默认混合列表includeSymbols仍TODO。最小复审无第二索引、持久状态、同义调度或fallback；准确命令、指纹、原件及边界见 `out/tests/temp/2026/11/11/workspace_symbols_stream/artifacts/verification.json`，实现提交b36783b92。
+  - 2026-11-11 默认列表符号接通：search.quickOpen.includeSymbols 与 # 共用明确窗口范围、原Provider／聚合／评分／失败单分支重试及resolve；文件、会话与符号渐进合并且busy独立结算，保留活动身份、发起组及侧开，追加行列不重查名称。filesOnly／delegate／handleAccept／正文及行列入口零符号查询；确认关闭后resolve仍可完成，关闭／新输入取消列表并丢弃迟到结果。11项原Picker合同（76断言）、50项Chromium原组件合同（577断言）、171份实际转换源码类型及规定正式Web构建通过，严格OpenSpec校验通过。语言Provider／窗口服务／联邦查询为具名DI，未冒充完整产品页、真实远端语言宿主或Windows／Electron；默认includeSymbols TODO已完成。准确命令、失败归因、指纹、最小复审及保留原件见 `out/tests/temp/2026/11/11/default_workspace_symbols/artifacts/verification.json`。
+- [x] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
+- [x] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
+
+## 11. 领域动作与资源模式
+
+覆盖规范：快速访问必须区分目标选择与动作执行；候选展示不得触发业务执行；管理动作必须复用领域权威状态；跨入口命令必须保持目标优先级与原打开修饰键。
+
+- [x] 11.1 将项目业务动作注册为同一 Action／Command，迁齐原菜单、React 操作和 picker 消费者；目标优先显式参数，再发起 editor owner，仍不明确才选择。
+  - 2026-11-14 收口：Session／fork、工作区、自动化、终端／Browser、复制／Composer 及 MCP 原列表／详情／Options／资源齿轮已核同一 Command 和原 writer；显式参数、发起 owner、只选择的优先级由原领域合同逐项证明。MCP 双 scope 完整页面补齐最后缺口；全仓消费者、历史后续差异及逐项原件见 `out/tests/temp/2026/11/13/quick_access_six_closure/artifacts/task-evidence-matrix-1.json` 和 `consumer-minimal-audit-1.json`。下方未完成判断保留为历史，不再代表当前此项状态。
+  - 2026-11-12 资源操作旧旁路清理：所有生产调用均已提供原 Command dispatcher，`useWorkspaceResources` 删除可选参数及直接执行的回退；组件与 picker 继续共用同一 writer，不新增请求或状态。10项 Hook 检查／34断言与完整 Web 类型检查通过，正式 Workbench 构建按相同两文件指纹复用；持续最小充分复审未发现遗漏调用。原始命令、源码指纹与结果位于 `out/tests/temp/2026/11/12/search_diagnostic_notices/artifacts/luna/cleanup/workspace_resource_dispatch/`；本片不替代其它领域或原生验收，宽任务保持未勾选。
+  - 2026-11-06 终端／Browser 的 promote、attach、detach、stop、delete 已注册同一原 Action／Command，底部面板按钮经原 Hook 临时句柄复用原 writer，picker 固定 owner／revision 和发起 child。共享唯一写入结算，成功完整替换、失败只回读；不为已挂载按钮追加控制面查询。其余业务动作与右侧 Session 资源入口尚未迁齐，整项不勾选。
+  - 2026-11-12 Session 重命名／删除已注册原 Action／Command，导航菜单与 Session 候选按钮共用原对话框、删除确认及目录 outbox；显式 Session 优先于发起 child 所属 Session，无明确 Session 时沿原有界 `session ` Provider 只选择。重解完整 owner，读取权威标题，离线拒绝且不启动目标；身份检查覆盖确认前，已受理操作不撤销／重放，也不新增成功通知冒充物理完成。48项 hook／真实 Command／Provider 定向检查、另外45项跨入口检查、172份实际转换源码类型与79扩展正式Web构建通过，严格规范校验通过；完整产品页面仍在验收，当前不得据此关闭11.1／11.6／11.7或Electron。原始命令、失败归因、源码指纹与最小复审见 `out/tests/temp/2026/11/12/session_quick_actions/artifacts/verification.json`。
+  - 同日上下文分支接入同一 Session Command：导航菜单、Session 候选、消息按钮与子 Thread 资源按钮迁齐，Thread 内重复对话框及其提交接线删除；显式快照优先，发起 child 保留精确 Thread。原导航 fork hook 继续持有范围预检、原幂等请求、错误与权威回执，标题由命令读取；取消来源预检立即释放命令，迟到回执不重新显示，受理后拒绝关闭／替换并等待原 writer。106项原 Provider／Command／hook 检查通过，最终取消调整后的32项hook复验通过；172份实际转换源码类型检查与79扩展正式Web构建通过。完整页面仍在验收，不关闭11.1／11.6／11.7或Electron；准确证据及最小复审见 `out/tests/temp/2026/11/12/session_fork_actions/artifacts/verification.json`。
+  - Thread 名称与最近候选补齐同一分支命令入口，显式传递完整 owner 和精确 child，不先打开目标、不读取历史、不把正文搜索命中当无快照来源。真实 Provider／Command 联合合同76项726条断言、172份实际转换源码类型及正式79扩展构建通过；首次联合运行在既有 Session 场景连续超时，独立26项与补充阶段诊断后的联合检查均通过，未取得确定超时根因，原件保留。完整 fork 页面仍在验收，宽任务保持未勾选；证据见 `out/tests/temp/2026/11/12/thread_fork_quick_access/artifacts/verification.json`。
+- [x] 11.2 接入 `session `／`thread `／`resource `，覆盖 Skill／AGENTS／配置、附件／工具结果、变更的真实数据与能力，非文本交相应视图，不为各类再建通用状态机。
+  - `resource ` 已接入工作区根 AGENTS 的真实元数据发现和原只读 SourceDocuments 打开；复用唯一 URI parser，在同一次解析中传递明确来源 Gateway，保留工作区与目标组身份。共享树6项API／OpenAPI、30项Provider／原来源合同（253条断言）、51份实际转换源码类型检查及正式构建通过；独占快照真实Gateway双工作区页面核候选浏览／取消零正文读取、一次读取原正文、只读、侧边共享模型和删除源后的原404，pageErrors为空。远端Gateway仅HTTP合同装具，未验真实联邦／Electron；Skill、配置及其余类别继续未完成。精确源码、原始结果及复用边界见 `out/tests/temp/2026/11/05/resource_quick_access/artifacts/root-integration.json`。
+  - 随后接入工作区已配置HTTP Skill：GET只投影原accepted metadata，原导航／Opener／只读Provider消费原URI；同名来源及owner独立，不编译runtime或维护第二目录。单次浮层只发现一次，逐键本地筛选，关闭／身份失效取消实际读取。新旧Provider35项、API／递归合同22项及最终int64字段16项检查通过，proto标准生成／一致性／breaking通过；同批51份实际转换类型及正式Web构建通过，精确7833个主构建输入核验支持int64生成后的复用。正式Gateway双工作区页面通过，启动4次来源获取，浏览／取消／只读打开零新增获取，显式刷新才增加2次；不可用来源保留原错误，零模型／Session。保留原等待全部owner元数据的呈现边界；本地Skill、Gateway／inline、配置及其它资源和Electron继续未完成。精确源码、失败归因及真实页原件见 `out/tests/temp/2026/11/06/skill_quick_access/artifacts/root-integration.json`。
+  - 工作区本地 Skill 已沿原固定根发现顶层 `SKILL.md`，共享原导航预算、错误归属、URI 和只读打开；不读 frontmatter、不登记／刷新来源、不编译 runtime，超限明确失败而不发布部分目录。14项本地API、133项原API／导航／递归合同、42项Provider／300断言、51份实际转换类型、正式Web构建、协议生成一致性及breaking通过；双工作区正式页面核本地／HTTP同名独立、精确只读打开、删除后原404且无空分屏、重开只见新增包，零模型／Session。Root核26路径前后指纹及OpenAPI仅新增本地入口与三个结构；失败归因和原件见 `out/tests/temp/2026/11/06/local_skill_quick_access/artifacts/verification.json` 及 `root-integration.json`。既存 `http_` 寻址冲突明确报错，不新增包名禁令；Gateway／inline、配置及其它资源和Electron继续未完成，11.2不勾选。
+  - 2026-11-11 Gateway／插件 Skill 发现与只读打开：`resource ` 消费原发布来源metadata，经目标Workspace代理固定Gateway与读取受众，显示确切插件包／版本；无正文发现、不绑定观察或激活模型。原Opener支持Gateway Skill并要求明确Workspace audience，远端使用唯一解析器已有reference_uri，保留SourceDocuments归属核验。后端最终169项、来源Chromium合同及递归OpenAPI合同通过；167份转换源码类型与79扩展正式构建通过，真实双Workspace安装／绑定／发现／只读页面及v1/v2生命周期通过。Python类型与改前均18条既有诊断；运行资源组合另有7项超时已交持续审查，不称整组全绿。精确命令、源码指纹、失败归属及最小复审见 `out/tests/temp/2026/11/11/plugin_skill_quick_access/artifacts/verification.json`。配置／附件／变更与真实远端页面、Electron未由本片证明，11.2仍不勾完。
+  - 2026-11-12 类别接入闭环：配置来源、附件文本／PDF、变更与 Session／Thread 已由各自真实页面验证；工具结果补齐真实产品 seed→fork→child 执行→metadata 发现→around 定位原 ToolRow，取消零正文读取、接受零重放，核原 owner／revision／canonical item／Turn／tool_call_id／request_id。工具结果页1 passed／54.68秒，原完整聊天页1 passed／75.37秒，Ruff／Node语法通过；共用隔离 Home、原控制令牌和一次准备的不可变插件包，不新增状态机。准确命令、源码指纹、失败归因及正式产物见 `out/tests/temp/2026/11/12/tool_result_resource_quick_access/artifacts/verification.json`，配置复制页见 `out/tests/temp/2026/11/12/config_resource_reference/artifacts/verification.json`。本项完成所列类别的 Linux 本机接入；真实远端、Windows／Electron、公开 Diff 引用及固定版本仍由2、12、13、15组未完成任务追踪，不以本项代替。
+- [x] 11.3 接入 `automation ` 的任务详情、已有开始／暂停／继续／编辑／终止／删除／试运行及历史操作，按原状态和 revision 可用；暂停任务不冒充停止 turn，试运行不自动执行后续动作。
+  - 原任务按钮与Quick Access共用具名Action／Command及唯一写入／权威回读结算；未打开详情可直接暂停、恢复、检查试运行或确认终止，详情／编辑／历史复用精确owner的原TaskView。后端无独立start／delete，不虚构API；Goal仅发现与展示，控制继续原Goal卡片。29项合同／159条断言与真实Gateway＋正式Workbench页面通过，核12个写回执、真实409、A/B隔离、关闭未受理浮层零写入及受理后不撤销／重放，pageErrors与多余写入均零。根集成51份实际转换的类型检查、正式Web构建和同29项短测通过；Web独立tsc仍有28条原诊断，无本片新增。精确补丁、源码指纹、失败原件与适用边界见 `out/tests/temp/2026/11/05/automation_quick_actions/artifacts/verification.json` 和 `root-integration.json`；综合动作／目录outbox、恢复与Electron验收继续由原未完成项追踪。
+- [x] 11.4 接入 `workspace ` 的真实控制面候选、范围选择与独立切换／连接／启动动作，执行时核验冻结目标，不因浏览候选启动后台服务。
+  - 原控制面发现复用有界查询；三个原Command交回导航hooks，菜单和控制中心同链。执行前只读`check_health=false`登记，不增加全目标健康探测；明确来源解析错误直接暴露，无owner才选择。25项定向合同、共享树Workbench真实类型、Ruff及正式构建通过；真实Gateway页面验证浏览／范围取消零写入、启动B不激活、独立切换及原导航切回，零模型调用／页面错误。证据`out/tests/temp/2026/11/05/workspace_quick_actions/artifacts/root-integration-037.json`。同批Composer提示断言失败另行修复，不宣称组合全绿；远程连接、多成员确认和Electron未由本页覆盖。
+- [x] 11.5 接入终端／浏览器／MCP 等已有资源的查找、聚焦和原生命周期动作，保持 stop／detach／delete 区分及合法关联范围。
+  - 2026-11-14 收口：终端／Browser 精确聚焦、未打开 child 关联及 stop／detach／delete 沿原完整页面；当前资源 47 项／282 断言与源码同 SHA。MCP `run-03f2e5eec5d1` 的 workspace／Gateway 两 scope 均完成，2 passed／164.90秒：原资源齿轮进入 Options，disconnect／connect 各一次 succeeded，关闭浮层不撤销或重放；详情与原菜单保持精确目标。MCP 连接控制不重启插件实例，resources／templates 未开放保持明确说明；不将该页面扩大为 Windows／真实远端／Electron 的运行资源管理验收。准确原件及边界见同目录任务矩阵。
+  - 2026-11-13 未打开 Thread 关联闭环：显式 Thread、同 owner 发起 Thread 优先，其余沿原 `thread ` Provider 只选择；接受保留精确 child／owner 和所选资源 revision，取消不写入或打开详情，解除关联只列当前关系。物理替换旧 Session 选择字段，删除无消费者文案；资源动作／聚焦持续观察 Gateway，离开后切回仍拒绝旧动作。67项当前合同396断言通过，集中182份真实转换类型及79扩展正式构建通过；真实Gateway／双Backend／Workbench与AGENTS补页合计2 passed／156.38秒，核新增关联、取消零写／零Tab、精确解除后仍运行，以及原stop／detach／delete、Session版本冲突与B管理，pageErrors／禁止写入均为空。首次页面固定方向键误选诊断行的截图与失败原件保留，修为稳定ID正常键盘导航后Enter，未放宽业务断言。命令、源码与资产指纹、原始结果及最小充分实现复审见 `out/tests/temp/2026/11/13/runtime_thread_selection/artifacts/verification.json`；MCP生命周期、Windows／真实远端／Electron未由本子链证明，宽任务仍未勾选。
+  - 2026-11-06 `resource ` 已接入原工作区终端／Browser 清单和上述五种独立管理动作；同名和空页面标题以稳定 ID 区分，所有来源 metadata 共用原三并发，单次发现后本地筛选、关闭／身份失效取消实际读取。74项受保护合同／464条断言、57份真实转换类型、Ruff／Pyright及正式Web构建通过；真实Gateway双工作区页面核浏览／二级取消零写入、stop保留关联、detach不删除、delete独立确认、原Browser按钮、旧revision409和B操作不切导航，pageErrors及模型调用均零。Web独立tsc仍为28条既存诊断，未新增。精确命令、源码指纹、原始失败归因和通过证据见 `out/tests/temp/2026/11/06/runtime_resource_actions/artifacts/verification.json`。精确聚焦、MCP、右侧Session资源动作及Electron／Windows运行资源管理继续未完成，不以本片勾整项。
+  - 2026-11-12 右侧 Session 资源的保留／关联／解除关联迁到同一资源 Command，冻结元数据中的 ID／revision；读取期间版本或凭据变化拒绝写入，最终由原 Session loader 权威重读。原 Session 停止／Browser wake 合同继续原入口。54项定向检查281条断言、172份真实转换源码类型、79扩展正式构建和完整运行资源页面通过；页面同时核跨工作区精确聚焦、浏览／二级取消零写入、stop／detach／delete区别、真实409及新Session旧版本拒绝后精确解除关联，零模型／页面错误。刷新收起详情及Browser重建抢焦点的失败原件、修正后的测试边界和最小复审见 `out/tests/temp/2026/11/12/session_runtime_actions/artifacts/verification.json`。仅关闭此子链，MCP／其它动作和跨平台仍不由本片证明，11.1／11.5／11.6／11.7保持未勾选。
+- [x] 11.6 统一 pending／confirmed、完整权威替换、失败重新读取与未知结果对账，取消未接受步骤不写入，关闭已受理浮层不撤销／重放后端动作。
+  - 2026-11-14 收口：原资源、任务和目录 outbox 的完整回执／失败回读／未知结果证据与 MCP 原 catalog 合同合并核验；MCP 103 项／698 断言含操作代次、pending／终态、未知只回读及保留双错误。当前任务 Hook／组件与既有 12 项／55 断言原件同 SHA，自动化及 Composer 隐藏阶段的 Gateway 往返由 135 项红绿收据承接；无新通用状态机、持久化或重试。各自取消与已受理边界、准确命令和复用差异见同目录任务矩阵，不把受控回执丢失称作全平台真实断网。
+- [x] 11.7 验证未打开详情直接管理、显式 child 优先、任务 revision 冲突、目录 outbox 回执和预览无写副作用，移除迁齐后无消费者的同义执行链。
+  - 2026-11-14 收口：原完整运行资源页 20 项标志、Session／fork 产品页、自动化 revision 409 与原 outbox 回执均保留；MCP 双 scope 的未开详情管理与查看／取消零写入补齐剩余类别。原 Session terminal／Browser cancel 已迁同一 resource stop，useWorkspaceResources 的可选 dispatcher／直接写入 fallback 已物理删除；Browser wake 与后台任务的不同业务合同继续归原 owner。逐消费者和最小充分实现复审未发现本链遗漏的同义 writer；原件、适用源码与运行面见同目录 `task-evidence-matrix-1.json` 和 `consumer-minimal-audit-1.json`。
+  - 2026-11-13 非 MCP 动作收口：Session 终端／Browser 停止已迁至同一资源 Command，保持精确 Thread 关联、原 revision、stop／detach／delete 区别及 finally 原 loader 强制回读；Browser wake 和后台任务保留各自 Session 合同。完整产品页 20 项标志全部通过，页面错误、禁止写入及模型调用为空，3035 个输入前后未变；当前资源合同 46 项／273 断言、任务 27 项及原 Hook／loader／outbox 检查通过，185 份实际转换源码类型、Web 类型及规定构建通过。提交 `be6c85b51`／`d94b01af2`；逐项任务、20 个标志、完整命令、原件及最小复审见 `out/tests/temp/2026/11/13/quick_access_action_closure/artifacts/verification.json` 和同目录 `task-evidence-matrix-1.json`。当前 MCP 完整页面尚未通过，11.1／11.5／11.6／11.7 不据非 MCP 子片勾选。
+  - 2026-11-12 Session 管理与 fork 的正式页面分别通过（26.31秒、62.55秒）：重命名／删除复用原确认和目录 outbox；未打开 Thread／Session 候选及导航 fork 取消均零写入，完整历史复制真实发布 durable child，child F1 保持精确来源。来源历史经一次 model_stream 产品执行生成，后续无额外执行；沿用已验正式构建及不可变插件包，未预写历史或浏览器状态。Ruff、MJS语法及差异检查通过，旧装具和断言失败原件保留；准确命令、结果与指纹见 `out/tests/temp/2026/11/12/session_fork_actions/artifacts/verification.json`。仅关闭这两个页面子项，MCP／其它动作和原生运行面继续未完成。
+
+## 12. 引用与 Composer
+
+覆盖规范：引用动作必须固定来源与接收者；普通资源引用与粘贴内容必须分别处理；选择和参数输入必须复用成熟交互并保持无副作用。
+
+- [x] 12.1 将复制 URI、引用和粘贴作为独立动作，使用原只选择／多步 Quick Input，不抢占打开的侧边／固定／后台修饰键。
+  - 2026-11-12 用户裁定收敛：删除额外固定版本引用功能及其验收要求。普通引用只保存资源 URI，原 owner 读取当前内容；不新增快照、版本字段或“不支持固定版本”提示。产物、Diff、执行历史和恢复继续归原模块。下方旧收据中“固定版本未验”仅记录当时范围，不再代表待实现任务。
+  - 复制 URI 已接入同一原 Action／Command：编辑器菜单、文件菜单及 Quick Access 文件／来源候选复用，后端唯一 grammar 返回带明确 Gateway 的 `reference_uri`，保留原地址字段语义。真实 Gateway／Chromium 验证来源文档、执行生成的工具结果和文件候选复制；没有正文读取、打开资源、激活来源或新增执行，候选按钮保留搜索框焦点。130项Python检查、Workbench真实类型检查、正式构建、协议生成一致性及breaking检查通过；准确命令、指纹和失败原件见 `out/tests/temp/2026/11/05/resource_reference_copy/artifacts/verification-001.json`。首次页面运行在辅助服务端口租约阶段失败，确认端口恢复可绑定后的一次重试通过。引用／粘贴／固定版本及Thread／Diff复制尚未齐，本项继续未勾选。
+  - Thread命令面板现可用原QuickAccess只选择未打开文件，先固定原草稿与工作区，取消不改草稿，接受只附加规范URI。真实Gateway／正式Workbench页面1 passed，核零新Tab／正文读取／执行及刷新保留；异步提示覆盖和外部delegate被插复制按钮的回归已修复，原断言保留，11项delegate／原Chat合同、最终真实类型与规定Web构建通过。证据`out/tests/temp/2026/11/05/composer_source_selection/artifacts/verification-001.json`；初次页面、合同及两项临时命令配置失败原件均保留。固定版本、多选／返回及完整能力矩阵仍未完成，本项不勾选。
+- [x] 12.2 在发起时固定来源及接收 Thread，全局入口无接收者才选择，切换焦点／范围不改投；接收者失效明确失败，不猜最近 Thread。
+- [x] 12.3 将支持的原资源引用交给精确 Composer 草稿，附件仍经原上传 owner，来源预览不激活，加入草稿不发消息、不启动 turn。
+  - 文件／来源文档的 URI 引用与实际选定正文分别由原 Action／Command 加入原 Composer writer；文件菜单复用同一命令，恢复后才发布写入句柄，接受时追加最新输入，作用域切换／卸载使旧句柄永久失效。引用只保存规范 URI，正文保留当时的选择，不伪装上传附件或新建存储链路。远端后端简称另携明确来源 Gateway 交同一 grammar 解析，与显式 URI 冲突拒绝。
+  - 真实 Gateway、双工作区、正式 Workbench／Chromium 验证两个可见 Thread 的明确接收、取消不变、无额外正文读取、来源修改及刷新恢复、零执行／模型调用；具名浏览器 HTTP 边界只延迟真实地址回执，期间把焦点切到另一 Thread，仍仅写发起草稿。草稿8项与Composer回归12项通过，Python合同133项（2条既有重复operation ID警告）、Workbench真实类型、正式构建、Ruff／Pyright、协议生成一致性及breaking检查通过。证据 `out/tests/temp/2026/11/05/composer_resource_actions/artifacts/verification-001.json`；首轮错误使用上游命令选项而绕过Opener及清理方法误名的原件保留。本片未覆盖从Thread选择未打开来源、显式固定版本、多选／二级返回或Electron，12.1／12.4／12.5继续未勾选。
+  - 2026-11-11 Gateway／插件 Skill 复制引用：原 resourceReference 同时接受确切 Gateway Skill 和工作区来源，仍核 Gateway／scope／kind，复制与 Composer 共用唯一解析器，无正文重读或新打开链。41项来源合同／276断言、167份转换源码真实类型、79扩展正式构建及真实双Workspace产品页面通过；页面经安装绑定打开Skill后执行原复制命令并核实际剪贴板、冻结owner及零正文重读。错误owner和非Skill的Gateway来源明确拒绝；未代替Windows／真实远端页面／Electron或完整Composer选择验收，12.1仍保留。精确命令、指纹和复审见 `out/tests/temp/2026/11/11/plugin_skill_reference/artifacts/verification.json`。
+  - 2026-11-12 Thread 复制引用完整页面收口：真实消息及 fork 创建 main／child，正式 Workbench 最近候选分别复制精确 URI，原 Composer 文件多选仍只附加未打开文件引用。组合页面2项通过、9项真实 Command／Provider 合同57条断言通过，核实际剪贴板、原 request_id、无额外正文读取／打开及零新增执行；跨 Gateway 仍为具名 HTTP 装具。只修测试导入排序并复用此前产品类型／正式构建，不重复已通过长页；证据见 `out/tests/temp/2026/11/12/thread_resource_reference/artifacts/verification.json`。固定版本、完整返回／能力矩阵和 Electron 仍未由本片证明，宽任务继续未勾选。
+- [x] 12.4 粘贴保留实际选定正文，来源变化不替换已粘贴内容；普通引用由原 owner 读取当前内容，产物、Diff、执行历史与恢复继续遵守原版本合同，不新增引用快照或版本字段。
+  - 2026-11-12 可用附件候选的独立复制按钮复用原资源 Command／唯一 URI parser，直接传原 file_id 与冻结 owner；文本和 PDF 不提前打开或读取原件。正式 Gateway／Backend／Workbench 页面1 passed／51.34秒，核实际剪贴板、原 request_id、100+1分页、复制后焦点及零新Tab／正文读取，原预览／分屏／刷新保持。172份实际转换源码类型和79扩展正式构建通过；新增与原附件／变更／Thread合同通过，联合来源检查有两个场景及清理钩子5秒超时，单独来源19项140断言通过，未确定原超时原因。页面首次上游断连原件保留、未加重试；第二次按产品共用续页按钮迁齐旧装具后通过。最小复审无新URI／正文缓存／持久账本；证据见 `out/tests/temp/2026/11/12/attachment_reference/artifacts/verification.json`。本片不证明固定版本、通用媒体URI重开、Windows／真实远端／Electron，宽任务保持未勾选。
+- [x] 12.5 验证多 Thread 同时可见、跨工作区来源、二级返回、多选取消、不支持能力和来源变化，只有指定草稿变化且无隐式模型调用。
+  - 2026-11-12 附件候选新增独立“将资源 URI 加入聊天草稿”按钮，复用原 Composer Command／URI parser／草稿 writer；provide 夺焦前捕获原 Pane 与接收者，范围选择往返保持同一临时句柄，发起时无 Thread 才明确选择。关闭、未就绪和凭据失效零追加，焦点改变不改投；不上传附件、不读原件或发送消息。39项原附件／变更合同206断言、最终6项引用反例54断言及原Composer多选4项35断言通过；172份实际转换源码类型、最终79扩展正式构建及真实Gateway／Backend／Workbench完整页1 passed／51.86秒，核文本／PDF引用、零新Tab／原件读取／新增执行及刷新草稿恢复，前后源码一致。最小复审无草稿注册表、第二存储或新恢复机制；首轮通过及一次非dist输出目录被拒绝的原件保留。准确命令、源码指纹与适用范围见 `out/tests/temp/2026/11/12/attachment_composer/artifacts/verification.json`。全局／跨工作区与失效反例仍是具名宿主合同，Windows／真实远端／Electron及固定版本未验，宽项继续未勾选。
+
+  - 2026-11-12 来源资源多选：新增独立Thread来源选择动作，复用原范围选择、resource Provider、唯一URI parser及Composer writer；AGENTS／Skill／有URI配置与当前Thread附件返回有序引用，全部解析成功后一次追加。原Quick Input返回保留范围，两阶段取消零写入；无URI及不可用项不准入，凭据／接收者失效拒绝，焦点切换不改投。最终来源合同11项72断言、附件／变更40项215断言、原Composer多选4项35断言、172份实际转换源码类型和79扩展正式构建通过；真实Gateway双工作区完整页1 passed／47.61秒，核B未打开AGENTS／Skill加入A草稿、返回／取消、零正文读取／新增执行及刷新恢复，pageErrors为空。审查代理四文件组合81项532断言通过，未复现原瞬时超时，未改装具或时限。最小复审无新目录／快照／草稿存储或双轨；精确命令、源码指纹、失败归因及原件见 `out/tests/temp/2026/11/12/source_reference_selection/artifacts/verification.json`。跨Gateway仍为具名边界合同，Windows／真实远端／Electron及固定版本未验，宽任务继续未勾选。
+
+## 13. 展示态与恢复
+
+覆盖规范：历史和缓存必须保持展示用途；展示态迁移必须保持单一恢复链与身份隔离。
+
+- [x] 13.1 复用原资源／命令历史及输入记忆配置，按身份隔离；从历史移除、关闭 Tab 和删除业务资源相互独立，不持久化 token／临时 endpoint。
+  - 2026-11-13 收口：Web与Linux真实Electron固定profile均验原资源／命令历史及三项preserveInput，单条移除、关闭和业务删除独立；原存储未存token或临时endpoint，16次正常原生启动／关闭保留原草稿。后续QuickAccess差异由当前合同与本批构建承接，不把旧ASAR冒称当前产物。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-13 原输入记忆与身份恢复子链：正式 Gateway／Backend／Workbench 页面通过（1 passed／145.60秒），Linux 原生同一业务驱动亦通过（1 passed／176.12秒）；从真实产品入口核原 `workbench.quickOpen.preserveInput`、`workbench.commandPalette.preserveInput`、`search.quickAccess.preserveInput` 的 true／false，命令 MRU 正常重启恢复和单条移除后命令候选仍保留；保留 A/B 同名最近资源隔离、去重、关闭与移除独立及原草稿。只读原历史未存 token／HTTP endpoint，零消息执行或模型调用。测试关闭原搜索动作的选区种入，避免把另一设置误当输入记忆；遵守原 Controller 同 Provider 保留值语义，通过实际输入框填写规范 URI。18项 Thread／只读合同313断言、76项完整 Quick Access 合同850断言、182份真实转换源码类型与79扩展正式 Web 构建通过；本片尚不代替真实双 Gateway 切换及全部平台，整项继续未勾选。证据见 `out/tests/temp/2026/11/13/history_identity/artifacts/verification.json`。
+  - 2026-11-12 原最近资源历史子链：已有稳定输入与 resolver 的 Thread／文件／来源／更改纳入原 HistoryService 的 untyped input 持久化；只读输入补齐不含正文的引用投影，去重沿原 URI identity，不伪造文件 Provider、不新增历史存储或格式。10项只读模型合同211断言、174份真实转换源码类型与79扩展正式Web构建通过；真实Gateway／Backend／Workbench页面1 passed／41.57秒。产品创建A/B同名Session，经实际打开、关闭、原prepareToClose提交与两次刷新，核原IndexedDB记录、明确A范围的关闭历史、重开无重复、移除不关闭Tab／删除业务及两边草稿恢复，零正文搜索和模型执行。首轮确证只读输入缺toUntyped；后续未提交刷新、观察器误读目标标记及冷启动无范围的失败原件保留，仅纠正相应测试边界。证据与最小复审见 `out/tests/temp/2026/11/12/recent_history/artifacts/verification.json`。未验Electron／异常退出／默认导航冷启动／真实远端及全部命令记忆合同，宽项继续未勾选；本地提交，不同步或push。
+- [x] 13.2 按已验收发布来源确定实际格式迁移范围；本轮按用户确认的首次发布边界验证当前版本化读写、既有显式转换及不可恢复记录原件保护，保留可核验身份、每组视图及既有草稿／working-copy 恢复，之后只写当前格式，不为开发中间态新增兼容迁移。
+  - 2026-11-13 首次发布收口：Thread v2／只读引用 v1 的真实 serializer、原 EditorGroupModel、旧更改投影在唯一输入工厂的显式转换，均由 `change_documents.test.mjs` 验证；最终29项／396断言通过，含未知版本、坏JSON、缺失owner原件保护及正常恢复。原Search Editor磁盘／backup／copy范围读写、文件working-copy／CAS恢复，以及Web与Linux固定profile的分屏／草稿正常重启沿已登记真实产品收据复用；不新增开发中间态迁移，不重置数据。当前Thread／只读身份与路由生命周期的准确原件见 `out/tests/temp/2026/11/13/history_identity/artifacts/verification.json`、`out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/`。本项按当前发布范围完成，不宣称执行了不存在的旧正式版升级，也不代表Windows或异常退出验收。
+  - 2026-11-13 范围修正：用户已确认尚无正式发布版，现再次读取发布登记仍为 `[]`；上一条缺基线记录是当时事实，不能作为等待未来发布的阻挡。本轮不新增旧版升级链，也不据此删除既有迁移；当前格式／显式转换的验收继续沿各 owner 的合同和产品恢复原件核对。
+  - 2026-11-13 迁移基线核验：`bun run release:policy list` 真实退出0，已验收发布登记为空（`[]`），缺少可核验的 `R_current`／`R_previous`。本片继续当前身份恢复实现，不以根／dev／临时 Home 或历史提交推测迁移契约，不新增兼容分支，也不移除既有迁移；13.2 保持未勾选。准确命令与原件见 `out/tests/temp/2026/11/13/history_identity/artifacts/release-baseline.json`。
+- [x] 13.3 对缺失身份、已删资源和损坏／未知版本提供明确反馈和展示记录移除，不清空全部存储、不扫描磁盘重建或猜同名目标。
+  - 2026-11-13 收口：Web／Linux原生逐条未知版本、缺失owner、坏JSON恢复及展示移除有真实原件；已删Thread通过产品删除和同名替代对象核真实404、精确owner及零改投，移除保留相邻分屏、业务与草稿；只读坏记录及相邻Diff沿原组合同和页面覆盖。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-13 Linux 原生损坏 Thread 恢复子链：正常关窗后逐条注入未知版本、缺失 owner 和坏 JSON；原错误占位明确反馈、跨第二次正常重启保留该条记录，单条移除不清空相邻分屏、原业务或 A/B 草稿，三类恢复／保留／移除阶段均零 B 目标读取。源码外 development ASAR 及原启动器真实通过，未新增产品 IPC 或存储。首轮第4次冷启动只等导航外壳，控制台明确“工作区登记信息尚未加载”；测试改为等真实工作区节点后补验通过，不改产品或放宽身份断言。正式原件及具体边界见同目录 verification，13.3 保持未勾选。
+  - 2026-11-13 Linux 真实 Electron 已删 Thread 最近历史子链：与 Web 共用真实消息、原 Session Command／确认／目录 outbox 删除及同名替代对象步骤；原生 1 passed／115.56秒。第一次正常关窗重启后只读核旧镜像的原 Turn IDs 仍在，再从最近记录接受旧 owner，核精确 Gateway／Workspace 的真实404、明确错误与旧镜像清除、同名新目标及 bootstrap／history 零读取；单条移除只删旧最近项，保留错误 Tab、同名业务对象及幸存 Thread 正文／草稿／镜像，浏览器零消息执行、模型调用仍各一次。共享驱动提取后的 Web 节点亦通过；无产品逻辑或 IPC 变更。准确命令、源码指纹、原件和最小复审见 `out/tests/temp/2026/11/13/native_recent_history/artifacts/verification.json`。仅本地提交；缺失身份、坏 JSON／未知版本等原生宽项未由本片证明，13.3保持未勾选。
+  - 2026-11-13 已关闭 Thread 的已删资源最近历史子链：复用真实消息入口生成 A/B 聊天镜像与草稿，关闭标签后沿原 Session Command／确认／目录 outbox 删除 A，核 committed／settled，再经产品 API 创建同名新 Session。正式 Gateway／Backend／Workbench 页面 1 passed／72.38秒；重开前确认旧镜像仍在，从原最近历史选择旧 A 后取得精确 owner 的真实404及一致 request_id，明确显示原错误、移除旧镜像、无 Composer，不读取同名新目标或 bootstrap／history。仅移除旧最近项保留错误 Tab、同名业务对象及 B 的正文／草稿／镜像；第二次正常刷新后 B 恢复、A 最近项不复活，浏览器零消息执行、模型调用仍各一次、pageErrors为空。产品原链路已满足，无 runtime 改动；复用已核984输入与 main 指纹的正式构建，开发Vite脚本的并发差异不由本页验收。Ruff、MJS语法及差异检查通过；首轮只在 gate 等待并主动取消的exit143原件保留，不计产品结果。准确命令、源码指纹、原始输出及最小复审见 `out/tests/temp/2026/11/13/deleted_thread_history/artifacts/verification.json`，正式页见 `out/tests/integration/clients/web/quick_access/test_recent_history/runs/run-2d2f0946f151/nodes/node-9e2a810df2ca/artifacts/deleted-thread-history.json`。本片仅Linux Web，不代替无权资源、其它资源类型、Windows／真实远端／Electron，13.3继续未勾选；仅本地提交，不同步或push。
+  - 2026-11-12 Thread 不可恢复记录补齐原错误占位页的单条移除动作，直接调用所属编辑器组关闭；原 serializer 继续保留原件和具体原因，不新增 Pane、恢复存储或业务删除链。真实 Gateway／Backend／正式 Workbench 页面 1 passed／75.71秒，产品生成 A/B 同名 Session 与草稿后逐条注入未知版本、缺失 owner、坏 JSON，核重复恢复零 B 读取、相邻 A 保留、移除后规范 URI 重开仍恢复 B 草稿及零模型执行；原最近历史隔离／去重／单条移除断言继续通过。13项只读／原编辑器组合同233断言、174份实际转换类型、79扩展正式构建、Ruff／MJS语法及差异检查通过。最小复审直接复用原错误 Action／closeEditor，无新状态／fallback；精确命令、指纹及原件见 `out/tests/temp/2026/11/12/thread_recovery/artifacts/verification.json`。本片仅 Linux Web，不代替已删资源、Windows／远端／Electron 等宽项，13.3保持未勾选；只本地提交，不同步或push。
+  - 2026-11-12 只读来源／更改恢复子链：原 TextResource serializer 保留损坏 JSON、未知版本及无身份记录的原件和具体原因，原 EditorPlaceholder 只关闭选中展示记录；正常引用继续原输入工厂，服务故障保持原错误，不建立恢复数据库或重复历史清理。9项真实 resolver／EditorGroupModel 合同206断言、172份实际转换源码类型、正式79扩展Web构建及真实Gateway／Backend／Chromium页面通过（1 passed／95.31秒）；产品先生成更改与正常组状态，再只破坏一条来源记录，核两次恢复、零来源读取、相邻Diff保留及单独移除。原关闭join／导航取消诊断和前四次失败原件如实保留，不宣称console零错误；未验Windows／真实远端／Electron，整项仍未完成。准确命令、源码指纹与最小复审见 `out/tests/temp/2026/11/12/readonly_recovery/artifacts/verification.json`。
+  - Thread恢复子链：未知版本、缺失owner、损坏JSON及非对象记录复用原v2不可恢复输入保留原件，重复保存不丢记录、不使整组恢复失败；ThreadPane通过原createEditorOpenError显示具体拒绝，解路由失败保留原Error及精确原因。8项新增反证先全部失败，修正后12项／178断言通过；真实Gateway／正式Workbench组合1 passed／87.48秒，产品先生成会话、草稿及分屏后才注入三条展示记录故障，核两次恢复、原生编辑器列表选择、关闭不删会话／草稿、未知Gateway与重复登记零错误目标读取，pageErrors为空。51份转换源码完整类型检查及同批正式构建通过，最终源码前后不变；原计数装具错误、原生泛化提示和旧文案失败均保留，未放宽身份或原件断言。准确命令、指纹、失败／通过及正式产物见 `out/tests/temp/2026/11/05/thread_recovery/artifacts/verification.json`；其它资源类型与Electron仍待验收，整项不勾选。
+- [x] 13.4 验证 Web 浏览器存储与 Electron 固定 profile 中重启、route 更换、Gateway／凭据变化和不可恢复旧记录，旧候选及动作立即失效，不新增 IPC。
+  - 2026-11-13 收口：Web及Linux固定profile的正常重启、实际登记路径复用／搬迁和三阶段真实401已通过；Gateway往返由原Provider／HTTP／ThreadInput合同证明，当前来源／更改resolver补齐绕过公开Opener的迟到读取拒绝。按原文合并分层证据，不额外要求异常退出或全平台笛卡尔积，也不新增IPC。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-13 旧历史身份生命周期：原最近候选统一在接受、侧开、移除及引用动作前核身份，先核验再求编辑器组；范围选择换到独立 Quick Input 后继续订阅身份并取消原选择，失效不重开旧列表；Thread 在途路由解析共用原 HTTP 取消且拒绝迟到 owner 写入，首次 Gateway 发布仍可正常恢复。三组旧实现反证先失败，修正后合同通过；正式 Web 与 Linux 原生分别由真实 Gateway 产生3次401／一致 request_id，核旧候选清除、范围取消、Thread 零目标业务读取及规范 URI 重开保留草稿。工作区沿原 managed API 删除登记，在本测试隔离目录复用原路径登记不同 UUID 后旧历史明确拒绝；原 UUID 搬迁重登记、Backend generation 改变后规范引用和新历史恢复原草稿。原生 ASAR SHA-256 `5532b75bddf59fc5ff0a6b6ef03cfc88b8f5b37965988cccfe761625e8d02ec4`，16次 launch／16次 exit0、URL／profile 一致，无 IndexedDB 关闭错误；94条 console error 中的原上游 shutdown join、故障注入和路径操作诊断完整保留，不声称 console 零错误。两轮各4个 Backend 与 Gateway 正常完成关闭；Web 输入前后不变，原生期间仅另一任务的 `resource_navigation.py` 改变，本片3份产品源码与资产／包均同指纹。准确原件、失败归因和最小复审见同目录 verification。真实双 Gateway 切换目前只有真实 Provider／ThreadInput 装具的身份发布反证，异常退出、Windows／macOS 和正式发行未验，13.4 保持未勾选。
+  - 2026-11-13 原生最近历史恢复子链：源码外 development ASAR（SHA-256 `fa44eae7e3b7cf0f078c359d6224940a56e3d417dafbc54de440ccb6950af9a0`）经原启动器完成3次 launch／3次 exit0、两次真实 BrowserWindow.close 重启，来源 URL／profile 始终相同；测试不提前 flush 或预写浏览器存储，第二次恢复后已删最近项不复活，幸存 Thread 草稿继续可用。包构建时1110输入前后不变；随后仅 devConfig 变化影响 NLS 构建ID，按原实际包指纹复用，不冒称当前全部输入一致。首轮 Web通过、原生在 fixture bind42016失败的原件保留；新原生测试显式依赖原模块端口租约后单节点通过，前后测试／Backend源码不变。无 IndexedDB 关闭错误，Backend正常完成关闭；预期404、原上游 shutdown join 及 Skill 发布错误如实保留。正式结果 `out/tests/integration/clients/electron/test_recent_history/runs/run-957807bf1eef/nodes/node-d2d21ff88e90/artifacts/deleted-thread-history.json`；未验 route／Gateway／凭据变化、异常退出、Windows／macOS 或正式发行，13.4保持未勾选，总进度仍72／100。
+
+## 14. 交互与宿主条件
+
+覆盖规范：键盘确认取消与返回必须沿用原版语义；焦点转移失焦关闭和定位预览必须遵守原版行为；原版快速访问操作习惯必须保留；原版服务与项目同名能力必须区分实际接入条件。
+
+- [x] 14.1 按 design 六类 22 项交互基准验证自动焦点、提示、高亮、分层列表、行内 Tooltip、上下／翻页／首尾、Enter／修饰键、Esc 与返回。
+- [x] 14.2 验证支持 Provider 的后台连续接受、失焦设置、取消定位预览恢复、IME／ARIA、主题、输入记忆及活动项／滚动保持，浏览器拦截键保留可用命令。
+  - 2026-11-13 原 Quick Input 六类交互闭环：正式 Gateway／Backend／Workbench／Chromium 的独立矩阵通过，最终 `run-4463ef22ed4f` 为1 passed／42.28秒、外层48.31秒、exit0、incomplete_stages=0、观测峰值RSS合计2.45GB。真实24候选核自动焦点／模式提示／帮助返回、高亮／次要归属／图标／行内Tooltip、方向／翻页／首尾／环绕、固定与侧开、同一浮层两次后台接受后两Tab保留、Esc、预览位置恢复、失焦设置、取消不记忆／接受后记忆、活动身份及滚动保持、实际IME输入／ARIA和主题切换；沿原命令入口提供浏览器键位的可用路径。加载／迟到取消与快慢合并复用原76项默认Provider及16.20的已核证据，不复制上游控件。页面与console错误均为空；默认共享构建、显式可复用不可变dist的fixture已经迁齐。最终主包 SHA-256 `777386e7efd30f7d36638d338360ab70b962d4d9c3aaf0fecaf2fa5b1a209f02`，183份转换源码类型和79扩展正式构建通过；完整Web类型的并发TerminalContent测试错误单独保留，不据此声称全树全绿。准确命令／前后指纹见 `out/tests/temp/2026/11/13/file_read_identity/artifacts/interactions-continuous.json`，正式页面原件位于 `out/tests/integration/clients/web/quick_access/test_quick_access_interactions/runs/run-4463ef22ed4f/nodes/node-ef08793132e0/artifacts/`。本项完成适用原交互合同，其余Electron／跨平台与全功能矩阵仍由15组追踪。
+- [x] 14.3 按全功能矩阵核原生 term／task／debug／debug consoles／mcpr 的实际服务与项目 owner 映射；原服务缺条件不伪报互通，项目核心入口仍真实可用。
+- [x] 14.4 核 ext／ext install／issue 的实际宿主及发行配置条件，记录可用或明确缺失原因，不为快速访问新增原生扩展体系或外部发行服务。
+  - 2026-11-13 条件 Provider 矩阵：正式 Workbench／真实 Gateway／Backend 页面通过，`run-85a9e739d002`，1 passed／154.44秒（含独占门排队）／exit0。键盘完整遍历原帮助虚拟列表，再进入 term、task、debug、debug consoles；核原服务空态及无匹配过滤，未创建原生终端／任务／Adapter，不将项目资源混入原列表。项目终端／Browser 的既有真实 owner 操作证据仍归11.5，项目持续任务与调试沿原专属命令。mcpr 因原 ChatContextKeys.enabled 未满足而未发布，不回退文件搜索伪报互通。
+  - ext 读取目标 Gateway 的真实插件库存，核精确 gateway_id、200、响应头／体 request_id 及隔离 Home 空库存；ext install 接受后进入同一安装器的 ZIP／开发目录／自有来源选择，取消后零业务写入。当前 browser Workbench 未导入上游 electron-browser 问题报告贡献，帮助无 issue，原 `_issues.getSystemStatus` 明确报告 browser 不支持 `--status`；不新增问题服务或承诺微软 Gallery。三条初始化 API 的 active owner／request_id、零页面错误、零外网请求和零模型调用均通过；只读 POST 库存、地址解析及两项订阅按原路由职责核验，其余写入仍拒绝。首轮误将空 filter 当无结果提示、次轮误将只读 POST SSE 当业务写入的装具失败保留，未改产品逻辑或放宽身份断言。
+  - Node语法、Ruff、Python真实类型和差异检查通过；复用本批79扩展正式构建及182份实际转换源码类型检查，main SHA-256 `3f74afceee3d73dabba5741531ab2476f08f9f8c8ac84fa53059446b655a0cc4`。准确命令、指纹、三轮原件、实际服务条件与最小实现复审见 `out/tests/temp/2026/11/13/conditional_quick_access/artifacts/verification.json`。本项完成当前 Web 条件映射；不将同源代码当作 Electron／Windows／真实远端运行互通证明，原生入口验收仍归15.4。仅本地提交，不同步分支或重启开发实例。
+
+## 15. 产品验收与交付证据
+
+覆盖规范：接入完成必须具备真实入口与运行条件证据。
+
+- [x] 15.1 按测试矩阵登记对应定向协议／owner／客户端检查及隔离 fixture，使用进程外超时、内存保护和镜像测试产物路径；独立 fixture 可并行，失败先归因，不默认串行全跑。
+  - 2026-11-13 定向入口登记：公开搜索合同、联邦／领域 owner、无浏览器工具／目录树、Provider 生命周期、真实联邦、原调用方／动作合同、Web 动作和 Linux Electron 搜索／恢复各有独立 suite；沿现有 runner 的外部超时、4GiB 数据段上限与 pytest 集成独占闸门，不增加调度器或重复 fixture。矩阵解析、ID 唯一性、源码路径与保护参数核验、原 `--list` 入口均通过，原件在 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/matrix-registration-2.json`、`matrix-list-1.json` 和 `matrix-search-contracts-1.json`（28项公开合同通过）；此登记不表示本次重跑了所有 suite。
+- [x] 15.2 完成相关后端静态检查、真实前端类型检查和 `bun run --cwd src/clients/web build`；同一 sourceTransform 生成贡献必须纳入类型证明，复用同源码已完成构建，不重复无变化检查。
+  - 2026-11-13 最新范围加载／计数批次：完整Web真实类型退出0／39.79秒，185份实际转换源码类型退出0／86.56秒，79内置扩展正式Web构建退出0／97.11秒，两次1070输入前后无变化；main SHA256 `13e3702190e7fe51c4c3c9fa58d1a268560c597c1edef02ba1b261d866154f5c`。原件及输入指纹位于 `out/tests/temp/2026/11/13/search_scope_identity/artifacts/` 的 `web-types.json`、`workbench-typecheck.json`、`web-build.json` 和相应stdout／inputs文件；不替代后续只读Provider修复或MCP失败页面的验收。
+  - 2026-11-08 类型验收收口：Web 的检查目标及标准库对齐实际 Workbench ES2024 构建，修齐既有测试的 owner、可选字段和异步返回类型，不关闭严格检查、不排除测试、不放宽身份／顺序／恢复断言。原29条诊断清零，完整Web真实类型检查和包含183份实际sourceTransform源码的正式Workbench类型检查均通过，8文件114项测试／441条断言及独占目录正式Web构建通过。后端本片无改动，最近切片Ruff／Pyright经原输入SHA核对复用；1001个客户端／构建输入验证期间无变化。准确命令、首轮字段遗漏及修复、原始输出、源码指纹和复用范围见 `out/tests/temp/2026/11/08/quick_access_type_gate/artifacts/verification-v1.json`。本项仅关闭静态与构建门，不替代15.3真实Gateway页面、15.4 Electron或其它业务验收；插件／扩展／MCP实现继续暂停。
+- [x] 15.3 通过实际 Gateway、目标后端和 Workbench 浏览器入口核初始化三个 API 与 request_id，执行 Ctrl+P、Command Center、URI、引用和管理操作，保留请求范围及错误原件。
+  - 2026-11-14 按各源码快照分层收口：原默认搜索／Quick Input 页面证明 Ctrl+P 与 Command Center，原 URI／文件菜单／媒体及 Composer 页面证明规范打开、引用和精确草稿接收，原领域页面证明管理。最后 MCP 双 scope 页面真实经过 Gateway／Backend／Workbench，三初始化 API 均200且响应头／体 request_id 相同；连接动作精确 owner、每次一写、查看／取消零写，pageErrors=[]。逐入口、正式产物、范围和失败历史见 `out/tests/temp/2026/11/13/quick_access_six_closure/artifacts/task-evidence-matrix-1.json`；不将独立 dist／ASAR 的历史页面合称当前整树一次全矩阵重跑。
+- [x] 15.4 在真实 Electron 打包产物核同一入口、快捷键、会话操作和重启缓存／范围恢复，不用开发服务器或浏览器 parity 替代桌面证明。
+  - 2026-11-13 Linux 原生 Quick Access 完整闭环通过：`run-fc23e383a26d`，1 passed／83.81 秒；实际 Ctrl+P、单 owner 与明确 A+B 内容查询、Command Center、原 SearchView／SearchEditor 保存后正常关窗重启、恢复范围后再次查询均通过。所有重查请求逐条核精确 A+B 与响应 request_id；保存先观察 dirty，再调用产品保存命令并等待清洁，两次真实 Electron 均正常退出0，dialogs／pageErrors 为空。提交 `fdde58d59`／`411ab96ac`；准确命令、原始输出、进程退出及包指纹见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/native-scope-final-verification.json`。复用 ASAR 为 `eace3c7b23c78a3fa9f62aa40cce520ab5e4824afc16aaebe7d8afef969d4876`，`e8163fea…` 是外层可执行文件而非另一个 ASAR。
+  - 会话删除及旧最近记录拒绝重开沿 `out/tests/temp/2026/11/13/native_recent_history/artifacts/verification.json` 的真实原生产品步骤；输入／命令历史、草稿／脏备份和分屏恢复分别沿 `history_identity` 与 `out/tests/temp/2026/11/12/thread_cache_native/artifacts/verification.json` 的独立原生原件。各收据绑定自己的不可变 development ASAR 和源码快照，不合称最新全部源码或正式发行验收；当前 MCP／新运行资源动作的完整集成仍由第11组与16.15追踪。本项没有更新 release、递增发行版本或同步分支。
+- [x] 15.5 为规范全部场景和 design 全功能矩阵逐项关联准确证据，区分通过、未通过及真实条件缺失；保留源码指纹、命令、原始输出、退出码和未完成阶段。
+  - 2026-11-14 新版 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/scenario-evidence-6.json` 保留旧版及128份原件，补入最新 MCP 双 scope、已完成的 Session 搜索定位及符号 Provider 故障合同；修正旧索引已附原件却未同步的两个场景状态，并从实际数组重算计数。205场景为139 observed／62 contract_verified／4 conditional，40行矩阵为30 observed／2 contract_verified／8 conditional；条件项继续说明真实缺少的上游服务／宿主，不把合同证明当完整产品页面或全平台验收。变更行与原件 SHA 见该索引；复用差异及六项收口收据位于 `out/tests/temp/2026/11/13/quick_access_six_closure/artifacts/`。
+  - 2026-11-13 新版逐项证据索引 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/scenario-evidence-5.json` 已在保留旧索引与所有原件的前提下重核205个规范场景、design40行闭集及128份原件SHA；场景状态为136 observed、61 contract_verified、3 partial、4 conditional、1 pending，矩阵为28 observed、2 contract_verified、2 partial、8 conditional，仍有明确缺口。Session搜索真实页面 `run-f4f7c5836d42` 证明同名目标按精确Owner A获取最新breadcrumb、逐级展开并高亮目标行；完整Web TypeScript、定向Ruff及符号Provider失败6项合同通过，详见 `out/tests/temp/2026/11/13/quick_access_symbol_navigation_closure/artifacts/verification.json`。MCP双scope最新页 `run-423ed1d3dc99` 仍2项失败且无connection operation；11.1／11.5／11.6／11.7与完整15.3／15.6继续未关闭。索引不把单一Session页面或局部Provider合同扩写为全矩阵通过。
+- [x] 15.6 交付前核无重复默认 Provider、第二搜索／动作事实源、失联调用、静默错误或清缓存式迁移，保留其他人的改动；复核 OpenSpec 并仅按已证行为勾选任务。
+  - 2026-11-14 最小复审：实际 sourceTransform 的默认／全文／符号三个原登记位置各保留一次 selector 替换，SearchService 的 file／text 共用原 businessProvider；React catalog、Quick Access 和文件搜索沿同一联邦客户端，菜单／React／picker 沿各原领域 Command／writer。全仓调用清点及错误／清理边界未发现本链悬空调用、静默失败或清空恢复数据；本轮不新增产品代码或机制。当前911份前端／runtime输入与 typecheck13／build10逐份SHA一致，复用198份实际转换类型与规定Web构建；严格 OpenSpec 与差异检查通过，准确命令、源码和未重跑范围见 `out/tests/temp/2026/11/13/quick_access_six_closure/artifacts/verification-1.json`。其他人的 staged／unstaged／untracked 改动保留，未归档、提交、同步或启停开发实例。
+
+## 16. 两级搜索、显式范围与联邦统一（2026-11-03 扩展）
+
+覆盖规范：跨工作区查询必须采用两级后端搜索；显式集合与全部范围必须冻结后执行；工作区发现与领域搜索必须可独立组合；工作区搜索必须提供轻量 Provider 合同；联邦结果必须增量返回并沿用总期限；联邦续查必须保留各 owner 的独立版本；搜索排序与导航排序必须分离归属；原搜索链必须统一迁移且保留缓存来源；规范 URI 必须按资源引用与重开需求补齐。
+
+独审补充覆盖：Provider 选择与释放必须保持唯一归属；查询缓存必须独立于请求及持久业务索引；查询计量与联邦配额必须可继续且不漏项；增量事件必须有序有界且明确结束；搜索诊断必须机器可判别并保留原因；资源比较与本地覆盖必须贯通原版搜索。
+
+本组是新增架构及迁移验收，勾选以各项实际证据为准，不撤销其它切片的已有证据。2026-11-03 独审补充的生命周期、缓存、配额、原版评分、资源比较和增量结算由本组未完成项继续追踪，不能用已有清点或局部实现证据宣称补充合同已落地。编号只定位职责与必要依赖，不设定整体实施顺序；领域 Provider 可按各自完整纵向链迁移，共享合同及其消费者须一并迁齐后验收。
+
+- [x] 16.1 清点 Gateway catalog 全范围查询／镜像匹配、旧 React 资源导航、Workbench 多目标分支、原文件 SearchService、Agent 工具及测试的全部直接／间接消费者，确定唯一两级调用链与删除清单。
+- [x] 16.2 在原协议 owner 定义 Provider 能力、类型化领域命中联合及联邦范围／分支／增量／结束信封，同步 OpenAPI／proto／生成客户端与真实类型检查；只共享生命周期，不引入全局业务对象或索引库。
+  - 2026-11-08 合同收口：原proto及Pydantic保留同形公开结构与业务校验分工；7个领域页仍引用各owner类型，联邦scope／page／branch／end和diagnostics来源沿同一typed信封。当前Python合同／路由／调度类型零诊断、3套搜索生成绑定的真实TypeScript消费者检查通过，含错误输入必须拒绝的反向约束；Node／Web独立runtime的二进制往返及JSON位置／原诊断消费另通过。OpenAPI与生成检查、消费者31项均通过，238份相关输入前后指纹核对见同一 `verification-v5.json`。Web流另有已存在的ES2021 Error.cause TS2554，已核当前源码与HEAD相同，留在1.4，不声称全前端类型零错误。本片不改生产代码或生成产物，复用前轮真实Gateway／Backend上下文序列化和重启续页证据，不重复构建。
+- [x] 16.3 在工作区 SearchService 注册原 catalog／Thread／文件／消息／工具结果／请求／Trace Provider，按类别＋操作／模式唯一分派，支持能力／版本发现、精确 scope、选项拒绝及原分页／位置；冲突报错，缺 Provider 不永久等待。注册句柄可释放，禁止新准入、取消并等待在途安全结算后释放资源，不能切换 Provider 或发布迟到命中；原领域接口复用同一查询，不复制扫描器或强制 Searchable 基类。
+- [x] 16.4 在 Gateway 实现发起上下文、显式集合与 all 的范围解析，返回稳定集合／时间／顺序；无上下文、空集合、未知或越权 ID 明确拒绝，续页冻结范围，登记变动不静默增删目标，停止目标不启动。
+- [x] 16.5 复用 Gateway 控制面提供有界工作区名称／ID／导航发现，使“相关工作区 → 明确集合 → 会话树／Thread／正文”可由 UI／工具组合；直接集合及 all 查询不以项目名称相关性预筛。
+- [x] 16.6 在 Gateway 实现唯一跨目标有界队列；核心使用取消／进度／最终完成 typed 合同，SSE 仅作网络编码。统一剩余期限、实际路由、单次 fan-out 相同 request_id 及新读取新 ID、分支重试和部分失败；首批及时、后续有界批次／缓冲、结算前 flush、唯一终态，慢消费不无限积累，Provider 无 SSE 依赖，不新增持久搜索会话或广播搜索结果。
+  - 当前SSE、Agent／脚本和授权JSON relay均装配同一GatewaySearchService；Workbench名称／正文／文件与原React目录界面沿共享流客户端，原上下文工具只转交同一授权链。全仓调用核对区分文件根元数据Limiter和原目录镜像同步Semaphore，二者不另做请求内领域查询。当前83项调度／编码／传输／relay／公开合同及真实Gateway＋双Backend单文件通过（1 passed／53.30秒），源码前后未变；覆盖快页、三并发、排队期限、慢消费、取消结算、页尾准入、唯一终态、原request_id及重启后的单分支续查。保留2项既有OpenAPI重复operation-ID警告；原件及精确调用图见 `out/tests/temp/2026/11/05/search_dispatch_closure/artifacts/verification.json`。其余缓存／canonical／诊断与跨运行面任务继续独立验收。
+- [x] 16.7 提供冻结范围和 owner 独立 cursor 的类型化续查，保留原数据版本与来源；支持无进程内搜索状态的重启续查、单分支失效／重试，不伪造全域 revision／总数／快照。
+- [x] 16.8 固定 Gateway 默认稳定类别／范围／owner 查询顺序及显式可比较相关性模式／版本；Quick Access 对已返回候选复用原上游 fuzzy scorer／MRU，不在后端重写上游评分，不为重排增加远端读取。保留正文分组及 Gateway／catalog 导航权威顺序，不混排不可比裸分数或宣称部分页为全域 top K。
+  - 2026-11-08 原范围顺序切片：Python SSE／JSON relay不再将明确范围降为无序集合；两种客户端均按原Gateway首次owner顺序去重，保留合法A/B/A输入、快B页先出、最终A/B顺序及独立cursor，原请求不改写且不增请求。旧实现两项范围颠倒负例和Web重复范围正例均已复现；最终89项后端与28项Web流检查、Python静态、定向ES2021类型和正式Workbench构建通过。全Web仍为相同29条既有类型诊断。准确命令、修前失败、源码指纹与原始结果见 `out/tests/temp/2026/11/08/search_scope_order/artifacts/verification-v1.json`；本片不代替完整排序／相关性矩阵、真实页面或Electron，整项继续未勾选。
+  - 日志分支迁齐既有 `category-scope-owner-v1`：跨 Gateway 按冻结范围首次出现的顺序分配页配额和最终汇总，同 Gateway 的明确来源顺序及独立 cursor 保留；增量页仍及时交付，不按完成快慢改排名、不新增读取。旧实现判别反例1 failed，修复后调度／原日志ASGI／传输／输出82项通过，Ruff通过；生产及新用例Pyright零诊断，原测试45项诊断与前次完整基线逐条消息和数量相同。原始命令、源码、反例、类型比较及退出码在 `out/tests/temp/2026/11/06/search_diagnostic_order/artifacts/verification.json`。未改公开DTO或前端，无须重复生成及构建；全组相关性／MRU和导航排序组合证据尚待汇齐，16.8保持未勾选。
+  - 2026-11-13 排序合同收口：真实 Gateway／双 Backend 以反向 B+A 范围和反向 Thread／catalog 查询核 `category-scope-owner-v1`，各 owner 同名 Session 保留，工作区登记顺序和原 catalog 导航快照不变；重启及独立续查仍通过，单文件 `1 passed / 63.94s`。定向94项通过，正文快页可先交付而最终汇总不换序，原领域页内顺序／cursor 保留，同片段不同 owner 不合并，部分结果仍为 incomplete。当前无跨 owner 的共同相关性合同，顶层或分支 `order=relevance` 由真实 ASGI 入口422拒绝且零分发；不声称已实现相关性模式。前端继续原 fuzzy scorer／稳定身份同分和 MRU，复用同源码默认 Provider 的76项／850断言及真实 quickNavigate 零查询证据；本片未改前端／公开类型，不重复构建。Ruff与OpenSpec strict通过；本地Pyright命令缺失，未补装或宣称通过。准确命令、输入指纹、原始结果和最小充分实现复审见 `out/tests/temp/2026/11/13/search_order/artifacts/verification.json`。
+- [x] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
+  - 2026-11-13 收口：原寻址owner提供文件／Session／Thread规范URI，消息、工具、请求及Trace保留独立位置／领域版本，folder／命令／进度不强造URI。当前目录owner重命名／移动定向通过，URI、Thread身份、locator和manifest原件不变；同资源多位置和真实route复用沿原产品页核验。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+- [x] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
+- [x] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
+  - 2026-11-13 收口：唯一后端联邦流已贯穿Workbench／旧React／多根文件，旧fileSearchPage和quickAccessBranches生产检索无命中。第6组固定SearchEditor scope与本轮389项／1473断言、56项服务合同／974断言、原cacheKey／delegate／独立编辑器释放合同及双Gateway模型页共同覆盖本项；元数据发现Limiter不承担领域查询，不误删为第二调度。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像已迁齐；canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
+- [x] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
+- [x] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
+- [x] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
+- [x] 16.15 在真实 Web 和 Electron 产品入口定向回归多范围搜索、原文件 dirty model／Search Editor、历史和动作；另在关闭浏览器后验证工具／脚本查全部会话树及真实 `search_context`。树验收覆盖 A/B 同名 folder 与 Session 不合并、各自根／父链／breadcrumb 及独立 cursor 正确；上下文验收对应 16.12 的原来源、身份、预算和版本语义，保存范围及原始结果证据。静态检查、类型检查、构建和受影响用例按第 15 组要求保护执行，不默认全套重跑。
+  - 2026-11-13 综合收口：原生多范围／SearchEditor保存与范围重启沿 `native-scope-final-verification.json`；原生dirty备份、分屏、草稿与历史沿 `history_identity`、`native_recent_history` 和 `thread_cache_native` 各自原件；新增真实Electron QuickAccess终端停止1 passed／54.02秒，核精确owner、响应request_id、权威terminated回读及正常exit0，提交6e4b58d1f，见同目录 `electron-runtime-action-receipt.json`。无浏览器A/B同名树与独立cursor、真实Agent工具、真实search_context重启分别沿 `headless-matrix-verification-1.json` 与 `context-search-audit/artifacts/verification.json`。每份收据绑定独立源码和development ASAR，不合称同一最新发行包；原生运行时用例缺Agent Spec导致的404及renderer控制台错误保留，不据此声称零错误。MCP独立完整页仍由11组追踪；未验证Windows／macOS及真正跨机SSH，loopback原件按实际边界登记。
+  - 2026-11-13 无浏览器树／真实工具补验：A/B 同名根、父子目录和 Session 均由原产品创建／移动入口生成，交错分页核根、父链、breadcrumb、独立 cursor，跨 owner 游标真实409；原脚本 origin／A+B／all、停止目标和 Gateway 重启只续查B继续通过（1 passed／75.58秒）。真实模型入口经两个已登记扩展工具完成发现与精确 Session 查询（1 passed／299.32秒，包含原集成闸门等待）；没有浏览器或用户Cookie，保留实际后端分发及request_id。Ruff、Python真实类型零诊断，两个运行的相关输入前后无变化。复用已准备不可变插件包而隔离Home／实例，首轮超时及包准备超时原件不覆盖；准确命令与原始输出见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/headless-tree-3.json`、`headless-agent-1.json`、`tree-static-2.json`。本片不替代尚在收口的综合Web动作与原生范围恢复。
+- [x] 16.16 复核删除清单、原调用方／测试迁移、无双重调度／重复匹配／第二事实源；同步实际 Gateway 职责说明与相关 AGENTS.md，在实现完成时登记准确证据，不把本次规范扩展当实现完成。
+  - 2026-11-13 删除与调用链复审：生产及测试全量检索无旧 `fileSearchPage`／`quickAccessBranches` 调用；唯一Workbench SearchService、原Quick Access／文件Provider／旧React共享流、Gateway浏览器SSE／授权JSON relay及原工作区Provider分派的实际调用位置已登记。文件根元数据Limiter与镜像订阅并发保持各自职责，不误当领域fan-out清除；Gateway根／搜索、工作区搜索及Workbench搜索的AGENTS已描述实际边界，无第二索引、调度或恢复事实源。结合16.6、16.10、16.11、16.14、16.20和当前scope／模型页原件完成此项；命令、源码指纹及准确依赖见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/search-migration.json`，不据静态检索替代原生或MCP验收。
+- [x] 16.17 定义资源数／正文匹配区间／上下文与状态字节的计量、全请求与 owner 配额及公平准入，分发前分配页预算；未调度分支明确可继续，页尾被截断时不得推进越过未交付命中的 cursor。验证刚好上限／多一条、重复根、0 配额、原 IFileQuery 0 哨兵转换、exists 探测，不混同无界查询或完整覆盖。
+- [x] 16.18 补机器可判别的错误／受限／取消／信息／警告代码、详细原原因和分支重试信息；验证空目录非法正则、能力版本不匹配、流断开、内部读取失败及原 request_id，诊断文本不执行任意命令链接，复用本地耗时／数量诊断不新增遥测后台。
+  - 2026-11-13 分层验收收口：正式 Workbench／真实 Gateway 页 `run-da75cc5127e5` 1 passed／82.37秒，核原 info、limited warning、Search Editor 文本诊断及三初始化身份；页面发起的真实空目录非法正则和合同版本2请求，均为 HTTP 200 的 SSE、分支 HTTP 400、零 page／结果、不可重试，响应头和全部事件沿原 request_id。后两项验证到 API 回执，未声称错误已渲染进 Quick Access；页面原件见 `out/tests/integration/clients/web/quick_access/test_search_diagnostics/runs/run-da75cc5127e5/nodes/node-3990db17d76f/artifacts/diagnostics.json`。驱动已删除逐行自解 SSE，统一使用 `src/shared/sse.js`，机械替换后通过语法／差异检查，未重跑该页。
+  - 流正常 EOF／真实 HTTP 截断、读取拒绝和原 request_id 复用 `out/tests/temp/2026/11/06/search_stream_read/artifacts/verification.json`；原内部 provider_read_failed 由 `test_federated_search.py` 的原件权限故障证明。完整 `%` 页面失败兄弟保留、单分支重试、远端取消和实际读取取消复用 `out/tests/temp/2026/11/12/quick_access_search_closure/artifacts/text-search-verification-1.json`；详细字段及命令链接按文本的 Provider 合同、DEBUG 排队／读取耗时与数量分别沿下列诊断投影及 `search_local_diagnostics` 原件。各层共同覆盖本任务；HTTP 故障边界不称为真实跨机 TCP 断网，Electron／Windows 整体回归仍归15.4／16.15。
+  - 2026-11-12 `%` 文件正文搜索恢复：原文件 Provider 等各分支结算后才传播具名失败／远端取消，原 SearchModel 提交成功兄弟的缓冲结果；失败行可明确重试原单分支，复用冻结 scope／cursor／pageLimit、剩余额度、去重身份及本地模型版本，Esc 和模型变化取消实际读取。45项合同／822断言、13项转换合同／54断言、182份真实转换源码类型及79扩展正式构建通过；真实Gateway／双Workspace／正式Workbench页面1 passed／40.06秒，核A/B/A读取、成功兄弟保留、仅A重试、远端取消及关闭重试后的原出站请求取消，pageErrors／模型调用为空。独立最小复审无旧Provider旁路、正文副本或重复状态；准确命令、12文件指纹、首两轮失败归因及原件见 `out/tests/temp/2026/11/12/quick_access_search_closure/artifacts/text-search-verification-1.json`。该页未验重试中转移SearchView、Electron／Windows／真实跨机，不据此勾选16.18宽项。
+  - 2026-11-12 后端可选 HTTP 状态为 JSON null 时，Quick Access 与会话资源树不再展示虚构的 `http_status: null`；真实数字状态、原 code／error_owner／reason／request_id 均保留。两个新增反例在原实现失败，修后两个完整文件100项／944条断言通过，Web／Workbench真实类型及正式Web构建通过，前后源码指纹一致。原件及准确命令见 `out/tests/temp/2026/11/12/search_null_status/artifacts/verification.json`。本片使用明确宿主／HTTP装具与真实SSE消费者，不替代完整Gateway页面、Electron或16.18其余场景，整项继续未勾选。
+  - 2026-11-08 上下文非法正则切片：原查询 owner 在库存／会话／正文读取前编译，空库存同样拒绝；直接与统一 HTTP 保留400及原 owner／code／reason，SSE／JSON分支不可重试，精确 relay 与 Agent 保留具名拒绝和原 request_id。463个唯一受影响单测及真实 Gateway／Backend 产品用例1 passed／74.22秒通过，覆盖空库存、合法正则、原重启续页／来源／cursor冲突及真实模型工具错误JSON；两轮新增合法回执断言漏计本机简称URI的失败原件保留，生产源码未变。Ruff／strict规范检查通过；补充Pyright四条诊断与完整HEAD归档基线逐项一致，无新增诊断。原owner单一异常及既有身份核对复用，未引入错误框架或兼容分支；证据见 `out/tests/temp/2026/11/08/search_failure_delivery/artifacts/verification-receipt.json` 与同目录 `root-delivery-v1.json`。未验跨Gateway远端spoke实际通道、Web／Electron界面及其余info／warning，本项保持未勾选，未触及MCP。
+  - 正常 EOF 缺最终汇总时，Web 客户端抛 `IncompleteSearchStreamError(code=incomplete_stream)` 并保留原响应头 request_id，Quick Access 显示同一身份，不改标取消／超时／HTTP 拒绝。API 24项、Chromium内容合同27项及正式Gateway页面1项通过；页面使用同次成功文件流的真实冻结scope精确重试一个Thread分支，其余失败保留原身份，完全没有scope时的原范围重查由内容合同另证。原件 `out/tests/temp/2026/11/05/search_diagnostics_closure/artifacts/verification-027.json`；仅浏览器一次响应正文截空，未冒充真实TCP断连。其它消费者及信息／警告贯通仍待，整项不勾选。
+  - Python SSE／JSON relay 的正常 EOF 由同一验证器抛出具名 `IncompleteSearchStreamError`，保留 `incomplete_stream`、原 request_id 和详细续查原因，读取异常／取消／期限／HTTP 拒绝不改标、不虚构 HTTP 状态。两入口6个反证转绿，Root 原客户端文件30项通过，Ruff／Pyright通过；扩展6文件检查235通过／2项旧装具非UUID在传输前拒绝，未声称整批全绿。原件 `out/tests/temp/2026/11/05/search_python_diagnostics/artifacts/verification-006.json`；本片不完成其它诊断类型或16.18整体。
+  - Quick Access 按原 typed state 单独展示取消，保留已取得候选及原 message／code／reason／request_id；仅 retryable 分支提供明确重试，沿冻结范围重查该分支，不携带旧 cursor。失败正文含“取消”仍为失败，deadline 保持超时，其他已完成分支不变。Chromium 内容合同31项、Workbench真实类型检查及正式Web构建通过；五个交付文件与已测候选指纹相同。原件 `out/tests/temp/2026/11/05/search_cancel_status/artifacts/verification-009.json`；本片使用明确HTTP与宿主装具，未验真实Gateway取消的完整页面，16.18继续未勾选。
+  - Quick Access 的失败／受限／取消详情统一显示原 code、error_owner、reason、实际 http_status 和 request_id，受限分支同时保留原说明；字段缺失不补造，原续点／重试与候选保留规则不变。旧实现反证7失败／2通过，修复后48项Chromium合同／559条断言、真实Workbench类型检查和正式Web构建通过；原IconLabel将命令链接及HTML作为文本呈现。准确命令、源码指纹和原始结果见 `out/tests/temp/2026/11/05/search_diagnostic_projection/artifacts/verification.json`。本片为显式HTTP／宿主装具，不代替完整产品页面或其它消费者；16.18仍未勾选。
+  - 同一文件file/text Provider的失败／取消保留原说明与全部领域诊断，并以Error.cause保留原分支事件及request_id；不可继续的受限警告补齐原说明／归属／原因／request_id，不补造HTTP状态、不自动重试或信任命令链接。两项反证失败后，23项原SearchService／Provider合同368条断言、真实Workbench类型和正式Web构建通过。原件见 `out/tests/temp/2026/11/05/file_search_diagnostics/artifacts/verification.json`；本片仍使用明确网络页资产，不代替真实产品页面、其它信息／警告类型或16.18整体。
+  - 原调度器补每个实际分发分支的 DEBUG 诊断：原 request_id／稳定分支、排队毫秒、领域读取毫秒、实际接收量及原来源／stale；不记录查询或命中正文，不把接收量当最终交付量。失败／取消未取得页时指标留空，零配额未分发不造读取记录；关闭 DEBUG 不计算额外结果计量。真实并发槽位阻塞反例及失败／取消检查、原调度／输出／传输共68项通过；Ruff通过，生产类型零诊断，测试45条诊断与完整HEAD归档基线逐条相同。未改前端、公开协议或查询行为，不重复Web构建；完整原件 `out/tests/temp/2026/11/06/search_local_diagnostics/artifacts/verification.json`。本片补本地耗时／数量诊断，16.18其余验收继续未勾选。
+  - 真实正文读取失败由 Web 的 `SearchStreamReadError(code=stream_read_failed)` 保留响应头 request_id 与原 cause；共享 SSE 只在实际 reader 拒绝处映射，已出错流不重复取消，任何收尾释放原锁。Quick Access 未完成分支显示原网络原因和身份，已完成分支及候选保留，取消／总期限／解码／正常EOF合同不变。84项SSE消费者、30项Python客户端、Chromium Provider 50项中49项首轮通过、修正新测试对已完成分支的错误预期后2项定向通过；独立真实HTTP的4个范围前后×正常EOF／截断场景通过，生产SSE编码由Chromium和PythonSDK共同消费，未替换transport。Workbench 51份转换源码类型与正式构建通过；Web原28项诊断仅两项既有行号变化，本片零新增，Python新测试Pyright／Ruff通过。准确命令、原输出、源码指纹、初轮测试文案／签名修正及Bun直接运行tsc触发4GiB保护的失败原件见 `out/tests/temp/2026/11/06/search_stream_read/artifacts/verification.json`。本片是明确传输边界及Provider装具，未重跑正式Gateway页面或Electron；16.18其余信息／警告合同保持未完成。
+- [x] 16.19 贯通原 owner canonical／大小写及 IUriIdentityService 比较键、重叠根／额外文件／模型去重与根局部选项；保留 onlyOpenEditors、preview、文件大小／编码／链接策略的真实映射，未支持选项明确拒绝。冻结按工作区分区的本地覆盖身份并交文件 owner 在输出计量／分页前排除，不传正文，绑定缓存／cursor。验证只选 A 时 B 不查询，以及 A+B 小配额时 A 本地删词屏蔽旧磁盘命中、B 同路径及 A 另一文件仍可续页取得，核真实序列化、progress／终态计数、模型变化与旧 cursor 失效及本地剩余远端配额。
+  - 2026-11-13 收口：Windows真实canonical页、Linux原生canonical及owner大小写／链接原件与当前56项／974断言组合验证比较键、选项和覆盖。当前双Gateway页六项全true：A本地负覆盖、B同路径、独立续页、旧cursor400、旧retry零请求及剩余配额均保留；QuickInput真实计数首批1／最终3，受限提示不计入结果数。历史平台快照与当前生产差异有逐文件指纹，未宣称新dist跨平台全量重跑。 准确命令、原件、源码依赖与适用边界见 `out/tests/temp/2026/11/13/uri_recovery_action_audit/artifacts/task-evidence-matrix-1.json` 对应任务及同目录 `verification.json`；本次结论替代下方历史记录中的待验收判断。
+  - 2026-11-13 双真实 Gateway／Backend、相同 workspace UUID 的正式 Workbench 页 `run-ae87de636a92` 1 passed／60.54秒；核本地删词覆盖、A+B配额4与合法续页、只A、onlyOpen零远端、原 `%` 首批本地及剩余远端配额2、原覆盖集合零正文、模型变化后旧cursor真实400／invalid_cursor、旧retry本地拒绝且零新增搜索。56项服务合同／974断言、Ruff与Node语法通过，实际HTTP按request_id关联两Backend，原磁盘不变、零模型执行；Pyright可执行文件缺失未运行。完整命令、前后指纹和历轮失败原件见 `out/tests/temp/2026/11/13/search_model_coverage/artifacts/verification.json`。SSH沿原loopback装具，不代替真实跨机、Windows或Electron；正文行和SSE终态计量已核，Quick Input标题将受限提示计入数量的问题另行收口，暂保留整项未勾选。
+  - 2026-11-12 额外文件与模型 ignore 子链：显式额外文件的名称复用原匹配，正文复用同一 Provider 的精确文件分支，目录在计量／分页前排除相同身份；打开模型不再套硬编码磁盘 ignore，明确 glob 和根／owner 边界仍生效。31 项真实搜索服务合同／579 断言、172 份转换源码类型及正式 79 扩展构建通过；真实 Gateway／Backend／Workbench 页面 1 passed／53.84 秒，核 node_modules 未保存正负命中、A/B 小配额与取消、模型正文不上送及磁盘不变。三次新增测试配置／断言错误均保留原件并仅修测试；最终复用相同产品构建。准确命令、指纹、失败归因及最小复审见 `out/tests/temp/2026/11/12/search_extra_files/artifacts/verification.json`；未补验 Windows／Electron／真实远端，整项继续未勾选。本地提交，不同步或 push。
+  - 2026-11-06 Windows完整页面补验：`hyf-win` 正式目标快照 `2cc4092e91d4e30fe11b7ee6db7cea43d24537be`，原 Gateway／双 Backend／正式 Workbench／Node Playwright／Chromium `1 passed／132.06秒`，外保134.74秒／exit0，原180秒Job与teardown通过。文件树、公开URI、联邦候选和直接resolver共享原dirty模型；另一owner、逻辑链接及大小写敏感目录独立；正常刷新可保存，大小写更名后备份／光标恢复且旧SHA保存真实409，原磁盘字节保持。8项断言全true、pageErrors为空，9项相关输入与最终快照匹配，最终web／gateway停止。专用fixture用固定LF字节消除Windows文本模式改写，raw输出按bytes保存；驱动等原Opener规范化及焦点完成，未放宽正文／身份／SHA／CAS或期限。准确命令、620条阶段、失败归因、源码与正式原件SHA见 `out/tests/temp/2026/11/06/windows_canonical_page/artifacts/canonical-final-027.result.json`；Root随后仅修订既有Node运行器的注释，Python AST不变，记录在同目录 `owned-boundary-comment-v1.json`。该片不替代Electron及本项其余组合，整项保持未勾选。
+  - Windows目标实机反证6项全部失败：大小写别名漏排除文件／子树，或误报查询根越界。现沿原文件owner的目标解析取得临时规范路径段，并保留逻辑入口，在正文读取、输出计量及分页前比较；符号链接入口不与目标合并，根外入口不能借链接投进查询根。遍历复用已解析child，不新增客户端请求、持久身份或inode去重。链接回归3项先反证失败；修正后Linux组合166项通过，另2项仅将整个os替身缩为scandir替身后定向通过，保留原扫描上限及关闭断言；Windows完整同文件75通过／2项原POSIX条件跳过。此前GBK与CRLF测试准备错误仅固定UTF-8及字节输入，原业务与计量断言保留。最终3文件Ruff通过，生产Pyright9条完整诊断与独立HEAD基线逐项一致，无新增；原失败、准确命令、快照及边界见 `out/tests/temp/2026/11/05/file_case_coverage/artifacts/link-verification.json`，此前大小写原件见同目录`verification.json`。本片只关闭owner排除子链，编辑器／模型canonical能力和Windows大小写敏感目录的产品验收仍未完成，整项不勾选。
+- [x] 16.20 追加可判别生命周期与流式验收：查询中注销后无新分发／fallback／迟到 progress，安全结算后释放；同 picker 缓存复用／范围隔离及 A/B 独立编辑器释放；受限预热不能标记完整，唯一匹配在预热上限外时仍可有界查询／续查或明确受限，不返回完整无匹配；进度与最终结果不重复计数、最后不足批次仍 flush、慢消费缓冲有界、终态唯一、未交付页不漏项。按相关源码批次做定向受保护验证，不默认重跑全套。
+  - 补齐501文件的预热边界：真实文件owner的同步／异步入口均返回前500项及合法续点，最后一项可续查并由新模糊查询独立召回，全程零正文读取。同一SearchService的`maxResults=0`真实消费500上限及后续哨兵，明确`limitHit`；复用同`cacheKey`查询上限外唯一文件、另一Gateway同UUID及`clearCache`后重查均不被旧页遮蔽。24项服务合同／388条断言和6项真实owner定向检查、Ruff与ESM通过；本批只补验收，不添加第二缓存或重跑未变化产品构建。同picker交互缓存及其它组合继续未完成；原始命令、指纹与边界见 `out/tests/temp/2026/11/06/file_prewarm/artifacts/verification.json`。
+  - 随后沿原owner已确认下一文件的`result_limit`结束已满配额查询，删除重复哨兵请求；每轮独立判断，字节受限仍探测原续点。501项预热和A+B小配额的Gateway请求均由2次降至1次；合法资产在旧实现2失败1通过，修改后26项／407条断言全通过，覆盖恰好完整和续页后不继承旧受限状态。测试资产同时对齐原files owner的`entry_limit→result_limit`、字节限制→`byte_limit`投影，保留原诊断／请求身份断言。共享根同批51份实际转换源码类型与正式Web构建通过，按精确生产SHA复用Skill片的两份收据；仅4行生产改动，无新缓存／配置。原始结果及范围见 `out/tests/temp/2026/11/06/file_result_limit/artifacts/verification.json`；不据请求数推断全链路耗时比例或勾选整个16.20。
+  - 最终补齐同`cacheKey`查询换代／清理与独立B读取的并发组合：旧A取消后新A正常返回，迟到旧页不覆盖；B信号、模型监听及progress沿自身生命周期，完成只交付一次。原空文件编辑器／Chat／Controller／Provider的缓存引用、隐藏／范围切换／释放与取消合同同批54项／626断言通过；文件SearchService 27项／424断言通过。文件Provider按规范明确无owner查询缓存，保留原cacheKey／clearCache调用；不为验收强加缓存。唯一分派注销结算、真实Gateway版本交接、三页缓冲、末页即时编码、汇总计数及未交付cursor保护复用已核输入的原收据，连同501文件上限外召回构成16.20闭环。准确命令、指纹、首轮测试自身断言求值顺序导致超时的归因与各层证明边界见 `out/tests/temp/2026/11/06/search_lifetime_closure/artifacts/verification.json`；本项不代替canonical、其它诊断或Electron任务。
+
+### 2026-11-03：三类正文客户端统一联邦（16.11、16.14、16.18、16.20 部分）
+
+- Quick Access 消息、工具结果及 LLM 请求记录正文统一提交所选 owner，经同一 Gateway 流取得增量领域页；删除原工作区消息搜索客户端和 LLM 直连分支。这三类不再预检工作区或使用前端 Limiter，只有 Gateway 分配并发及页额度；名称和文件类仍由后续切片迁移，不保留同类 fallback。
+- 复用共享 SSE 分帧与 descriptor 核对的生成校验器，核对范围、事件顺序、request_id、领域归属及唯一终态，不对正文新增 hash 或深比较。一个十五秒总期限覆盖建连和正文；用户取消回收同一 reader。续页／重试保留冻结范围，只发对应分支；A 已开始续页时原 A+B 请求的收尾不会清除新请求状态，断流保留已完成 A 并让未完成 B 明确失败。
+- 最终 17 项 API 检查、12 项真实 Provider／Quick Input 调用合同检查及 129 项后端／公开结构／Gateway 调度检查通过。合同装具明确替换网络、Picker 事件及宿主服务，不将其当完整产品页面。真实 Workbench 类型检查覆盖 18 份 sourceTransform 源码，零诊断；Ruff、Pyright、协议生成一致性、OpenSpec strict 与差异检查通过。本批未改 proto，无需重复 Buf breaking。
+- 两项真实 Gateway／正式 Workbench／Chromium 验收通过：`2 passed in 253.77s`。关键消息、工具输出、child 与请求记录均通过产品入口及统一 model_stream 生成。消息／工具场景五次正文请求、请求日志场景三次正文请求均只访问 `/api/gateway/search`，旧正文入口零请求；精确打开、复用 Pane、长正文／emoji、旧引用 409 及零整批日志读取的原断言保持，两个页面 `pageErrors=[]`。同会话共享一次正式构建，46.95 秒、退出零，main SHA256 为 `4f70ca8ee5678e4c52af2c4e3169578610cdc6af5c1ec97e1f767b736d047c35`。
+- 首轮真实浏览器发现新入口漏传 JSON Content-Type（422），已补齐并在网络装具中增加请求头断言；另一失败来自虚拟列表末尾状态未实际渲染，复用原真实滚轮装具查看末尾，保留原文案和期限断言，未修改产品列表来迁就测试。首轮失败及最终通过原件都保留；最终运行源码指纹无变化。
+- 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/content-federation-*`；最终产品原件分别在 `out/tests/integration/clients/web/quick_access/test_message_content/runs/run-76c55bc35cb5/` 和 `out/tests/integration/clients/web/quick_access/test_request_content/runs/run-76c55bc35cb5/`。文件、目录镜像、工具／脚本消费者、all UI 与 Electron 等仍未完成，以上整项保持未勾选，不用本切片替代剩余验收。
+
+### 2026-11-03：文件模型覆盖先于正文读取与分页（16.19 部分）
+
+- 原文件查询接受规范资源覆盖集合，按目标 Gateway、工作区及查询根核验，在读取正文、计数与分页前排除；集合排序去重并参与原 cursor 绑定。模型正文不传出浏览器，省略集合仍查询已提交文件。仅已打开的精确单文件请求不携带兄弟文件覆盖项。
+- 原 owner 同步／异步及相关导航回归 239 passed；真实 SearchService 的 19 项集成检查通过，覆盖 A/B 分区、零命中、小配额、上下文及精确单文件请求。Ruff、生成一致性、Buf format／lint／对 `9bedff21b` 的 breaking 检查通过；真实 Workbench 类型检查包含 18 份转换源码并零诊断。文件 owner 的 9 条 Pyright 诊断与 HEAD 基线一致，无新增。
+- 正式 Workbench 构建、真实 Gateway／Chromium 验收 1 passed / 105.18 秒：从原文本编辑器删除 A 查询词后，在 A+B Search Editor 中仍找到 A 另一文件及 B 同路径；一条小页不被 A 旧正文占用，更换覆盖集合使旧 cursor 返回 `invalid_cursor`，C 保持 offline／可启动且没有搜索请求，磁盘未保存草稿、无页面错误。
+- 原命令、源码指纹、退出码及失败归因保留于 `out/tests/temp/quick_access_provider_20261103/artifacts/file-coverage-*`；最终浏览器原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-6ec4755d7c8b/`。此前两次失败分别来自驱动命令返回值／清理方法，以及误将列表状态期待为运行时状态，均保留原件并按现有合同修正。
+- Gateway 文件 Provider、跨目标文件调度迁移、URI identity 及重叠根等仍待实现；本切片不将 16.19 或整个两级搜索标为完成，也不代 Electron 验收。
+
+### 2026-11-03：目录公开结构补齐（1.2、16.2 部分）
+
+- Session catalog 的六种公开读侧结构统一登记到 Workspace proto；前端从生成结构派生，仅保留 HTTP presence 和业务值域窄化，不再逐字段手写同形接口。原 Pydantic、目录版本及分页职责保持。
+- 真实路由、嵌套结构漂移与候选 descriptor 发布前拒绝等定向检查合计 72 passed；Ruff、协议生成一致性、Buf format／lint／基于 `bce2fc960` 的 breaking 检查通过。真实 Workbench 类型检查包含 18 份转换源码并零诊断，正式 Web 构建通过。
+- 准确命令、源码指纹、原始输出及退出码保留于 `out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。本批未改变运行时查询行为，不重复浏览器流程；Provider 和联邦合同仍待实现，1.2／16.2 不据此勾选。
+
+### 2026-11-03：工作区名称 Provider（16.2、16.3、16.20 部分）
+
+- 工作区容器装配唯一 SearchService，按类别及操作注册 catalog／Thread 名称 owner；旧名称 API 和新增 `/search` 入口共用原查询。能力发现只读注册信息，声明合同版本、选项、位置、页上限及原 owner 缓存职责，不扫描历史或恢复 runtime。一个注册可声明多个操作，重复身份及类别／操作冲突明确拒绝。
+- 注册释放和工作区关闭先撤销准入，取消并等待在途 owner 安全结算后才释放；迟到结果不得发布，不切换 Provider。直接复用原 worker 清理原语，零输出配额明确受限且不调用 owner；未知类别、版本、选项和工作区归属均在扫描前拒绝。本切片没有新建索引、缓存库、SSE 或跨目标队列。
+- 目录／Thread 结果及原 cursor 保留原类型，新增请求、能力和结果信封从 proto 生成并递归核对 OpenAPI，两个离线快照同步导出。62 项定向 API／owner／协议检查通过；最终生命周期文件 13 项通过，另有 65 项协议批次通过（其中新增 search 合同在能力字段最终调整后已由前述 62 项再次覆盖）。
+- 真实 Gateway＋Backend 测试通过产品创建、执行及 fork 建立 main／child，核对新旧入口的完整目录／Thread 页一致、工作区隔离拒绝、版本及选项错误、零配额、request_id 和后端重启后跨入口继续原 cursor；1 passed / 74.56 秒。模型仍使用统一 model_stream 回放，不将其宣称为真实外部模型验收。第一次在端口租约阶段遇到 48242 冲突，确认全部声明端口空闲后再运行通过，未终止未知进程。
+- Ruff 排除原 API 的 B008 后通过；Pyright 新服务及 API 无新增诊断，容器／生命周期的 6 条既存诊断与 `9332b9be7` 原件逐条对比一致。协议生成一致性、Buf format／lint／breaking、真实 Workbench 类型检查（18 份转换源码）及正式 Web 构建通过。
+- 准确命令、源码指纹、原始输出和退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/provider-*`；产品运行原件：`out/tests/integration/gateway/test_thread_name_search/`。本批未改 UI 行为，未重复浏览器与 Electron 验收。树浏览、其余领域 Provider、规范 URI 的全部命中投影及 Gateway 联邦仍未完成，16.2／16.3／16.20 保持未勾选。
+
+## 17／18. 已迁出的缓存完善范围
+
+原第 17／18 组任务整体迁入 [refine-workbench-layered-caches](../2026-11-13-refine-workbench-layered-caches/tasks.md)，保留编号和已完成 17.2／18.3 的证据归属。下方历史收据继续保留，不能据部分收据勾选后续任务。这里不再重复维护 checklist，也不以配置、语言／扩展、Webview 缓存及统一清理的完成阻塞快速访问归档；第 1–16 组实际依赖的身份、查询缓存、原恢复数据与当前文件读取仍按原断言验收。
+
+## 既有切片的实现与验收记录
+
+### 2026-11-02：Session／Thread 专用模式（11.2 部分）
+
+- `session ` 和 `thread ` 通过原 Registry、帮助 metadata 与 Action 接入同一 Provider；分别只查询 catalog 或精确 Thread owner，范围、分页、失败、取消和打开继续使用唯一链路。Session 名称不按文件行号／符号拆分；Thread 最近记录不混入文件。
+- 真实 Gateway／正式 Workbench 验收从两个原命令打开选择器，确认 Session 打开原 main、Thread 保留 child，实际只出现一次 catalog 查询和一次 Thread 查询，均限定 A，没有额外文件查询、业务执行或页面错误：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-4e1b4ef34a25/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`；1 passed / 121.91 秒。该运行同时保留原 URI、分页和目录失效回归。
+- 9 项 Provider 合同、真实类型检查（含 18 份转换源码）、正式构建通过；原输出与退出码以 `out/tests/temp/quick_access_opener_20261102/artifacts/name-modes-*` 保留。`resource ` 的其余类别尚未接入，11.2 保持未勾选。
+
+### 2026-11-02：规范 URI 打开切片（2.2、7.4 部分）
+
+- 认证 Gateway 的只读地址投影复用唯一 URI grammar，公开 DTO 从 proto 生成并递归检查。原 Opener 重新解析稳定工作区路由；Session 沿原 owner 取得 main，child 保留精确 Thread，文本文件复用唯一文件投影。原 URI 不先按行号或符号改写；目标不可用和非法 URI 明确失败。发起组、侧边、固定与后台选项保留，校验成功前不创建侧边组。
+- `tests/e2e/clients/web/test_quick_access_catalog_targets.py` 经正式构建、真实 Gateway 和产品创建／fork 入口验证 child、Session main、侧边组、跨工作区同名文本及非法 fragment；最终 1 passed / 121.23 秒，证据：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-444f14cfbcd7/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。首次运行在端口租约阶段失败，未进入业务；保留原件，没有终止未知进程。
+- 地址解析与鉴权 16 passed；Gateway／消息流 HTTP 合同首轮 180 passed，唯一新文件根 fixture 错误修正后该组通过；Workspace 递归结构检查 9 passed；原 Provider 合同 9 passed。协议生成一致性及包含 18 份实际 sourceTransform 源码的真实类型检查通过；正式 Workbench 构建与本轮浏览器验收使用同一源码。命令、原输出与退出码位于 `out/tests/temp/quick_access_opener_20261102/artifacts/`。
+- TODO：媒体、只读来源、Diff 的完整投影及独立版本参数、原 Chat／空文件编辑器真实调用方和 Electron 产物尚未验收，2.2／7.4 保持未勾选。
+
+### 2026-11-02：Thread 稳定身份切片（2.1）
+
+- Thread 编辑器以 Gateway／工作区／Session／Thread 构造唯一内部投影；匹配、分屏复制、关闭重开和版本 2 序列化均使用同一身份，临时 route 不进入正常恢复记录。恢复和原 resolver 重新查询当前登记，缺失／歧义拒绝，不自动连接、启动或改投活动工作区。同一输入的 Pane／导航在途解析共用 Promise，控制面重解不探测全部工作区服务。
+- 新建、会话导航、fork、任务及资源页调用方已迁齐；旧无 Gateway 身份的记录原样保留为可关闭恢复错误，仅写新格式，不凭当前 Gateway 猜测。
+- 定向 Bun 17 项通过；真实 Workbench TypeScript 检查零诊断；正式共享构建通过。新增真实 Gateway／Chromium 场景通过标签去重、分屏、草稿／每组视图刷新恢复、未知 Gateway 与歧义拒绝且不读取对应 Session。歧义只复制一条真实登记响应，属于明确替身边界；真实 route 改变／复用由定向检查证明，尚不能据此勾选 2.5 的完整产品场景。
+- 原完整聊天工具循环回归通过，保留封存请求、文件保存、main／child 并行隔离、迟到导航和删除后刷新恢复的原断言。首次新增测试错误要求重开在已有资源之外再复制标签，按上游 HistoryService 的实际行为修正；随后修复替身回调清理竞态并重新通过。两次失败原件均保留。
+- 类型检查原并行模式触及 4 GiB 外部保护；使用编译器单线程及局部 GC 预算后，在相同硬限制内约 50 秒完成。未调整用户环境或放宽内存上限。
+- 命令、源码指纹、退出码与原输出：`out/tests/temp/quick_access_thread_20261102/artifacts/`；真实页面产物：`out/tests/integration/clients/web/test_thread_editor_identity/`、`out/tests/integration/clients/web/test_basic_chat_tool_loop/`。Electron 原生及剩余快速访问能力尚未验收，相关任务继续未勾选。
+
+### 2026-11-02：目录模糊召回切片（3.1）
+
+- 原 catalog 搜索及 Gateway 公开目录镜像共用顺序字符匹配和搜索键投影，名称、ID、逻辑路径及冻结 UTC 创建位置分别匹配。搜索键按原快照复用，保留排序、top-K、total 与 revision；旧子串语义的游标明确失效。导航 folder 不创建 Session 或 Thread。
+- 定向 Python 56 项通过，覆盖首屏之外缩写、Unicode、逻辑路径、独立字段、分页、查询变化、重命名与删除；真实 Gateway 集成通过原后端创建／移动及在线、重启后离线镜像搜索，核对 request_id、归属、stale 状态及物理 locator 不输出。次工作区仍是既有明确 HTTP 替身，本项不证明新 Quick Access Provider 已接入。
+- Pyright 零诊断，OpenSpec strict 通过。完整 Ruff 检查仅剩 HEAD 原有的 TRY004 两条和 ISC004 一条；新增导入格式已修正，排除这两项既存规则后检查通过，未改变既有异常合同。
+- 原始命令、源码指纹、退出码和审查收据保留于 `out/tests/temp/quick_access_catalog_20261102/artifacts/`；真实集成产物位于 `out/tests/integration/gateway/test_session_catalog_search/`。本批无前端及公开 DTO 变化，未重复 Workbench 构建。
+
+### 2026-11-02：Thread 有界发现切片（3.2）
+
+- 新名称查询复用原 catalog 可见快照、Session 生命周期读准入和控制库只读事务；main 取冻结指针，child 取既有发布记录及标题。不加载 cold runtime、不读正文、不新增表或 schema 版本。每页明确目录／行数／结果／调度时间预算及独立 cursor，不承诺跨控制库同一时刻快照。
+- 定向 Python 206 项、客户端 13 项通过；真实 Gateway 集成经产品创建、执行及 fork 建立同名 main／未打开 child／另一 Session main，验证后端重启续页、精确 URI、原 request_id、无额外模型调用，以及新 child 使当前分支旧 cursor 返回 409。
+- 新模块 Pyright 零诊断，SessionService 19 条既存诊断与 HEAD 一致、无新增；Ruff 排除原 API 12 条 B008 后通过，另保存原件对比。生成一致性、Buf 格式／breaking、公开 descriptor／OpenAPI、真实 Workbench TypeScript 及生产构建均通过。
+- 新集成装配初期遗漏游客登录、Gateway 回调地址和 native 辅助服务，并误用 source point 字段；逐项按原输出修复，未更改产品来迁就测试。端口曾被瞬时连接占用，改用既有进程租约提前预留本文件服务端口。失败原件与最终通过均保留。
+- 证据：`out/tests/temp/quick_access_discovery_20261102/artifacts/`；正式产品查询原件位于 `out/tests/integration/gateway/test_thread_name_search/`。Provider 尚未消费本查询，3.3／3.4 及整体 Quick Access 验收仍未完成。
+
+### 2026-11-02：文件根与轻量 stat 切片（4.1）
+
+- 唯一文件投影保存稳定 Gateway／工作区归属及不透明规范根，迁齐所有旧叶子 query 消费者；根及特殊字符支持原版 joinPath／relativePath／序列化往返。每次操作解析当前已登记 route，旧临时 route 记录明确不可恢复。describe 只返回真实类型、size／mtime／ctime，不读正文或计算 hash；保存仍使用实际读取的 revision／CAS，stat 不推进基线。
+- Python 168 项、客户端 3 项／37 断言、公开合同 391 项通过，真实 Workbench 类型检查与生产构建通过；生成一致性、Buf 格式／breaking、OpenAPI 和 OpenSpec strict 通过。真实 Gateway／Chromium 完整聊天工具循环保留文件树预览、原版编辑器打开／保存及多 Thread 的原断言并通过。
+- 目录根由真实 FileService／provider＋显式 Gateway 传输 spy 和后端真实文件系统 describe 分层验证，尚不证明 SearchService 或完整搜索 UI；特殊字符最终修正由定向客户端、最终类型检查与构建覆盖。Pyright 10 条旧诊断与 HEAD 一致，无新增。列表 stat 最初触及原响应预算，收敛为 describe 专用后通过，未放宽预算。
+- 准确命令、源码指纹、原输出、失败归因与结构审查：`out/tests/temp/quick_access_file_root_20261102/artifacts/verification.json`。2.2／2.4／4.4 等剩余完整任务保持未勾选。
+
+### 2026-11-02：有界文件模糊召回切片（4.2）
+
+- 同一导航 search 新增显式 fuzzy，按根内解码相对文件路径作大小写折叠顺序字符召回，只返回文件，不读正文；旧 path／glob／content 语义保持。共用原扫描、分页和预算，不加索引或第二查询链。取消释放调用方等待，原只读 worker 恢复后核对同一 deadline。
+- 定向 Python 176 项通过，最终 7 项 fuzzy 检查通过；真实 Gateway＋共享 Backend 双挂载查询通过，覆盖首批 120 个无关文件之后的缩写、激活另一工作区仍定位原根、独立续页、模式旧 cursor 与扫描超限错误。尚不证明 Quick Access UI 或远端 SSH。
+- 公开协议批次 426 项通过，另 1 项发现上一切片 stat 字段编号断言漏迁；按已批准合同补字段及可选值往返后，该文件 9 项全部通过。模式公开字段仍是 string，生成前端只更新注释；运行时客户端类型与代码未变，复用上一切片的最终真实类型检查和生产构建。
+- Schema Pyright 零诊断；原 owner 的 10 条旧诊断与 HEAD 一致、无新增。Ruff、生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。证据与失败归因：`out/tests/temp/quick_access_fuzzy_file_20261102/artifacts/verification.json`。
+
+### 2026-11-02：文件文本选项与精确坐标切片（4.3 部分）
+
+- 原导航 search 增加 typed search_options，贯通正则、大小写／smart case、整词与分隔符、多行、全部非重叠命中、include／exclude 及明确 ignore 模式。省略选项保留原敏感字面量和每行首个命中；旧匹配实现已被同一编译／遍历链替换，原精确工具产物 capability 也复用此链。模式按一次本机调用编译，正则执行消费剩余总期限。
+- 多行起止继续提供码点坐标，并由原 owner 使用完整文本同时计算 UTF-16 起止列与片段起点列。裁剪前的 emoji 不再需要客户端猜测或额外读取正文；使用稀疏代理对位置复用转换，ASCII 跳过该扫描。完整 SearchService 和客户端坐标消费尚待接入，不据此勾选 4.3 或 4.4。
+- 最终 209 项定向 Python 检查通过；真实 Gateway＋共享 Backend 双挂载再次通过，核对跨 CRLF／emoji 的正则命中、大小写、路径过滤、UTF-16 位置、精确读取与 request_id。公开合同先完成 428 项，追加 UTF-16 字段后定向协议／往返 37 项及真实公开结构导出再次通过；最终类型检查和生产构建通过。
+- Ruff 与 schema Pyright 通过；原 owner Pyright 从 HEAD 10 条既存诊断减至 9 条，无新增。生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。末次验证前导入排序问题已修复，失败原件保留。
+- 此切片当时未接目标 ignore 文件及客户端搜索；后续唯一服务、上下文和目标 ignore 切片已迁齐。regex/wcmatch 直接依赖也已在修复 metadata 包发现后登记，未升级其锁定版本。
+- 证据：`out/tests/temp/quick_access_text_options_20261102/artifacts/verification.json`。这些分层检查不代 Quick Access UI、远端 SSH 或 Electron 验收。
+
+### 2026-11-02：唯一搜索服务与本地模型隔离切片（5.1～5.3）
+
+- Workbench 创建前沿原 singleton 登记项目 RemoteSearchService 子类；同一文件 file／text Provider 连接原导航 API。只有明确业务根的正文组合使用项目分支，原生容器继续使用原服务。按完整 URI 在 findMatches／首次和后续 progress 前限制模型；零命中模型同样屏蔽同文件磁盘旧命中，不自动保存。
+- 仅已打开查询在请求前选精确文件；文件名保留完整相对路径，复用上游模式匹配。分页复用每个 owner 的路由和固定请求合同，结果上限在模型与磁盘之间合并；取消／dispose 中止实际请求并拒绝迟到及同页后续进度。后端 UTF-16 源区间与有界首行预览分开投影，不再读取正文推算位置。业务 AI 明确未启用，未支持的选项在本地进度前拒绝。
+- 最终 10 项搜索服务集成及原 Thread／文件检查合计 17 项、122 条断言通过；公共 Gateway／HTTP 客户端 65 项、153 条断言通过：真实 ServiceCollection／InstantiationService 与上游匹配／结果转换，Gateway 传输为明确 spy、文本为内存存取装具。覆盖 A／B 同路径、原生容器同名 URI、零命中覆盖、双向隔离、仅已打开、上限、分页、失败归属、取消及释放。不能据此声称真实 IndexedDB、SearchView、Quick Access UI 或 Electron 已完成，5.4～5.6 保留未勾选。
+- 真实 Gateway／Chromium Thread 身份回归和同源码正式生产构建通过。首次页面等待暴露在线模型目录刷新阻塞，原后端日志有前台等待记录；测试明确改用本地目录。第二次在启动前遇临时端口占用；接入现有端口租约保留绑定后，原五秒断言和全部打开／恢复场景通过，未终止未知进程。服务装具初次遗漏上游 Worker 服务，补齐为误入即失败的明确依赖后通过。所有失败原件保留。
+- 最终真实 Workbench 类型检查、Ruff 和 OpenSpec strict 通过；本批没有公开 DTO 或协议生成变化。证据：`out/tests/temp/quick_access_search_service_20261102/artifacts/verification.json`；正式服务及浏览器产物分别位于 `out/tests/integration/clients/web/quick_access/search_service.test/` 和 `out/tests/integration/clients/web/test_thread_editor_identity/`。
+
+5.6 验收：真实 Gateway／正式 Workbench 中 A、B 同路径不同 dirty 模型及 IndexedDB 同名文件，普通／仅已打开／转交／移动视图／反向 B 均保持归属；两份磁盘正文不变。产品入口切换导航并等待选中，避免测试 API 激活与界面镜像的布局恢复竞态。16 项定向检查、实际生成源码类型检查、Ruff 及 fixture 正式构建通过。命令、源码指纹与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/isolation-verification.json`。Search Editor 与 Electron 尚未验收。
+
+
+### 2026-11-02：Search Editor 独立范围与持久化切片（6.3～6.6）
+
+- 在原配置模型保留版本化 scope，同一 sourceTransform 贯通原 factory、命令、控件更新、copy、JSON serializer 和磁盘／backup header；priorConfig 不继承范围。原 Pane 子类使用每个实例的 child QueryBuilder，实际原搜索取消、模型 await 与最终写回均核对输入／搜索代际，不改私有 readonly 上下文或吞构建错误。
+- 真实 Gateway、A/B 托管后端、正式 Workbench 与 Chromium 验证分屏独立查询、不同范围不复用、复制、另存、关闭重开及刷新恢复；实际请求只访问对应 owner，dirty 正文恢复且两份磁盘文件均未保存。保存结果经原扩展双击定位仍打开原 A 文件。旧格式显示历史正文且只读，重查明确报错且无 HTTP；经原 Quick Input 明确选择 B 后才查询 B。损坏／未知版本在原编辑器占位页显示具体错误，均未发业务搜索。
+- 实际跳转验收暴露原搜索结果模型未接入文本解析引用，词语高亮会报 unable to resolve；在原 startup contribution 登记同一结果模型的内容 Provider，由原 Input 持有解析引用并随其释放，移除直接销毁模型的旧生命周期。保留高亮、定义跳转和原结果模型，不增加正文副本。初次范围名称回退为 ID、通用错误占位隐藏原因等失败已按原件定位修复，未放宽断言。
+- 最终 14 份转换源码的真实类型检查、23 项定向检查／178 条断言、Ruff 和 fixture 正式生产构建通过；结构审查无 findings，固定 upstream 原件不变。准确命令、源码指纹、原始输出、退出码和失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/editor-verification.json`。
+- 6.2 保留未勾选：两个 rawData 分支已携带范围，但需要上下文行的重跑分支仍被现有文件 Provider 明确拒绝，尚无完整运行证据。6.7 保留未勾选：真实深度 backup 故障恢复、route 变更／复用和迟到 Pane 完成仍需专项验收；本批不证明远端 SSH 或 Electron。
+
+### 2026-11-02：同次读取上下文与完整转交切片（6.2）
+
+- 原导航 search 增加 0～100 行上下文，文件及精确工具产物沿同一匹配器、读取、分页及预算返回有类型的行；上下文每页去重，不占命中数，仍计入响应字节。客户端按最终接受的命中合并跨页上下文，剔除命中行、上限之外的无关行及已被本地模型接管的旧正文，截断可见；未增加逐命中读文件或第二搜索链。
+- 真实 Gateway／Chromium 验证 contextLines=0 原结果转交时无额外搜索、contextLines=1 对未打开磁盘文件自动重查，以及 dirty 模型上下文、相邻命中去重。保留既有分屏、复制、保存恢复、旧格式只读和 A/B／IndexedDB 隔离断言，实际 HTTP 仍指向 A；两份磁盘正文均未保存。恢复布局过早捕获无范围错误已修复为首次查询同步捕获，后续查询范围继续固定。
+- 后端及协议定向 321 项、搜索服务 12 项／70 条断言、14 份实际转换源码类型检查、Ruff、正式生产构建、生成一致性和 Buf 格式／依赖／真实提交 breaking 均通过。首次类型检查遗漏默认值、Ruff 局部命名和真实页面恢复范围失败的原件保留，按具体原因修复后复验。
+- 真实工作区 HTTP 两项及跨 Gateway／localhost SSH 定向一项通过，后者经连接入口和目标 Workspace 两条原路由核对上下文 URI、CRLF／BOM 行号和 request_id。迁齐此前 stat／完整坐标的旧断言，并修复该场景残留的旧装具模块导入及已移除的 artifacts_dir 构造参数；产物直接复用现行 harness 的逐节点目录，不增加兼容装具。原失败与最终通过分别保留在 context-http-*、context-federation-* 收据中。
+- 准确命令、源码指纹与退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/context-*.json`；最终真实页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-00bb9f01ab54/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.3 的目标 ignore 文件及 6.7 的深度恢复／route 专项仍未完成，不将其或 SSH／Electron 标记为已验收。
+
+
+### 2026-11-02：目标机器 ignore 与完整搜索选项切片（4.3）
+
+- 同一文件 owner 以 pathspec 解释所选根以内的 `.gitignore`／`.ignore`；支持继承、锚定、否定和 `.ignore` 优先级，目录在递归／正文读取前剪枝。显式文件与已打开模型沿原上游行为，不为磁盘规则增加请求或第二套 TS 引擎；父目录／全局 ignore 仍在 progress 和 HTTP 前明确拒绝。
+- 规则累计读取受原 max_bytes／deadline 约束，每目录只读一次；stat 与缺失事实进入原 cursor 前缀，隐藏规则被改写、创建或删除同样使旧页失效，不新增全文 hash。提取共同有界读取，文件 read／search／规则共用同一 I/O 链。
+- 修复 setuptools 扫描 JS 依赖的 metadata 故障，明确 Python 包范围；只新增 pathspec，登记已有 regex／wcmatch 直接依赖，没有升级既有包。proto 注释与生成产物同步，无字段、配置版本或数据库变化。
+- 334 项后端／协议检查通过；23 项工作台服务／范围／持久格式用例通过（22 项首次通过，再补拒绝断言后服务文件 14 项通过，沿用其它 9 项）。真实类型检查含 14 份 sourceTransform、正式 Workbench 构建、Chromium 原页面通过，默认 respect 隐藏文件、原设置关闭后 none 显示文件；A/B dirty、IndexedDB、仅已打开、SearchView、Search Editor 和上下文原断言保持。
+- 真实跨 Gateway 与 localhost SSH 定向用例通过：A/B 同名规则相反，两个真实路由均按 B 规则搜索，关闭 ignore 返回两个文件。前三项 Web／HTTP 验收在组合运行中已通过，组合在最后一项触发 240 秒外部超时；保留退出码 124，仅重跑未完成的远端用例并通过（42.36 秒），本次孤立 SSH 进程已按运行 ID 清理。
+- Ruff、Buf format、生成一致性与相对 77fcd4379 的 breaking 检查、OpenSpec strict 通过。结构审查无 findings：规则模块只负责纯匹配，I/O 仍归文件 owner；触达源码目录各 12／10 个文件，导航 757 行仍为单一有界只读链。
+- 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/ignore-*.json`；页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-5c568eae5d7f/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.4、6.7 以及 Electron 仍需各自完整验收。
+
+### 2026-11-02：Search Editor 深度恢复与路由变更验收（6.7）
+
+- 沿原 Monaco 输入写入 A/B 独有未保存结果，只读核对原 IndexedDB backup 的正文及范围；刷新后正文原样恢复且没有自动搜索。延迟真实控制面回执期间替换另一组的 Input，放行后查询仍属于 B。
+- 正式移除 B 后搬迁隔离装具，由 C 占用旧路径及 route：B 重查明确报错且零文件搜索 HTTP。再经管理入口注册原 B，新 route 保留稳定 workspace ID；再次查询及刷新恢复均只访问新 route 和原规范根，不显示 C 正文。保留此前复制、另存、关闭重开、dirty 模型、上下文及 A/B/IndexedDB 原断言。
+- 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（156.85 秒），Ruff、JS 语法及 OpenSpec strict 通过。仅新增测试，无产品代码变化，复用上一切片真实类型检查。结构审查无 findings：专用 helper 约 150 行，无新增源码目录。
+- 三次失败均为验收装具问题：删除遗漏 runtime group 前置条件、正文输入焦点错误、将注册摘要当作完整工作区 DTO；分别按原输出修正，未放宽身份、正文或零请求断言。准确命令、指纹、失败原件及退出码位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/recovery-*.json`；最终页面原件位于 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-9421a9a007bb/nodes/node-f4e408bf0b21/artifacts/search-result.json`。本项不证明 Electron 或剩余 Quick Access 功能。
+
+### 2026-11-02：文件边界与坐标验收（4.4）
+
+- 在原真实 Gateway／受管 Backend 场景补齐缺失目录的 describe／有效 search、未知二进制的无正文 stat 与明确编码错误、只读 agent-spec 拒绝普通文件写入且原件不变。根内 include、大小写不敏感多行正则、CRLF／emoji 的码点与 UTF-16 完整区间均核真实 HTTP 回执；保存后 describe 只返回 stat，旧 revision 仍以 409 拒绝，保留原 request_id。
+- 真实 HTTP 场景通过（67.76 秒）；原版 FileService 定向 3 项／37 断言通过，确认目录／二进制 stat、稳定投影及 route 变化后的 CAS 基线。复用前两切片的查询选项、dirty 模型和真实页面证据，无产品变化，不重复前端构建／类型检查。Ruff、差异检查及 OpenSpec strict 通过；原文件 522 行，新增断言仍属同一导航场景，无结构 findings。
+- 首两次失败来自测试误把未知 `.bin` 当成受支持媒体；按既有合同同时核 text／auto 都明确拒绝，未扩展媒体能力。第三次缺失目录搜索漏传必需 query，修正有效请求后通过。原输出、源码指纹、命令及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-boundary-*.json`；真实回执保留在 `out/tests/integration/backend/agents/test_resource_navigation/artifacts/navigation-receipts.json`。这不代替尚未实施的统一 opener 或 Electron 验收。
+
+### 2026-11-02：文件观察去除正文轮询
+
+- 删除每个编辑器文件每五秒读取完整正文的轮询，复用原共享 watcher／SSE。相同完整根共用订阅，事件先按规范根及实际监听目标限制，父目录删除及溢出仍通知原 FileService；最后释放才取消，路由解析晚到不再建立订阅，流错误沿原 watch 错误通道暴露。通知不读取正文、不更新 revision／CAS。参考 `reference_repo/vscode/extensions/copilot/src/platform/filesystem/vscode/fileSystemServiceImpl.ts` 的原文件 watcher 接入。
+- FileService 定向 5 项／51 断言、真实类型检查（含 14 份转换源码）、Ruff、JS 语法通过。真实 Gateway／正式 Workbench 构建／Chromium 完整场景通过（162.79 秒）：空闲六秒正文 GET 增量为零，外部真实文件修改自动显示，dirty 草稿保存由原 FileService 明确拒绝且磁盘不被覆盖；原后端 CAS 单测及原双工作区／备份／路由恢复断言保持。结构审查无 findings：产品及服务测试各约 155 行，页面 helper 约 50 行，无新源码目录。
+- 首次类型检查的闭包收窄、单测误比较 URI 内部缓存、页面装具目录变量被接口对象遮蔽均按原输出修正，未放宽身份或冲突断言。命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-watch-*.json`；最终页面为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-191eb29762e2/nodes/node-f4e408bf0b21/artifacts/search-result.json`。不增加任务勾选，不代表默认 Quick Access 或 Electron 已实现。
+
+
+### 2026-11-02：默认名称入口（7.1、7.2）
+
+- 原贡献仅登记一次项目默认 Provider，仍用原 Picker、fuzzy scorer、历史、打开与编辑器组；按最近／Session／Thread／文件固定分组。空输入不发名称或正文查询，关闭历史后不枚举补空。各类别渐进发布，使用稳定目标保持活动项；Session 接受时由原 owner 解析 main，Thread 保留精确身份。
+- 真实 Gateway／正式 Workbench 页面通过：A／B 查询目标隔离、延迟真实 Thread 响应时其余分支先到、未打开 main 的 ID 发现、键盘打开文件的 2:3 位置和多层路径、无匹配不扩搜、Command Center 帮助不查询、真实设置关闭历史。原 dirty、watch、IndexedDB 隔离、SearchView、Search Editor 分屏／保存／backup／route 场景全部继续通过；最终页面为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-a5f66c4a83d6/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 原 PickerEditorState 在 hide/dispose 与异步 restore 交错时读取被清空的状态；同一转换内改为 await 前消费局部状态，时序测试证明 dispose 可恢复，旧恢复不清掉下一次定位状态。固定 16 份源码的全部锚点、上游原件和真实类型检查通过。
+- 9 项定向检查／100 条断言通过。delegate／filter／补充项／handleAccept 在浏览器组件装具中验证空查询、URI 查询、取消／迟到响应、后台标志和原接收者；宿主与 Picker 事件是明确替身，不代替空文件编辑器或原 Chat 二级流程的完整验收，7.4／7.6 仍未勾选。普通页面通过后仅补齐 delegate 空输入分支，其余页面分支等价，定向检查与最终构建覆盖该增量。
+- 设置验收失败原件确认旧装具逐键插入触发自动补括号，生成无效 JSON；现以真实剪贴板粘贴和保存，并只读实际存储核对完整 JSON，未绕过设置 owner。JS 静态检查、Ruff、差异检查通过；准确命令、源码指纹、原输出、退出码及保留的失败原件位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/default-access-*.json`。多范围、通用 URI opener、完整帮助转接、正文和 Electron 等剩余场景继续未完成。
+
+
+### 2026-11-02：帮助与模式转接（7.5）
+
+- 原 Controller 在浮层显示前捕获发起归属，原输入前缀转接继续传递 typed options；原 HelpQuickAccess 的确认和精确前缀两个 show 直接传递 options，返回默认入口关闭本次递归帮助。独立新命令重新捕获自己的上下文，不从之前浮层隐式继承回调或错误；发起错误在显式转接中不改投后来焦点。
+- 真实 Gateway／正式 Workbench 经原设置保持浮层，将底层编辑器从 A 切到 B，经 Command Center → `?` → `%` 查询仍只访问 A，返回默认入口也只显示 A 历史且不递归帮助。原默认、dirty／watch、SearchView、Search Editor 分屏／保存／backup／route 场景继续通过；页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-a9be95922242/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 11 项定向检查／126 条断言通过，原 Help 两个处理器的接收者回调保持同一对象；后者为浏览器组件装具，不冒充真实原 Chat widget 验收。18 份实际转换源码类型检查、正式页面构建、Ruff、JS 静态检查和结构审查通过；第一轮类型检查指出嵌套 options 字面量的额外属性，改为原 typed 局部变量后通过，未逃逸类型。
+- 准确命令、源码指纹、原始输出、退出码与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/invocation-verification.json` 及相邻收据。本切片不完成 7.4／7.6、跨范围、通用 URI opener 或 Electron 的剩余验收。
+
+### 2026-11-02：列表与打开动作验收（7.3）
+
+- 真实 Gateway／正式 Workbench 页面核对 Session、Thread、文件的名称、工作区归属、详情、图标及实际命中高亮；悬停 Tooltip 和 Tab 聚焦的侧边按钮均通过。明确开启原 Quick Open 预览设置后，侧边文件显示预览标签；两次原后台接受保留输入焦点，文件固定在发起组，原组 Thread 保持可见。移除历史后原标签与后端 Session 均保留。
+- 最终页面通过（184.12 秒），原 A/B／IndexedDB、dirty／watch、SearchView、Search Editor 分屏、保存、backup 和 route 恢复断言继续通过，无页面错误。仅新增测试，复用上一切片同产品源码的真实类型检查；本轮 fixture 重新完成正式构建。JS 语法、Ruff、结构及 OpenSpec strict 检查随本边界保存。
+- 前两次失败分别是装具未先悬停便查找通常隐藏的按钮，以及未开启预览设置便断言预览；依据原列表 CSS 与原设置默认值修正，未修改产品行为或放宽归属断言。命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/list-*.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-0ef312a76ada/nodes/node-f4e408bf0b21/artifacts/search-result.json`。7.4／7.6、统一 URI 打开和 Electron 等仍未完成。
+
+### 2026-11-02：符号来源与搜索边界（5.5）
+
+- 原 `#` 登记只选择项目符号子类，复用原 Picker 的 provide、过滤及释放；明确业务 owner 或发起身份错误时，在全局符号查询之前返回未启用或原错误。原生无业务范围调用继续使用原符号服务，文件内符号不受影响。默认入口开启 includeSymbols 时明确提示当前缺少可限定业务根的服务；未增加全局设置改写。
+- 26 项定向检查／212 条断言通过，覆盖根与 extras、AI 拒绝、等待越过原 200ms debounce 后全局符号 Provider 零调用，以及原生符号调用仍到达真实注册表。真实 Gateway／正式构建／Chromium 完整场景通过（181.25 秒），`#` 保留 B 身份且没有领域查询，原 A/B、dirty、watch、SearchView、Search Editor、backup 和 route 断言保持。复用同产品源码指纹的 18 份转换源码真实类型检查；本次构建由正式 fixture 完成。
+- 合同浏览器装具改以本地静态服务加载同一编译产物，去掉每例经控制通道传输数 MB base64；相同 26 项从 20.94 秒降至 4.74 秒，没有放宽期限或断言。原列表复用时隐藏但保留旧 detail，展示测试现先按候选身份限制再核文案，仍要求唯一目标。端口 TIME_WAIT 导致的启动失败与前两次定位失败原件保留；确认端口重新可绑定后再跑通过，未终止未知进程。
+- 准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/symbols-*.json`，最终为 `symbols-contract-004.json`、`symbols-browser-004.json`；文本定位其余模式与 Electron 尚未独立验收，不勾选 10.2 或桌面任务。
+
+### 2026-11-02：明确多工作区范围（8.1、8.2）
+
+- 普通混合入口复用原 Quick Input 多选已登记工作区，展示 Gateway、稳定工作区身份及运行状态；确认才查询，取消恢复原查询和活动候选身份。只选择调用方、delegate 和 quickNavigate 保持原合同，不增加范围按钮。模式转接保留用户明确选择的集合，发起编辑器归属另行保留。
+- 所选 owner 共享一次路由读取，使用原 Limiter 将业务分支及根请求限制为三路并发；按类别交错调度，取消同时释放在途与排队分支。停止目标只展示不可查询，不调用启动、连接、激活或注册。Session 打开使用命中分支的 owner，最近记录仅包含明确选定集合。
+- 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（208.49 秒）：勾选未确认零查询、取消保持 A、确认仅查 A+B、C 零业务查询、三条在途请求均实际中止，释放旧响应不覆盖新结果，`?` → `%` 保留 A+B；选停止 C 不调用生命周期接口，其余两者仍可查询。原 dirty、watch、SearchView、Search Editor、保存／backup／route 恢复断言保持，页面错误为空。页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-44393c58118d/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 真实类型检查包含 18 份转换源码，通过后核对 881 份产品源码指纹一致；26 项定向检查／217 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。结构审查无 findings：范围选择独立于查询编排，无新增源码目录。准确命令、指纹、原输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/scope-types-002.json`、`scope-browser-004.json`、`scope-final-contract-001.json`、`scope-final-static-001.json`。
+- 前次失败原件保留：类型字面量额外字段、候选身份定位、虚拟列表末尾状态定位，以及读取被取消响应正文的装具时序均按具体证据修正；未放宽身份、并发或零请求断言。8.3～8.6 尚需身份代际、状态展示、文件续页及完整错误矩阵，不因本切片部分覆盖而勾选；Electron 仍未验收。
+
+### 2026-11-02：Session／Thread／目录默认动作（3.3）
+
+- Session 接受复用原 main-thread owner，Thread 保留精确 child；catalog folder 不再被过滤，默认动作打开原会话导航，重新读取最新 breadcrumb 并复用原分支加载，等待真实按钮挂载后定位。新请求、关闭视图及过期回执释放旧定位，不创建编辑器、Thread 或执行。
+- 独立真实 Gateway／正式 Workbench 构建／Chromium 验收通过：同名 Session、main 与尚未打开的 durable child 分别可发现；Session 打开 main，child 保持身份；查询后移动 folder 会定位新祖先，侧栏关闭后重新打开，删除后的旧候选明确失败，B 的同名 folder 不被改投。8 条名称查询和 55 条 request_id 回执留存，标签数量、后端 Thread 列表及零消息／job 写请求均核验，页面错误为空。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-55d121cf8b58/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 18 份实际转换源码的真实类型检查、32 项合同检查／225 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。最终 E2E 用时 100.33 秒（进程总计 103.23 秒），源码指纹未变化。准确命令、指纹、原输出与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/catalog-target-{types-002,contract-001,static-002,browser-002}.json`。结构审查无 findings，无新增源码目录或第二目录加载链。
+- 首次浏览器失败源于装具在初始化 HTTP 完成前启动 5 秒 Composer 等待；改为由点击触发并等待精确 bootstrap HTTP 回执、核 owner／status／request_id，随后仍使用原 5 秒验证 Composer。原件保留，未改产品或放宽身份断言；实际 child 初始化约 3517ms，main 约 938ms。本切片未重跑约 200 秒的完整 text_search 场景，不代表 3.4、8.3～8.6 或 Electron 已验收。
+
+### 2026-11-02：各 owner 明确续页与失效确认（8.5）
+
+- 文件名称查询不再由 SearchService 隐式连续取页；同一 SearchService／文件 Provider 的原循环提供单根单页入口，每次最多 50 项，独立透传原 cursor，用户明确续查才取下一页。普通 file/text 搜索仍使用同一循环按原合同聚合，未新增扫描器、索引或正文 hash。分支排队时立即移除续查动作，阻止重复排队；续查失败清除该分支旧页，显式从首屏重查，其他分支保留。活动目标失效后持续清空确认，后续结果不能自动接替原 Enter 目标。
+- 正式 Workbench 构建／真实 Gateway／Chromium 通过（111.90 秒，进程总计 114.85 秒）：55 个文件按 50＋5 返回；55 个 Session 由产品创建 API 生成，其 catalog 与 main Thread 分别沿独立 cursor 取到 50＋5。拖动原列表滚动条后续页仍保持原活动文件；删除已扫描文件使原 cursor 明确返回 400，旧页消失，重查只访问文件分支，新的同位置文件未被自动选中，Enter 不打开替代对象。14 条查询回执均核验 request_id，只访问 A，B 零查询，无消息／job 写请求，页面错误为空。最终仍只挂载 7 条可见行。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-9c5d5ac1ea87/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 28 项定向检查／236 条断言、18 份实际转换源码的真实类型检查、正式构建、JS 语法、Ruff、差异检查及 OpenSpec strict 通过。类型检查期间仅测试驱动改动，882 份产品源码指纹与最终验收一致。准确命令、原输出、指纹与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/pagination-{types-001,contract-001,product-fingerprint-001,browser-005}.json` 及相邻 static／structure 收据。结构审查无 findings：搜索目录仍为 15 个 TS 文件，单一 Provider 与查询编排职责保持。
+- 四份失败页面原件保留：测试定位器同时命中隐藏树、滚轮未到末尾，以及两处异步更新后状态行重新进入虚拟列表的等待顺序。依据真实 DOM 和 HTTP 回执修正为原版滚动条与完成回执后定位，未放宽身份、页数、零请求或业务期限断言。最末文件验收首／续页约 191／182ms，响应约 10.7／1.5KiB；仅说明本工作负载，不承诺总体性能。参考 Copilot 的原搜索服务、限量与取消职责；原目录变化校验保留以履行 cursor 合同。8.3、8.4、8.6、完整 text_search 回归及 Electron 仍未验收。
+
+### 2026-11-02：查询生命周期与独立状态（8.4、8.6）
+
+- 名称查询按原 Limiter 保持三路并发，原 JSON 十五秒期限覆盖排队、目标解析与该页读取；取消不发送排队请求，迟到响应不发布，超时结束 busy。文件查询复用原十秒总期限并取上层剩余期限，跨分页和 Gateway 透传同一 deadline，已经过期时不再解析路由或访问目标。分支分别展示完成／受限／失败及覆盖说明、实际 request_id；重试只读失败分支，续页失败撤下对应旧页，其余结果保留。
+- 原 HTTP 身份屏障发布失效通知，原工作区上下文通知 Gateway 变化；旧候选、活动选择和在途读取立即失效，继续输入也不沿旧身份请求。不建立第二身份缓存或公开搜索 DTO。目录名称 owner 仍全目录扫描，尚缺服务端总预算，代码已登记 TODO，因此 **8.3 继续未完成**；通用 URI opener 的 2.2 也未完成。
+- 新增真实 Gateway／正式 Workbench／Chromium 场景通过（135.20 秒）：产品 API 创建隔离 A/B/C 的关键状态，核只 A／明确 A+B、C 零查询、三条真实请求中止及第四分支不发送、迟到结果废弃、真实十五秒超时保留其它结果、全失败不伪报无匹配、单分支重试、停止目标零生命周期操作及 401 撤下旧身份。503／401 为明确 HTTP 故障注入，延迟沿原真实响应，属于 Integration，不冒充真实后端故障。页面错误与禁止写请求均为空；原件为 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-d020c09db7af/nodes/node-6c413386faf0/artifacts/query-lifecycle.json`。
+- 原 catalog／文件独立分页 E2E 继续通过，旧 cursor 与 Enter 不改投的原断言保留。最终完整 text_search 回归通过（225.37 秒；包装进程 228.22 秒），包含 A/B／IndexedDB、dirty／watch、默认入口、范围取消保留明确活动身份、SearchView、Search Editor 分屏／保存／backup／route 恢复，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-ce56a5c10600/nodes/node-f4e408bf0b21/artifacts/search-result.json`。旧测试先修虚拟列表观察，再依据鼠标滚动条点击会清空列表焦点的实际失败改用真实滚轮；未修改产品、缩减断言或延长期限，失败原件均保留。
+- 77 项定向检查／295 条断言、18 份真实转换源码的类型检查、正式构建、Ruff、JS／TS AST、结构审查及 OpenSpec strict 通过。767 份产品文件核对仅新增目录预算 TODO 注释，其余与先前通过的类型／页面证据一致。类型检查默认采用编译器原生单线程，避免并行检查撞四 GiB 保护；独立提交 `34f43a07d`。试验构建复用插件没有生效，已移除临时插件，正式页面仍由既有共享 fixture 实际构建，没有宣称跨运行复用。
+- 准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/branches-{contract-002,types-003,browser-003,regression-001,regression-004,structure-003,product-evidence-001}.json` 及相邻日志。未重跑不受新变化影响的已通过场景；Electron 与其余任务继续未完成。
+
+
+### 2026-11-02：名称查询服务端总期限（8.3）
+
+- catalog／Thread 名称 API 接收可选有限 UTC 截止时间，取客户端剩余期限与十五秒的较小值；Gateway 透明透传。原 catalog 冷快照逐行读取、投影、匹配和发布前检查同一期限，未完成快照不缓存；SQLite 游标在超时退出前关闭。Thread 准入等待消费剩余期限，原一秒调度分页及受保护 worker 结算规则保持，不宣称强行打断原生阻塞 I/O。
+- 386 项后端定向检查通过：已过期请求零扫描、冷读取中途停止、暖缓存匹配中途停止、远期时间戳不能扩大上限、真实准入等待超时后可继续查询。首轮唯一失败为测试 breadcrumb 包装函数未迁齐 check 参数，迁齐后通过，失败原件保留。90 项前端合同检查／332 条断言、18 份实际转换源码的真实类型检查通过；OpenAPI 两份快照同步登记 Header。
+- 正式共享 Workbench 构建／真实 Gateway／Chromium 两场景通过（206.76 秒，包装进程 209.73 秒）：两个名称端点真实返回过期 409 及同一 request_id；普通分支和单分支重试都传剩余期限，继续核三路取消、迟到响应、十五秒超时、A/B/C 隔离、身份失效、目录定位、精确 child、独立分页和旧 cursor。生命周期页面记录 47 条查询，页面错误与禁止写请求为空；原件位于 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-4f9cc6b3b59b/nodes/node-6c413386faf0/artifacts/query-lifecycle.json` 和 `out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-4f9cc6b3b59b/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 定向 Ruff、Python AST、结构审查及 OpenSpec strict 通过；API 原有 12 条 B008 按提交前后诊断逐项核对，无新增告警，未扩大修改。无新增源码目录、第二查询器或业务状态库。准确命令、指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/budget-{owner-final-001,contract-001,types-001,browser-001,static-001,structure-001,spec-001}.json`；类型及页面运行期间只有不参与构建的后端测试变化。未重跑不受此次变化影响的完整 text_search，Electron 和其它未勾选任务仍未完成。
+
+### 2026-11-03：文件原字节与图片打开（2.2 部分）
+
+- 同一 FileService Provider 的完整读取改用既有 raw 文件入口，原图片编辑器直接解码真实字节；范围读取沿同一入口透传 Range 和取消，不再以文本 JSON 或完整文件切片冒充目标字节范围。普通文本仍沿原 PUT／expected_revision 保存，基线是本次完整读入字节的 SHA-256，stat、watch 与范围读取不推进它；没有额外正文请求或磁盘重读。复用 noble 单一 SHA-256 实现，普通远程 HTTP 不增加 WebCrypto／安全上下文要求。原媒体 Webview 的内部缓存参数不成为规范 URI 或业务版本。
+- 28 项 Provider／原始请求／鉴权定向检查通过，覆盖真实原 FileService、原字节／BOM、范围取消、路由变化、stat 不推进基线、部分读取不推进基线、无 WebCrypto、206 和错误返回；另有 17 项原搜索 Service 定向检查通过。18 份实际转换源码的最终真实类型检查通过。原始取消测试误用了会吞掉错误的 consumeStream 无 reducer 重载，改用原可传播错误的重载后通过，未修改产品取消语义；失败原件保留。
+- 正式 Workbench／真实 Gateway 的图片解码、真实 HTTP 206、BOM 文本编辑保存、精确 child、Session main、独立分页和旧 cursor 通过。完整 text_search 回归通过，保留 A/B／IndexedDB、dirty、watch、SearchView、Search Editor、保存／backup／route 原断言；两场景合计 323.66 秒。该冻结构建仍采用先前 WebCrypto SHA-256；随后只替换为同算法的 noble 实现，最终产物另行验收，不能把两份源码指纹混为一份。
+- **未完成／TODO：** 原音视频 Webview 的真实验收失败，未出现 audio 元素；确认现有产品 CDN Worker 是 v4，固定上游要求 v6。证据位于 `out/tests/temp/quick_access_media_20261102/artifacts/webview-prerequisite.json` 及首轮失败页面。匹配固定上游的隔离宿主尚未接入；不能改为 Gateway 同源 Webview 绕过该条件。代码保留具名 TODO，音视频未算实现或验收完成；只读来源、Diff／独立版本与 Electron 也仍未完成，因此 2.2 不勾选。
+- 准确命令、源码指纹、退出码和失败原件见 `out/tests/temp/quick_access_media_20261102/artifacts/` 的 provider、types、browser 和 static 收据；正式页面产物按对应 tests 路径保留。
+
+- 最终 noble 版本正式构建／真实 Gateway／Chromium 通过（117.51 秒），源码指纹保持一致：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-cb96bf4a6595/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。图片真实解码、原 HTTP Range、BOM 编辑保存和全部既有目录／child／分页断言通过，页面错误为空。前一轮尾部模式测试从最近历史提前接受同一 child，导致查询被取消；现等待精确 owner／query 的真实 HTTP 回执后再接受，原请求数、归属和零额外文件查询断言全部保留。原件见 browser-3，最终见 browser-4；没有产品查询语义变化。
+
+### 2026-11-03：只读工作区来源（2.2、2.5 部分）
+
+- 工作区 AGENTS／Skill 的规范链接进入同一原 Opener，正文沿原资源导航读取，由原内容 Provider／只读文本模型展示和释放；不伪造 stat、不增加文件 writer，也不把非文本或截断内容冒充完整文档。内部投影保留稳定 Gateway／工作区及不透明规范引用；最近记录与默认查询范围同步消费该归属，关闭后重开重新读取 owner。
+- 参照 `reference_repo/vscode/extensions/copilot/src/platform/workspace/vscode/workspaceServiceImpl.ts` 的原文档服务复用，以及原 Workbench 模型引用生命周期，来源先经 resolver 取得模型引用，再创建编辑器组；移除 Opener 的重复路由读取，不另建路由／正文缓存。读取失败不建组，打开成功或失败均释放预读引用。13 项定向检查／106 条断言通过，覆盖原 FileService 回归、停机拒绝、完整正文、归属错误、截断与媒体拒绝，以及模型引用释放。
+- 正式 Workbench 构建／真实 Gateway／Chromium 完整页面通过（133.03 秒）：同名 A/B AGENTS、原只读编辑器实际键入不改正文、导航仍为 A 时来源 B 的默认查询与历史只属 B、Skill 关闭重开再次读 B；来源写请求及模型执行均为空。既有 main／child、目录、独立分页／旧 cursor、图片解码、HTTP Range、BOM 保存及专用模式断言继续通过，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-ce073bea8d92/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 失败原件保留：首轮误断言原生 EditContext 不提供的 `aria-readonly`，现按固定上游 `screenReaderSupport.ts` 检查 `aria-autocomplete=none`，并保留实际键入、完整正文不变及无写请求断言；后续补齐选择器关闭／输入确认，消除连续调用保留旧输入的测试时序。读取断言改为消费唯一解析入口返回的规范 URI，保留精确 Gateway／工作区核验；原 POST 观察流是只读订阅，不能按 HTTP 方法将其误计为业务写入。没有放宽目标归属或执行副作用断言。
+- 准确命令、源码指纹、原始输出及退出码位于 `out/tests/temp/quick_access_sources_20261103/artifacts/`。页面冻结构建后仅修正 `IResourceEditorInput` 的 type import 声明位置；同一 esbuild 转换结果逐字相等，证明运行时代码未变，见 `type-import-runtime.json`。最终真实类型检查、Ruff、AST／结构、差异与 OpenSpec strict 检查随本边界保存。未运行无关的全仓测试；配置来源、非 Workspace 来源、Diff、音视频隔离宿主和 Electron 仍未完成，2.2／2.5 保持未勾选。
+
+### 2026-11-03：目录与 Thread 发现验收（3.4）
+
+- 沿原真实 Gateway／Workbench 场景，通过产品入口创建 55 个 Session，记录真实首屏 50 个身份，再从未返回的目标中构造间隔缩写。实际 `pgcg050` 经 Ctrl+P 同时返回第 51 个目标的精确 Session 与 main Thread，证明召回先于分页；没有在首批结果内做前端补偿。
+- 由产品创建入口推进 catalog revision 后，原 Session cursor 的真实续页返回 409、对应旧候选撤下；显式重查不携旧 cursor，重新得到首屏。另用唯一不存在的查询，核实际 items／total 为零、cursor 为空及原 UI 完整零匹配提示；沿用原首屏受限／续页状态、同名 main／child、目录删除后拒绝打开的断言。
+- 5 项原 owner 定向检查通过；正式构建／完整页面回归通过（128.55 秒），包含上一切片的只读来源、图片／保存与全部既有目录／Thread 场景，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-c87af2742f79/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。本批仅改验收，复用同产品源码的最终真实类型检查；Ruff、JS AST、结构、差异与 OpenSpec strict 均随本边界保存。准确命令、源码指纹、原输出与退出码见同一临时证据目录的 `discovery-*.json`；未扩跑无关全仓测试或声称 Electron 通过。
+
+### 2026-11-03：工作区消息正文有界发现
+
+- 原历史 owner 由 catalog／SessionThread 只读接口发现 main 和 published child，沿同一 canonical 搜索取得正文；每页最多 64 个目录位置、16 个 Thread，所有 Thread 共用 256 条正文／8 MiB／1 秒调度预算，准入沿原 15 秒总期限。cursor 保存当前目录、Thread revision、keyset 和原历史位置，不新增表、schema 版本或正文索引。
+- 工作区真实消息入口验证 3 项通过；补充跨 Thread 共用正文预算与既有名称期限回归 9 项通过。覆盖 child 未打开仍可发现、长正文／emoji、原 around 定位、冷历史不物化、空页续查、当前 Thread／catalog／历史变化冲突与过期期限。API 客户端 5 项、真实类型检查（18 份转换源码）、正式工作台构建、协议一致性、OpenAPI、Ruff 与 strict 通过。
+- 首次失败来自测试装具在历史生成阶段绑定查询 Gateway，触发不相关 Skill 控制面；改为仅本次搜索请求绑定认证上下文，生成历史沿既有装具。准确命令、源码指纹、失败原件及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-message-*.json`／`.raw`。React 接线及真实浏览器正文搜索尚未完成，9.3／9.7 保持未勾选。
+
+### 2026-11-03：消息正文 Quick Access 与真实原文定位
+
+- `content ` 首次仅显示类别选择；消息类别沿同一分支生命周期、明确工作区集合、独立 cursor、取消与期限查询，文件类别转交原 `%` Provider。工具结果、LLM 请求及 Trace／运行日志仍明确未接入，9.1／9.4–9.8 未以消息切片代替整体验收。
+- 原 around 响应附带本次已核验的单条 canonical 原文，ThreadPane 以临时编辑器参数转交 React；复用原 around loader 和 Virtuoso 实际挂载回调，在所属 Turn 内高亮 Unicode 码点区间。该原文不写入时间线缓存／持久展示态；手动滚动停止自动定位，关闭释放原文。过期命中只拒绝本次导航，保留可用历史及原 request_id。
+- 真实 Gateway／正式 Workbench／Chromium 验收通过（173.76 秒）：产品消息入口生成七轮历史并通过产品 fork 创建未打开 child，默认／未确认类别零正文请求；从旧页侧边打开、66,004 码点后的 emoji 命中、同一 Pane 第二处定位、显式旧版本参数的真实 409 与可用 Composer，以及原 `%` 转接均通过，页面错误为空。正式原件：`out/tests/integration/clients/web/quick_access/test_message_content/runs/run-4a8355028f3d/nodes/node-2c00fa0318ba/artifacts/message-content.json`。模型仅使用统一 model_stream 回放；旧版本场景只修改请求参数，不替换响应或预写业务历史。
+- 验收期间修正外部编排 Backend 的列表投影：不检查健康时复用原代理的已登记路由，不因缺少 Gateway runtime 错判 offline，也不增加探测；72 项 Gateway 回归通过，独立提交 `ad8b1b37f`。登录／模型资产身份／原列表按钮悬停等装具失败原件均保留；失败按具体阶段修正，没有放宽 owner、原文或可见性断言。
+- 后端长原文及过期引用 2 项、消息／loader／滚动定向检查、真实类型检查（18 份转换源码）、正式构建、协议一致性、OpenAPI、Ruff 和 strict 的命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/content-message-*`／`message-location-*`。未将本切片作为其它正文类别、Thread 大纲或 Electron 原生验收。
+
+
+### 2026-11-03：工具结果正文与原详情定位（9.4）
+
+- 原历史入口按显式 message／tool_result 类别读取同一 canonical view，引用和 Thread／工作区 cursor 绑定类别；JSONL 与原 ToolOutputStore 完整输出共用 8 MiB 预算，不增加搜索表或正文副本。同一逻辑结果按原 activity 的 item_sequence 取最早可见载体；around 按精确 canonical item 补原工具详情，不执行或重放工具。完整输出在同一次读取核原字节量与 SHA-256，删除及同长度改写明确拒绝旧定位。
+- React 在原 ToolRow 临时显示已核验完整输出；实际 mark 挂载后用原生 scrollIntoView 揭示限高详情内的命中，再对齐外层虚拟列表。30 项组件检查／125 条断言通过，包含内层滚动对照；HTTP 59 项／138 条断言、最新工具结果 API 两项通过，覆盖并发内联／完整结果、类别隔离、共享预算、cursor 及过期引用。消息原有五项回归亦通过；后续 catalog 身份修复由最终工具 API 和完整页面覆盖。
+- 正式 Workbench 构建、真实 Gateway／Backend／Chromium 通过（测试 239.25 秒，含独占闸门排队的包装进程 242.92 秒）：消息入口生成七轮历史，产品 fork 创建未打开 child；完整工具输出 hash、65536 码点之后的命中、内外两层可见性、类别隔离和原消息定位／过期错误／可用 Composer 全部通过，页面错误为空。正式原件：`out/tests/integration/clients/web/quick_access/test_message_content/runs/run-b9c52be618bf/nodes/node-2c00fa0318ba/artifacts/message-content.json`。精确 model_stream 回放属于 Integration，不作为真实模型服务验收。
+- 删除按体积切换新 Worker 的重复 JSON 解析链，全部调用方沿 requestJson 下载并解析；保留非法响应诊断、下载取消与解析前取消，代表载荷测量见 design 和 `json-parse-measure.json`，不宣称为 around 全链路性能收益。同步解析执行期间不可取消。
+- 最终真实类型检查含 18 份 sourceTransform 源码；协议生成一致性、OpenAPI、Buf breaking／格式、Python 静态检查与 OpenSpec strict 均有原件。最新浏览器运行期间本切片产品源码指纹未变，之后仅新增独立调用方测试及文档。结构审查无新增 findings：工具完整输出读取归原历史子目录，未把 I/O 放入 React 或 Gateway；既有大文件只扩展同一读取／装配职责。
+- 原失败与归因保留：载体身份不一致、工具详情嵌套滚动、瞬时端口冲突；另有一轮在导航准备阶段未发业务查询，补等待新 Session 的真实导航可见性及请求观测后通过；原五秒断言期限保持，隔离探针未复现该停滞，未据此宣称其唯一根因。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/tool-content-*`。9.1、9.5～9.8、两级后端扩展及 Electron 仍未完成。
+
+
+### 2026-11-03：原空文件编辑器与 Chat 调用方（7.6）
+
+- 新组件装具经同一生产 sourceTransform 编译原 EmptyFileEditorSearch、AttachContextAction、QuickAccessController、QueryBuilder 和项目 WorkspaceQuickAccess；仅 Picker 宿主事件、文件搜索传输及外围服务是明确替身，不读取或变异私有字段／prototype，不把本检查称为完整 Gateway 页面或真实键盘验收。
+- 六项 Chromium 检查／67 条断言通过（11.30 秒）：原空文件编辑器发起空查询及后续 delegate 查询，使用明确根和同一原 cacheKey，隐藏／换工作区／dispose 均取消并清原 cache，重新打开生成新 key；迟到结果不覆盖当前结果，目录描述及禁用侧边按钮沿原调用方消费。
+- 原 Chat 的 filter 拒绝不支持 scheme，additionPicks 保留，值附加与二级接受仅进入显式原 widget；返回项重开原选择器且后续焦点变化不改投，hide／取消结束二级流程、不自动返回。原 enabledProviderPrefixes 仍为 ['', '#', '@']，真实 Controller 拒绝调用已登记但不允许的 % Provider；未调用项目 Composer、Opener 或业务写入口。
+- 初次构建遗漏原 Chat 引用的字体／图片 loader，补齐真实资产及 CSS 后通过，未替换原模块。最终 JS AST 语法检查、差异及 OpenSpec strict 通过；新增 callers 子目录有四段式 AGENTS.md，三个代码文件各自负责宿主事件、真实调用方装配与断言，未新增产品实现。产品代码未变，复用上一切片真实类型检查和正式构建。
+- 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/original-callers-{contract-1,contract-2,contract-3,static-1}.json`／`.raw`；正式编译资产位于 `out/tests/integration/clients/web/quick_access/callers/original.test/`。7.4 的其余行列／符号／quickNavigate、两级搜索及 Electron 继续未完成。
+
+
+### 2026-11-03：两级搜索调用方清点与目录匹配统一（16.1、16.10 部分）
+
+- 已按 URL、导出、Protocol、服务与测试清点 Gateway 镜像、旧 React 导航、Workbench／原文件 Provider 及 Agent context 工具；设计中登记唯一链路、物理删除清单和保留边界。scripts／tools 没有现存在线领域搜索调用方，历史资产生成与旧库导入不属于联邦。16.1 清点完成，不将其视为新调度器或其它第 16 组实现完成。
+- 工作区 catalog 与 Gateway 派生镜像共用同一个字段召回及稳定键迭代器；镜像同名项先沿原 owner 的冻结创建位置再按 ID 取首屏，避免相同查询的首屏分歧。保留有界 top-K、原分页、期限检查、目录同步与健康职责，没有新增索引或兼容链路。
+- 55 项目录／镜像检查与 10 项模糊查询／期限检查通过；新增反向日期／ID 顺序的同名回归。期限测试的故障注入点随实际 owner 平移，原超时和匹配计数断言不变；首轮失败原件保留。新改源码 Ruff 与 AST 通过，Gateway 文件既有两条 TRY004、一条 ISC004 经 HEAD 对比确认无新增；OpenSpec strict 与差异检查通过。未改公开类型或前端，未重复构建或声称真实页面／联邦验收通过。
+- 准确命令、启动源码指纹、原输出及退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/catalog-match-{owner-1,fuzzy-budget-1,fuzzy-budget-2,static-1,spec-1}.json`／`.raw`。结构复核沿原 mapping／catalog owner 减少重复，无新增目录和新的职责层。
+
+
+### 2026-11-03：Gateway 工作区元数据发现（16.5）
+
+- 新增 `/api/gateway/search/workspaces`，仅沿原 registry／navigation 按名称、路由 ID、稳定后端 UUID 与逻辑导航路径模糊发现。返回具体 Gateway／workspace owner、独立 target_id、导航 breadcrumb、控制面来源和时间；没有健康请求、连接／启动／激活或领域正文读取。每页最多 200 项，最多观察一条额外命中判断续页；登记／导航扫描上限为 10,000，超限明确拒绝，不构造全量命中或声称精确总数。
+- 无状态 owner cursor 绑定 Gateway、规范查询、registry revision 与 navigation revision；续页不依赖进程内搜索状态。原导航顺序保持，较早节点移动到较晚父节点后也正确展开。远端返回所属 Gateway 与稳定 backend UUID，不将远端路由别名当作资源身份。元数据发现可独立调用，不强迫明确集合／all 的领域查询先按工作区名称过滤；领域调度、联邦 SSE、工具与 UI 消费仍按未完成的 16.2～16.4、16.6～16.16 推进。
+- 13 项产品 Gateway ASGI 集成检查、49 项协议／鉴权检查通过，覆盖停止目标、空查询有界浏览、名称／ID／导航召回、嵌套移动、无匹配、独立分页、登记／导航／查询／Gateway 改变的旧 cursor、远端断开和扫描上限；这些是 ASGI 与控制面验收，不是实网联邦或真实浏览器证明。首轮远端 fixture 缺 connection_id，在产品拒绝处修正，原件保留。最终 handler 沿原控制面的异步入口同步取得元数据快照，避免另在线程读写导航产生新竞争。
+- Proto 与 Python／JS／TS 绑定、真实 OpenAPI 递归结构校验已同步；Buf 格式、真实提交 breaking 与生成一致性通过。首轮一致性失败仅因新增 owner 身份注释后未重生成，重生成后通过。真实类型检查含 18 份转换源码；最终生成文件相对该检查只增加同一条注释，已按原源码 SHA-256 反证，运行时绑定字节不变。最终正式 Workbench 构建通过（69.40 秒），使用独立输出，没有覆盖开发服务产物；保留版本与正文指纹后清理临时 dist。
+- 新源码与测试 Ruff／AST 通过，control/router 的 21 条原诊断经 HEAD 比较无新增；结构复核无新增 findings，未增加源码子目录或工作区存储。OpenSpec strict 与差异检查通过。准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-discovery-*`；原诊断探针的工作区、BOXTEAM_HOME、脚本和 PNG 已清理，仅保留 JSON／raw 证据。
+
+### 2026-11-03：Gateway 显式范围冻结与重启重解（16.4）
+
+- `/api/gateway/search/resolve` 复用唯一 resolver，支持明确 origin、非空集合、all 及无状态 resume；最多 64 个目标，all 沿导航顺序保留停止／断开登记，超限整体拒绝。范围只保存稳定 owner、模式、解析时间和版本；重解不换投被复用的 route、不吸收新登记，不探测健康或取得租约。registered 只证明登记存在。此入口为可选预览，实际联邦调度将内部复用，不要求额外网络往返。
+- 稳定 owner 投影统一到 registry，原导航与发现消费者全部迁移；control 路由复用原共享 registry／navigation 依赖，删除同义 helper。Proto、Python／JS／TS 绑定和真实 OpenAPI 递归检查同步。77 项最终范围／协议／鉴权／路由检查、65 项原资源导航／导航存储回归及 13 项发现检查通过。
+- 真实独立 Gateway／Backend 集成通过（1 passed / 33.68 秒）：冻结 A+B，重启前删除 B、让 C 复用其 route，resume 仍保留 B 失效，新 all 才包含 C；核对请求 ID、响应头／体一致、停止目标文件不变及无 sessions 创建。登记数据只作为控制面测试输入，不预造执行历史；该场景不证明实际联邦正文或领域 cursor 续页。初次失败分别来自不完整 managed owner 合同与模板 UUID 冲突；补齐合法输入，并复用新增 fresh_identity fixture 让产品生成隔离 UUID，源模板及默认行为不变。
+- 删除路由测试的固定接口总数、整份 OpenAPI hash 及子进程，保留唯一登记与通配代理前置顺序断言，公开结构由 descriptor 合同检查承担。已只读对照 Copilot 的 jsonBody／endpoints 测试行为与结构断言；没有删除产品内容完整性校验，也未运行参考仓库测试。旧总数断言失败原件保留。
+- 最终真实 Workbench 类型检查（18 份转换源码）、独立正式构建、协议生成一致性、Buf 格式／lint／基于 `7a87c0e13` 的 breaking 检查通过。新核心／路由 Pyright 零诊断；扩大到原 resource_navigation 后的两条 min/key Optional 诊断与 HEAD 原件完全相同，未扩修。Ruff 原 25 条、现 23 条，无新增；AST 与差异检查通过。构建 dist 和临时 baseline 探针已删除，保留日志、JSON 收据及构建 manifest。
+- 准确命令、源码指纹、退出码及失败原件：`out/tests/temp/quick_access_provider_20261103/artifacts/scope-*`；真实请求原件：`out/tests/integration/gateway/test_search_scope/runs/run-52e435172ca2/nodes/node-1557f17028b3/artifacts/scope-network.json`。未修改 UI 行为，未重复浏览器／Electron验收。实际 fan-out、增量流、独立领域 cursor 及原调用方迁移尚未完成，16.2／16.6／16.7／16.13／16.14 保持未勾选。
+
+### 2026-11-03：请求级有界联邦与独立续查（16.6 部分、16.7）
+
+- 新 `/api/gateway/search` 在同一次请求内部解析显式范围，核心与 SSE／HTTP 分离；信封由独立 Search proto 引用原范围及原领域页，不让 Gateway 控制面 proto 导入工作区业务协议，不新建领域正文或持久搜索状态。原本地凭据与 UserAccess 均须通过；网络适配只解析已登记路由，持有引用，失效／取消后结算并关闭原响应再释放。
+- 分支上限 128、并发 3；默认总输出 200、硬上限 1000，按类别／冻结范围顺序分发前公平预留，各页再受原查询上限约束。领域接收预算总计 8 MiB，超限不交半页、不推进原 cursor。消费暂停不补排队分支；先 scope、整页增量及逐分支唯一终态、最后唯一 end，汇总不重复发送正文或计命中。总期限从准入覆盖排队及网络；安全结算后拒绝取消方迟到结果。零分配明确未查询，不将其能力视为已验证；包含控制状态的统一输出字节计量、其它领域单位和文件哨兵继续由 16.17 及代码 TODO 追踪。
+- 定向验证覆盖快／慢分支、排队期限、慢消费者、断流、路由失效、迟到结果、原 owner／版本／数量校验、零配额、字节限制和不跳过未交付页。首批 94 项合同／范围／SSE／传输检查通过；最终修改后的 50 项及最终 descriptor 归并后的 21 项检查通过，另有 56 项鉴权／路由批次通过。计数分别来自各原始命令，存在重叠，不作为不同测试总数相加。
+- 最终真实 Gateway＋两个独立 Backend 验收通过（1 passed / 48.59 秒）：经产品入口创建 A/B 各三条同名 Session；只 A、明确 A+B、与查询名称无关的 B 仍命中、all 保留停止 C，核真实领域页及汇总数 6。重启 Gateway 后只续查原 B；通过产品创建入口推进 B revision，A 旧页继续、B 旧 cursor 明确失败，再仅重查 B。每次读取使用新 request_id，响应头与所有事件一致；下游同 ID 及精确 A/B 零 C 分发另由明确 HTTP spy 边界验证，未把 spy 称为实网证据。关键目录没有预写，模型未被调用。
+- 实网原件：`out/tests/integration/gateway/test_federated_search/runs/run-9d803ab8ba14/nodes/node-1578f60a3a46/artifacts/federation-network.json`。首轮缺第二工作区启动配置，沿原安装 helper 补齐；第二轮装具将预先登记的活动 B 当作 A，观察到六条均写入 B 后改为按主工作区稳定 UUID 取 A，并在创建前断言 A/B 不同。没有修改产品排序、范围或放宽身份／结果断言。失败原件保留。
+- 参照 Copilot 的 nodeFetcher／jsonBody 单一编码边界，移除调度核心为已受网络字节上限保护的页再次执行 JSON 编码测量；超限仍由真实接收边界拒绝，输出只在 SSE 编码一次。没有删除内容完整性 hash，不声称已测得全链路性能收益，也未运行参考仓库测试。
+- 最终核心／路由／schema Pyright 零诊断、Ruff 全绿；协议生成一致性、Buf lint／基于 `1c8061388` 的 breaking、18 份转换源码的真实类型检查及独立正式构建通过。构建／类型检查后仅改变 Python 核心和验收，前端与生成绑定保持原指纹；最终实网期间源码未变，之后只补具名 TODO 注释及文档。结构审查无新增 findings，生成目录不作为手写代码审查；既有 internal_v2 和测试目录超过 20 文件的拆分风险保留，未扩大无关整理。临时 dist 已删除，保留构建 manifest、AST／目录 JSON 和收据。
+- 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/federation-*`。新 Buf JS／声明绑定的四处文件末尾空行触发默认 diff 检查；这是统一插件的可重复输出，生成一致性已通过，保留原件并仅在本次检查排除 blank-at-eof，其余空白检查通过，没有手改绑定或持久修改 Git 设置。本边界提供真实可调用后端，现有目录／Thread Provider 可用；文件及正文 Provider、旧 UI／镜像／工具调用方迁移、完整字节计量和 Web／Electron 联邦交互仍未完成，16.2／16.3／16.6／16.10～16.16 等不据此勾选。
+
+
+### 2026-11-03：canonical 正文 Provider 纵向接入（16.2／16.3 局部）
+
+- 注册 `message/content` 与 `tool_result/content`，能力明确声明字面量模式、码点位置、100个命中上限及无缓存；名称能力声明 fuzzy。原工作区正文入口改走同一 Provider，唯一 `search_workspace_messages` 调用方为 Provider；精确 Thread 与 around 沿原 owner。不新增匹配器、正文索引或持久搜索状态。
+- 联邦汇总按正文命中数和原 cursor 结算，保留字节／Thread／单项大小等受限原因，超配额整页拒绝。统一 API 保留原无效 cursor、历史版本冲突及删除准入错误；原 API 的响应形状和状态码不变。
+- 首批68项定向检查通过；新增正文配额测试修正装具中未登记 URI 后，最终15项调度检查通过，另一个40项通过批次与首批存在重叠，不相加。消息／工具的6项真实执行集成检查通过，覆盖未打开child、完整输出、空格查询、跨入口cursor、预算及失效。
+- 真实 Gateway＋Backend 验收通过（1 passed / 74.44秒）：经产品消息入口执行真实工具和助手回复，再通过产品fork生成child；显式两类联邦正文查询，核准确计数、独立cursor、精确归属；Backend重启后沿原cursor续至child，并经原around取得正确完整原文。整个查询／恢复没有新增模型或工具执行，所有事件与响应头沿本次request_id。原件：`out/tests/integration/gateway/test_thread_name_search/runs/run-25b159247ad7/nodes/node-d071f7f9468a/artifacts/thread-discovery-actual.json`。
+- Ruff、核心Pyright、公开结构、生成一致性、Buf格式／lint／基于`39f3d0aa7`的breaking均通过；含18份sourceTransform源码的真实类型检查与正式Web构建通过。结构审查没有新增findings；既有容器／大目录风险未扩修，生成目录不按手写结构审查。临时dist已删除，原始命令、源码指纹与退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/content-*`。最初误用未安装的Python pyright入口，随后使用仓库既有Bun Pyright，未改环境。
+- 16.2／16.3仍未整体完成：文件、请求与日志Provider及其调用方待迁，前端多目标队列、镜像和工具迁移仍在原任务追踪；这次没有勾选未完成的整组验收，也不把实网正文证明称为Web交互证明。
+
+
+### 2026-11-03：Session 级 LLM 请求正文与精确记录定位（9.5）
+
+- `llm_request/content` 注册到唯一工作区 SearchService，由原 catalog／Session 读准入限定来源，原 LLMRequestLogService 读取已保留文件；列表、搜索和精确读取共享解码。保持现有 Session 归属、原日志裁剪，不猜 Thread、不建立正文副本或索引。新增公开字段沿 Workspace proto、Pydantic／OpenAPI、生成绑定迁齐，并在原 product-runtime-logging owner 补正式 delta。
+- 明确 JSON 文本／Unicode 码点位置、64节点／128记录／8MiB／一秒正文调度／总期限、1MiB单条和512目录文件上限；cursor绑定Gateway、工作区、查询、catalog revision、当前目录版本与页内正文版本。已读正文无后续匹配时直接越过该记录，末条穷尽直接完成，避免已知空尾页请求和重复读取。原记录删除、同长度改写、跨Session及非法文件名明确拒绝，预算与无法推进的超限分别披露。
+- `content ` 明确选择请求类别后才查询，命中经原main解析打开所属Session的原请求视图，独立位置由ThreadEditorOptions传递；只读取命中的一条日志，复用原RequestLogCard及懒展开，在所属Pane临时显示已核验原文附近上下文和高亮。关闭／换命中取消旧读取并释放正文，不进入聊天或持久视图缓存，不调用整批日志loader。
+- 最终后端／Provider／真实ASGI／联邦调度定向检查76项通过；原请求面板和API24项通过。真实Gateway＋正式Workbench＋Chromium验收1项通过（109.60秒）：关键日志经真实消息执行入口和现有model_stream回放生成；未选类别零查询、只请求llm_request、精确原记录、同Pane另一处emoji命中与可见滚动、原owner拒绝旧版本、整批日志读取为零、pageErrors为空。这里只用参数替换验证旧版本拒绝，没有伪造定位响应；实际删除／改写由原owner及真实ASGI定向检查验证。
+- 浏览器原件：`out/tests/integration/clients/web/quick_access/test_request_content/runs/run-a2161d0940ff/nodes/node-c6204ad2127e/artifacts/request-content.json`；正式构建退出0，44.60秒，main SHA256=`dcb165dca7a4540df19a84bccc498aa4db22d7078a16805d4db6eefb6cfed815`。浏览器之后只优化Python续点并保持原UTF-8解码，最终76项覆盖该批次；前端、协议及构建源码指纹未变，复用上述构建和真实类型检查，不为后端修改重复长构建。
+- 含18份实际sourceTransform源码的Workbench真实类型检查、核心Pyright零诊断、Ruff（沿用sessions.py既有B008排除）、生成一致性、Buf格式／lint／基于7dc15718b的breaking、OpenSpec严格校验和差异空白检查通过。首次TS检查发现原卡片的必填JSON业务类型与Proto可选Struct差异，API沿原业务类型收紧；首次Python类型命令误用不存在的uv入口，随后使用原Bun Pyright，不改变环境。命令、源码指纹、原始输出和退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/llm-*`。
+- 9.1／9.6～9.8仍未整体完成：Trace／运行日志owner、完整类别与其它运行面验收继续保留；也不以此切片勾选16组全部Provider或前端联邦迁移。
+
+### 2026-11-03：Session／Thread 名称复用唯一联邦流（16.11 部分）
+
+- Session／folder 与精确 main／child 名称迁到原正文使用的同一 Gateway 流客户端，一次提交所选 owner；保留原 fuzzy 排名、高亮、分组和接受动作。删除名称直连实现、`searchSessionThreads` 及其全部客户端导出／调用，文件仍沿原文件链待完整迁移，没有同类别双查或失败回退。默认入口合并两组 busy，任一组未完成时不提前结束加载；总期限通过标准 TimeoutError 判别。
+- 39项客户端／真实 Provider 合同检查通过，覆盖名称独立续页、单分支重试、fuzzy 高亮、取消及不合作传输的迟到结果。24项 Gateway 调度／传输检查及真实 query_lifecycle 场景通过；它们所在旧批次的 text_search 曾失败，未把该批次整体记为通过。query_lifecycle 原件为 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-4571af6cc515/nodes/node-6c413386faf0/artifacts/query-lifecycle.json`，含明确 A／A+B、三并发取消结算、超时／全部失败、单分支重试新 request_id、停止 C 零业务读取及身份失效。
+- 最终正式 Gateway＋Workbench＋Chromium 两项综合验收通过（377.77秒，共用一次41.24秒构建，运行期间源码未变）。消息／工具场景经产品消息和 fork 入口生成关键状态：默认入口一次名称请求、未选正文零查询，五次正文请求均沿 Gateway；未打开 child、超长原文 emoji、同 Pane 另一处命中、原 owner 409及完整工具输出定位通过，pageErrors为空。文件场景保留 A+B范围、停止 C状态、取消与原活动项、原打开动作、dirty model负命中、SearchView／Search Editor转交／分屏／保存／备份／route重用等全部原断言。
+- 浏览器原件分别为 `out/tests/integration/clients/web/quick_access/test_message_content/runs/run-bd26d8722db7/nodes/node-2c00fa0318ba/artifacts/message-content.json` 和 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-bd26d8722db7/nodes/node-f4e408bf0b21/artifacts/search-result.json`。构建 main SHA256=`4dcd424d5da92cb36edc55400d008141ada2b63b70035051be1daad2ef52bb13`。故障装具仅延迟真实 Gateway 出站领域响应或注入具名网络失败，不替换调度／匹配／SSE；名称与正文请求分别观察，继续捕获旧直连入口。
+- 原滚动断言失败经隔离实页探针确认：delta=1000的五次 wheel 各只推进50px，poll退避在原五秒内只走到350px，末尾状态用原版首尾命令仍可到达。装具改为在原滚动条上有界连续滚动并核首尾位置；未延长期限、放宽状态或替换产品列表。原始失败、瞬时端口占用及探针准备失败保留于 `names-scroll-probe-*`／`names-federation-browser-final-01`；诊断 JSON及对照截图保留在 `out/tests/temp/quick_access_names_scroll_20261103/artifacts/`，临时工作区与运行态已删除。
+- 含18份实际sourceTransform源码的真实类型检查、Pyright零诊断、Ruff、20份ESM语法检查与差异检查通过；最终产品源码逐文件对照类型检查指纹无变化，复用其结果。准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/names-federation-*`，最终两项浏览器收据为 `names-federation-browser-final-02`。目录镜像、文件多范围及其配额／缓存、其余Provider和Electron仍未完成，16.11保持未勾选。
+
+
+### 2026-11-03：文件领域 Provider 与多根联邦合同（16.2、16.3、16.11、16.17 部分）
+
+- 工作区唯一 SearchService 注册文件 name／content Provider，直接委托原 ResourceNavigation；不新增扫描器或查询缓存。协议复用原选项及领域页，显式 file_targets 保留各根局部选项，分支以稳定 owner／类别／操作和资源根区分，原 cursor 不封装成全局游标。默认根由目标工作区身份生成；外部根仍经原目标 Gateway 文件 owner 授权。files_only 在原扫描链分页前排除目录，名称按文件、正文按命中区间计，上下文不消耗命中配额。
+- 真实 Gateway＋两个 Backend 的网络验收通过（最终48.51秒）：A 两根及 B 一根保留独立过滤与原续点，Gateway 重启后只继续 B 指定根；正文小页按原位置取得同一文件的第二处命中，覆盖的非法 UTF-8 旧正文不读取。另核非法编码和不存在目录保留原错误代码、唯一终态与 request_id，停止 C 不被启动。原名称范围、目录失效、单分支重试与重启续查断言全部保留。原件位于 `out/tests/integration/gateway/test_federated_search/runs/run-b60444e697f1/nodes/node-1578f60a3a46/artifacts/federation-network.json`。
+- 105项原定向检查通过；补充的嵌套公开结构漂移／目录根检查37项、文件 Provider 准入5项、HTTP 错误归属4项及客户端流14项均通过。Pyright、Ruff、Buf format／lint／对真实提交的 breaking、生成一致性、OpenAPI 导出、含18份真实转换源码的类型检查及完整 Workbench 构建通过。519份前端产品源码与类型检查／构建指纹一致；临时 dist 已清理，保留构建 hash、日志、准确命令、源码指纹和退出码，见 `out/tests/temp/quick_access_provider_20261103/artifacts/files-federation-*`。
+- 首次实网失败为装具的同机 Backend／Gateway 使用独立本机令牌，改为共享隔离 HOME 后通过；新增单测装配与 Gateway ID 准备失败原件保留，未放宽业务断言。静态检查发现通用 OSError 捕获会抢占 TimeoutError 并误标其它领域，已移除该泛化处理，以真实 HTTP 适配断言期限仍409、文件编码错误400、未知请求日志权限失败仍500。通用网络／I/O 的具名归属仍由16.18和代码 TODO 追踪。
+- **未完成：** 前端文件 Provider／Quick Access 尚待迁入新合同，原文件前端队列尚未删除；重叠根、0哨兵／exists、统一输出字节及其它计量验收仍待推进。本切片只完成可独立调用的后端文件查询入口和共享流合同，不勾选16.11、16.17或完整Provider任务，不代表Web或Electron文件联邦已验收。
+
+### 2026-11-03：普通文件搜索与 Quick Access 统一联邦（16.11、16.17 部分）
+
+- 普通 file／text Provider 一次提交全部明确业务根，经唯一 Gateway 联邦流自动继续未完成根，固定首次页大小及总期限；保留各根局部选项、UTF-16 位置、上下文合并、onlyOpenEditors、dirty model 零命中覆盖和取消。业务 fileSearch 不再先逐根发 exists 预检；真实不存在根仍由原 owner 明确拒绝。原 IFileQuery 0 哨兵转换为最多500项有界召回，exists 只探测，不返回文件；后端无查询缓存，clearCache 明确无缓存。
+- Quick Access 名称可先返回，原有界根加载器和 child QueryBuilder 准备文件条件后，一次联邦请求提交可用文件 owner；根失败按分支表达，续页／重试复用冻结范围、根选项及原 cursor，不重复读取根。移除 quickAccessBranches、fileSearchPage 及全部生产消费者，原 delegate／cache 调用合同保留。名称和文件各用一次联邦请求，不将其描述为所有类别合成单个请求；重叠根及 canonical 身份仍由16.19追踪。
+- 11项服务、8项范围构建、6项原空文件／Chat调用方检查通过；新增文件合同最初因装具缺响应信封失败，补齐后完整18项Provider合同通过。含18份真实转换源码的类型检查通过，当前748份前端源码与该检查指纹一致。最终Ruff、TypeScript AST解析、OpenSpec strict及差异检查通过；结构复核无新增findings，435行主Provider及既有测试目录规模继续关注。Bun --check曾实际执行场景并因缺运行参数早退，不作为纯语法通过证据；最终以真实AST解析核验。
+- 真实Gateway＋正式Workbench＋Chromium：模型覆盖1项通过，A+B小配额中A旧磁盘命中被屏蔽，B同路径和A其它文件仍能取得，停止C零查询，未保存草稿不写盘；完整搜索／恢复及生命周期最终补跑2项通过（296.37秒）。覆盖分屏、SearchView／Search Editor转交、保存／备份恢复、迟到Pane、route复用拒绝旧owner且出站零分发、原owner新route恢复，以及取消、超时、全部失败、单分支重试、身份失效；页面错误为空。后两项共用一次正式构建，与模型覆盖使用相同main SHA256=`9bdad91dbae0444bcd9a39e96bf90ff03d4584801fae6409867a072be5eb8666`。
+- 页面端口统一复用本目录fixture，在各测试自己的端口块内选择并持续保留空闲绑定，保存探测收据；实跑已跳过被占用的44420，没有终止未知进程。原浏览器失败分别是端口准备冲突、旧直连路由断言及误读错误信封，均保留原件；迁移为稳定owner、404/detail.code及原request_id断言，并保留原结果／身份／期限要求，产品源码未因这些装具修复变化。
+- 准确命令、源码指纹、输出及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/files-workbench-*`。模型覆盖原件为`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-ebf949b1bbb4/`；最终其它两项原件分别为`test_text_search/runs/run-d6cbe3a8b4f2/`、`test_query_lifecycle/runs/run-d6cbe3a8b4f2/`。未重复已经通过的模型覆盖，未运行Electron验收；16.11／16.17／16.19等完整任务保持未勾选，旧React目录／镜像、工具／脚本、统一输出字节及其余缓存合同继续推进。
+
+
+### 2026-11-03：目录在线与离线镜像统一联邦（16.10）
+
+- 原 catalog owner 统一提供匹配、排序、breadcrumb 与原 cursor，在线 Provider 和 Gateway 镜像共用，不复制领域页。联邦查询显式允许离线目录镜像，默认只查询在线 owner；目标不可达时才读同一稳定 owner 的现有镜像，page 事件披露来源、更新时间、stale 和原失败原因。权限／版本拒绝、期限及路由失效不借镜像掩盖，查询不触发同步或启动。owner-v3 缓存保存两种原 catalog 版本并隔离临时 route 复用，保留原后台同步、配置与健康证明。
+- 旧 React 目录搜索复用唯一联邦流并增量显示，工作区和导航文件夹沿原控制面 discovery 的有界分页；达到配额明确受限。命中点击按稳定 owner 重新解析路由后交原动作。已物理移除旧 Gateway 聚合 API、三份公开 DTO、客户端、全目标 gather 及独立镜像匹配／投影；原工作区领域入口继续复用原 catalog owner。
+- 140项 owner／目录／调度／实际 ASGI／公开结构检查、68项生命周期／配置／鉴权检查、45项既有客户端检查和新增2项目录投影检查通过。空查询准入顺序保留后补跑23项目录检查通过；计数有重叠，不相加为独立测试总数。3000条残留缓存回收规模保持，移除装具准备中无关的6000次注册表写入，不把此变化称为产品性能收益。
+- 两个真实 Backend＋Gateway 验收通过（51.39秒）：目录和 Session 经产品创建／移动入口生成；在线联邦页等于原 owner 页，B停止后沿原cursor取得下一页且披露镜像，禁止镜像时明确失败，Gateway重启后仍保持原页和时间，A继续在线。原件：`out/tests/integration/gateway/test_session_catalog_search/runs/run-ad69031adcec/nodes/node-f4aa71827e4a/artifacts/catalog-federation-network.json`。
+- 正式 Gateway＋Workbench＋Chromium 验收通过（161.86秒），保留目录搜索、未打开Session未读标记、精确归属、真实视图恢复、浏览器隔离和页面零错误；搜索请求核唯一联邦入口，scope中的route与稳定workspace分别校验。原件：`out/tests/integration/clients/web/test_browser_view_sessions/runs/run-bb348770384e/nodes/node-a68d18cdcbd3/artifacts/browser-view-sessions-result.json`。同批正式构建退出0，40.72秒，79扩展，main SHA256=`87c17bcc47e550daf2466cc1793c26ea1bc0e2a2192df0ebf2af40af2495d38a`。浏览器期间仅补回后端空查询前置校验，后续23项及最终Pyright覆盖；前端产物未变。
+- 真实类型检查含18份实际转换源码通过，620份当前前端产品源码与收据一致；核心Pyright零诊断，24份Python文件Ruff通过，lifespan两条既存BLE001与HEAD逐项一致；Python／TS AST及目录结构审查无新增findings，既有大组件和大测试目录风险未扩修。生成一致性、OpenAPI导出和Buf lint通过。基于真实提交`f3045c2c5`的breaking仅报告已授权下线的三份GatewaySessionSearch DTO删除，保留失败原件，没有为通过恢复兼容类型。
+- 首轮实网装具重复登记默认工作区造成启动拒绝，沿原默认登记修正；首轮浏览器产品交互已完成，但Python仍把稳定workspace当route，现分别校验两种身份后通过。新增客户端装具补齐真实节点state，未放宽归属、顺序、期限或结果断言。初轮长批外部超时、主动终止的排查批及所有失败原件保留，不作为全批通过。准确命令、源码指纹、日志及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。
+- 16.11、16.12、16.17、16.19及剩余Provider／工具／Electron等完整任务仍未完成；本边界只勾选16.10，不把Web实证推广为其它运行面验收。
+
+### 2026-11-03：文件比较键与重叠根准入（16.19 部分）
+
+- 原文件 Provider、SearchService 和 Quick Access 的查询准入统一消费 `IUriIdentityService.extUri`：目录包含、根局部 exclude、额外文件、已打开集合、模型负命中覆盖、结果区间及上下文共用原比较规则，不再独立按 URI 字符串去重或全局折叠大小写。根内额外文件不另发重复分支，输入查询不被改写；同名跨 Gateway／工作区保留独立身份。
+- 相同有效选项的重复根合并，无根相对过滤且 ignore 边界一致的父子根仅扫描父根，保留最初范围次序。冲突局部选项或根相对 glob／ignore 继承不等价时，在本地匹配和 HTTP 前明确拒绝；后者保留具名 TODO，不能静默丢掉某根选项。已对照 reference_repo/vscode 的 Copilot 搜索：保留原服务和相对根，覆盖身份仍由文件 owner 在输出计量前排除，不新增正文 hash 或客户端重扫补额度。
+- 22项真实 Provider／原 QueryBuilder 定向集成检查通过，包含重叠根顺序、冲突、根内额外文件、局部选项和注入的目标大小写规则；注入规则只证明消费 URI identity，不能替代真实 Windows canonical 能力验收。首轮输入不变断言误比较 URI 惰性 external 缓存，已改为核查询语义和数组身份，原失败记录保留。
+- 真实 Gateway／正式 Workbench／Chromium 模型覆盖用例通过（132.33秒）：新增只选 A 时 B 零查询，保留 A+B 小配额、A 未保存删词、B 同路径与 A 另一文件、旧覆盖 cursor 失效、停止 C 和磁盘未改断言，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-b8181195ecd5/nodes/node-f238fd176e30/artifacts/model-coverage.json`。同批正式构建退出0、55.37秒，main SHA256=`0fcc0299354de2f22cdf0543494af08d65eaf4d44cfc360c885c598730b213cf`，复用该完整产品构建，不重复构建。
+- 含18份真实 sourceTransform 的类型检查、7份 TS／ESM AST、受影响 Python Ruff 和差异检查通过；目录职责及 AGENTS 复核无新增结构 findings。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-identity-*`。模型变化、preview 映射、真实 Windows canonical 及 Electron 尚未由本批验证，16.19 和整体进度保持未勾选。
+
+### 2026-11-03：模型代际变化取消文件查询（16.19 部分）
+
+- 唯一 SearchService 为本次适用模型（含零命中）订阅内容变化及释放，沿原 CancellationToken 同时取消等待、实际 HTTP、续页与迟到 progress；原服务 dispose 也结束等待 notebook 排除集合的查询。完成、同步异常及取消均释放本次监听，A 模型变化不取消独立 B 查询。notebook 排除集合消费同一 URI identity，不新增正文 hash 或第二查询链。
+- 17项真实服务定向检查通过，新增模型变更／释放、服务释放、并行 A/B、同步 progress 变化及监听回收。真实 Gateway＋正式 Workbench＋Chromium 验收通过（114.76秒）：仅延迟真实 HTTP 发出，编辑实际未保存模型后由产品中止请求，原件记录 net::ERR_ABORTED；保留只 A 时 B 零查询、A+B 小配额、旧 cursor 失效、停止 C、磁盘不变及页面零错误。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c6b143adfb48/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
+- 同批正式构建退出0、44.26秒，main SHA256=`33d29b14b80903d2e53f0a4b80d68b08998c0e057ccf19d22ea66d8f1a04640f`；含18份实际转换源码的真实类型检查通过，当前738份前端产品源码与该检查指纹一致。Ruff、7份TS／ESM AST及结构复核通过，无新增findings。准确命令、指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-generation-*`。
+- 首轮服务装具误把 Emitter.hasListeners 方法当属性，已修正；首轮浏览器停在编辑器组定位，尚未执行取消断言，按原截图修正为可见原文件组并等待暂停回调结束再撤销路由。失败原件保留，未放宽取消、归属或结果要求。preview 映射、真实 Windows canonical 及 Electron 仍未覆盖，16.19保持未勾选。
+
+### 2026-11-03：原版有界预览与独立源区间（16.19 部分）
+
+- 文件 Provider 复用原 TextSearchMatch 同时投影最终结果及 progress，保留后端独立 UTF-16 source range；不为片段补读正文，不再重复构造同一命中。不支持的多行预览及非法列预算在本地匹配／HTTP 前拒绝；多行真实匹配仍保留，后续多行片段以具名 TODO 追踪。
+- 实际页面发现原 MatchImpl 的 lcut 对无分词边界长前缀可耗尽展示预算，导致查询词消失。通过唯一 sourceTransform 裁剪前缀并保持 Unicode 完整，固定 upstream 原件未改。27项真实 Provider／原结果模型／QueryBuilder及转换检查、含19份实际转换源码的真实类型检查、Python Ruff、TS／ESM AST和目录审查通过，无新增结构 findings。
+- 真实 Gateway＋正式 Workbench＋Chromium 验收通过（117.17秒）：Search Editor 有界预览及原 `%` picker 均保留查询词，搜索阶段额外正文读取为0，原命中 accessible label 为 UTF-16 2:1204，实际复制选中正文为 preview-target；原状态栏按码点显示起点列1203。原模型取消、只A不查B、A+B小配额、旧覆盖cursor、停止C及磁盘未改断言保持，页面错误为空。原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-7df9c8ca7131/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
+- 同批正式构建退出0、41.71秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`。首轮类型只读属性写入、浏览器误选文件分组、长前缀实际缺陷及状态栏单位混用均保留原始失败记录；最终以精确源位置和实际所选文本验证，未放宽定位要求。准确命令、源码指纹、日志及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-preview-*`；真实 Windows canonical及Electron仍未齐，16.19保持未勾选。
+
+### 2026-11-03：原文件私有条件读取（17.2）
+
+- 原 WorkspaceFileResponse 为完整 raw GET 发布 private/no-cache，弱 ETag 绑定稳定工作区、规范 URI 与原 stat 观察值；对照 VS Code serveFile，只散列小型身份／观察值，不读全文生成 validator，不建立字节库。原认证、路由、文件解析及当前读取权限先于304；304不读正文，返回本次请求ID及原缓存／Vary头。Vary覆盖两类目标头、Gateway、本地／联邦凭据及Cookie；下载、临时、Range继续no-store。唯一失败头策略按原Starlette路由模板同时覆盖canonical及内部头寻址载体，其他API不改变。
+- 21项文件响应检查通过，包含弱／强／多值／星号条件、实际打开但禁止read的304、权限异常因果、owner／URI／观察值隔离、原临时清理和Range。新增真实Web E2E通过（47.97秒）：经实际Gateway与两个托管后端，在原图片编辑器打开／关闭／重开，网络首次200传69字节，暖读304均传0正文，更新后200传70字节且原图片宽度变为2；UTF-8文本暖读304，外部改写后原保存基线仍409。相对／绝对／URI及canonical HTTP载体校验器一致，401／错误owner400／删除404明确no-store，Range206及下载合同保持，页面错误为空。
+- 原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-24e6c5652161/nodes/node-1a9400b31e52/artifacts/file-cache.json`。正式构建退出0、37.58秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`；重跑前逐项核750份前端源码指纹后复用该构建，未重复打包。Python核心及装具Pyright零诊断、Ruff及AST／结构复核通过；原API的27条B008与HEAD逐项相同。两份OpenAPI快照仅补原raw说明／304，公开结构不变，生成一致性检查通过。
+- 初轮装具误用工作区准备参数，未进入产品；后续固定“每次打开恰好一个请求”的装具假设与原watcher建连再验证不符，按真实网络区分首次和暖读，所有暖读均须304及零正文。额外再验证的性能处理留给下一切片，不把本次零正文收益表述为已减少请求次数。扩大原错误映射检查在既有符号链接文案断言失败（原期待Path traversal detected，现原解析器返回文件路径超出当前目标目录的访问能力）；该测试及解析链与HEAD一致，未为通过改动。失败原件保留，准确命令／指纹／原始输出／退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/raw-cache-*`。
+- 本边界只完成17.2；原Webview／Electron回环及打包重启、route复用／断连／淘汰／配额、watcher完整失效场景仍需17.3～17.7分别验证，保持未勾选。
+
+### 2026-11-03：初次文件监听不触发重复读取
+
+- 初次 watcher 建连不发布伪造的 UPDATED；流重建与 overflow 仍使已连接根重新核实，真实编辑／删除继续交原 FileService。同根引用共享及 B 工作区独立连接由两项真实 Provider 定向检查覆盖，传输和路由是明确装具边界。
+- 正式 Workbench＋真实 Gateway＋Chromium 验收通过（85.64秒）：首次、暖读及 B 同路径各一次读取，暖读304且零正文，图片保持打开时真实外部改写使宽度更新；原授权、删除、Range及保存CAS断言保持，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-d1440063483e/nodes/node-1a9400b31e52/artifacts/file-cache.json`。构建38.20秒、退出0；含19份转换源码的既有真实类型检查与当前输入指纹一致。
+- 代码与定向检查提交为 `b3eb43072`。命令、源码差异及原始输出保留在 `out/tests/temp/quick_access_watch_20261103/artifacts/`；此前类型／Provider检查在 `out/tests/temp/quick_access_provider_20261103/artifacts/file-watch-*`。
+
+### 2026-11-03：构建静态资源再验证（分层缓存部分）
+
+- 唯一构建从实际 esbuild 输出生成 `immutable-assets.json`，Gateway 与 Electron 共用服务器只对清单内内容地址发布长期 immutable；入口、main、Worker及未登记文件再验证，不按扩展名或貌似hash的名字猜测。共用服务器沿原 VS Code serveFile 使用stat观察值ETag，支持304与HEAD，不重读正文计算hash；缺失JS／Worker不再回退成首页，OAuth回调保持no-store。
+- 13项Gateway静态检查、4项真实Node服务器检查（71条断言）通过，覆盖新旧validator、升级正文、缺失Worker、未登记同形文件、OAuth及既有代理取消／隔离。Pyright零诊断、Ruff、ESM语法和差异检查通过。首次静态批次在已通过测试后找不到uv环境中的pyright；改用工具环境并显式指定项目解释器后通过，失败原件保留。本批仅修改构建／server脚本，没有改变tsconfig输入，复用已核指纹一致的真实类型检查。
+- 正式构建46.95秒、退出0，main SHA256仍为 `2b67d6240978a26be812e8c4b23752ed1f026b9bd82bd7f2dbf48d3ac7846b1c`；真实Gateway＋Workbench＋Chromium通过（98.83秒），index、main、真实editor Worker及生成SVG的HTTP条件读取均304／零正文，各自缓存头正确，缺失Worker404，原图片／文本／CAS及零页面错误保持。原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-52c8c3737747/nodes/node-1a9400b31e52/artifacts/file-cache.json`。
+- 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_static_20261103/artifacts/verification.json`。本批没有完成打包Electron重启、Vite HMR回归或固定版本Webview隔离宿主验收；完整分层缓存和第17组相关任务继续保持未勾选。
+
+### 2026-11-03：Linux 打包 Electron 原图片缓存（17.5、17.7 部分）
+
+- 扩展原便携 Electron 集成验收，三次从真实 ASAR 启动，沿原图片编辑器和相同 Gateway／工作区读取隔离 PNG。首次200传69字节，暖读及同 profile 正常退出重启后304均零正文；独立 profile 首次200传69字节。没有手动 flush、renderer Node 或文件系统 IPC，保留原聊天、文件保存、未发送草稿、先显历史后同步、只读保护、正常退出和 profile 隔离断言。
+- 正式矩阵 `bun run test:matrix -- --suite=integration-electron-packaged-workbench` 通过：1 passed in 178.29s，退出0；pageErrors、storageErrors、proxyErrors均为空。原件：`out/tests/integration/clients/electron/test_packaged_workbench/runs/run-c0cda837a8b3/nodes/node-95670caeaac1/artifacts/native-result.json`；归档SHA256=`547255d1f5a5ca58ed10aa29c74c67e60b76e2ef6d5fc399dad144c00ab42878`。
+- Node语法和Ruff通过；Pyright仅报告原有 interactions 的 object 索引诊断，HEAD快照复核得到同一诊断，没有新增。命令、原始输出、退出码及四份源码指纹见`out/tests/temp/quick_access_native_cache_20261103/artifacts/`。普通图片的证据不覆盖Webview，淘汰／配额等其余场景尚未齐，17.5／17.7完整任务保持未勾选。
+
+### 2026-11-03：联邦搜索统一输出预算（16.17 部分）
+
+- 接收领域页与业务流输出各8 MiB；输出在唯一SSE编码边界按UTF-8实际字节计量，包含scope、整页、游标、诊断、分支终态及汇总。编码器只暂存下一帧，正文不为计量重复编码；提前预留逐分支终态和最终汇总，不重复序列化全量待结算状态。纯传输心跳不计业务事件输出。
+- 整页不能交付时，唯一调度核心返回limited/output_bytes，保留输入cursor及零交付计数；不得跳过本页命中。原范围与续点自身无法容纳时，在任何分发前返回413/output_bytes。原3并发、完整页、慢消费不补队、总期限、安全结算与唯一终态保持。
+- 35项不同定向检查均已有通过证据，覆盖精确字节上限／多一字节、Unicode／转义游标、状态与汇总预留、超大诊断、零配额、旧续点重试及每候选页只编码一次。首次34通过／1失败是新装具遗漏resume冻结范围，按原请求合同补齐后该用例与新增边界检查通过，未放宽cursor／顺序／结果要求。Ruff通过；产品核心及新测试Pyright零诊断，原transport测试的27条Optional诊断与HEAD逐项同文，无新增，原件保留。
+- 真实Gateway＋双Backend验收通过（54.36秒）：只A、A+B、all含停止C、名称／多文件根／正文区间和上下文、Gateway重启原续点、单分支版本冲突与独立重试保持；每个实际响应记录下载字节并核8 MiB上限。准确命令、源码指纹、失败与通过输出和网络原件位置见`out/tests/temp/quick_access_output_20261103/artifacts/verification.json`。本批不改前端输入或公开DTO结构，未重复Workbench构建／Web／Electron交互；完整16.17及其余跨运行面验收仍按清单推进。
+
+### 2026-11-03：搜索读取失败归属（16.18 部分）
+
+- 原工作区SearchService在已分派Provider边界将原生I/O／SQLite读取失败登记为search_provider/provider_read_failed，附provider_id、类别和操作，保留原cause与完整诊断。明确文件错误的目标机器位置及原因可用于排障；不把任意异常正文或SQL正文普遍公开。TimeoutError先于OSError处理，原期限、取消、领域错误及内部编程错误仍走原出口。
+- 原API返回500具名详情，Gateway转为对应failed分支并保留provider_id、原cursor、零交付计数及显式重试。错误响应同样核原request_id，异请求错误不能附到当前分支；无通用“文件失败”回退。网络错误与信息／警告合同仍以代码TODO追踪。
+- 60项定向检查通过（1.78秒），含真实注册Service＋ASGI、原异常因果、SQLite正文保护、期限／取消／注销回归、错误ID拒绝、原续点及输出预算。核心Pyright零诊断，Ruff、OpenSpec strict及差异检查通过。
+- 真实Gateway＋双Backend验收通过（48.41秒）：通过产品创建Session，再只撤销隔离日志目录权限，工作区API确实500、归属llm-request-log且包含原目标位置；联邦A明确失败、B完整零匹配，恢复权限后只重试原A分支成功。没有替换查询响应或准备执行历史，原名称／文件／重启续点／版本冲突等验收保持。命令、源码指纹及原件位置：`out/tests/temp/quick_access_read_failure_20261103/artifacts/verification.json`。本批无客户端或公开DTO字段变化，未重复Web／Electron；16.18完整合同仍未齐，不据此勾选。
+
+### 2026-11-03：无浏览器工具与脚本资源搜索（16.12 部分）
+
+- 新增只读 `discover_workspaces`／`search_resources` 扩展工具并登记原内置配置；工具及 Python 客户端复用既有 Gateway transport、认证、领域请求、独立续点及联邦事件。机器入口与普通入口共用唯一 handler／编码／调度，浏览器与机器入口均使用既有凭据，不创建游客或用户访问租约。SSE 由直接依赖 httpx-sse 解码；取消、总期限及显式关闭释放同一响应。
+- 原551项单元回归通过；最终客户端及工具定向407项通过（有重叠，不相加），新增拒绝断言核status／code／原因。真实双Backend＋Gateway脚本验收覆盖只A、A+B、all含停止C、工作区发现、Gateway重启后只继续B，后端日志按request_id证明实际请求分别为无正文、A、A+B、A+B、B；当时的历史验证为无Cookie、普通入口无租约与机器入口错误凭据均401；当前合同已改为普通入口同样接受本机凭据，旧租约体系退役。
+- 真实产品消息入口经统一model_stream三轮执行发现、资源搜索及最终回答，job完成，两个扩展结果进入实际模型wire；范围绑定调用owner、只命中目标Session，两个Gateway请求ID独立且搜索事件沿原ID。定向1 passed／60.02秒；脚本原件为 `out/tests/integration/gateway/test_resource_search_tools/runs/run-a58ef7e308b0/`，模型原件为同目录 `runs/run-8600e4026484/`。关键Session由产品API生成，不手工准备执行状态。
+- 实网测试揭露容器未将启动Gateway URL传给原上下文transport，已沿原装配显式传入；另一失败为日志解析未接受GET查询参数，已用原日志证明并修正，保留两个不同请求ID和精确搜索ID断言。失败及通过原件均保留。Ruff、11份核心／测试Pyright、生成一致性、OpenAPI真实结构及OpenSpec strict通过；无前端／公开DTO字段变化，不重复Web构建或Electron验收。准确命令、源码指纹、日志和退出码见 `out/tests/temp/resource_search_20261103/artifacts/`。
+- 旧 `search_context` 的有效上下文／本地来源、inventory及精确单资源读取仍保留原语义；跨目标gather和全局offset迁移尚未完成，代码附具名TODO。16.12／16.15及完整Quick Access保持未勾选，本批不以普通canonical消息搜索代替上下文验收。
+
+### 2026-11-03：原上下文来源接入统一 Provider（16.12 部分）
+
+- 工作区注册唯一 `context/content` Provider，委托原 SessionContextQueryService，保留有效上下文、目录和会话信息来源、literal／regex、大小写、字符预算、资源身份、码点位置及原 revision／cursor。目标工作区身份由 owner 生成；工具与脚本复用既有联邦请求及 typed 领域选项。原上下文接口与统一接口共用版本冲突 409 信封。
+- 143 项 Provider、原上下文、联邦调度及公开协议定向检查通过。真实 Gateway＋Backend 通过产品入口生成执行历史后核新旧查询完整页一致、按原身份及版本精确读取、后端重启后原续点继续、来源变化明确拒绝旧续点；1 passed／62.42 秒。首次读取失败为测试未绑定请求身份，已按原请求作用域补齐；另一次装具启动前端口占用的失败原件保留，确认端口空闲后通过，未终止未知进程。
+- Ruff、9 份核心／测试 Pyright、协议生成一致性、Buf format／lint／基于 `7c9b2c27a` 的 breaking、OpenSpec strict、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。准确命令、源码指纹、原始输出及退出码保留在 `out/tests/temp/context_provider_20261103/artifacts/`；正式网络原件归 `out/tests/integration/gateway/test_context_resource_search/`。
+- 本批没有改变 Quick Input／Electron 交互，不重复浏览器和打包 Electron 验收。旧 `search_context` 跨目标聚合及相关消费者迁移仍未完成，16.12／16.15 保持未勾选。
+
+### 2026-11-03：删除无消费者的目标解析链（16.16 部分）
+
+- 全仓核对确认旧 SessionTargetResolver 只有定义、自身测试和无效依赖注入，生产工具早已通过结构化 URI 及原通信／联邦 owner 处理目标。删除解析器、协议／DTO、包导出、容器装配、runtime／工厂参数及专属测试，迁齐其它测试装具和目录职责；不为死链路新增联邦搜索包装。现行 FederationRpcService 的 exact-ID、权限、歧义、期限与通道行为保持原入口。
+- 88 项定向回归通过、5 项真实外部模型用例按原条件跳过；覆盖 Agent 工厂、工具装配、runtime、上下文工具与完整 federation transit 文件。真实 Gateway＋Backend 通过产品消息执行、上下文精确读取及重启续页，1 passed／57.13 秒。Ruff、差异检查通过；核心五文件 Pyright 的 7 条诊断与 `e28ce7de1` 基线逐条同文，没有新增，未把该检查称为零诊断。
+- 命令、源码指纹、原始输出、退出码及类型诊断对比保留在 `out/tests/temp/quick_access_dead_target_20261103/artifacts/`。本批没有改变前端或公开协议，复用前一切片的真实类型与构建；不重复 Web／Electron 交互。旧 Gateway 上下文聚合仍有实际工具与 relay 消费者，继续由 16.12 追踪；16.16 完整项保持未勾选。
+
+### 2026-11-03：真实 Agent 消费有效上下文搜索（16.12 部分）
+
+- 扩展原实网验收，在后端重启及原续页验证之后，经真实产品消息入口创建调用会话，由统一 model_stream 驱动 `invoke_extension_tool → search_resources → context/content`；断言冻结工作区、原 `session-context` Provider、精确会话 URI 和 effective_context 来源，并核验工具结果进入下一次模型 wire。关键执行与工具结果全部由产品生成，未增加模型或 SSE 替身。
+- 定向 1 passed／77.10 秒，原上下文页一致、精确读取、来源选择及旧 cursor 拒绝断言保持。Ruff 与该测试 Pyright 零诊断；仅扩展测试，复用原同源码的类型／构建及产品核心回归。命令、测试指纹、原始输出与退出码为 `out/tests/temp/context_provider_20261103/artifacts/tool-*`，正式网络与模型原件归同名 integration 测试目录；此证据不代替旧 `search_context` 聚合迁移或完整 Web／Electron 验收。
+
+
+### 2026-11-03：Gateway 上下文聚合迁入唯一搜索执行（16.12 完成）
+
+- `search_context` 保留工具名及精确资源合同；Gateway inventory 返回同一联邦事件，显式集合／all 与冻结范围／各 owner cursor 由 GatewaySearchService 执行。JSON relay 和浏览器 SSE 复用输出准入、总期限、调度与唯一终态，原 context read grant／origin 不扩大到文件或其它类别。Gateway 的 max_chars 是每个 owner 原上下文页的预算，总返回另受联邦条数及字节配额约束。
+- 已删除调用侧 Semaphore(8)、全工作区 gather、跨库 hash／全局 offset／聚合总数及专属 helper／测试。inventory 读取、精确 read/search、有效上下文与其它原来源、资源身份校验和独立 revision／cursor 保留；校验失败完整原件仍由原日志出口记录，日志 sink 失败不妨碍分支结算和租约释放。
+- 单元／公开合同批次 675 passed；最终 RPC／真实 WebSocket 授权与 relay／client 批次 51 passed，最后日志处理批次 17 passed。产品入口生成历史后，逐项比较原上下文页、重启后续查，并分别通过模型调用 search_resources 和 search_context：1 passed。下游非法 URI／类型的九组分支隔离、恢复及原日志：1 passed。原跨工作区工具、版本过期、错误归属与后端停止分支：1 passed／47.09 秒；旧查询装具的 new_versions 和错误格式断言同步现行合同，不放宽产品校验。
+- 协议生成一致性及 Buf breaking、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。Ruff 无新增诊断；核心 Pyright 保留四条已核对的既存诊断，lifespan 保留两条既存 BLE001。原件、源码指纹及当前收尾命令记录在 `out/tests/temp/context_federation_20261103/artifacts/`；早期失败按原件保留。Docker 离线消费者已迁移，未运行 Docker E2E；本批没有改变 UI 交互，不替代 16.15 的完整 Web／Electron 产品验收。
+- 联合此前无浏览器 origin／selected／all、控制面发现后查树、Gateway 重启续页、停止目标和真实模型工具证据，勾选 16.12。16.15、16.16 及其它未闭环项继续保留，不以本边界宣称整个 Quick Access 完成。
+
+
+### 2026-11-03：未保存模型覆盖与小配额实网验收（16.19、16.17 部分）
+
+- 新增无替身文件覆盖 E2E，通过正式 Workbench 原编辑器删去 A 查询词且不保存，只选 A 时屏蔽旧磁盘命中并返回另外两文件；明确选择 A+B 后每分支首批一项，保留 B 同路径及 A 独立尾页。覆盖身份在实际请求中按 owner 分区，未发送模型正文；改变排除集合后原 cursor 明确返回 invalid_cursor。两工作区磁盘原文不变。
+- 原查询生命周期故障装具迁到真实 SearchTransport 装配模块，继续核取消、总期限、独立失败与重试、停止目标零业务读取及身份失效。设置和搜索观察迁为 tests/support/workbench 唯一共享辅助，故障控制保留 Integration 专用；无替身场景归 tests/e2e/clients/web，不以故障装具证明真实服务故障。
+- 正式受保护矩阵 integration-web-search-coverage 通过：2 passed／179.54 秒，退出0；共享正式构建42.37秒、退出0。文件覆盖原件为 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-be80e412f5e3/；后端原日志逐 request_id 核实际分发 A、A+B、A。Ruff、两文件Pyright零诊断、六个真实浏览器驱动的ESM编译和差异检查通过。本批未改产品源码，复用前一边界的真实类型与正式Web构建证据。
+- 首次失败是命令helper返回复杂对象，第二次是测试未关闭原picker的干净预览；均以原件归因后修正装具，未改产品配额或放宽隔离／续页断言。早期及最终命令、源码指纹、原始输出和退出码见 out/tests/temp/file_coverage_20261103/artifacts/verification.json。Windows canonical及大小写发布和其它选项／运行面仍未齐，16.19及完整16.17保持未勾选。
+
+
+### 2026-11-03：联邦分支保留原领域诊断（16.18 部分）
+
+- 原 FederatedSearchBranchDTO 增加 error_owner、reason 和真实下游 http_status；Gateway 从原错误详情取得这些字段，沿同一调度分支、SSE／JSON relay、终态与汇总发布，不改写领域 code／message、原 cursor 或交付计数。Provider 读取失败保留原身份；普通401／403仍能按真实状态区分，网络失败和本地取消不伪造 HTTP 状态。协议、Python／TS／JS与SSE结构均由唯一生成入口同步。
+- 独立网络验收暴露上轮通信接入的冷导入循环：internal_v2 包级批量导出反向导入尚未完成的搜索模块。全仓核对无包级DTO消费者，删除未使用批量导出，各原消费者继续按所属模块显式引用；两种独立进程导入顺序均通过，不靠测试收集或启动导入顺序规避。
+- 最终定向100项通过（10.41秒），包括原输出预算／取消／relay／客户端、两种同码不同原因、真实HTTP状态和冷导入。真实Gateway＋双Backend通过（50.31秒），原件 out/tests/integration/gateway/test_federated_search/runs/run-77357653a6af/：空目录非法正则、非法cursor、非法UTF-8及实际I/O失败保留原归属／原因，原续页／重启／部分失败保持。文件覆盖E2E通过（87.84秒），原件 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-ef7e46002a50/，零页面错误，共享正式构建39.33秒、退出0。
+- 核心六文件Pyright零诊断、Ruff、真实Workbench类型检查（19份转换源码）、生成一致性、Buf breaking及OpenSpec strict通过。正式浏览器验收使用同源码的唯一产品构建，未重复无变化打包；本批不改变UI交互，不重复Electron。第一次独立网络检查在收集阶段因上述循环导入失败，原件仍保留；准确命令、指纹、原始输出及退出码见 out/tests/temp/search_diagnostics_20261103/artifacts/verification.json。原owner其余异常细分与信息／警告合同仍由16.18追踪，完整任务保持未勾选。
+
+
+### 2026-11-03：文件续页跳过已完成正文（16.11、16.17 性能切片）
+
+- 参考 VS Code 原 FileSystemFileSearchProvider／RawSearchService 与 Copilot 搜索接入，将续点分成已完成文件和当前文件内位置；原文件／ignore 观察值继续保护已消费前缀，删除逐条匹配正文的前缀序列化。已完成文件不重读正文，单文件多命中、UTF-16、上下文及首条未交付项仍沿唯一匹配链；没有新增缓存、目录索引或持久搜索状态。内部 cursor 统一 v2，v1 明确 invalid_cursor，不加兼容双轨。
+- 相同64文件、每文件69,622字节、每页一条的异步负载，正文读取由2,143次／149,199,946字节降为127次／8,841,994字节，测量耗时由56.106秒降为6.755秒；优化后同步为6.803秒。仅这些实际负载证明收益，不承诺全链路线性增长。目录前缀仍重复观察，保留对应源码 TODO；部分文件继续按原匹配器恢复。
+- 最终owner定向163 passed／18.53秒；改用typed测试选项后补核重建owner用例2 passed。覆盖同大小并恢复mtime后ctime变化的POSIX前缀拒绝且无正文读取、未消费文件更新可见、重建owner后的文件内位置连续。该ctime用例明确不适用于仍以ctime表示创建时间的Windows，不冒充Windows实机验收。
+- 真实Gateway与双Backend网络1 passed／48.98秒：原查询及Gateway重启后的文件内续点相同，通过原保存API更新已消费文件后，旧cursor返回原resource_file_operations/stale_cursor/400，零页、零交付并保留输入cursor。正式Workbench／Gateway／Chromium文件覆盖E2E 1 passed／90.58秒，pageErrors=[]，共享正式构建41.11秒、退出0；A/B覆盖、小配额和原查询隔离断言保持。
+- Ruff、OpenSpec strict和差异检查通过；Pyright与HEAD原件对照，核心9条及既有测试17条诊断完全相同、无新增，网络测试零诊断。无公开DTO或前端源码变化，不重复协议生成、前端类型或Electron。基线初次负载超过默认读取预算已改为显式128KiB；第二次基线异步完整复现后，同步部分被90秒外部监督器终止，未把它算作完成；原件均保留。
+- 准确命令、源码指纹、测量、原始输出、退出码及正式产物路径：out/tests/temp/search_pagination_20261103/artifacts/verification.json。16.11／16.17的其余合同与16.19 Windows canonical等仍未闭环，保持整项未勾选。
+
+
+### 2026-11-03：冻结搜索范围与登记变更实网验收（16.13 完成）
+
+- 复用真实双Backend／Gateway与正式搜索SDK，通过产品入口创建A/B各两条Session、CAS保存B独有正文并删除B登记。origin只访问A，selected只访问A/B；相关发现仅查控制面，名称不相关的B仍在明确all正文范围命中。空集合422、混入未知owner404，均保留request_id且零后端请求；停止C明确target_unavailable，没有搜索触发启动。
+- Gateway停止后沿原registry owner准备真实目录／UUID的离线D并复用B旧route，重启后沿原all范围续查：保留A/B/C身份、时间和顺序，只有A真正分发并取得第二条Session，B明确owner_unavailable、零交付且保留原cursor；D不替代B，只有新all才包含D。C/D没有创建Session业务目录。离线准备不作为管理UI新增目标的验收。
+- 受保护矩阵最终1 passed／50.49秒，退出0；两后端全部access日志按request_id核对实际分发，控制面发现与前置拒绝均零后端HTTP读取。Ruff通过、测试Pyright零诊断、OpenSpec strict及差异检查通过。无产品源码／公开DTO变化，未重复Web构建或Web／Electron、Windows canonical验收。
+- 首轮测试将D指向不存在目录和虚构UUID，Gateway启动实际拒绝；已修正测试输入，没有放宽产品校验。失败与通过原件、准确命令及源码指纹保留于out/tests/temp/search_scope_changes_20261103/artifacts/verification.json，最终正式原件为out/tests/integration/gateway/test_search_scope_changes/runs/run-34a886b96831/。联合既有范围和实际网络证据勾选16.13，其余未闭环项保持。
+
+
+### 2026-11-03：网络故障保留原传输原因（16.18 部分）
+
+- 联邦搜索沿既有error_owner／reason字段传递search_transport及httpx原异常类型，区分连接／读取／写入／池超时、连接／读写故障、远端／本地协议、代理与解码等原因。保留原deadline／target_unavailable代码、异常因果、详情、输入cursor和重试，不伪造HTTP状态或Provider身份，不从自然语言推断原因，不增加第二错误分类链。
+- 57项定向检查通过（2.18秒）；每类传输异常均核原续点、零页、零交付、分支终态等于汇总、路由引用释放及原分支重试。真实Gateway＋双Backend通过（49.93秒）：关闭本装具B后端但保留登记URL，真实连接拒绝返回ConnectError／search_transport，A仍返回原页面。没有替换该网络响应或终止未知进程。
+- Ruff通过；核心与实网测试Pyright零诊断，原transport测试29条诊断与HEAD原件逐条同文，没有新增。OpenSpec strict及差异检查通过。命令、源码指纹、原始结果、实际退出码及正式产物见out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json。本批无公开DTO或前端源码变化，不重复生成、Web构建或Electron；原owner其余异常与信息／警告合同仍未齐，16.18保持未勾选。
+
+
+### 2026-11-03：请求日志续点与引用具名拒绝（16.18 部分）
+
+- 原LLMRequestLogService统一续点／引用错误为LLMRequestLogError，移除旧无原因异常并迁齐全部调用方。输入格式、归属、查询和越界返回400 invalid_request_log_cursor；catalog、目录及正文变化返回409 stale_request_log_cursor；精确定位保留409 stale_request_log_reference。原因在原校验点产生，原API／Gateway沿同一owner、reason、真实HTTP状态、详细消息与输入cursor传递；权限、取消及内部错误不改标。
+- 29项日志定向检查通过（4.75秒）；相关搜索／API回归86项通过（8.38秒，有重叠不相加）。覆盖损坏base64／结构、跨owner／查询、目录／文件／正文位置越界、catalog／目录变化及同大小恢复mtime的正文变更。装具补齐产品HTTP错误处理器后，request_id响应体与响应头一致；原Unicode／预算／留存／原列表与精确定位断言保持。
+- 真实Gateway／Workbench／Chromium经产品消息及model_stream生成关键日志，原详情定位、同Pane第二位置、过期引用及零整批读取保持；另经原API核400与409诊断，由正式Python搜索SDK核原分支和汇总一致、零页、零交付及旧cursor保留。1 passed／95.67秒，pageErrors=[]，共享正式构建39.41秒、退出0；原件为out/tests/integration/clients/web/quick_access/test_request_content/runs/run-be62f0c9233b/。
+- 真实类型对照完整git archive基线，7条既存诊断同文、无新增；Ruff原sessions.py的27条B008与基线同文，其余触及文件零诊断。OpenSpec strict、ESM语法及差异检查通过。无产品前端／DTO变化，不重复生成或Electron。首次页面检查在原首次鼠标点击的动画稳定性等待阶段失败，未进入新诊断；首次接受改为明确核活动身份后走真实Enter及reduced motion，保留后续鼠标与全部定位断言，不将其称为产品缺陷修复。
+- 首轮缺HTTP处理器、类型注册签名、初次静态快照基线及页面失败原件均保留，最终使用完整基线。准确命令、源码指纹、原始结果与实际退出码见out/tests/temp/request_log_errors_20261103/artifacts/verification.json。其余owner和信息／警告合同继续由16.18追踪，保持整项未勾选。
+
+
+### 2026-11-03：联邦生命周期验收收齐（16.14）
+
+- 真实双 Backend＋Gateway 验收1项通过（48.23秒）：不支持匹配模式与合同版本均保留原400和明确代码、零页／零交付；关闭本装具自有A/B后端并保留登记URL，两分支真实ConnectError、原cursor与独立重试信息不丢失，汇总incomplete，不伪报完整无匹配。同名Session与相同正文片段的跨owner结果均保留；纯查询前后原catalog快照（含顺序、版本及水位）完全一致。既有重启续页、单分支revision冲突、部分失败、同request_id与真实序列化断言继续通过。
+- 快慢分支、排队期限、取消／断流与迟到页安全结算复用同源码的57项调度／transport／输出定向证据：out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json；真实Workbench的快慢、取消、全部失败与独立重试沿out/tests/temp/file_coverage_20261103/artifacts/verification.json（2项／179.54秒），其中出站故障为显式装具，不称全部为原生网络故障。本批新增连接拒绝使用真实TCP。
+- Ruff与本实网测试Pyright均零诊断；OpenSpec strict通过。准确命令、指纹、退出码与正式原件：out/tests/temp/search_lifecycle_20261103/artifacts/verification.json。首次启动前端口冲突原件保留，未终止未知进程，确认端口空闲后通过；补齐同片段断言后最终重跑通过。产品源码未变，未重复Web构建／Electron；完整Quick Access及其余16组任务仍按各自范围追踪。
+
+
+### 2026-11-03：目录游标保留原校验原因（16.18 部分）
+
+- 原catalog_query的唯一游标校验器改用CatalogCursorError；编码／payload、scope、offset无效与内容／catalog版本变化区分invalid_catalog_cursor和stale_catalog_cursor，由原校验点产生reason。原目录搜索、children／roots与统一Provider仍为409，保留owner=session_catalog、原消息及request_id。在线联邦与离线镜像保留输入cursor和零交付，镜像不伪造HTTP状态；不新增存储、hash或第二分类器。
+- 119项定向检查通过（20.57秒），最终API断言补跑5项；原navigation operations和Provider回归通过，完整数量见related.log。真实双Backend＋Gateway1项通过（48.36秒）：经产品创建目录历史，实际校验损坏cursor、跨查询续点及单owner目录变化，状态／原因／原cursor／零页与独立重试均正确。
+- 一条既有日期搜索测试曾因随机folder ID按合法模糊规则命中年份而失败，现固定该测试ID，保留原唯一命中断言；原ID与归因见fixture-collision.json。完整HEAD基线该轮通过，不将其表述为必现产品回归。Pyright39条和Ruff11条均与完整基线逐条同文、无新增；产品四文件与新增游标测试零诊断。OpenSpec strict及差异检查通过。
+- 命令、指纹、原始结果与退出码：out/tests/temp/catalog_search_errors_20261103/artifacts/verification.json；完整基线解包及tar已删除，诊断原件保留。本批无前端／公开DTO字段变化，不重复生成、Workbench类型或Electron；发现旧catalog targets浏览器验收仍观察旧HTTP入口，下一切片迁齐观察器再执行页面验收。其余owner与信息／警告仍由16.18追踪，保持未勾选。
+
+### 2026-11-03：目录页面统一观察联邦回执与文件过期重查（16.11、16.18 部分）
+
+- 目录／Thread 专用模式、独立分页和只读来源历史的浏览器观察器迁到现有联邦回执工具，复用唯一 SSE 解码；真实 HTTP 请求数与领域分支数分别计量，仍核精确 owner、原 request_id、50＋5 独立页、首屏外模糊召回及失效 cursor 的 code／reason／HTTP 状态。原文件滚轮操作提升到实际共用的 support，不复制一份滚动实现。
+- 真实页面复现文件游标过期后缺少重查按钮：Gateway 已保留原文件错误，却将其标为不可重试。沿唯一诊断出口允许 invalid_cursor／stale_cursor 显式重查原分支；非法正则、401／403 保持原拒绝语义。无新查询器、自动重放或错误文本解析。
+- 38 项传输检查通过。Ruff、浏览器驱动语法和测试 Python 类型检查通过；传输产品文件零类型诊断，传输测试既有29条与上一切片原件逐条同文，无新增。OpenSpec strict 与差异检查通过。本批无前端产品源码或公开DTO字段变化，不重复生成、Workbench类型或Electron；正式页面使用本轮真实构建（38.27秒、退出零）。
+- 完整目录浏览器场景最终 1 passed / 139.24秒，真实 Gateway＋托管后端＋正式 Workbench＋Chromium，无业务替身；Session／fork child／目录和55个分页 Session 均由产品入口创建。文件活动项保持、失效候选清除后Enter不误开、显式单分支重查、目录revision的409／stale_catalog_cursor／revision、main与child、跨工作区只读来源、图片／Range／BOM保存和非法URI断言均保留，pageErrors=[]。
+- 前五轮原件保留：原滚动步数不足、上述真实不可重试缺陷、旧状态文案、按钮须悬停及失效候选移除后的虚拟列表重新定位；按实际上游交互修正驱动，未延长业务期限或放宽身份／冲突断言。首次传输单测中的断言放置错误亦保留原件，修正后38项通过。
+- 准确命令、源码指纹、原始结果、类型基线比较和退出码：out/tests/temp/quick_access_catalog_acceptance_20261103/artifacts/verification.json；最终页面原件：out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-2e8daea77b1f/。其余owner及信息／警告仍由16.18追踪，整项保持未勾选。
+
+### 2026-11-03：Thread 搜索续点保留原校验原因（16.18 部分）
+
+- 原 Thread 名称游标按实际校验点区分非法形态、owner／查询不符、目录位置越界与 catalog revision 变化，发布 invalid_thread_cursor／stale_thread_cursor；当前 Session 的 Thread 发布版本冲突由原控制库读取方发布 stale_thread_catalog，并供名称与消息发现共用。原名称入口与统一搜索保持409、原owner／reason、详细原因及request_id；Gateway保留输入cursor、零交付和显式原分支重查，不自动重放。
+- 267项定向测试通过（7.75秒），覆盖控制库、名称查询预算、Thread游标形态、两条API及传输。Ruff11条及Pyright19条与完整HEAD基线按未变行映射逐条相同，无新增；最终网络测试文件Ruff与Pyright均零诊断。OpenSpec strict及差异检查通过。
+- 真实双Backend＋Gateway网络场景1项通过（51.82秒）：产品入口创建Session并发布两个fork child，非法续点与跨查询在直接API／联邦中具名拒绝；A发布新child使旧Thread版本失效，B仍可续页，显式重查只调度A。原全范围、离线／重启、文件续点、权限及真实连接拒绝断言保留。
+- 首轮500原件保留，原因是测试装具未启动fork资源枚举所需的终端服务；沿既有终端／浏览器进程装具、独占端口及MountedWorkspace补齐真实服务，来源请求明确full_rollout_copy，未伪造child或历史。准确命令、指纹、原始结果、基线比较和退出码：out/tests/temp/thread_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除，诊断原件保留；本批无前端或DTO字段变化，不重复Web构建／Electron。16.18其余owner及信息／警告尚未收齐，保持未勾选。
+
+### 2026-11-03：工作区消息续点具名拒绝与真实恢复回归（16.18 部分）
+
+- 工作区 canonical 消息／工具结果续点按原校验点区分非法形态、Gateway／workspace归属、查询、类别、目录位置与catalog revision；非法续点继续invalid_turn_cursor／400，目录版本冲突改为stale_message_search_cursor／409。原历史搜索与统一Provider返回相同workspace_message_search归属和原因；Thread发布版本仍消费原stale_thread_catalog，Thread内历史仍由原历史owner核验。Gateway保留实际状态、输入续点、零交付和显式原分支重查，不自动重放。
+- 92项API／历史失败边界／传输定向测试通过（6.98秒）；4项后端消息入口与编译图集成、1项真实Gateway＋Backend＋统一model_stream回放集成全部通过（合计152.89秒）。覆盖损坏形态、跨owner／查询／类别及越界、共享正文／Thread预算、Unicode位置、未打开child、冷历史零物化、真实执行推进历史版本、fork发布版本、catalog变化、重启后消息／工具续页和原around定位；查询未新增模型调用。
+- 原网络测试能力清单迁齐已注册file名称／正文、LLM请求与context，以类别＋操作核全部匹配模式，不通过覆盖同类别键丢掉文件操作。真实消息及工具续点的400／409、原因、原cursor、分支重试和request_id均留原件，显式重查只请求原分支。
+- Ruff零诊断；Pyright三条与完整HEAD基线按未改行逐条相同，产品及API测试零新增诊断。初轮测试装具缺生产HTTP异常处理器的失败保留；API单测接入原处理器，简化历史ASGI装具只证明领域详情，完整请求ID由真实Gateway场景证明，未改共享fixture。OpenSpec strict和差异检查通过。
+- 准确命令、源码指纹、原始结果、实际退出码、基线比较及正式网络回执位置：out/tests/temp/message_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除；本批无前端／公开DTO字段变化，不重复生成或Web／Electron构建。其余具名owner和信息／警告仍由16.18追踪，整项保持未勾选。
+
+### 2026-11-03：普通 URI 保留端口与数字片段（7.4 部分）
+
+- 普通链接在原行列解析前按原入口条件识别，端口、路径中的冒号、数字 fragment 和逗号均原样交给现有 Opener；不新增 URI 解析器。文件 delegate 保留行列定位，修改位置复用候选而不重查；filesOnly 对照固定上游保持字面查询，未改变其语义。
+- 旧产品回归实际失败，明确复现三类 URL 被行号解析改写；修复后实际 Provider＋Chromium 的25项定向检查全部通过（23.17秒、230条断言），包括原空文件编辑器和 Chat 调用方。Picker事件及宿主服务为显式替身，不作为完整Gateway页面或操作系统链接打开验收。
+- 含19份实际sourceTransform投影的完整Workbench类型检查通过（65.64秒），正式Web构建通过（52.91秒）；ESM语法、OpenSpec strict及差异检查通过。准确命令、源码及构建指纹、失败和通过原件、退出码：out/tests/temp/quick_access_uri_suffix_20261103/artifacts/verification.json。未重复完整Gateway页面和Electron；quickNavigate及文件符号等其余范围仍未闭环，7.4保持未勾选。
+
+### 2026-11-03：原图片读取失败不再静默显示旧图（17.4 部分）
+
+- 对照固定上游及reference_repo/vscode，确认原图片reload忽略所有读取失败且不消费删除。业务文件沿唯一sourceTransform补齐删除刷新；当前加载失败时清理旧图、object URL与大小并显示原错误。保留原Pane、FileService、watcher、加载代际及恢复链，未改其它原生文件行为。
+- 旧产品真实页面回归失败：POSIX撤销文件读取权限后原raw返回500/no-store，界面仍显示1x1旧图且无错误。修复后真实Gateway＋双托管后端＋正式Workbench＋Chromium通过（1项／93.08秒）：权限失败／恢复、删除／重建均在原Pane可见；原冷热200／304零正文、外部更新、A/B隔离、静态资源、文本CAS及Range／下载／401等断言保持，pageErrors=[]。该原生延迟I/O沿原TraceMiddleware为500，不改写成授权403。
+- 10项源码转换／watcher检查通过（118条断言）；含20份真实转换源码的完整类型检查通过（49.71秒），本批正式页面构建退出0、40.83秒；复用与Web build相同的唯一构建管线，不重复打包。ESM、Ruff、Python类型、OpenSpec strict及差异检查通过；初次uv run pyright因工具未安装失败，改用仓库既有uvx入口后零诊断，保留原件。
+- 准确命令、源码及构建指纹、失败与通过输出及退出码：out/tests/temp/image_read_failures_20261103/artifacts/verification.json；最终真实页面原件：out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-c8d73ac5b960/nodes/node-1a9400b31e52/artifacts/file-cache.json。未重跑Webview／Electron；认证切换、route复用、断连与迟到加载等仍由17.4追踪，整项保持未勾选。
+
+### 2026-11-04：文本模型并发引用与真实释放（18.2 部分）
+
+- 真实 `FileEditorInput` 的计数装具复现并发取得两份引用、关闭只释放一份；固定上游及参考仓库均存在该时序。沿唯一源码转换共用在途获取，保留原 TextFileEditorModelManager／resolver、dirty 与关闭生命周期，失败后明确重试，不新增模型缓存或兼容链。
+- 正式 Workbench／真实 Gateway／A、B 托管后端／Chromium 验收通过：同 URI 并发分屏只读一次，键盘未保存正文两组共享而选区分别保留，关闭一组不丢编辑；外部改写触发原 modified-since 提示且正文及磁盘原件均保留，明确 revert、最后关闭和重开后实际重新读取，B 同路径不混入 A。原图片权限／删除／恢复、条件缓存及 API CAS 场景同时保留通过，pageErrors 为空。
+- 3 项原类引用检查、8 项转换／原查询回归、21 份实际转换源码的真实类型检查及 ESM 语法通过，正式页面复用同一源码的已验证新构建；最终浏览器 1 passed / 53.31 秒。Ruff 通过；fixture 类型检查的两条既存诊断与 HEAD 基线逐条一致，无新增。端口占用与错误要求 PUT 的两轮失败原件保留，未放宽版本冲突／dirty／owner 断言。
+- 重复的端口选择收敛到原 E2EProcessLease，9 项含真实 socket 的保护检查通过，独立提交 `911d49cf1`。完整证据、源码与构建指纹及准确命令：`out/tests/temp/text_model_lifecycle_20261103/artifacts/verification.json`。
+- TODO：只读来源、Diff／历史版本和打包 Electron 尚未验收，18.2 保持未勾选；不以此文本切片宣称整组完成。
+
+### 2026-11-04：轻量文件观察与目录缓存边界（18.3）
+
+- 核实普通文件 stat 沿原导航 describe／Path.stat 实时读取，Provider 不缓存元数据或失败，不读取正文；原目录缓存仍由目录 key／revision、内存 LRU 和精确子树失效负责。stat／watcher 不推进原 SHA-256 保存基线，不新增 stat 缓存或 hash 预读。
+- 新增真实 Provider 请求链检查，HTTP 与路由为明确装具：404／403 后恢复重新 describe，A/B 同路径目标隔离；原 raw 建立基线后，外部更新再 stat，PUT 仍带读取时的原 revision。原 watcher 检查同时核同根引用、重连／overflow 与 B 独立连接；目录并发、失败、删除／迟到响应、局部收敛回归共 19 项／71 断言通过。
+- 旧根目录次数断言失败已按当前源代码归因：现有身份校验使用轻量 Workspace／roots API，不再拉目录正文。对照 Copilot 的工作区元数据职责后保持该单链路，改为核零额外根目录读取，并加强请求 route、写入 directory key 及原 revision 断言，不恢复冗余请求。失败及最后通过原件均保留。
+- 修改测试的真实 TypeScript 检查零诊断，ESM／差异检查通过；本批仅改验收，产品源码与先前 21 份转换类型检查、正式构建及真实 Gateway／Chromium 更新／删除／权限恢复／CAS 证据一致，复用而不重复构建。完整指纹、命令、原输出、边界和复用依据：`out/tests/temp/text_model_lifecycle_20261103/artifacts/metadata-verification.json`。18.10 的完整运行面验收仍未完成。
+
+### 2026-11-04：只读来源与更改模型共享、稳定身份及正常重载恢复（18.2、13.2 部分）
+
+- 更改前后侧和完整补丁统一进入原内容 Provider／TextModelResolverService，删除旧文件 Provider 的重复 stat／正文读取；相同变更集仅合并在途请求，不保存第二份历史正文。稳定投影仅含 Gateway／工作区／Session、changeset、edit 和阶段，原输入工厂一次迁移具备完整身份的旧引用；缺失身份明确报错。只读 serializer 仅保存来源／更改引用，正文和各组视图态仍由原服务负责。
+- 真实 Provider／resolver 的计数装具与原文件引用、查询转换共 17 项／181 条断言通过，覆盖并发共享、最后引用释放、失败重试、旧版本不改投、owner 隔离及创建／删除的空侧。装具只替换路由、HTTP 与底层文本存取，不替代真实页面证明。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 验收 1 passed／80.21 秒：两轮真实执行生成创建／修改历史，原会话资源打开 Diff，前后侧一次读取、分屏零新增读取、只读与原完整补丁、旧引用归一均通过；产品正常 Reload Window 后 Diff 与来源恢复，最后关闭再打开重新读取，pageErrors 为空。统一模型协议使用 model_stream，未预写历史、浏览器存储或 HTTP 响应。浏览器强制导航未保证原异步存储提交，保留失败原件，不据此承诺异常退出恢复。
+- 22 份实际转换源码的完整类型检查、Ruff、ESM、OpenSpec strict 及差异检查通过；首轮正式构建通过／38.82 秒，之后仅改测试定位／等待，每轮核产品及 main 指纹后复用，未重复构建。环境缺少 `uv run pyright` 命令，保留退出 2；本批未改 Python 产品源码。完整命令、源码与构建指纹、失败归因及原始结果：`out/tests/temp/change_documents_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c5e21a6912e0/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron 及其余历史／身份恢复尚未验收，18.2、13.2 保持未勾选。
+
+### 2026-11-04：原配置缓存保存与删除顺序（18.4 部分）
+
+- 真实 ConfigurationCache＋FileService 复现三种错误：首个目录准备延迟导致旧保存覆盖后发保存、保存后删除被迟到写入复活，以及目录失败却返回保存成功。参考仓库和固定上游的实现一致；唯一 sourceTransform 将目录准备与正文写入一起放入原条目队列，删除重复 helper，沿 FileService 原幂等递归建目录及失败传播，不建第二缓存或全局队列。
+- 真实 FolderConfiguration 经唯一文件投影验证非本地配置读取、更新、删除后空设置及另一 Gateway 同路径的独立 key／正文；type／key／cacheHome 隔离、失败重试和原转换／查询回归合计 15 项／162 断言通过。本地 workbench 设置仍沿原 needsCaching 排除。计数装具只延迟／拒绝目录准备，内存 Provider 不代替 IndexedDB 验收；消费者把缺失设置缓存为 `{}` 的既有合同保持。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 的元数据页面通过（1 passed／97.57 秒）：原设置编辑器连续三轮保存后直接刷新，正文及实际字体均恢复，受控关闭期间日志写入仍可提交，页面错误为空，无预写存储。该页面的模型回放未发生模型调用。23 份实际转换源码的完整类型检查、ESM、OpenSpec strict 和差异检查通过；同批正式构建通过／40.95 秒，复用 Web 的唯一构建管线。
+- 准确命令、源码与构建指纹、旧产品失败及测试归因：`out/tests/temp/configuration_cache_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/test_workspace_metadata_bootstrap/runs/run-b028fb3526ef/nodes/node-8954dc22de03/artifacts/workspace-metadata-browser.json`。本批未重跑 Vite 变体、打包 Electron、真实 profile 切换及全部配置诊断／关闭竞态，18.4 保持未勾选。
+
+
+### 2026-11-04：Linux 便携 Electron 只读模型正常退出恢复（18.2、13.2 部分）
+
+- 同一正式 ASAR 产物通过真实 Agent 的 write_file 建立创建历史，再从原会话资源打开 Diff；前后侧一次读取、分屏零新增读取、只读来源及 Diff 均通过。BrowserWindow 正常关闭、同 profile 重启后，两组中的来源／Diff 由原 serializer 和 Provider 恢复，目标变更集和来源各读取一次；独立 profile 没有对应 Tab、模型或读取。保留原聊天、README CAS 保存、草稿、历史先显后同步及图片200／304零正文验收。
+- 统一 model_stream 提供两次模型交互，后端原记录核验 Session／Thread／调用身份、stream、prompt 与 write_file 工具结果配对，实际文件正文及权威历史核验通过；关键历史未预写。真实 Linux 原生业务 1 passed／101.74 秒，pageErrors、存储与代理错误均为空，后端正常关闭。首轮将面板 changesets/all 请求误计入目标Diff，改为冻结 changesetPath 精确断言后通过；全部原件保留。
+- 正式矩阵成功构建并核归档 SHA256；只改测试计数后，重核打包器完整 sourceFingerprint 及归档摘要复用相同便携包，新 Gateway／Backend／profile／工作区及所有原生步骤重新执行。ESM、Ruff 通过；Python 类型的一条 raw object 索引诊断与 HEAD 基线相同，无新增。本批仅改测试，复用产品相同的23份转换源码类型检查和正式Web构建，未重复无变化构建。
+- 完整命令、源码／包指纹、复用装具原文、失败归因、原始输出和退出码：`out/tests/temp/native_readonly_20261104/artifacts/verification.json`；最终原生原件：`out/tests/integration/clients/electron/test_packaged_workbench/runs/run-f5cf036c07f6/nodes/node-95670caeaac1/artifacts/native-result.json`。Windows／macOS、异常退出及其余历史身份／版本场景未验证，18.2、13.2 保持未勾选；该证据不覆盖 Webview 缓存。
+
+
+### 2026-11-04：本地已超限的搜索停止远端读取并保留受限提示（16.19、16.20 部分）
+
+- 对照参考 VS Code 的 getOpenEditorResults／FileSearchManager，在取得本地超限哨兵后停止后续模型匹配和 Gateway 查询；释放模型监听，异步完成仍携带真实 limitHit。原 Search Editor 消费异步完成，旧链会漏掉本地受限提示，此次同时补齐。恰好达到上限继续按原覆盖集合探测远端，零配额无本地命中和文件名预热哨兵语义保持。
+- 服务／QueryBuilder 28 项、439 条断言通过：同模型或跨模型超限、零配额、精确上限有／无远端命中、模型监听释放、A/B隔离及取消均保留。旧产品失败原件留存，明确区分 Search Editor 的完成信息与单个 helper。
+- 真实 Gateway、A/B 托管后端、正式 Workbench 与 Chromium 1 passed／134.52 秒：原编辑器写入三条草稿而上限两条，A+B 查询零 HTTP 且显示受限；改为恰好两条后实际探测A/B、排除同草稿并确认完整无剩余命中。原代际取消、覆盖分页、停止C零查询、UTF-16与preview验证仍通过，pageErrors为空，磁盘未被保存。
+- 23份转换源码的完整类型检查、ESM、Ruff、OpenSpec strict和差异检查通过；正式Web构建退出0／60.37秒，复用唯一构建管线不重复打包。完整指纹、准确命令、失败及通过输出、退出码：`out/tests/temp/search_local_limit_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c9555bd8dbcc/nodes/node-f238fd176e30/artifacts/model-coverage.json`。本批未重跑Electron，不承诺固定耗时比例；16.19、16.20其余场景保持未勾选。
+
+
+### 2026-11-04：Trace 正文查询与原事件定位（9.6、9.7、9.8、16.18 部分）
+
+- 独立 trace/content Provider 复用原 TraceEventStore、JSONL 分页及 Job／Thread 归属；查询不建正文副本、索引或第二扫描器。catalog／Session 准入、受保护 worker 结算、扫描／字节／时间预算、原行位置和具名 400／409 错误贯穿公开协议及 Gateway。未匹配事件不计算正文 hash、不查 Thread；候选按窗口批量查询归属，命中行完整版本只计算一次。
+- 原事件页改为持有完整行记录，既有 events 消费从同一记录派生；补正窗口恰好从完整行开头开始时错误丢弃该行的问题。Trace owner 及 Provider 78 项通过（18.65 秒），相关搜索服务和 API 72 项通过（9.27 秒，有重叠不相加）。覆盖恰好 512 KiB、字节／条目上限、跨 Session、真实 Thread、Unicode、取消等待、同长度保留 mtime 中部修改及 HTTP request_id／机器原因。
+- 正式 Gateway／Workbench／Chromium 通过真实消息、fork 和 child 执行生成事件；未选类别零正文查询、未打开 child 两处长正文命中、同 Pane 新位置、实际 mark 可见、追加后旧行读取、旧引用拒绝及零全量 Trace 请求均通过。正式 Python 搜索 SDK 核原 owner 的旧 cursor 409、原原因、零页和保留输入续点。联合消息／工具正文回归 2 passed／263.18 秒，pageErrors=[]；驱动清理收尾后的 Trace 定向再次通过（122.47 秒）。请求日志场景在本轮首批通过。名称与文件原有独立请求的测试现分别核冻结 owner、类别、文件根和续查描述，不再错误要求单请求。
+- 真实 Workbench 类型检查（23 份转换源码）、正式 Web 构建、协议生成一致性／Buf breaking、Ruff、ESM 语法和 OpenSpec strict 通过。Pyright 在原 sessions／container 保留 7 条既存诊断，基线同文，没有新增；不称全仓类型零诊断。正式构建44.99秒、退出0，main SHA256=b38a18307ac32a1af79d831abe6d01260553c12c16ba0b1fe60faa9b6827f013。
+- 初轮预算推进／空 owner 查询失败已修复，原件保留；浏览器初轮旧名称计数断言与新驱动误用 cleanup 的失败保留，新驱动使用原 close 并分别保存执行、诊断和清理错误。准确命令、指纹、退出码及正式产物见 out/tests/temp/trace_search_20261104/artifacts/verification.json。仅删除两份已记录指纹的临时基线源文件，正式产物与原始日志保留。本切片没有验证 Electron 或 Windows；工作区／Gateway 运行日志仍未实现，9.6 及相关整项不勾选。
+
+
+### 2026-11-04：quickNavigate 只导航原历史（7.4 部分）
+
+- 对照固定上游 AnythingQuickAccessProvider.doGetPicks 的 quickNavigate 分支，将项目 Provider 的历史返回提前到补充项、模式帮助及文件符号之前。保留已选 owner 过滤、同目标去重、历史顺序、原 fuzzy／filter 及原接受逻辑，不建另一套历史或查询器。
+- 新浏览器合同装具先复现旧实现混入 addition／help／separator，再验证仅所选工作区的文件和 Thread、排除外部 owner／重复／隐藏项、零网络查询和原组接受。20 项检查／171 条断言通过（16.97 秒），原 URI／行列、delegate、身份取消、名称／正文续页、原调用接收者及帮助转接断言保持。前两次失败分别为装具漏传文件根和缺少 keybinding 服务方法，原始输出保留，不算产品缺陷。
+- 正式 Gateway／双托管 Backend／Workbench／Chromium 的原搜索组合验收通过（231.37 秒）：通过真实打开入口建立 B 的两个最近文件，再调用原 workbench.action.openPreviousEditorFromHistory，核 MRU 顺序、仅 B、原版第二项激活及真实 Enter 后 B 正文可见，全程零搜索请求。原跨范围、dirty 模型、SearchView／Search Editor、watcher、保存／恢复和停止目标断言均保持，pageErrors=[]。出站延迟故障点仍是原显式 Integration 装具，不将其称为原生服务故障。
+- 23 份转换源码的真实 Workbench 类型、正式 Web 构建、Python 定向类型、Ruff、ESM 语法及差异检查通过；共享构建44.93秒、退出0，main SHA256=0d89bf1181724e717a10196f9203065036e7bbdb988ef76ea88cc2fefa3e4ab7。命令、源码指纹、失败与通过输出、实际退出码及正式产物见 out/tests/temp/quick_navigate_20261104/artifacts/verification.json。本批未改变公开协议或后端产品，不重复生成／后端全套测试；未验证 Electron／Windows。文件符号等其余范围仍未闭环，7.4 保持未勾选。
+
+
+### 2026-11-04：文件符号往返与原文本定位前缀（7.4、10.2）
+
+- 对照固定上游及 reference_repo/vscode 的 lastGlobalPicks／文件符号入口，保存原候选和活动文件；无匹配符号不覆盖来源，退出符号恢复原第二项。名称查询按规范化查询拥有单一生命周期，追加行列／文件符号复用原请求及仍可用的分支操作；新名称、身份失效和浮层关闭取消原读取。迟到名称页只更新隐藏的原列表，不覆盖符号候选。删除重复 AbortController，预览装饰沿实际编辑器释放；不新增搜索缓存服务或持久索引。
+- 正式 Workbench、真实 Gateway／双托管后端与 Chromium 组合验收 1 passed／277.57 秒，pageErrors=[]。原 JSON 语言服务验证未打开文件的符号、无匹配后返回原第二项、忙碌时追加行列及符号往返零额外名称请求、真实 Enter 后 3:3、Esc 恢复原编辑器／光标和脏内容；慢 Thread 响应只由原出站装具延迟，释放后真实空结果继续更新，不将它表述为服务故障。原 `:`、`::`、`@`、`@:` 分别验证行列、字符偏移、实际 JSON 符号及分类预览取消，无领域搜索请求；既有跨范围、dirty model、SearchView／Search Editor、watcher、保存／恢复和停止目标断言保持。
+- 21 项调用合同／184 条断言、23 份实际转换源码的完整类型检查、Ruff、Python 定向类型及 ESM 语法通过。共享正式构建 53.71 秒、退出 0，main SHA256=193d38fc0a54e73a8f7850a1d255d6be514433726e5c62eec68a493639957289，复用 Web 的唯一构建管线。此前 URI／行列、delegate／filesOnly、filter／additionPicks、handleAccept、行内按钮、前缀限制及 quickNavigate 的已有证据与本次回归共同覆盖 7.4；`#`／includeSymbols 的明确未启用边界沿 5.5 证据保持。
+- 初轮脏文件清理超时、无效清理命令、两次类型诊断及过强的 Tab 删除预期均保留原件并分别归因。原 PickerEditorState 仅关闭仍为 transient 的输入；验收核原位置／焦点及草稿，不擅自强关已保留 Tab。清理改用实际已登记的 revertAndCloseActiveEditor，并同时保留原场景和清理错误。未验证 Electron／Windows；Thread Outline 仍由 10.1 跟踪，不借文本符号证据勾选。
+- 完整源码／构建指纹、准确命令、原始输出和退出码：out/tests/temp/file_symbols_20261104/artifacts/verification.json；最终页面原件：out/tests/integration/clients/web/quick_access/test_text_search/runs/run-42c01e1a3add/nodes/node-f4e408bf0b21/artifacts/search-result.json。
+
+
+### 2026-11-04：Thread 原非文本大纲与组内预览（10.1）
+
+- ThreadPane 注册原 Outline creator，`@` 继续使用原非文本 Provider 的过滤、预览与接受；只沿 canonical history owner 分页获取用户标题和 metadata。每页 20 轮，明确已覆盖／未加载、更早页读取与失败重读，不创建符号索引或第二历史缓存。原 Provider 通过唯一 sourceTransform 消费大纲更新，前插保持活动身份，续页动作保留浮层与查询；固定上游字节不变。
+- 临时预览与取消恢复复用原 around／Virtuoso 挂载及锚点调度，只操作发起编辑器组；预览不保存浏览器视图，取消会中止缺页读取并废弃迟到定位，接受才提交原持久展示态。空历史没有虚假滚动位置，错误保留原详细原因。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 已通过产品执行及 fork 创建 23 轮 child 历史：空 Thread、main／child 隔离、20→23 轮明确分页、非法真实 cursor 后重读、未挂载轮次接受、两组隔离、真实滚轮位置恢复及预览零持久写入均通过，pageErrors=[]。仅错误续点场景改写请求的 cursor，由真实后端拒绝；没有替换响应、预写历史或浏览器状态。联合运行的大纲项通过，新增编辑器导航项另有测试驱动失败，未把联合退出 1 表述为全绿。
+- 60 项定向检查／466 条断言、25 份实际转换源码的真实 Workbench 类型检查、Ruff、显式项目解释器的 Pyright、ESM 与 OpenSpec strict 通过。正式构建退出 0／45.59 秒，main SHA256=93cf51d53051731437a1753e58ee9eb8d3edfc44b70dc5da85f0c2c9702dc32f；只改测试后核源码早于构建及全文指纹，复用同一构建。准确命令、指纹、原始失败与退出码：out/tests/temp/thread_outline_20261104/artifacts/verification.json；页面原件：out/tests/integration/clients/web/quick_access/test_thread_outline/runs/run-c114735ae099/nodes/node-8268691f3631/artifacts/thread-outline.json。
+- TODO：长历史产品执行准备仍有增长成本，24 次执行实测 8.29～18.83 秒；保留测量与代码 TODO，后续独立量化，不以手工历史替产品生成关键状态。Electron／Windows 的大纲尚未验收，其余正文和管理任务保持原状态。
+
+
+### 2026-11-04：原编辑器与视图快速导航验收（10.3、10.4）
+
+- 复用真实执行生成的文件／更改和原 Thread，两组 Diff 经 `edt active `、`edt `、`edt mru ` 核对标签、组与活动顺序；真实输入产生 dirty，经原关闭按钮及不保存确认返回，关闭一个副本保留另一组，零搜索请求。文本 `@`／`@:` 在 Thread 后仍沿 JSON 符号服务定位，Esc 恢复原位置。
+- `view ` 通过原 Provider 聚焦已有会话导航及工作区终端、输出、自动化、端口、MCP 连接和 Browser，核对原底部面板位置及精确工作区归属。来源／Diff 刷新恢复、最后引用关闭后重读及磁盘正文不变断言保留；正式 Gateway／后端／Workbench／Chromium 1 passed／95.53 秒，pageErrors=[]。只改验收，不新增产品导航链路。
+- 复用相同产品指纹的25份实际转换源码类型检查及正式构建；测试驱动的命令返回序列化、自动保存、关闭结算／Esc焦点、hover及视图标签定位问题和瞬时端口占用均保留原件，未扩大产品交互期限或放宽原业务断言。进程外240秒／4GiB保护，外层360秒；最终Ruff、项目解释器Pyright、ESM、OpenSpec strict与差异检查见证据收据。
+- 完整命令、指纹、失败归因、原始输出与退出码：`out/tests/temp/thread_outline_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-37c04fd66a4e/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron／Windows导航尚未验收，不以本批勾选整体运行面验收。
+
+### 2026-11-04：父子搜索根按原 owner 分区（16.19 部分）
+
+- 父子根分别保留 QueryBuilder 的相对过滤和 ignore 配置；父分支通过 typed `excluded_subtree_uris` 在递归、规则及正文读取前剪去独立子树。分区集合按原 URI 归属校验并绑定原 cursor，变化明确拒绝；不新增扫描器、索引或搜索状态。相同根去重，冲突选项仍拒绝。
+- 打开模型、负命中覆盖、远端结果和上下文使用相同分区；子根排除的模型不能借父根条件重新出现，精确已打开文件不携带兄弟子树排除。21 项真实搜索服务检查及最终 67 项文件 owner 检查通过，涵盖同步／异步、三层根、顺序、跨 owner、子树无效 UTF-8 规则／正文零读取和续页。
+- 正式 Workbench／真实 Gateway、A/B 后端及 Chromium 1 passed／99.86 秒；真实原 Search Editor 的 QueryBuilder 生成父 TXT／子 Markdown 分支，只有正确 dirty 模型和父磁盘命中，仅已打开搜索零后端请求。原 A/B 小配额续页、覆盖集改变使旧 cursor 拒绝、磁盘未保存及 request_id 分发回归保持，pageErrors=[]。原件：`out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-f3c40b4f1bc7/`。
+- 真实 Workbench 类型检查（25 份实际转换源码）、本轮正式共享构建、Ruff、生成一致性、Buf breaking、OpenSpec strict 与差异检查通过。核心 Pyright 的 9 条诊断与 HEAD 原文逐条相同，schema 零诊断；初次检查误将 Git SHA 当 Buf 输入路径、误用未安装的 uv run pyright，均保留失败原件，改用正确 Git 输入及已有 uvx 工具后完成。
+- 命令、源码指纹、原始结果与退出码见 `out/tests/temp/quick_access_nested_roots_20261104/artifacts/verification.json`，前序静态／服务检查原件在 `out/tests/temp/overlapping_roots_20261104/artifacts/`。Windows canonical 和其余选项仍未齐，16.19 保持未勾选；不以 Web 结果替代 Electron 或 Windows 验收。
+
+
+### 2026-11-04：发布包压缩分块与真实静态升级（18.7 部分）
+
+- 对照参考 VS Code 的正式构建压缩／分块做法，唯一 esbuild 管线启用 minify 和 ESM splitting；实际生成的 hash 分块进入原 immutable 清单，main／Worker 仍沿原 URL 再验证。主包由 59,465,598 B 降至 20,528,325 B，另有 146 个 JS 分块共 8,825,941 B；原 editor Worker 由 673,959 B 降至 330,507 B。不新增缓存服务、原生 bootstrap 或另一套构建，Electron 仍递归打包同一 renderer。
+- 正式 Workbench 副本、真实 Gateway／Backend 及 Chromium 持久 profile 验收 1 passed／79.91 秒：原主入口实际加载的代表分块冷读 3,570,584 B、热读零正文；main 与真实 editor Worker 热读304，改变副本后实际执行新版 main／Worker，删除 Worker 后真实失败／404，初始化三接口及 request_id 正确，pageErrors=[]。旧临时 context 与本轮持久 profile 不同，不将缓存命中变化仅归因于压缩，也不承诺整链性能比例。
+- Linux 正式便携包经摘要校验、解压及真实 ASAR 窗口验收 1 passed／182.92 秒，聊天／工具配对、文件 CAS 保存、图片304、只读 Diff 共享、正常退出重启及独立 profile 隔离保持；pageErrors、storageErrors、proxyErrors 均为空，后端正常关闭。浏览器完整聊天独立回归 1 passed／163.06 秒。原归档 SHA256=d850ee8a8a7da2fe04f8e81c878bdbf2154c9f4915ff65e5beb8c18a7ea6aa36。
+- 修复两处实际测试装配故障：Electron 在打包前沿原 E2EProcessLease 预留整组端口；Vite 直接启动产品 dev 命令指定的 Node 入口，使原 PID 探针观察实际 listener。原期限与所有业务断言保持，失败原件保留。Vite 源码页真实 Gateway 初始化、未注册目录编辑、设置保存／刷新及日志存储回归 1 passed／199.87 秒，未发生模型调用。
+- Ruff、ESM、OpenSpec strict、差异检查通过；新增静态测试和 Vite 装具 Pyright 零诊断，Electron 原有1条 raw object 索引诊断与 HEAD 基线一致。未改 TypeScript 或 sourceTransform 输入，复用同源码25份实际转换源码类型证明；本批正式构建及原生打包均实际完成。准确命令、源码／产物指纹、原始输出及退出码：`out/tests/temp/static_upgrade_20261104/artifacts/verification.json`。正式 Web 原件位于 `out/tests/integration/clients/web/quick_access/test_static_upgrade/runs/run-47251a73e3e1/`，原生原件位于 `out/tests/integration/clients/electron/test_packaged_workbench/runs/run-c8237bfdf925/`。HMR 源码变更、固定 v6 Webview 隔离宿主、Windows／macOS 及引擎内部代码缓存收益未验，18.7 保持未勾选。
+
+
+### 2026-11-04：规范工具结果沿原 Opener 打开（2.2、2.4、2.5 部分）
+
+- 原 Opener 按 Session／文件目标与单文件来源的实际能力分派，移除 agent-spec／skills 类型白名单；工具结果、文本附件等来源交同一只读 resolver 和导航 owner 核验，不复制 URI grammar、路由解析或正文。先取得原模型引用，失败不建空分屏，完成／失败沿原引用释放。
+- 来源与 Opener 15 项／140 条断言、25 份实际转换源码的真实 Workbench 类型检查、规定 Web 构建、Ruff、MJS 语法及严格规范校验通过。集成时生产指纹与构建一致，复用相同产物。正式 Gateway／后端／Workbench／Chromium 1 passed／72.47 秒：真实执行生成规范工具结果，核完整中段、只读、三组共享、正常刷新恢复和最后引用关闭后冷读；无普通文件读取、无额外执行，pageErrors=[]。
+- 集合能力负例通过原 `_workbench.open` 命令调用相同 Opener，核真实 403、领域 owner／原因、组不变与零回退。前序 Quick Input 鼠标接受未产生 parse 请求的失败原件保留，未归因或宣称修复，不以命令证据替代该交互。原更改导航 hover 超时未改动。Electron、媒体、配置和完整 Diff URI 场景尚未验证，2.2／2.4／2.5 整项不勾选。
+- 准确命令、源码指纹、构建及全部原始退出码见 `out/tests/temp/quick_access_sol_20261104/artifacts/verification.json`；正式页面原件位于 `out/tests/integration/clients/web/quick_access/test_resource_opener_sources/runs/run-bbec73388455/`。
+
+
+### 2026-11-04：Search Provider 整批关闭结算（16.3／16.20 部分）
+
+- 工作区服务先关闭全部准入，再等待所有原 registration 完成安全结算；任一 release 失败不使服务提前返回。保留单一关闭任务和原错误实例，多错聚合；调用方取消等待清理后继续传播，释放失败保留为原因链，不重复 release、不切换 Provider 或发布迟到结果。
+- 修改前判别反例 1 failed；相关搜索目录 62 passed，补充直接 registration 取消场景后服务模块 27 passed，Ruff 与项目 Python 3.12 Pyright 零诊断。原始输出、准确命令及最终源码指纹：`out/tests/temp/search_provider_close_sol_20261104/artifacts/verification.json`。本切片未运行真实 HTTP、Web 或 Electron，不替代本组完整生命周期与流式验收，16.3／16.20 保持未勾选。
+
+### 2026-11-05：运行日志正文查询与原行定位（9.6）
+
+- 原 diagnostics owner 从受管进程发现来源，按真实文件合并共享 Backend 并披露关联工作区；Gateway 自有来源单独选择。新增有界行查询和精确原行读取，不读工作区业务目录，不建日志正文副本、索引或另一队列。`runtime_log/content` 用明确 diagnostics 分支接入原 SearchJob 和同一 Python／Web 联邦客户端，保留冻结范围、原管理鉴权、期限、配额、取消结算及唯一终态。
+- 原行引用采用文件身份、字节区间、完整目标行版本及 Unicode 码点位置；精确读取只核目标区间和边界。追加使旧查询续点失效，但未改完整行继续定位；轮转、删除及原行改写明确拒绝，不回读 tail。具名诊断视图临时显示原行，不发布为普通文件或聊天引用。
+- 后端定向186项、前端31项通过；包含共享文件单次读取、独立来源、范围越界、零配额、分页、原鉴权、远端错误／总期限／取消和引用释放。正式 Gateway＋受管 Backend＋Workbench＋Chromium 验收1 passed／117.45秒、退出0，原件 `out/tests/integration/clients/web/quick_access/test_runtime_log_content/runs/run-85556df0c000/nodes/node-e85125f74669/artifacts/`；关键日志由真实文件失败和原 DTO 拒绝产生，核A/B进程隔离、同Pane另一处emoji、追加后精确定位、旧版本拒绝及零整批诊断读取，5份搜索收据，页面错误为空。共享Backend由真实owner单测覆盖，此页面的A/B是独立进程；联邦传输／故障为显式替身，未声称真实跨机或Windows通过。
+- 真实Workbench类型检查44份转换源码、正式Web构建、protocol生成一致性／Buf breaking及OpenAPI校验退出0；最终产品Python Ruff／Pyright零诊断。完整Web类型与原基线28／28诊断一致，无新增。命令、源码指纹、原输出、失败归因和退出码保留在 `out/tests/temp/quick_access_logs_20261105/artifacts/` 的 `final-backend-12.json`、`final-browser-tests-13.json`、`runtime-browser-diagnostic-14.json`、`final-ruff-15.json`、`final-pyright-15.json`、`final-web-types-15.json`、`web-types-comparison-12.json`、`workbench-typecheck-08.json`、`web-build-11.json`、`protocol-check-09.json` 和 `openapi-check-09.json`；根复核当前owned源码与相应回执一致，复用成功构建。早期错误装具假定共享进程、注册后未刷新列表及QuickInput切换观察的失败保留，不以放宽业务断言处理。
+- 仅关闭9.6；9.1、9.7、9.8及第15／16组的完整组合验收继续按原任务推进，不以本切片替代Electron、Windows或其它领域动作。
+
+
+### 2026-11-05：搜索取消保留原结算错误原因（16.3／16.20 部分）
+
+- 原查询取消后等待同一个 owner 安全退出；读取期间出现的 OSError、SQLite 错误或 RuntimeError 不再替换最初取消。Provider 仍有效时保留首次 CancelledError 及参数，期间注销仍按原 provider_unavailable 出口，读取失败保留为 cause；不发布迟到命中、不重复释放。
+- 六个判别场景在原实现全部失败；隔离搜索目录 70 passed／13.80 秒，精确合入共享树后 70 passed／11.55 秒，Ruff 与 Python 3.12 Pyright 零诊断。完整输入、命令、源码指纹、原始输出和退出码：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/verification-001.json`；根集成收据：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/root-integration-002.json`。本片未改前端或协议，不重复构建；真实 Gateway 关闭、同类别版本交接和其它流式验收仍未闭合，16.3／16.20 保持未勾选。
+
+### 2026-11-05：真实 Provider 注销及版本交接（16.3／16.20 部分）
+
+- 独立 Gateway 与 A/B Backend 经产品消息入口及 model_stream 生成 canonical 历史。A 原准入 worker 仍持 Session 读锁时注销立即拒绝新准入；原查询安全结算后才释放 registration，不发布迟到 A 页，B 持续可查。原版本释放前 v2 注册冲突，释放后旧 v1 在扫描前拒绝，v2 沿同一原查询执行；服务关闭与各 release 均核唯一终态。
+- 真实网络 1 passed／67.38 秒；共享树 Ruff 和 Python 3.12 Pyright 通过。完整快照、输入指纹、准确命令、原始输出与 wire 原件见 `out/tests/temp/2026/11/05/search_provider_lifecycle_next/artifacts/verification-001.json`。本片仅新增测试组合与用例，不改生产接口、前端或协议，不重复 Web 构建。
+- Provider 分层复用及缺口见同目录 `provider-evidence-001.json`：当前 ResourceNavigation 与最后直接产品指纹已变化，较新双后端收据未记录完整脏生产输入；当前 Trace owner 以精确指纹存储入口单测承接，未再次运行 HTTP／Web。16.3 及其余缓存／流式验收保持未勾，不将本片覆盖扩大到所有 Provider 或 16.20。
+
+### 2026-11-05：当前 ResourceNavigation 真实 HTTP 证据补齐（16.3 局部）
+
+- 完整隔离快照含当前 ResourceNavigation 及原调用方，5514 个输入文件运行前后指纹完全相同；原 `test_federated_search.py` 经独立 Gateway／双 Backend 完成30次真实搜索 SSE，115条原断言不变，`1 passed / 50.00s / exit 0`，Ruff／Python 3.12 Pyright 通过。六服务统一复用既有有界端口租约，仅修正装具准入；成功轮次首选端口均空闲，不声称实测跳过占用分支。
+- 收据：`out/tests/temp/2026/11/05/search_provider_current_http/artifacts/verification-004.json`（SHA256 `195baaa931ed2bf5676fc6d2e63268b96fed37f7e6ddc2e1dde56c0dc97d75cd`）。隔离快照后共享树四个文件仅将 SQL 资源路径改为 `migrations/`，归一该前缀后完整 AST 相同、32份原 SQL 字节相同；本项可分层复用查询／分页／正文／错误语义，不宣称尚未落位的新资源初始化或离线v10迁移通过。缺凭据快照及端口占用的前置失败原件保留，未进入搜索验收；临时凭据副本已删除、关联进程为零。Trace 当前 HTTP／Web 与其余生命周期、流式组合仍未齐，16.3／16.20保持原状态。
+
+
+### 2026-11-05：页预算与原续点闭包（16.17）
+
+- 原文件 owner 的两处 cursor binding 区分查询身份与本页 `limit/max_response_bytes`；双根配额2/1后继续单根，可重新分配而不误拒原cursor。查询、scope、匹配／覆盖、扫描／读取／期限及文件观察／区间校验保留，未增加兼容链或扫描器。升级前旧binding的cursor需重新查询，保留明确invalid_cursor。
+- 当前共享树248项定向、4项HTTP准入／状态字节／零配额边界通过；隔离真实Gateway的11次请求验证name/content双根→单根、零配额不推进及最终无漏无重，当前客户端21项验证重复根／有界0哨兵／exists。完整计量、公平准入及精确上限／多一条按源码指纹逐项复核，16.17闭环。Ruff与strict通过，生产9条Pyright诊断与完整HEAD基线相同，无新增；未改前端／DTO，不重复构建。
+- 原始命令、源码指纹、首轮错误检查路径退出4及修正后通过、独立类型基线、真实HTTP结果与适用边界见 `out/tests/temp/2026/11/05/search_budget_completion/artifacts/verification-005.json` 及 `root-integration-006.json`；不以本项替代未完成的共享SQL整理、其它第16组或Electron验收。
+
+### 2026-11-05：请求日志与 Trace 失效游标重新查询（16.18 部分）
+
+- 原 Gateway 错误出口将四个既有 invalid／stale 请求日志和 Trace 游标代码标为可重新查询；保留原 owner、code、reason、HTTP状态、输入cursor及零交付计数。原客户端继续查询携原cursor，失败重新查询只选原分支并省略已拒绝cursor，不新增解析器、DTO或分类链。
+- 43项传输、40项原owner／API、55项调度／输出／Service及26项真实Chromium组件合同通过；共享树43项补验、Ruff和ESM检查通过。组件核scope／类别／查询保持与命令URI／HTML只作文字；SSE和宿主边界为显式装具。真实Trace经执行／fork／Gateway页面定位及SDK失效cursor检查1项通过。正式构建通过；49宿主类型检查保留完整归档基线两错，Python测试旧32条诊断与基线相同，未宣称全绿。
+- 真实请求日志停在原Quick Input整体隐藏后的焦点断言，新retryable断言尚未到达；未放宽焦点或业务断言，正独立取证。16.18整项保持未勾。完整原件 `out/tests/temp/2026/11/05/search_error_contract/artifacts/verification-008.json`；根集成与精确归属 `root-integration-009.json`（SHA256 `9e1dc2350daf53c070a0bd379df882391459c7d730e7fd0eef986d33de823288`）。
+
+### 2026-11-05：原面板恢复焦点与编辑器导航回归（14.2 部分）
+
+- 同步失焦调用栈确认：保存为closed的面板先由原服务恢复标签，再隐藏时原Layout无条件聚焦编辑器，Quick Input随后因失焦关闭。唯一sourceTransform在隐藏／取消最大化前捕获面板焦点，仅交回面板自身的焦点；不改固定上游、不添加焦点补偿或第二状态。原标签／尺寸、路由代际和显式MCP深链接保持。
+- 原完整更改／来源浏览器场景通过，真实dirty关闭按钮、不保存确认、两组Diff／MRU、关闭一个副本、文本符号及六类工作区视图均通过；MCP测试迁到原生列表的明确空状态，同时核实际Gateway／工作区头。16项定向检查覆盖面板、外部Quick Input、面板自身最大化、iOS和右侧区域最大化；完整类型与正式Web构建通过。
+- 命令、原始失焦栈、源码指纹和产品证据见 `out/tests/temp/2026/11/05/model_sharing/artifacts/verification-004.json`。同批独立语言测试失败已分开记录，不宣称整批全绿；14.2其余IME、失焦设置等场景保持待验收。缓存模型完整证据归独立变更18.2，不在此重复勾选。
+
+### 2026-11-05：Thread 文件多选一次追加原草稿（12.1／12.5 部分）
+
+- 原 Quick Access 的显式 pick 复用原 QuickPick 多选；勾选后 Esc 返回空集合并取消 reader，show 与原单选保持原行为。文件候选可选、状态行不可选，同查询续页按资源身份保留勾选，身份失效清空选择。全部来源通过唯一 URI owner 解析后才调用一次已捕获的原 Composer writer，任一不支持或解析失败均零追加。
+- 共享根47项 Chromium 合同／506条断言、51份实际转换源码的完整类型检查、Ruff／Python 3.12 Pyright及MJS语法通过。正式Workbench构建与真实Gateway／双工作区页面1 passed／97.98秒（外层100.86秒），核勾选后取消、第二项真实grammar拒绝、延迟第二项且切换焦点、零新Tab／正文读取／执行及刷新后草稿恢复；运行期间源码指纹不变。
+- 首轮页面150秒超时原件保留：复选框焦点的Enter由原Toggle用于切换勾选并停止传播，驱动改为原输入框确认且等待选择器关闭，原断言和期限不变；补充阶段原始输出。精确补丁、前后指纹、失败与通过命令及收据见 `out/tests/temp/2026/11/05/content_selection_audit/artifacts/multi-reference-verification-041.json`。固定版本、二级返回及Electron未由本片证明，12.1／12.4／12.5继续未勾选。
+
+### 2026-11-05：工作区 Provider 注册与注销证据闭环（16.3）
+
+- 核对容器注册、服务关闭及原catalog／Thread／workspace history消费者，均复用唯一SearchService与领域owner；能力／版本／选项、原分页及位置不另建实现。70项服务检查及真实A/B Backend／Gateway的注销和版本交接，按当前生产源码精确指纹复用：关闭准入、安全结算后释放、禁止迟到页及版本切换前冲突均已证明。
+- 当前名称HTTP、页预算、消息／工具和请求／Trace产品页面分别与对应owner逐文件SHA一致；补齐早前缺少的当前Trace页面证据。原四页组合仍记1失败3通过，消息页随后独立通过，不改写旧失败。完整匹配及原始收据索引见 `out/tests/temp/2026/11/05/provider_registration_closure/artifacts/verification-001.json`；未变化的检查不重复运行。本项关闭，第16.20组缓存、预热及流式组合继续未勾选。
+
+### 2026-11-05：命中定位取消、迟到响应与原记录删除（9.7）
+
+- 请求日志／Trace新增11项真实hook合同；同原虚拟滚动及history reader在共享树共63项／305条断言通过，覆盖缺页、异步挂载、owner切换、取消、迟到成功／失败与原错误保留。消息／工具的目标组、侧边打开、未打开child、长原文和真实滚动复用既有正式页面证据；不新增定位器、正文缓存或生产防御分支。
+- 正式Gateway／Workbench请求日志与Trace页面2 passed／155.20秒，运行前后全部源码指纹稳定；产品执行生成历史，真实搜索后暂时移走命中的原文件，再点击旧候选，核真实409、精确owner／原因／request_id、旧高亮清除，以及零自动重搜／全量读取。还原同一原件后，原目录变更／追加游标断言继续通过。正式构建39.94秒通过，两页面pageErrors均为空。
+- Ruff／Python 3.12 Pyright及MJS语法通过；新增测试已进入原web配置的真实tsc程序，零新增诊断，全量仍保留28条原错误。类型检查后的唯一测试源码差异是404／Not Found改为真实409／Conflict，受保护短测已补验。首轮两个删除页面均通过，但Trace下游原file_changed断言被删除注入影响，整批1失败1通过；修正为定位后恢复原件，未放宽原断言，失败原件保留。准确命令、指纹及证据索引见 `out/tests/temp/2026/11/05/content_selection_audit/artifacts/record-navigation-root-verification-058.json`。本片关闭9.7；9.8完整矩阵、Electron与第16组其它验收继续单独核对。
+
+### 2026-11-05：各类正文位置验收矩阵收口（9.8）
+
+- 文件正式页面已证明前缀emoji与裁短预览仍打开真实选区：UTF-16源列1204、状态栏码点列1203，实际复制为preview-target，零额外正文读取；当前原textMatch投影与已验实现一致，正文位置owner与原`%`Provider精确指纹不变，另补当前21项／327条Provider合同。消息／工具页面覆盖未打开child、超过64KiB的原文／结果、截断片段、多行与emoji、真实侧边组和滚动；双日志页面保留原来源、原行、追加及未选零查询证据。
+- 请求／Trace实际删除复用本轮两页；工具通过当前真实ASGI入口再验同长度改写及原件删除后的409，1 passed／19.51秒，保留既有依赖弃用警告。消息的view版本失效补当前同步／异步图替换、rewind及冷reader检查，3 passed／4.08秒；不手删canonical文件造另一条产品历史链。运行日志轮转／删除复用186项成功收据，相关owner及删除用例与当前精确指纹一致。
+- 原文件页面来自已接受产物，当前并非整树与旧构建一致；根局部选项／v2归属等后续改动由当前Provider合同及其它既有范围验收承接。仅收口本项，无生产修改、不重复完整页面或构建；精确原件、源码适用范围、命令及退出码见 `out/tests/temp/2026/11/05/content_selection_audit/artifacts/content-position-matrix-verification-060.json`。本项不替代Electron及第15／16组的完整验收。
+
+### 2026-11-06：目标 owner canonical 与原编辑器冷恢复（16.19 部分）
+
+- 2026-11-06 原生补验：将原 Web canonical 场景抽成同一业务驱动，由各运行面显式传递 TestRunContext；77 个原业务断言未放宽。当前源码打包的 Linux Electron／真实 ASAR 1 passed／144.59 秒，三次正常关窗退出码均为0，两次同 profile／同 origin 重启后 dirty、backup、sticky、光标及 SHA CAS 409 均通过，pageErrors 与 IndexedDB 关闭错误为空。12条原版 shutdown joiner 与3条预期409诊断保留，不宣称 console 零错误。共享驱动抽取后原 Web 直接入口另补 1 passed／94.39 秒；两项均有进程外超时及4GiB保护。Node语法、Ruff和Pyright通过。准确命令、四文件SHA、正式产物和原包摘要见 `out/tests/temp/2026/11/06/electron_canonical_page/artifacts/electron-canonical-final-006.result.json`。未验证 Windows／macOS Electron、崩溃恢复或抽取后的 Windows Web；本子项不替代16.19其余组合，整项仍未勾选。
+
+- 文件引用与导航沿目标文件 owner 逐段取得真实大小写，保留 logical symlink 入口；新 canonical_uri 表达 owner 内规范 URI，原 uri 继续承担请求回执与跨 Gateway 引用。编辑器准入、直接 resolver、搜索 dirty overlay 和冷恢复共用规范身份，不增加逐文件 HTTP 或第二身份表。
+- 冷恢复复用原 WorkingCopyBackup、Pane／Memento 与已有 Provider SHA 保存基线：先写规范备份再移除旧键，目标备份冲突保留双方；不以当前磁盘重建草稿基线。Linux 正式 Workbench／真实 Gateway 页面通过，验证多入口同模型、owner／逻辑链接隔离、刷新后草稿／sticky／光标保留、保存200及外改后原SHA冲突409，pageErrors为空。
+- 后端 owner／导航／URI 合同268项、Provider53项／988断言、实际转换57份源码类型检查及协议生成一致性通过。Windows owner真实HTTP／大小写敏感目录等4项通过，正式构建79个扩展成功；Windows页面尚在Gateway启动阶段因既有受管PID与真实Backend PID不同而拒绝，未执行交互。391项公开合同通过，4项既有MCP roots／Skill descriptor fixture失败保留原件。完整命令、源码指纹和原始收据见 `out/tests/temp/2026/11/06/file_canonical_identity/artifacts/canonical-manifest.json`。Windows页面、Electron及16.19整项继续未完成。
+
+
+### 2026-11-08：明确范围符号搜索保留部分成功并披露原失败（10.2 局部）
+
+- 沿原 getWorkspaceSymbols 的可选错误回调向同次 `#` Picker 交原 Provider／原错误；成功结果继续原聚合、去重、排序与接受，失败行取固定宿主的 Gateway／Backend。业务入口改为 await 捕获原异步转换拒绝，取消后不发布迟到候选或失败。不改原无范围窗口查询、Anything 或公开符号命令的宽容语义，不复制聚合器或引入符号索引。
+- 独立原 owner 组件7项／64断言、原符号隔离回归7项／91断言通过；实际Browser181份／Node190份转换源码类型、Ruff／Pyright通过。正式79扩展Workbench构建与真实双Gateway／Backend页面1 passed／125.85秒：由产品入口激活真实Web／Node扩展，原`#`面板同时展示Web成功符号与Node受控失败，原目标身份及原因可见；安装、配置、冷恢复、Notebook明确拒绝和原生文件读取断言保持，pageErrors为零。原console／网络错误分类保留，不称控制台无错。
+- 原组件的认证、控件及扩展回调为具名边界；真实页面SSH仍为既有loopback装具，未验Windows／真实SSH／Electron。符号分支增量发布、单分支明确重试和默认列表includeSymbols仍为TODO；本片不扩大既有任务完成范围。独立审查无阻断，owned进程与六端口均回收；准确命令、指纹、原始输出、构建与适用边界见 `out/tests/temp/2026/11/08/workspace_symbol_failures/artifacts/verification-v1.json`。
+
+### 2026-11-08：上下文续点的原 owner 诊断（16.18 部分）
+
+- 原上下文 codec、读取分页器和搜索 owner 统一返回 `session_context_cursor/invalid_context_cursor`，区分格式、归属、查询选择、非法位置和实际越界；拒绝布尔位置与末尾非零字符偏移，合法末尾空页及 revision 的原409保持。直接HTTP和统一搜索返回400，联邦分支保留原原因、request_id、输入cursor、零交付及不可重试；精确relay保留原409外壳，读取／搜索客户端和内置上下文工具复原结构化诊断。不新增分页链路或自动重查。
+- 406项定向与112项相关单测通过，覆盖三个HTTP入口、布尔／负数／小数／字符偏移、原请求身份漂移、relay detail与工具错误。Ruff、OpenSpec strict及差异检查通过；16份Python文件的96条类型诊断与完整HEAD归档基线逐项相同，无新增，不称全仓类型零诊断。
+- 当前共享树的真实集成在装具阶段被637个测试文件超过636个端口块容量拦住，未修改他人负责的测试基础设施。以完整HEAD＋本切片全部生产／测试改动生成隔离Git tree `2c5e84488ed8389959f094602c3a197e7fae1a13`，归档SHA256 `2613164deba1b5984baf9b30b27db7a4afee965aa7e0e3771605d2057d00d252`；持有原仓库独占锁、外层超时与内存保护，真实Gateway／Backend／统一model_stream产品验收1 passed／79.96秒（外层85.48秒）。核七类拒绝的直接HTTP、联邦SSE和inventory JSON、精确读取／搜索异常、七次真实模型请求及重启续页；此证据不代替当前全部共享改动的联合验收。
+- 首轮隔离测试将联邦完整URI游标错投原精确代理的本机简称入口，导致归属先于查询拒绝；根据原始请求修正为各入口先取得自己的真实游标，保留明确原因和完整诊断断言。准确命令、前后源码指纹、失败／通过输出、退出码与私有补丁位于 `out/tests/temp/2026/11/08/context_cursor_diagnostics/artifacts/`；16.18整项保持未勾选，插件／扩展与MCP暂停边界保持。
+
+### 2026-11-11：配置来源 Quick Access（11.2 部分）
+
+- `resource ` 消费同一 ConfigurationSourceOwner 的只读目录，工作区分别发现，同 Gateway 只列一次；已有 URI 仅展示，无文件 URI 的正式逻辑来源保留原 source_key，不另造公开地址。接受复用原来源 JSONC 命令及 writer，冻结目标、发起组、预览／固定、侧开／后台；浏览、筛选及取消不读正文、不预检、不保存。
+- 资源浏览器合同94项／613断言通过。正式 Workbench、真实 Gateway／Backend 与 Chromium 1 passed／97.44秒，验证两类来源原 JSONC 保存、侧开、只读及既有 CAS 冲突、草稿恢复和未知保存只查原键；pageErrors为空。原正式79扩展构建27.61秒成功，复用同批产物，不重复构建。
+- 本片171份转换源码类型检查通过；最后联合检查因并行 MCP Gallery 清理的两处旧引用失败，已交其 owner 处理，未称整树类型全绿。Ruff、ESM语法及差异检查通过；当前环境无 pyright 可执行文件，未更改环境。最小复审保留唯一来源 owner／命令／writer，无新缓存、schema或持久化。失败原件、源码指纹及适用范围见 `out/tests/temp/2026/11/11/config_resource_quick_access/artifacts/verification.json`；未验Windows／Relay／Electron，附件／变更等仍未接入，11.2不整勾。
+
+### 2026-11-11：会话变更资源快速访问（11.2 部分）
+
+- `resource ` 仅发现发起 Thread 所属 Session 的 changeset 摘要，且工作区须入选；逐键筛选和取消不读 Diff／补丁、不写审阅。接受复用原 Thread 更改面板及 loader，冻结精确 child、changeset、发起组和打开选项；选定范围随原 ThreadInput 展示态复制／恢复，无新 URI、正文缓存或 writer。
+- 原 Provider／更改模型合同49项、ThreadInput序列化12项通过；172份实际转换源码类型检查、Ruff、ESM语法及差异检查通过。正式 Gateway／Backend／Workbench／Chromium 1 passed／104.11秒，核真实执行生成更改、取消零读取／写入、指定范围打开、Diff／补丁、共享模型及刷新恢复，pageErrors为空；同批正式79扩展构建27.49秒通过。
+- 用例准备迁齐新版插件配置交接、隔离Home及运行令牌，关闭顺序为Backend→Gateway→model_stream；此前旧fixture、缺令牌、错误prepared路径及关闭顺序失败原件均保留。最小复审只保留原领域链与展示态；未验Windows／Relay／Electron，不勾完11.2。命令、指纹和准确适用范围见 `out/tests/temp/2026/11/11/changeset_resource_quick_access/artifacts/verification.json`。
+
+### 2026-11-12：配置 URI 复用正式来源编辑（2.2、11.2 部分）
+
+- 规范配置 URI 经唯一寻址 parser 与原来源目录匹配后，进入同一 JSONC 命令、模型与 CAS writer；远端引用仍由该 parser 按目标 Gateway 归一。inline 来源只查目标 Gateway 和同 Gateway 的明确发起工作区，缺失或歧义明确失败，不猜 source_key。打开前冻结编辑器组和选项，凭据变化拒绝迟到打开。
+- Provider／Opener 合同37项244断言、原来源回归56项416断言及172份实际转换源码类型检查通过。真实Gateway／Backend／Workbench／Chromium 1 passed／95.73秒，覆盖Gateway与Workspace配置URI、侧开、只读及原CAS冲突／未知保存零重放；pageErrors为空。最终正式79扩展构建通过，远端解析另经真实A/B parser入口核对。
+- 最小复审保留原parser、来源目录、命令与writer，无第二配置映射、正文缓存或语法实现。真实跨机／Windows／Electron配置URI页面未验，2.2与11.2保持未完成；准确指纹、命令及原件见 `out/tests/temp/2026/11/11/config_uri_opener/artifacts/verification.json` 和 `web-build-final-01/`。
+
+
+### 2026-11-12：Thread 附件快速访问（11.2 部分）
+
+- 原附件 catalog 以单 SQL 返回精确 SessionThread 的原件元数据与有界续页；不扫描历史正文、不读取或重建原件。`resource ` 仅在发起 Thread 的工作区入选时发现附件，显式续页，关闭与身份失效取消读取；接受冻结原附件引用，复用同一 Thread 附件预览及 MIME，展示态随原 ThreadInput 复制与恢复。
+- 43项客户端合同／321条断言、6项后端入口与 catalog 检查、172份实际转换源码类型检查和协议生成一致性通过。真实 Gateway／Backend／Workbench／Chromium 1 passed／81.83秒，产品消息入口生成101个附件，核100+1分页、owner／request_id、浏览筛选取消与分页零原件读取、文本及PDF接受、侧开和刷新恢复；正式79扩展构建通过。
+- 后置Python媒体页断言按精确file_id所在页严格推导1或2次读取，并核第二页after等于原next_after；两分支使用保存原件补验，未为纯断言修正重复长页面。精确候选后端通过，候选客户端3项受HEAD既有认证fixture错配影响、候选生成检查受HEAD既有未登记SSE DTO阻断；当前共享树对应检查已通过，不将他人的修复夹入本片。未验Windows／真实远端／Electron，11.2保持未完成；命令、源码指纹、原输出与适用边界见 `out/tests/temp/2026/11/11/attachment_resource_quick_access/artifacts/verification.json` 和 `page/commands-and-evidence.txt`。
+
+### 2026-11-12：工具结果元数据快速访问（11.2 部分）
+
+精确 Thread 的资源候选沿原历史 view／tool_calls 索引返回工具名称、canonical item、Turn 和调用身份；浏览不读取 canonical／完整结果正文，续页绑定原 view／revision，接受通过原 around 入口核验并补载精确 ToolRow。附件与工具结果共用原单次续页处理，消息与工具导航共用一个已核验结果状态；不伪造消息区间或 URI，不新增目录索引、正文缓存或执行入口。
+
+真实产品执行生成历史的后端检查 3 passed；导航与附件／变更合同 87 passed／391 断言，最终导航状态简化后补验 56 passed／250 断言。172 份实际 sourceTransform 源码类型检查、协议生成一致性、公开 OpenAPI 导出和新增 proto 格式／breaking 检查通过；完整 Workbench 页面、Windows、真实远端及 Electron 工具结果入口尚未验收，11.2 保持未勾选。原始输出位于 `out/tests/temp/2026/11/12/tool_result_resource_quick_access/artifacts/`。本次按用户要求在工作区统一提交／同步边界收口，完整页面验收仍待后续继续。
+
+收口补验：相同产品源码的正式 Workbench 构建通过（79 个内置 Web 扩展）；新增 Provider 短合同在按原 owner 限定混合来源行后 7 passed／44 断言，验证精确 child、固定 view 续页、取消与 typed 接受。完整页面仍未运行；短合同不替代真实页面。原件位于 `out/tests/integration/clients/web/quick_access/resources/test_tool_results/artifacts/2026/11/12/tool_results_slice/`，失败原件及 `rerun-01/` 均保留。
+
+### 2026-11-12：精确 Thread 与未打开来源的复制引用（2.3、12.1 部分）
+
+原复制命令现接受精确 Thread 编辑器及候选，将已有 Gateway／工作区／Session／Thread 身份交唯一 URI owner 生成既有规范引用；复制不查目录、历史或资源存在性，不启动目标。AGENTS／Skill 的 `resource ` 候选按钮也直接复用同一命令，不先打开或读取正文，保持选择器与输入焦点。活动 Thread 发起的文件多选仍沿原 Composer 入口，不因新增 Thread 引用能力改为引用自身。
+
+Gateway 地址及路由短验 25 passed、公开结构 96 passed、认证与顺序 4 passed；来源复制合同 19 passed／140 断言，Skill／配置来源 63 项及运行资源 29 项通过，各批有重叠不相加。扩大消费者检查发现运行装具缺少此前新增的附件／工具结果空目录回执、路由顺序测试仍引用已删除辅助代理；迁齐后保留原身份、revision、动作及取消断言复验通过。172 份实际转换源码类型、规定 Web 构建（79 个内置扩展）、协议生成一致性与相关 Ruff 通过。Python Pyright 可执行文件不可用，未改环境；完整 Thread／来源页面正由独立测试切片验证，本记录不将其计为通过。Windows、真实远端 Gateway、Electron 与固定版本／Diff 引用尚未由本片验收，宽任务继续未勾选。准确命令、指纹、失败原件及最小实现复审见 `out/tests/temp/2026/11/12/thread_resource_reference/artifacts/verification.json`。本次仅本地提交，不同步或 push。
+
+### 2026-11-12：引用合同收口与 Diff 正文粘贴（12.1／12.4／12.5）
+
+原粘贴 Action 增加只读更改文本能力；Diff 沿上游焦点规则选择 original／modified，在 Quick Input 前捕获所选正文，继续由原 Thread 草稿 writer 一次追加。补丁共用同一动作，不扩大规范 URI 引用能力，不新增快照、版本字段、正文缓存或存储。持续审查确认普通引用仅存 owner 公布的 URI，文件读取仍在原 owner 收到 read 时发生；媒体缓存参数及原历史／Diff 版本合同保留。
+
+真实消息执行生成 v1／v2，更改面板打开原 Diff；正式 Gateway／Backend／Workbench／Chromium 验证左侧 v1、右侧 v2及完整补丁只追加指定草稿，零新增正文读取／执行，正常刷新保留。原共享只读模型、旧记录迁移、损坏恢复、编辑器组／MRU、dirty 关闭与六类面板断言保留；1 passed／109.33秒，pageErrors=[]。模型为具名 model_stream；原上游关闭生命周期等 console 诊断保留，未宣称 console 零错误。
+
+10项只读模型检查211断言、174份实际转换源码类型及79扩展正式构建通过。结合此前 Composer 双Thread／跨工作区／来源修改页面、来源多选返回／取消及不支持能力合同，关闭12组当前支持资源的引用／粘贴任务；不将已删除的固定版本要求作为遗留。首轮插件准备失败及第二轮更改面板读取被误计入粘贴的原件保留；先等原面板完成加载后保留零读取断言，复用一次准备的不可变包。准确命令、源码指纹、失败归因与最小复审见 `out/tests/temp/2026/11/12/diff_composer_selection/artifacts/verification.json`。Diff公开URI重开、其它未接通类型、Windows／真实远端／Electron仍归2／13／15组未完成项，不由本片证明。仅本地提交，不同步或push。
+
+
+### 2026-11-12：公开 Diff URI 的复制与重开（2.2／2.3 部分）
+
+中央 grammar 登记 `changes` 层级模板，保留明确 Session、all／正常及 replay Turn、原 files／attachments child；认证地址投影只处理地址。原 Opener／ChangeDocuments／resolver 读取当前聚合 Diff，两侧在一次作用域共用同一原响应，最后活跃消费者结清才释放；未新增快照、正文缓存或历史账本。公开 URI 不带 edit_id，已打开模型及恢复继续遵守原变更版本合同。复制零正文读取；缺通用上下文读取 owner 的 Diff 不提供 Composer URI 附加，程序化调用同样拒绝，实际选定正文粘贴继续可用。普通引用只存 URI、读取当前内容，删除 proposal 中相反的额外冻结措辞。
+
+368项最终URI／地址合同、135项公开协议／路由合同、13项模型233断言（含原URI对象与JSON恢复往返）、174份真实转换源码类型、79扩展正式构建、Ruff、协议生成一致性及OpenSpec严格校验通过。正式Gateway／Backend／Workbench完整页1 passed／109.74秒：真实执行生成v1／v2，实际剪贴板复制、关闭并经Quick Open重开只发一次更改集GET，原分屏／只读／草稿／恢复断言保持，pageErrors为空。182条console诊断包括原关闭／fetch及具名损坏恢复故障，不宣称零console错误。
+
+首轮原Thread恢复面板的正常GET被计入打开阶段，先结清该读取后保留原单次断言；第二轮发现把完整源URI编码进单段会被VS Code URI对象展开斜杠，已删除该未提交草案并统一为层级suffix，不留兼容分支。原始结果和最终命令、源码指纹、最小充分复审见 `out/tests/temp/2026/11/12/diff_uri/artifacts/verification.json`；正式页面见 `out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c94dc84e3bf5/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Python环境无pyright命令，未安装；Ruff与受影响后端合同通过。此片不代替所有媒体URI重开、跨机器／Windows／Electron及宽任务完整矩阵，2.2／2.3继续未勾选。仅本地提交，不同步或push。
+
+### 2026-11-12：上下文最小预算拒绝与内部错误归属（16.18 部分）
+
+- 原上下文 owner 对无法容纳最小命中身份的字符预算给出 `context_search_budget_too_small`／`minimum_result_exceeds_budget`；精确、统一、relay 与 Agent 工具沿原错误出口保留归属和 request_id。统一搜索移除将任意 ValueError 伪装为可重试409的兜底。
+- 457项定向检查、Ruff通过；13文件Pyright与冻结de1de56ab基线均20诊断，无新增。真实双Backend／Gateway通过产品创建Session，精确及统一API预算拒绝和双owner SSE均通过；完整测试随后停在既有缺失目录断言（预期unknown_resource，原owner自43cdedfcce已返回file_not_found），后续阶段未验。本片不据此完成16.18。命令、源码指纹、原件和退出码：`out/tests/temp/2026/11/12/context_search_budget/artifacts/verification.json`。
+
+### 2026-11-12：普通搜索信息／警告与原界面诊断（16.18 部分）
+
+- 唯一 `SearchDiagnosticDTO` 在工作区结果及联邦分支复用，信息／警告保留severity、code、原owner和原文，沿同次page、分支终态及summary传递；命中预览与上下文裁剪不冒充查询失败或扫描受限。显式离线目录镜像提供原不可达原因、更新时间及stale警告，不新增事件类型、诊断数据库或第二查询状态。
+- 原文件Provider将诊断交原 `ISearchComplete.messages`，不授予命令链接权限；`%` 消费同一次原搜索完成Promise并追加普通文本提示及原受限状态，不另查一次。Quick Access保留流前HTTP原detail、状态及request_id；React目录搜索保留完整原分支并在原摘要显示错误、受限和普通诊断，省略空diagnostics的混合分支仍可展示。删除迁齐后的旧提示及无调用翻译key。
+- 后端／协议定向86项、文件SearchService合同32项／599断言通过；目录客户端／组件30项及最终混合分支组件28项通过，批次有重叠不累加。182份实际转换源码类型检查、最终Web真实类型检查、79扩展正式构建、Ruff、协议生成一致性和以a60cc7256为基线的breaking检查通过。真实双Backend／Gateway完整场景1 passed／48.01秒，保留分页、重启续页、fork、原错误归属及单分支重试断言。
+- 最终正式资产真实Web场景 `run-2875c2ebe401`，1 passed／23.12秒：通过三个初始化API并核request_id，产品入口创建Session，原Settings Editor保存配额；`%`显示info及受限warning，Search Editor显示info／warning，两次搜索各发一次请求，pageErrors为空且零模型调用。首次驱动误序列化原编辑器对象的失败原件保留，修正为等待命令完成但不跨页面返回编辑器对象；不放宽业务断言。
+- 原文本完整产品恢复场景另复用同一i18n冻结资产，1 passed／144.01秒；证明真实files/references 404提前拒绝、原B身份、零搜索分发、搬迁后同UUID重跑及重载恢复。182路径按文本锚点／AST／整文件生成的实际机制核LF／CRLF及精确拒绝，不修改固定上游。该旧资产验收不冒充新诊断证明。
+- 首次真实后端场景暴露装具缺Terminal绑定，后续插件准备又暴露独立Backend配置误投默认Gateway；现复用一次预备的不可变包，并将配置及运行时交接指向同一隔离Gateway，fork仍经产品入口生成。命令、源码指纹、原始失败／通过输出、资产摘要和最小实现复审见 `out/tests/temp/2026/11/12/search_diagnostic_notices/artifacts/verification.json`；恢复及转换完整证据见 `out/tests/temp/2026/11/12/quick_access_search_closure/artifacts/verification-12.json`。
+- `%`的远端取消及单分支重试展示仍有具名代码TODO；本片未完成16.18全部消费者及组合，也未证明Electron搜索恢复、Windows、跨机器或run10偶发问题根因。16.18及相关宽任务保持未勾选。仅本地提交，不同步、push或重启dev。

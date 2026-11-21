@@ -6,7 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker
 from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,

@@ -60,6 +60,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.schemas.internal_v2.turn_search import TurnMessageSearchRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
@@ -81,7 +82,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
+from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.canonical_langchain import project_tool_result
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
@@ -217,19 +220,19 @@ def _view_member_ids(storage: RolloutContextStore) -> set[str]:
         }
 
 
-def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore):
+@pytest.mark.parametrize("live_first", [True, False])
+def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore, carrier_saver, live_first):
     """带投影身份的 request carrier 不得被等价 live item 吞掉。"""
-    live = _live_tool_result(sequence=1)
-    carrier = _request_carrier(sequence=2, message_id="1b56a352-tool-msg")
-    live_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (live,), execution_id=MODEL_CALL_ID)
-    carrier_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (carrier,), execution_id=MODEL_CALL_ID)
+    live = _live_tool_result(sequence=1 if live_first else 2)
+    carrier = _request_carrier(sequence=2 if live_first else 1, message_id="1b56a352-tool-msg")
+    first, second = (live, carrier) if live_first else (carrier, live)
+    first_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (first,), execution_id=MODEL_CALL_ID)
+    second_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (second,), execution_id=MODEL_CALL_ID)
     # 两个 item 都在 catalog：carrier 没有被“等价复用”成 live item。
-    assert _catalog_tool_result_ids(storage) == [
-        live.item_id,
-        carrier.item_id,
-    ]
+    ordered = [live.item_id, carrier.item_id] if live_first else [carrier.item_id, live.item_id]
+    assert _catalog_tool_result_ids(storage) == ordered
     # carrier 产生独立的新 commit（旧缺陷路径不会产生新 commit）。
-    assert carrier_commits and not set(carrier_commits) & set(live_commits)
+    assert second_commits and not set(second_commits) & set(first_commits)
     # carrier 立即进入 active view，下一次装配才能读到它。
     members = _view_member_ids(storage)
     assert live.item_id in members
@@ -245,6 +248,15 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore)
         "1b56a352-tool-msg"
     )
     assert stored[live.item_id].projection_identity.projection_message_id is None
+    # 搜索只展示最早的原详情身份；续页不能把另一份等价载体重新当成结果。
+    request = TurnMessageSearchRequest(query=RESULT_CONTENT, category="tool_result", limit=1)
+    page = carrier_saver.search_history_messages(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), request)
+    assert [hit.reference.item_id for hit in page.items] == ordered[:1]
+    assert page.cursor is not None
+    following = carrier_saver.search_history_messages(
+        SESSION_ID, storage.storage.main_thread_id(SESSION_ID), request.model_copy(update={"cursor": page.cursor}),
+    )
+    assert following.complete and following.items == []
 
 
 @pytest.mark.parametrize("changed", ["media", "artifact"])
@@ -840,7 +852,7 @@ async def test_compaction_checkpoint_preserves_selected_state_cutoff(
     assert carrier_saver.safe_compaction_prefix_cutoffs(
         SESSION_ID, thread_id, checkpoint_ns="", state_messages=state, cutoff_indexes=[1, 3],
     ) == frozenset({1, 3})
-    summary = HumanMessage(content="已完成工具调用，保留真实结果。", id="carrier-summary")
+    summary = compaction_summary_message(content="已完成工具调用，保留真实结果。", id="carrier-summary")
     event = build_cache_preserving_event(
         CachePreservingPartition(prefix_messages=state[:1], messages_to_summarize=state[1:3],
                                  preserved_messages=state[3:], state_cutoff=3),
@@ -884,7 +896,7 @@ async def test_compaction_checkpoint_preserves_selected_state_cutoff(
         assert context["raw_message_count"] == 4
         assert context["compaction_cutoff"] == 3
         assert context["records"] == [
-            MessageService._message_to_agent_state_record(message)
+            message_to_agent_state_record(message)
             for message in [state[0], summary, state[3]]
         ]
 
@@ -931,6 +943,19 @@ def test_tool_pairing_survives_selected_carrier_replacement(
             "SELECT message_sequence FROM messages ORDER BY message_sequence"
         )]
         ToolProtocolBoundary(snapshot.connection, all_sequences).validate(len(all_sequences))
+        # selection 可以先移除 stream 声明；其独立结果仍可由同归属、
+        # 已选且闭合的 checkpoint 配对替代，不能被误报为新的 orphan。
+        live_call_sequence = snapshot.connection.execute(
+            "SELECT message_sequence FROM messages WHERE message_id='live-call'",
+        ).fetchone()[0]
+        without_live_call = [sequence for sequence in all_sequences if sequence != live_call_sequence]
+        ToolProtocolBoundary(snapshot.connection, without_live_call).validate(len(without_live_call))
+        if result_order != "checkpoint_only":
+            messages = dict(snapshot.connection.execute("SELECT message_id,message_sequence FROM messages"))
+            reordered = [messages[f"{LIVE_EXECUTION_ID}-result-{SCOPED_TOOL_CALL_ID}"],
+                         messages["request-call"], messages["request-result"]]
+            boundary = ToolProtocolBoundary(snapshot.connection, reordered)
+            assert [index for index in range(4) if boundary.is_safe(index)] == [0, 3]
         pairings = dict(snapshot.connection.execute(
             "SELECT call.tool_call_id, result.message_id FROM tool_calls AS call "
             "JOIN messages AS result ON result.message_sequence = call.result_message_sequence"

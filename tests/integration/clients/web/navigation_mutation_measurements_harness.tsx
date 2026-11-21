@@ -161,7 +161,6 @@ const config = window.measurementConfig;
 const owner = { gateway_id: config.gatewayId, workspace_id: config.workspaceId };
 const workspaceKey = gatewayWorkspaceKey(owner);
 const workspaces = [owner];
-const catalogSyncKeys = new Map<string, string>();
 const catalogRefreshVersions = new Map<string, number>();
 
 /** 局部真实客户端 Integration：完整文件树与 Gateway 导航 hook 访问真实服务。 */
@@ -333,7 +332,7 @@ function MeasurementHarness() {
   const explorer = useSessionResourceExplorer({
     apiPort: config.gatewayPort, workspaces, activeWorkspaceId: workspaceKey,
     searchOpen: false, searchQuery: "", currentSessionId: "", currentSessionWorkspaceId: null,
-    workspaceNavigationSyncKey: "measurement", catalogSyncKeys,
+    workspaceNavigationSyncKey: "measurement",
     catalogRefreshVersions,
   });
   window.navigationHarness = { ready: Boolean(explorer.navigation?.nodes.length && fileStatusObserverReady),

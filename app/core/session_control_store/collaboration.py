@@ -17,6 +17,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypedDict, cast
 
 from app.core.identifier import validate_session_id
 from app.core.session_control_primitives import validate_thread_creation_key
@@ -37,9 +38,39 @@ _COLLABORATION_MEMBERS_TABLE_DDL = load_sql(__package__, "migrations/collaborati
 _COLLABORATION_MEMBER_COLUMNS = (
     "delegation_id, creation_idempotency_key, membership_preimage_hash, "
     "registered_revision, coordinator_session_id, coordinator_thread_id, "
-    "child_thread_id, role, subagent_type, title, task_seed, state, "
+    "child_thread_id, role, subagent_type, title, task_seed, team_id, work_mode, state, "
     "registered_at, updated_at"
 )
+
+
+class CollaborationMemberSummary(TypedDict):
+    delegation_id: str
+    creation_idempotency_key: str
+    membership_preimage_hash: str
+    registered_revision: int
+    coordinator_session_id: str
+    coordinator_thread_id: str
+    child_thread_id: str
+    role: str
+    subagent_type: str
+    title: str
+    team_id: str | None
+    work_mode: str | None
+    state: str
+    registered_at: str
+    updated_at: str
+    admission_state: str | None
+
+
+def task_team_id(task_seed: str) -> str | None:
+    context = json.loads(task_seed).get("trusted_context")
+    team_id = context.get("team_id") if isinstance(context, dict) else None
+    return team_id if isinstance(team_id, str) else None
+
+
+def task_work_mode(task_seed: str) -> str | None:
+    context = json.loads(task_seed).get("trusted_context")
+    return context.get("work_mode") if isinstance(context, dict) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +129,10 @@ def prepare_collaboration_member(
     now = datetime.now(UTC).isoformat()
     connection.execute(
         f"INSERT INTO collaboration_members ({_COLLABORATION_MEMBER_COLUMNS}) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,'registering',?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'registering',?,?)",
         (delegation_id, creation_idempotency_key, frozen_hash, revision,
          member.coordinator_session_id, member.coordinator_thread_id, child_thread_id,
-         member.role, member.subagent_type, member.title, task_seed, now, now),
+         member.role, member.subagent_type, member.title, task_seed, task_team_id(task_seed), task_work_mode(task_seed), now, now),
     )
     return revision, frozen_hash
 
@@ -145,6 +176,8 @@ def validate_collaboration_member(
         row["delegation_id"] != creation["delegation_id"]
         or row["child_thread_id"] != creation["child_thread_id"]
         or row["task_seed"] != creation["task_seed"]
+        or row["team_id"] != task_team_id(str(creation["task_seed"]))
+        or row["work_mode"] != task_work_mode(str(creation["task_seed"]))
         or row["registered_revision"] != creation["collaboration_precondition_revision"]
         or row["membership_preimage_hash"] != expected
         or creation["membership_preimage_hash"] != expected
@@ -195,6 +228,25 @@ class CollaborationMixin:
     """collaboration ledger 与 member 账本方法族（装配进 SessionControlStore）。"""
 
     # ------------------------------------------------------------------
+
+    def list_collaboration_member_summaries(
+        self, *, coordinator_session_id: str | None = None,
+    ) -> tuple[CollaborationMemberSummary, ...]:
+        """普通投影只读归属和状态；任务正文的完整核验留给执行、发布及恢复。"""
+        self._ensure_open()
+        rows = self._connection.execute(
+            "SELECT m.delegation_id,m.creation_idempotency_key,m.membership_preimage_hash,"
+            "m.registered_revision,m.coordinator_session_id,m.coordinator_thread_id,"
+            "m.child_thread_id,m.role,m.subagent_type,m.title,m.team_id,m.work_mode,m.state,"
+            "m.registered_at,m.updated_at,i.state AS admission_state "
+            "FROM collaboration_members m LEFT JOIN thread_execution_intents i "
+            "ON i.thread_id=m.child_thread_id ORDER BY m.registered_at,m.delegation_id"
+        ).fetchall()
+        if coordinator_session_id is not None and any(
+            row["coordinator_session_id"] != coordinator_session_id for row in rows
+        ):
+            raise RuntimeError("collaboration member 与读取 Session owner 不一致")
+        return tuple(cast(CollaborationMemberSummary, dict(row)) for row in rows)
     # collaboration ledger（8.5-B，R25：delegation/member 权威账本）
     # ------------------------------------------------------------------
 

@@ -1,36 +1,11 @@
-"""JobEventBus 作为 `job.events/{job_id}` typed adapter 的装配证据测试（3.8-B）。
-
-既有行为合同由 ``test_job_event_bus.py`` 原样覆盖；本文件只验证「订阅者队列、
-溢出移除与短期历史确实由 EventChannelService 的 job.events/{job_id} channel
-承载」这一接线事实。
-"""
-
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from app.core.job_event_bus import JOB_EVENT_HISTORY_SIZE, EventType, JobEventBus
+from app.core.job_event_bus import EventType, JobEventBus
 from tests.support.job_thread_fixture import job_fixture_thread_id
-
-
-@pytest.mark.asyncio
-async def test_publish_creates_per_job_channel_with_history() -> None:
-    bus = JobEventBus()
-    await bus.publish(
-        job_id="job_channel_a",
-        event_type=EventType.JOB_COMPLETED,
-        payload={"result": "ok"},
-        agent_id="test",
-    )
-    service = bus.event_channel_service
-    assert service.channel_names == ("job.events/job_channel_a",)
-    channel = service.channel("job.events/job_channel_a")
-    assert channel.overflow_policy == "fail_closed"
-    assert channel.spec.history_size == JOB_EVENT_HISTORY_SIZE
-    assert len(channel.history) == 1
-    assert channel.history[0].type == "job_completed"
 
 
 @pytest.mark.asyncio
@@ -51,6 +26,7 @@ async def test_subscribe_registers_sink_subscriber_on_job_channel() -> None:
 
     await bus.unsubscribe("job_channel_b", queue, reason="done")
     assert queue.subscription_id not in channel.subscriber_ids
+    assert bus.event_channel_service.channel_names == ()
 
 
 @pytest.mark.asyncio
@@ -65,10 +41,11 @@ async def test_overflow_removes_subscriber_from_channel_registry() -> None:
             payload={"result": str(index)},
             agent_id="test",
         )
-    # fail_closed：溢出订阅者从 channel 移除，历史保持完整。
+    # fail_closed：溢出订阅者移除，无人消费的通道也立即释放。
     assert queue.subscription_id not in channel.subscriber_ids
     assert channel.subscriber_ids == ()
-    assert len(channel.history) == queue.maxsize + 1
+    assert channel.history == ()
+    assert bus.event_channel_service.channel_names == ()
 
 
 @pytest.mark.asyncio
@@ -81,6 +58,7 @@ async def test_shared_event_service_reuses_channels_across_buses() -> None:
     service = EventChannelService()
     first = JobEventBus(event_service=service)
     second = JobEventBus(event_service=service)
+    queue = await second.subscribe("job_shared", subscriber_kind="test_shared")
     await first.publish(
         job_id="job_shared",
         event_type=EventType.JOB_CREATED,
@@ -94,4 +72,7 @@ async def test_shared_event_service_reuses_channels_across_buses() -> None:
         agent_id="test",
     )
     channel = service.channel("job.events/job_shared")
-    assert len(channel.history) == 2
+    assert channel.history == ()
+    assert [(await queue.get()).type, (await queue.get()).type] == ["job_created", "job_completed"]
+    await first.unsubscribe("job_shared", queue, reason="done")
+    assert service.channel_names == ()

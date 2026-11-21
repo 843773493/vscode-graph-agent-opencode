@@ -5,7 +5,23 @@ import { resolve, extname, sep, join, relative } from 'node:path';
 import httpProxy from 'http-proxy';
 
 /** @type {Record<string, string>} */
-const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.ttf': 'font/ttf' };
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.ttf': 'font/ttf' };
+function acceptsGzip(header = '') {
+  const encodings = new Map(header.toLowerCase().split(',').map(value => {
+    const [coding, ...parameters] = value.split(';');
+    return [coding.trim(), !parameters.some(parameter => /^\s*q\s*=\s*0(?:\.0*)?\s*$/.test(parameter))];
+  }));
+  return encodings.get('gzip') ?? encodings.get('*') ?? false;
+}
+
+/** Gateway 未返回响应时只标记本机传输边界，沿用已有请求 ID，不创建另一个。 */
+export function gatewayProxyFailureHeaders(cause, request, component) {
+  const context = { source: { component }, stage: 'gateway_connect',
+    target: { component: 'gateway' }, error_type: cause.code ?? cause.name };
+  return { 'X-BoxTeam-Error-Context': JSON.stringify(context),
+    ...(request.headers['x-request-id'] ? { 'X-Request-ID': request.headers['x-request-id'] } : {}),
+  };
+}
 /** @param {{ root: string; gateway?: string }} options */
 export function createWorkbenchServer({ root: directory, gateway }) {
   const root = resolve(directory);
@@ -24,7 +40,10 @@ export function createWorkbenchServer({ root: directory, gateway }) {
     const message = `Gateway 代理失败：${path}，${cause.message}`;
     console.error(message);
     if ('writeHead' in response) {
-      if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      if (response.headersSent) { response.destroy(cause); return; }
+      response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8',
+        ...gatewayProxyFailureHeaders(cause, request, 'workbench_host'),
+      });
       response.end(message);
     } else {
       response.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
@@ -41,17 +60,22 @@ export function createWorkbenchServer({ root: directory, gateway }) {
     }
     const path = resolve(root, `.${decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)}`);
     if (!path.startsWith(root + sep)) { response.writeHead(403); response.end('禁止访问'); return; }
-    const file = await stat(path).catch(cause => {
+    const resourcePath = relative(root, path).split(sep).join('/');
+    const hasGzip = immutableAssets.has(`${resourcePath}.gz`);
+    const useGzip = hasGzip && acceptsGzip(request.headers['accept-encoding']);
+    const representation = useGzip ? `${path}.gz` : path;
+    const file = await stat(representation).catch(cause => {
       if (cause.code === 'ENOENT' || cause.code === 'ENOTDIR') return null;
       throw cause;
     });
     if (!file?.isFile()) { response.writeHead(404, { 'Cache-Control': 'no-store' }); response.end(`资源不存在：${url.pathname}`); return; }
-    const resourcePath = relative(root, path).split(sep).join('/');
     const callback = resourcePath === 'mcp-oauth-callback.html';
     // 与原 VS Code serveFile 一样只使用 stat 观察值；不为再验证重读 bundle 或计算正文 hash。
     const etag = `W/"${[file.ino, file.size, file.mtimeMs].join('-')}"`;
     const headers = {
       'Content-Type': mime[extname(path)] ?? 'application/octet-stream',
+      ...(hasGzip ? { Vary: 'Accept-Encoding' } : {}),
+      ...(useGzip ? { 'Content-Encoding': 'gzip' } : {}),
       'Cache-Control': callback ? 'no-store' : immutableAssets.has(resourcePath)
         ? 'public, max-age=31536000, immutable' : 'no-cache',
       ...(callback ? { 'Referrer-Policy': 'no-referrer' } : { ETag: etag }),
@@ -61,7 +85,7 @@ export function createWorkbenchServer({ root: directory, gateway }) {
       response.writeHead(304, headers); response.end(); return;
     }
     if (request.method === 'HEAD') { response.writeHead(200, { ...headers, 'Content-Length': file.size }); response.end(); return; }
-    const stream = createReadStream(path);
+    const stream = createReadStream(representation);
     response.once('close', () => stream.destroy());
     stream.on('error', cause => response.destroy(cause));
     stream.once('open', () => { response.writeHead(200, { ...headers, 'Content-Length': file.size }); stream.pipe(response); });

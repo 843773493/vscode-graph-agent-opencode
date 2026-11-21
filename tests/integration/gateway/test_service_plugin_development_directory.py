@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import commentjson
 import httpx
@@ -38,6 +39,9 @@ def test_development_directory_update_requires_immutable_publication_and_explici
             "entrypoint": ["arbitrary/engine/main.mjs"], "management_protocol_version": 1,
             "requires": [{"extension_point": "services", "version": 1}],
             "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]}}]}
+    peer = deepcopy(manifest["plugins"][0])
+    peer["id"] = "unselected"
+    manifest["plugins"].append(peer)
     manifest_path = source / "plugin.jsonc"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -50,22 +54,30 @@ def test_development_directory_update_requires_immutable_publication_and_explici
 
     def status() -> PluginSlotStatusDTO:
         items = post("/api/gateway/service-plugins/status", target).raise_for_status().json()["data"]["plugins"]
-        item, = [item for item in items if item["binding"]["package_id"] == "development.probe"]
+        item, = [item for item in items if item["binding"]["package_id"] == "development.probe"
+                 and item["binding"]["plugin_id"] == "node"]
         return PluginSlotStatusDTO.model_validate(item)
 
-    def bind(version: str | None, *, enabled: bool = True) -> None:
+    def bind(version: str | None, *, enabled: bool = True) -> dict:
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = client.get(path).raise_for_status().json()["data"]
         configuration = commentjson.loads(document["jsonc"])
-        configuration.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
-            "package_id": "development.probe", "package_version": version, "plugin_id": "node", "enabled": enabled}]}
-        response = client.put(path, json={**target, "source_key": "gateway_mutable_override",
+        if version == "1.0.0":
+            # 此隔离 Home 只安装探针包，不使用未安装的内置工作区模板。
+            configuration.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
+        configuration.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [
+            {"package_id": "development.probe", "package_version": version, "plugin_id": "node", "enabled": enabled},
+            {"package_id": "development.probe", "package_version": "1.0.0", "plugin_id": "unselected", "enabled": False},
+        ]}
+        body = {**target, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(configuration), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
-            "idempotency_key": f"development-binding-{len(evidence)}"})
+            "idempotency_key": f"development-binding-{len(evidence)}"}
+        response = client.put(path, json=body)
         evidence.append({"path": path, "status": response.status_code, "body": response.json()})
         assert response.raise_for_status().json()["data"]["edit"]["state"] == "active"
+        return body
 
     def call(slot: PluginSlotStatusDTO) -> httpx.Response:
         assert slot.instance is not None
@@ -106,13 +118,33 @@ def test_development_directory_update_requires_immutable_publication_and_explici
         assert not psutil.pid_exists(restarted.instance.process_id)
         assert call(restarted).status_code == 409
 
-        bind("2.0.0", enabled=False)
+        stale = bind("2.0.0", enabled=False)
         assert status().state == "stopped" and not psutil.pid_exists(current.instance.process_id)
+        # 发布与更新禁用绑定仍由原配置 owner/reconcile 处理，不影响未选绑定或默认项。
+        source_path = "/api/gateway/config/sources/gateway_mutable_override"
+        before_document = client.get(source_path).raise_for_status().json()["data"]
+        before = commentjson.loads(before_document["jsonc"])
+        manifest["version"] = "3.0.0"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        install_plugin(post, gateway_id=gateway_id, path=str(source), development_directory=True)
+        bind("3.0.0", enabled=False)
+        disabled = status()
+        assert disabled.state == "stopped" and not disabled.binding.enabled
+        assert disabled.binding.package_version == "3.0.0" and disabled.instance is None
+        document = client.get(source_path).raise_for_status().json()["data"]
+        after = commentjson.loads(document["jsonc"])
+        assert after["plugins"]["runtime"]["entries"][1] == before["plugins"]["runtime"]["entries"][1]
+        assert after["plugins"].get("workspace_defaults") == before["plugins"].get("workspace_defaults")
+        assert document["effective"]["plugins"]["workspace_defaults"] == before_document["effective"]["plugins"]["workspace_defaults"]
+        rejected = client.put(source_path, json={**stale, "idempotency_key": "stale-development-binding"})
+        assert rejected.status_code == 409, rejected.text
+        assert client.get(source_path).raise_for_status().json()["data"] == document
+        assert status() == disabled
         blocked = post("/api/gateway/service-plugins/uninstall", {**target,
-            "package_id": "development.probe", "package_version": "2.0.0"})
+            "package_id": "development.probe", "package_version": "3.0.0"})
         assert blocked.status_code == 409 and "引用" in blocked.text
         bind(None)
-        for version in ("1.0.0", "2.0.0"):
+        for version in ("1.0.0", "2.0.0", "3.0.0"):
             post("/api/gateway/service-plugins/uninstall", {**target,
                 "package_id": "development.probe", "package_version": version}).raise_for_status()
         assert post("/api/gateway/service-plugins/inventory", target).json()["data"]["packages"] == []

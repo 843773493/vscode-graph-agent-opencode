@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from functools import cache
 from typing import Any, cast
 
+from boxteam.workspace.message.v1 import message_stream_pb2
 from google.protobuf import json_format
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from google.protobuf.message import Message
@@ -16,7 +17,6 @@ from app.protocol.codecs.json import (
     message_to_json,
     timestamp_from_datetime,
 )
-from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
 _PAYLOAD_FIELDS = event_payload_fields(
     cast(Descriptor, message_stream_pb2.MessageStreamEvent.DESCRIPTOR), aliases={

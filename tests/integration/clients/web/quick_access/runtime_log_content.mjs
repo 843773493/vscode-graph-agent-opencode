@@ -57,7 +57,7 @@ try {
   }, { path, body, owner, expected });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health'), active = await api('/api/v1/workspace');
   const a = { gateway_id: health.gateway_id, workspace_id: active.workspace_id };
   await api('/api/gateway/managed-workspaces', { root_path: process.env.BOXTEAM_LOG_WORKSPACE_B, name: '日志隔离 B' });
@@ -70,7 +70,7 @@ try {
   await missing(owners[1], 'B');
   await api('/api/gateway/diagnostics/query', { scope: { source: 'workspace', workspace_ids: [GATEWAY_QUERY] }, query: 'unused' }, undefined, 422);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const quick = page.locator('.quick-input-widget');
   const rows = () => quick.locator('.monaco-list-row').filter({ has: page.locator('[data-quick-input-id^="log:"]') });

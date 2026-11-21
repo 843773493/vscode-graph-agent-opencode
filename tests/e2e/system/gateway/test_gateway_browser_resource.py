@@ -281,6 +281,7 @@ def _write_launcher_runtime_manifest(
             "workspace_inline": str(project_root / "configs" / "workspace_inline.jsonc"),
             "workspace_schema": str(project_root / "configs" / "workspace_schema.jsonc"),
         },
+        "bundled_plugins": [],
         "skill_resources": str(project_root / "resources" / "skills"),
         "web_assets": None,
         "chromium_executable": os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),

@@ -47,7 +47,7 @@ from tests.integration.backend.sessions.rollout_context.test_execution_history_s
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     history_target as history_target,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -128,12 +128,12 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
         Image.new("RGB", (800, 400), (35, 125, 210)).save(image, format="PNG")
         original = image.getvalue()
         calls = plan(target, session, thread, [{"content": "预览输入已冻结。"}])
-        uploaded = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        uploaded = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "查看图片并保留原件。", "attachments": [{
                 "file_id": "inline:input", "name": "input.png", "content_type": "image/png",
                 "data_url": "data:image/png;base64," + base64.b64encode(original).decode(),
             }]}, "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert uploaded.status_code == 200, uploaded.text
         await wait_for_job_done(client, uploaded.json()["data"]["job_id"])
         history = await client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
@@ -149,10 +149,10 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
             tool("read_file", {"path": ref["file_id"]}, "read-original"),
             {"content": "原件和派生输入均已消费。"},
         ])
-        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "生成派生结果，然后读取结果与图片原件。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         await wait_for_job_done(client, accepted.json()["data"]["job_id"])
         changes = await client.get(f"/api/v1/sessions/{session}/changesets/all")
@@ -213,10 +213,10 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
 
         # 未建图的冷 fork 由原发布事实保活；正式执行后才由 runtime 取得并释放关联。
         warm_call, = plan(target, fork_session, fork_thread, [{"content": "副本已消费共享目录。"}])
-        warmed = await client.post(f"/api/v1/sessions/{fork_session}/messages", json={
+        warmed = await client.post(f"/api/v1/sessions/{fork_session}/messages", json=with_message_run_operation_id({
             "message": {"content": "使用复制的历史完成一次执行。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert warmed.status_code == 200, warmed.text
         await wait_for_job_done(client, warmed.json()["data"]["job_id"])
         warm_capture = json.loads((target.replay.artifacts / (warm_call + ".json")).read_text(encoding="utf-8"))
@@ -293,10 +293,10 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
             }, "remove-derived"),
             {"content": "副本在来源删除后继续，并显式清理处理结果。"},
         ])
-        accepted = await client.post(f"/api/v1/sessions/{fork_session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{fork_session}/messages", json=with_message_run_operation_id({
             "message": {"content": "继续使用副本历史，显式删除已完成的处理结果。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         await wait_for_job_done(client, accepted.json()["data"]["job_id"])
         continued = json.loads((target.replay.artifacts / (continuation + ".json")).read_text(encoding="utf-8"))

@@ -45,24 +45,22 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
 
 def _base_config() -> dict[str, object]:
     return {
-        "config_version": 2,
+        "config_version": 3,
         "llm": {
-            "providers": [
-                {
-                    "id": "primary",
+            "providers": {
+                "primary": {"defaults": {
                     "endpoint": "https://example.com/v1",
-                    "model": "model-a",
                     "api_key": "${TEST_API_KEY}",
                     "custom_llm_provider": "openai",
-                }
-            ]
+                }, "models": {"default": {"model": "model-a"}}}
+            }
         },
         "default_agent": "default",
         "agents": {
             "default": {
                 "name": "Default Agent",
                 "instructions": {"system_prompt": "hello"},
-                "model": {"primary_provider": "primary"},
+                "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
             }
         },
     }

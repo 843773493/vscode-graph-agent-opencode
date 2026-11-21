@@ -74,6 +74,11 @@ export declare type GatewayThreadAddressRequest = Message<"boxteam.gateway.v2.Ga
    * @generated from field: string thread_id = 5;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional string item_id = 6;
+   */
+  itemId?: string | undefined;
 };
 
 /**
@@ -185,6 +190,11 @@ export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.Gate
    * @generated from field: optional string change_file_uri = 11;
    */
   changeFileUri?: string | undefined;
+
+  /**
+   * @generated from field: optional string item_id = 12;
+   */
+  itemId?: string | undefined;
 };
 
 /**
@@ -342,38 +352,6 @@ export declare type AddRemoteGatewayRequest = Message<"boxteam.gateway.v2.AddRem
 export declare const AddRemoteGatewayRequestSchema: GenMessage<AddRemoteGatewayRequest>;
 
 /**
- * @generated from message boxteam.gateway.v2.ChangePortForwardLabelRequest
- */
-export declare type ChangePortForwardLabelRequest = Message<"boxteam.gateway.v2.ChangePortForwardLabelRequest"> & {
-  /**
-   * @generated from field: optional string label = 1;
-   */
-  label?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.ChangePortForwardLabelRequest.
- * Use `create(ChangePortForwardLabelRequestSchema)` to create a new message.
- */
-export declare const ChangePortForwardLabelRequestSchema: GenMessage<ChangePortForwardLabelRequest>;
-
-/**
- * @generated from message boxteam.gateway.v2.ChangePortForwardLocalPortRequest
- */
-export declare type ChangePortForwardLocalPortRequest = Message<"boxteam.gateway.v2.ChangePortForwardLocalPortRequest"> & {
-  /**
-   * @generated from field: int64 local_port = 1;
-   */
-  localPort: bigint;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.ChangePortForwardLocalPortRequest.
- * Use `create(ChangePortForwardLocalPortRequestSchema)` to create a new message.
- */
-export declare const ChangePortForwardLocalPortRequestSchema: GenMessage<ChangePortForwardLocalPortRequest>;
-
-/**
  * @generated from message boxteam.gateway.v2.CreateFederationManagedWorkspaceRequest
  */
 export declare type CreateFederationManagedWorkspaceRequest = Message<"boxteam.gateway.v2.CreateFederationManagedWorkspaceRequest"> & {
@@ -431,19 +409,35 @@ export declare type CreateGatewayManagedWorkspaceRequest = Message<"boxteam.gate
 export declare const CreateGatewayManagedWorkspaceRequestSchema: GenMessage<CreateGatewayManagedWorkspaceRequest>;
 
 /**
+ * @generated from message boxteam.gateway.v2.PortForwardEndpoint
+ */
+export declare type PortForwardEndpoint = Message<"boxteam.gateway.v2.PortForwardEndpoint"> & {
+  /**
+   * @generated from field: string host_id = 1;
+   */
+  hostId: string;
+
+  /**
+   * @generated from field: optional string address = 2;
+   */
+  address?: string | undefined;
+
+  /**
+   * @generated from field: int64 port = 3;
+   */
+  port: bigint;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PortForwardEndpoint.
+ * Use `create(PortForwardEndpointSchema)` to create a new message.
+ */
+export declare const PortForwardEndpointSchema: GenMessage<PortForwardEndpoint>;
+
+/**
  * @generated from message boxteam.gateway.v2.CreatePortForwardRequest
  */
 export declare type CreatePortForwardRequest = Message<"boxteam.gateway.v2.CreatePortForwardRequest"> & {
-  /**
-   * @generated from field: int64 remote_port = 1;
-   */
-  remotePort: bigint;
-
-  /**
-   * @generated from field: optional int64 local_port = 2;
-   */
-  localPort?: bigint | undefined;
-
   /**
    * @generated from field: optional string protocol = 3;
    */
@@ -453,6 +447,21 @@ export declare type CreatePortForwardRequest = Message<"boxteam.gateway.v2.Creat
    * @generated from field: optional string label = 4;
    */
   label?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PortForwardEndpoint listener = 5;
+   */
+  listener?: PortForwardEndpoint | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PortForwardEndpoint destination = 6;
+   */
+  destination?: PortForwardEndpoint | undefined;
+
+  /**
+   * @generated from field: optional bool enabled = 7;
+   */
+  enabled?: boolean | undefined;
 };
 
 /**
@@ -1939,6 +1948,18 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayD
    * @generated from field: repeated boxteam.gateway.v2.PluginRuntimeObservationDTO plugin_observations = 13;
    */
   pluginObservations: PluginRuntimeObservationDTO[];
+
+  /**
+   * 目标机器上的原生展示位置；不能作为资源 URI 或当前机器上的操作目标。
+   *
+   * @generated from field: optional string control_directory = 14;
+   */
+  controlDirectory?: string | undefined;
+
+  /**
+   * @generated from field: optional string log_directory = 15;
+   */
+  logDirectory?: string | undefined;
 };
 
 /**
@@ -2316,6 +2337,84 @@ export declare type GatewayDirectoryListDTO = Message<"boxteam.gateway.v2.Gatewa
  * Use `create(GatewayDirectoryListDTOSchema)` to create a new message.
  */
 export declare const GatewayDirectoryListDTOSchema: GenMessage<GatewayDirectoryListDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.WorkspaceIdentityMappingDTO
+ */
+export declare type WorkspaceIdentityMappingDTO = Message<"boxteam.gateway.v2.WorkspaceIdentityMappingDTO"> & {
+  /**
+   * @generated from field: string legacy_workspace_id = 1;
+   */
+  legacyWorkspaceId: string;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 3;
+   */
+  workspaceId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.WorkspaceIdentityMappingDTO.
+ * Use `create(WorkspaceIdentityMappingDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceIdentityMappingDTOSchema: GenMessage<WorkspaceIdentityMappingDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.WorkspaceIdentityRecoveryDTO
+ */
+export declare type WorkspaceIdentityRecoveryDTO = Message<"boxteam.gateway.v2.WorkspaceIdentityRecoveryDTO"> & {
+  /**
+   * @generated from field: int32 format_version = 1;
+   */
+  formatVersion: number;
+
+  /**
+   * @generated from field: string migration_id = 2;
+   */
+  migrationId: string;
+
+  /**
+   * @generated from field: string registry_gateway_id = 3;
+   */
+  registryGatewayId: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.WorkspaceIdentityMappingDTO mappings = 4;
+   */
+  mappings: WorkspaceIdentityMappingDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.WorkspaceIdentityRecoveryDTO.
+ * Use `create(WorkspaceIdentityRecoveryDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceIdentityRecoveryDTOSchema: GenMessage<WorkspaceIdentityRecoveryDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayClientRecoveryDTO
+ */
+export declare type GatewayClientRecoveryDTO = Message<"boxteam.gateway.v2.GatewayClientRecoveryDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.WorkspaceIdentityRecoveryDTO workspace_identity = 2;
+   */
+  workspaceIdentity?: WorkspaceIdentityRecoveryDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayClientRecoveryDTO.
+ * Use `create(GatewayClientRecoveryDTOSchema)` to create a new message.
+ */
+export declare const GatewayClientRecoveryDTOSchema: GenMessage<GatewayClientRecoveryDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.GatewayHealthDTO
@@ -3283,6 +3382,16 @@ export declare type GatewayManagementTargetDTO = Message<"boxteam.gateway.v2.Gat
    * @generated from field: optional string connection_error = 5;
    */
   connectionError?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_owner = 6;
+   */
+  sourceOwner?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 remote_gateway_port = 7;
+   */
+  remoteGatewayPort?: bigint | undefined;
 };
 
 /**
@@ -3449,44 +3558,9 @@ export declare const GatewayWorkspaceListDTOSchema: GenMessage<GatewayWorkspaceL
  */
 export declare type PortForwardDTO = Message<"boxteam.gateway.v2.PortForwardDTO"> & {
   /**
-   * @generated from field: string gateway_id = 14;
-   */
-  gatewayId: string;
-
-  /**
    * @generated from field: string forward_id = 1;
    */
   forwardId: string;
-
-  /**
-   * @generated from field: string workspace_id = 2;
-   */
-  workspaceId: string;
-
-  /**
-   * @generated from field: string connection_id = 3;
-   */
-  connectionId: string;
-
-  /**
-   * @generated from field: string remote_host = 4;
-   */
-  remoteHost: string;
-
-  /**
-   * @generated from field: int64 remote_port = 5;
-   */
-  remotePort: bigint;
-
-  /**
-   * @generated from field: string local_host = 6;
-   */
-  localHost: string;
-
-  /**
-   * @generated from field: int64 local_port = 7;
-   */
-  localPort: bigint;
 
   /**
    * @generated from field: string protocol = 8;
@@ -3509,9 +3583,24 @@ export declare type PortForwardDTO = Message<"boxteam.gateway.v2.PortForwardDTO"
   error: string;
 
   /**
-   * @generated from field: string local_url = 12;
+   * @generated from field: string gateway_id = 14;
    */
-  localUrl: string;
+  gatewayId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PortForwardEndpoint listener = 15;
+   */
+  listener?: PortForwardEndpoint | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PortForwardEndpoint destination = 16;
+   */
+  destination?: PortForwardEndpoint | undefined;
+
+  /**
+   * @generated from field: bool enabled = 17;
+   */
+  enabled: boolean;
 };
 
 /**
@@ -3528,6 +3617,11 @@ export declare type PortForwardListDTO = Message<"boxteam.gateway.v2.PortForward
    * @generated from field: repeated boxteam.gateway.v2.PortForwardDTO items = 1;
    */
   items: PortForwardDTO[];
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
 };
 
 /**
@@ -3535,6 +3629,58 @@ export declare type PortForwardListDTO = Message<"boxteam.gateway.v2.PortForward
  * Use `create(PortForwardListDTOSchema)` to create a new message.
  */
 export declare const PortForwardListDTOSchema: GenMessage<PortForwardListDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PortForwardHostDTO
+ */
+export declare type PortForwardHostDTO = Message<"boxteam.gateway.v2.PortForwardHostDTO"> & {
+  /**
+   * @generated from field: string host_id = 1;
+   */
+  hostId: string;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: string description = 3;
+   */
+  description: string;
+
+  /**
+   * @generated from field: string kind = 4;
+   */
+  kind: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PortForwardHostDTO.
+ * Use `create(PortForwardHostDTOSchema)` to create a new message.
+ */
+export declare const PortForwardHostDTOSchema: GenMessage<PortForwardHostDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PortForwardHostsDTO
+ */
+export declare type PortForwardHostsDTO = Message<"boxteam.gateway.v2.PortForwardHostsDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PortForwardHostDTO items = 2;
+   */
+  items: PortForwardHostDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PortForwardHostsDTO.
+ * Use `create(PortForwardHostsDTOSchema)` to create a new message.
+ */
+export declare const PortForwardHostsDTOSchema: GenMessage<PortForwardHostsDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.ReorderGatewayWorkspacesRequest

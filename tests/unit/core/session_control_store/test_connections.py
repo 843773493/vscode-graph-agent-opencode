@@ -123,7 +123,7 @@ def test_rejected_database_preserves_bytes_and_keeps_location_in_diagnostics(
     detail = str(caught.value)
     assert str(tmp_path) not in detail and private_object not in detail
     assert "artifact=session_control" in detail and "stage=schema_version" in detail
-    assert "user_version=" in detail and "supported=18" in detail
+    assert "user_version=" in detail and "supported=20" in detail
     assert str(database) in caplog.text
     assert database.read_bytes() == before
     assert not database.with_name(database.name + "-wal").exists()

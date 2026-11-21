@@ -77,7 +77,7 @@ try {
     return response.data;
   };
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
   const owner = targets.active_workspace;
@@ -115,7 +115,7 @@ try {
   const child = fork.thread_id;
   expect(child).not.toBe(main);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   // 刷新按钮先于工作区镜像出现；等产品导航实际读到刚创建的 Session 后再发起搜索。
   await expect(page.getByRole('treeitem', { name: /^消息原文定位验收/ })).toBeVisible();
   expect(await page.locator(threadSelector(child)).count()).toBe(0);

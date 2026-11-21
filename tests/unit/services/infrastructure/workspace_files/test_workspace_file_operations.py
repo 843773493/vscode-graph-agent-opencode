@@ -12,10 +12,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 
 from app.api import workspace as workspace_api
-from app.api.deps import get_request_id, get_workspace_service, verify_local_token
+from app.api.deps import get_workspace_service, verify_local_token
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
 )

@@ -1,4 +1,4 @@
-import { normalizeDisplayText } from "../utils/displayText";
+import { normalizeDisplayText, truncateDisplayText } from "../utils/displayText";
 import { isRecord } from "../utils/jsonDisplay";
 
 export interface KeyFlowToolCallSummary {
@@ -43,7 +43,7 @@ export function compactKeyFlowText(value: unknown, maxLength = 120): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return `${text.slice(0, maxLength)}...`;
+  return `${truncateDisplayText(text, maxLength)}...`;
 }
 
 export function keyFlowSkillNames(value: unknown): string[] {

@@ -329,30 +329,30 @@ def _upsert_tool_call(
     tool_call_id = payload.get("tool_call_id")
     if not isinstance(tool_call_id, str) or not tool_call_id:
         raise MessageStreamError("tool_call 事件缺少 tool_call_id")
+    incoming = dict(payload)
+    arguments_delta = incoming.pop("arguments_delta", None)
+    if arguments_delta is not None and not isinstance(arguments_delta, str):
+        raise MessageStreamError("tool_call arguments_delta 必须是字符串")
     tool_calls = state.setdefault("tool_calls", [])
-    for tool_call in tool_calls:
-        if (
-            isinstance(tool_call, dict)
-            and tool_call.get("tool_call_id") == tool_call_id
-        ):
-            incoming = dict(payload)
-            existing_name = tool_call.get("tool_name")
-            if (
-                isinstance(existing_name, str)
-                and existing_name
-                and not incoming.get("tool_name")
-            ):
-                incoming.pop("tool_name", None)
-            existing_arguments = tool_call.get("arguments")
-            if (
-                isinstance(existing_arguments, dict)
-                and existing_arguments
-                and incoming.get("arguments") in ({}, "", None)
-            ):
-                incoming.pop("arguments", None)
-            tool_call.update(incoming)
-            return
-    tool_calls.append(_clone_json_tree(dict(payload)))
+    tool_call = _find_tool_call(state, tool_call_id)
+    if tool_call is None:
+        incoming = _clone_json_tree(incoming)
+        tool_call = {}
+        tool_calls.append(tool_call)
+    existing_arguments = tool_call.get("arguments")
+    if arguments_delta is not None and "arguments" not in incoming:
+        raw = existing_arguments.get("raw", "") if isinstance(existing_arguments, dict) else ""
+        incoming["arguments"] = {"raw": raw + arguments_delta}
+    if isinstance(tool_call.get("tool_name"), str) and tool_call["tool_name"] and not incoming.get("tool_name"):
+        incoming.pop("tool_name", None)
+    if (
+        isinstance(existing_arguments, dict)
+        and existing_arguments
+        and incoming.get("arguments") in ({}, "", None)
+        and incoming.get("arguments_complete") is not True
+    ):
+        incoming.pop("arguments", None)
+    tool_call.update(incoming)
 
 
 def _find_tool_call(

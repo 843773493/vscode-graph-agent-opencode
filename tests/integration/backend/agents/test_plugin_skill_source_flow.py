@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.plugin_package import install_plugin_async
@@ -98,15 +99,27 @@ def plugin_model(request: pytest.FixtureRequest) -> Iterator[ModelCase]:
 
 def _configure_model(path: Path, gateway_url: str) -> None:
     config = commentjson.loads(path.read_text())
-    config["llm"]["providers"] = [{
-        "id": "plugin-skill", "endpoint": ENDPOINT, "model": MODEL, "api_key": "plugin-skill-test-key",
-        "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True,
-            "supports_reasoning": False}, "supports_reasoning": {"reasoning_content": False}},
-    }]
+    config["llm"]["providers"] = {
+        "plugin-skill": {
+            "defaults": {
+                "endpoint": ENDPOINT,
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": MODEL}},
+        }
+    }
     for agent in config["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "plugin-skill", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'plugin-skill', 'model_id': 'default'}, 'fallbacks': []}
         agent["tools"]["custom"] = [{"tool_id": "test_tool_2", "skills": [NAME]}]
     config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
         "url": gateway_url, "timeout_seconds": 5,
@@ -184,9 +197,9 @@ async def _session(client: httpx.AsyncClient, workspace_id: str) -> tuple[str, s
 
 async def _send(client: httpx.AsyncClient, workspace_id: str, session_id: str) -> str:
     accepted = await _data(await client.post(f"/api/v1/sessions/{session_id}/messages",
-        headers={"X-BoxTeam-Workspace-Id": workspace_id}, json={
+        headers={"X-BoxTeam-Workspace-Id": workspace_id}, json=with_message_run_operation_id({
             "message": {"content": "加载插件说明"}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }))
+        })))
     return accepted["job_id"]
 
 
@@ -423,6 +436,25 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
             assert frozen_receipt["tracked"] is False and frozen_receipt["append_status"] == "none"
             assert frozen_receipt["revision"] == new_receipt["revision"]
             assert BODIES["2.0.0"].strip() in plugin_model.request_text(untrack_calls[1])
+
+            async def read_context_markers() -> tuple[list[dict], list[list[dict]]]:
+                headers = {"X-BoxTeam-Workspace-Id": workspace_id}
+                path = f"/api/v1/sessions/{session_id}/threads/{thread_id}"
+                history = await _data(await client.post(f"{path}/history", headers=headers,
+                    json={"direction": "tail", "turns": 20, "include": ["metadata"]}))
+                assert history["has_before"] is False
+                markers = [part for turn in history["items"] for part in turn["response_parts"]
+                    if part["kind"] == "context_notice"]
+                assert markers and all(not marker.get("context_cursor") for marker in markers)
+                contents = [(await _data(await client.post(f"{path}/items/inspect", headers=headers,
+                    json={"operation": "content", "content_ref": marker["context_content_ref"]})))["contents"]
+                    for marker in markers]
+                return markers, contents
+
+            frozen_markers = await read_context_markers()
+            assert any(marker["context_source_id"].startswith("skill:") for marker in frozen_markers[0])
+            for body in BODIES.values():
+                assert body.strip() in json.dumps(frozen_markers[1], ensure_ascii=False)
             await _bind(client, gateway_id, workspace_id, None)
             await _published(client, gateway_id, workspace_id, None)
             for version in BODIES:
@@ -434,6 +466,7 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
         close_gateway_process(gateway)
         gateway = start("gateway-restarted")
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=75, trust_env=False) as client:
+            assert await read_context_markers() == frozen_markers
             retained = plugin_model.plan(session_id, thread_id, load=False)
             await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
             assert BODIES["2.0.0"].strip() in plugin_model.request_text(retained[0])

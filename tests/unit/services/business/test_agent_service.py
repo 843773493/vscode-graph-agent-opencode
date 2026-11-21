@@ -9,8 +9,9 @@ from threading import Event, Thread
 import commentjson
 import pytest
 
-from app.agents import agent_factory
 from app.agents.policy import DEFAULT_AGENT_TOOL_NAMES
+from app.runtime import provider_model
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
 
@@ -52,7 +53,7 @@ async def test_provider_configuration_error_is_returned_without_hiding_agent(
     monkeypatch.setattr(
         "app.services.business.agent_service.provider_configuration_error",
         lambda provider: (
-            "OAuth 凭据缺少账号信息" if provider["id"] == "backup_1" else None
+            "OAuth 凭据缺少账号信息" if provider["provider_id"] == "backup_1" else None
         ),
     )
 
@@ -60,13 +61,13 @@ async def test_provider_configuration_error_is_returned_without_hiding_agent(
     default_agent = next(agent for agent in agents if agent.agent_id == "default")
     broken = next(
         provider
-        for provider in default_agent.providers
-        if provider.provider_id == "backup_1"
+        for provider in default_agent.models
+        if provider.model_ref.provider_id == "backup_1"
     )
 
     assert broken.available is False
     assert broken.configuration_error == "OAuth 凭据缺少账号信息"
-    assert len(default_agent.providers) > 1
+    assert len(default_agent.models) > 1
 
 
 @pytest.mark.asyncio
@@ -77,17 +78,17 @@ async def test_agent_list_defers_sdk_failure_to_execution(
     error = RuntimeError("SDK 初始化失败")
 
     def fail_sdk(provider, _runtime, **_kwargs):
-        calls.append(provider["id"])
+        calls.append(provider["provider_id"])
         raise error
 
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", fail_sdk)
+    monkeypatch.setattr(provider_model, "build_model_from_provider", fail_sdk)
     agents = await AgentService(config_service=agent_config_service).list()
-    assert agents and all(provider.available for agent in agents for provider in agent.providers)
+    assert agents and all(provider.available for agent in agents for provider in agent.models)
     assert calls == []
     with pytest.raises(RuntimeError, match="当前选择的模型配置不可用") as caught:
-        agent_factory.build_runtime_for_agent("default", agent_config_service)
+        prepare_agent_model("default", agent_config_service)
     assert caught.value.__cause__ is error
-    assert calls == [agent_config_service.get_agent_runtime_config("default")["providers"][0]["id"]]
+    assert calls == [agent_config_service.get_agent_runtime_config("default")["models"][0]["provider_id"]]
 
 
 @pytest.mark.asyncio
@@ -97,11 +98,12 @@ async def test_agent_list_rechecks_oauth_credentials_without_sdk(
     from app.runtime import chatgpt_auth
 
     config = commentjson.loads(Path("configs/workspace_inline.jsonc").read_text())
-    primary = config["agents"]["default"]["model"]["primary_provider"]
-    provider = next(value for value in config["llm"]["providers"] if value["id"] == primary)
-    provider.update({"custom_llm_provider": "chatgpt", "model": "chatgpt/gpt-5.6-codex",
+    primary = config["agents"]["default"]["model"]["primary"]
+    provider = config["llm"]["providers"][primary["provider_id"]]["defaults"]
+    config["llm"]["providers"][primary["provider_id"]]["models"][primary["model_id"]]["model"] = "chatgpt/gpt-5.6-codex"
+    provider.update({"custom_llm_provider": "chatgpt",
         "auth": {"type": "oauth", "method": "chatgpt"},
-        "api_mode": {"protocol": "responses", "model_info": {"supports_function_calling": True}}})
+        "api_mode": {"protocol": "responses", "model_info": {"supports_function_calling": True, "supports_reasoning": False}, "supports_reasoning": {}}})
     config_path = tmp_path / "oauth-workspace.jsonc"
     config_path.write_text(json.dumps(config))
     auth_dir = tmp_path / "oauth"
@@ -115,13 +117,13 @@ async def test_agent_list_rechecks_oauth_credentials_without_sdk(
     def unexpected_sdk(*_args, **_kwargs):
         raise AssertionError("Agent 列表不得初始化 SDK 或登记 SDK 模型能力")
 
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", unexpected_sdk)
+    monkeypatch.setattr(provider_model, "build_model_from_provider", unexpected_sdk)
     monkeypatch.setattr(chatgpt_auth, "ensure_litellm_chatgpt_model_capabilities", unexpected_sdk)
     service = AgentService(config_service=ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path))
 
     def selected(agents):
         default = next(agent for agent in agents if agent.agent_id == "default")
-        return next(value for value in default.providers if value.provider_id == primary)
+        return next(value for value in default.models if value.model_ref.model_dump() == primary)
 
     first = selected(await service.list())
     assert not first.available and "access_token" in first.configuration_error
@@ -133,16 +135,18 @@ async def test_agent_list_rechecks_oauth_credentials_without_sdk(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["provider", "tool_policy", "model_resolution"])
 async def test_provider_validation_does_not_block_event_loop(
     monkeypatch: pytest.MonkeyPatch,
     agent_config_service: ConfigService,
+    phase: str,
 ) -> None:
     entered, heartbeat, release = Event(), Event(), Event()
     observed: list[bool] = []
     errors: list[str] = []
     loop = asyncio.get_running_loop()
 
-    def validate(_provider: object) -> None:
+    def wait_for_observer() -> None:
         if not entered.is_set():
             entered.set()
             if not release.wait(10):
@@ -159,10 +163,17 @@ async def test_provider_validation_does_not_block_event_loop(
         finally:
             release.set()
 
-    monkeypatch.setattr(
-        "app.services.business.agent_service.provider_configuration_error",
-        validate,
-    )
+    if phase == "provider":
+        monkeypatch.setattr("app.services.business.agent_service.provider_configuration_error", lambda _provider: wait_for_observer())
+    else:
+        method = "resolve_agent_tool_policy" if phase == "tool_policy" else "get_agent_runtime_config"
+        original = getattr(agent_config_service, method)
+
+        def resolve(*args, **kwargs):
+            wait_for_observer()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(agent_config_service, method, resolve)
     observer = Thread(target=observe, daemon=True)
     observer.start()
     try:
@@ -173,6 +184,6 @@ async def test_provider_validation_does_not_block_event_loop(
 
     assert not observer.is_alive()
     assert errors == []
-    assert observed == [True], "Provider 同步校验阻塞了工作区事件循环"
+    assert observed == [True], f"Agent 列表的 {phase} 同步读取阻塞了工作区事件循环"
     assert agents
-    assert all(provider.available for agent in agents for provider in agent.providers)
+    assert all(provider.available for agent in agents for provider in agent.models)

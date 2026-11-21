@@ -1,8 +1,9 @@
-"""MessageService：从 LangGraph checkpoint 读取会话历史。"""
+"""消息准入、checkpoint 读取与可见消息查询。"""
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
     ExecutionQueueRecord,
+    MessageSubmissionConflictError,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import (
@@ -42,11 +44,11 @@ from app.schemas.internal_v2.message import (
     MessageDTO,
 )
 from app.schemas.internal_v2.pending_request import PendingRequestControl
-from app.services.business.session_turn_history.visible_page import visible_message_page
-from app.services.business.system_reminder_checkpoint_service import (
-    build_checkpoint_reminder_decision,
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    build_runtime_reminder_decision,
+    submit_runtime_reminder,
 )
+from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.business.user_content_builder import (
     UserContentBuilder,
     build_human_response_metadata,
@@ -63,14 +65,19 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     message_annotations,
 )
+from app.services.mapping.agent_state_messages import project_agent_state_records
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
 from app.services.mapping.itemized.provider_history import public_message_record
-from app.services.mapping.message_content import MessageContentProjectionMixin
+from app.services.mapping.message_content import (
+    attachments_from_message_metadata,
+    checkpoint_message_to_dto,
+    is_user_visible_message,
+)
 
 
-class MessageService(MessageContentProjectionMixin):
+class MessageService:
     def __init__(
         self,
         *,
@@ -178,7 +185,7 @@ class MessageService(MessageContentProjectionMixin):
     def accept_user_message(
         self, message: MessageDTO, *, execution_identity: UserExecutionIdentity,
         queue_input: ExecutionQueueInput,
-    ) -> None:
+    ) -> ExecutionQueueRecord:
         """在 Job 入队前冻结用户输入，并原子建立 acceptance、Turn/root 和 initial execution。"""
         if message.role != MessageRole.user or message.thread_id is None:
             raise ValueError("接受用户输入必须提供真实 user 消息和 thread_id")
@@ -187,7 +194,7 @@ class MessageService(MessageContentProjectionMixin):
             raise TypeError("MessageService 缺少 v2 Turn acceptance owner")
         metadata = dict(message.metadata)
         metadata.pop("display_content", None)
-        metadata.pop("boxteam_session_provider_id", None)
+        metadata.pop("boxteam_session_model", None)
         built = UserContentBuilder(attachment_service=AttachmentContentService(
             workspace_root=self._workspace_root, attachment_store=self._attachment_store,
         )).build(
@@ -202,7 +209,7 @@ class MessageService(MessageContentProjectionMixin):
             attachment_diagnostics=built.diagnostics,
         )
         payload = user_input_payload(built.content, response.get("attachments"))
-        accept(
+        accepted = accept(
             message.session_id, thread_id=message.thread_id,
             accepted_ingress_id=message.message_id,
             acceptance_idempotency_key=f"message:{message.message_id}",
@@ -214,11 +221,28 @@ class MessageService(MessageContentProjectionMixin):
             root_item_id=f"item-{message.message_id}",
             extensions=message_annotations(response), queue_input=queue_input,
         )
-        if self._attachment_store is not None:
+        if self._attachment_store is not None and accepted["job_id"] == execution_identity.job_id:
             self._attachment_store.complete_message_ingests(
                 message.session_id, thread_id=message.thread_id, message_id=message.message_id,
                 messages=self._checkpointer,
             )
+        return self._checkpointer.execution_queue_record(
+            message.session_id, message.thread_id, accepted["job_id"],
+        )
+
+    def message_submission(
+        self, session_id: str, thread_id: str, operation_id: str, *,
+        submission_hash: str | None = None,
+    ) -> ExecutionQueueRecord | None:
+        """读取原准入与队列输入，不复制业务正文或建立操作账本。"""
+        if self._checkpointer is None:
+            raise RuntimeError("消息操作查询缺少 canonical input owner")
+        record = self._checkpointer.message_submission(session_id, thread_id, operation_id)
+        if record is not None and (record.input.submission_hash is None or (
+            submission_hash is not None and record.input.submission_hash != submission_hash
+        )):
+            raise MessageSubmissionConflictError("operation_id 已用于不同消息输入或非用户提交")
+        return record
 
     def accept_job_input(self, job: JobRuntimeStateProtocol, *, queue_input: ExecutionQueueInput) -> ExecutionQueueRecord:
         """真实 Job 入队前完成唯一次准入；已有输入只按完整 identity 核验。"""
@@ -234,7 +258,7 @@ class MessageService(MessageContentProjectionMixin):
                 job.session_id, thread_id=job.thread_id,
                 job_id=job.job_id, message_id=job.message_id,
             )
-            dto = self._message_to_dto(job.session_id, job.thread_id, 0, frozen)
+            dto = checkpoint_message_to_dto(job.session_id, job.thread_id, 0, frozen)
             if (admission.turn_id != binding.turn_id
                     or admission.admission_idempotency_key != binding.admission_idempotency_key
                     or dto.content != job.message or dto.attachments != job.attachments):
@@ -250,8 +274,11 @@ class MessageService(MessageContentProjectionMixin):
             raise ValueError("seed/reference 准入不得携带未登记的附件")
         if "canonical_item_manifests" in job.message_metadata:
             response = dict(job.message_metadata)
-            if self._attachments_from_metadata(response) != job.attachments:
+            if attachments_from_message_metadata(response) != job.attachments:
                 raise ValueError("内部 Job 附件与已接受 canonical 输入不一致")
+            # runtime 已准入的后台优先级归原队列，不被 Job 的默认前台值覆盖。
+            frozen = saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
+            queue_input = replace(queue_input, background=frozen.input.background)
         else:
             built = UserContentBuilder(attachment_service=AttachmentContentService(
                 workspace_root=self._workspace_root, attachment_store=self._attachment_store,
@@ -302,7 +329,7 @@ class MessageService(MessageContentProjectionMixin):
                 reference.session_id, thread_id=reference.thread_id,
                 job_id=reference.job_id, message_id=reference.message_id, intent=binding,
             )
-        dto = self._message_to_dto(reference.session_id, reference.thread_id, 0, human)
+        dto = checkpoint_message_to_dto(reference.session_id, reference.thread_id, 0, human)
         if display or isinstance(binding, UserExecutionIdentity):
             return dto
         if not isinstance(human.content, str):
@@ -336,7 +363,7 @@ class MessageService(MessageContentProjectionMixin):
                 raw_messages,
                 canonical_items,
             )
-        return await run_sync_shielded(self._agent_state_records, raw_messages, context_name="Agent State")
+        return await run_sync_shielded(project_agent_state_records, raw_messages, context_name="Agent State")
 
     async def get_agent_context_state(
         self, session_id: str, thread_id: str
@@ -389,7 +416,7 @@ class MessageService(MessageContentProjectionMixin):
                 raise ValueError("_summarization_event 缺少 summary_message")
             effective_messages = apply_summarization_event(raw_messages, event)
 
-        records = await run_sync_shielded(self._agent_state_records, effective_messages, context_name="Agent Context")
+        records = await run_sync_shielded(project_agent_state_records, effective_messages, context_name="Agent Context")
 
         return {
             "records": records,
@@ -440,7 +467,7 @@ class MessageService(MessageContentProjectionMixin):
     ) -> bool:
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法写入 system_reminder")
-        return submit_checkpoint_reminder(
+        return submit_runtime_reminder(
             checkpointer=self._checkpointer,
             session_id=session_id,
             thread_id=thread_id,
@@ -457,7 +484,7 @@ class MessageService(MessageContentProjectionMixin):
     ) -> InternalExecutionInterrupt | str:
         if self._checkpointer is None:
             raise RuntimeError("MessageService 缺少 internal interrupt owner")
-        decision = build_checkpoint_reminder_decision(
+        decision = build_runtime_reminder_decision(
             session_id=admission.session_id, thread_id=admission.thread_id,
             execution_id=admission.execution_id, reminder=reminder,
             response_metadata=response_metadata, checkpoint_source="user_interrupt",
@@ -535,9 +562,9 @@ class MessageService(MessageContentProjectionMixin):
                 continue
             # 普通消息列表只暴露用户可见的输入和最终回复；工具调用、
             # system_reminder 与空 assistant 仍可通过 Agent State 调试视图查看。
-            if not self._is_user_visible_message(message):
+            if not is_user_visible_message(message):
                 continue
-            dto = self._message_to_dto(session_id, thread_id, index, message)
+            dto = checkpoint_message_to_dto(session_id, thread_id, index, message)
             visible_key = (dto.role.value, dto.message_id)
             if visible_key in seen_visible_messages:
                 continue

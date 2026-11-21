@@ -24,9 +24,9 @@ const agent = (): Agent => ({
   model: "primary",
   tools: [],
   capabilities: [],
-  providers: [
+  models: [
     {
-      provider_id: "provider_a",
+      model_ref: { provider_id: "provider_a", model_id: "default" },
       model: "model-a",
       custom_llm_provider: "openai",
       available: true,
@@ -76,6 +76,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
@@ -83,9 +84,9 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
-    refreshAgents: async () => undefined,
+    refreshAgents: async () => [],
     setWorkspaceDefaultAgent: async () => undefined,
-    setWorkspaceDefaultProvider: async () => undefined,
+    setWorkspaceDefaultModel: async () => undefined,
     switchContentView: () => undefined,
     createSession: async () => undefined,
     renameSession: async () => undefined,

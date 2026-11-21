@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import HumanMessage
 
-from app.agents.agent_factory import build_model_from_provider
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+from app.runtime.provider_model import build_model_from_provider
 
 
 @pytest.fixture

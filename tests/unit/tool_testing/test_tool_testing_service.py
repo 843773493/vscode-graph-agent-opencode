@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from langchain_core.messages import AIMessage
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 import app.tool_testing.service as tool_test_service_module
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO, ToolTestStartRequest
 from app.tool_testing.cases.apply_patch_case import create_apply_patch_cases
 from app.tool_testing.registry import ToolTestRegistry
@@ -24,13 +26,16 @@ from tests.support.tool_test_faults import (
 )
 
 
-class _TwoProviderConfigService:
+class _TwoModelConfigService(SingleProviderRuntimeConfig):
+    def resolve_agent_id(self, agent_id: str | None) -> str:
+        return "coder" if agent_id is None else agent_id
+
     def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
-        assert agent_id == "default"
+        assert agent_id == "coder"
         return {
-            "providers": [
-                {"id": "provider_a", "model": "model-a", "api_key": "secret-a"},
-                {"id": "provider_b", "model": "model-b", "api_key": "secret-b"},
+            "models": [
+                {"provider_id": "shared", "model_id": "model_a", "model": "model-a", "api_key": "secret-a"},
+                {"provider_id": "shared", "model_id": "model_b", "model": "model-b", "api_key": "secret-b"},
             ],
             "temperature": 0.2,
             "top_p": 1,
@@ -42,8 +47,48 @@ def test_apply_patch_defaults_to_ten_distinct_cases_and_one_repetition() -> None
     cases = ToolTestRegistry().cases_for("apply_patch")
 
     assert ToolTestStartRequest().repetitions == 1
+    assert ToolTestStartRequest().agent_id is None
     assert len(cases) == 10
     assert len({case.case_id for case in cases}) == 10
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "expected_agent_id"),
+    [(None, "coder"), ("default", "default")],
+)
+@pytest.mark.asyncio
+async def test_tool_test_resolves_omitted_agent_but_preserves_explicit_id(
+    tmp_path: Path,
+    agent_id: str | None,
+    expected_agent_id: str,
+) -> None:
+    class ConfigServiceStub(SingleProviderRuntimeConfig):
+        def __init__(self) -> None:
+            self.runtime_agent_ids: list[str] = []
+
+        def resolve_agent_id(self, candidate: str | None) -> str:
+            return "coder" if candidate is None else candidate
+
+        def get_agent_runtime_config(self, resolved: str) -> dict[str, Any]:
+            self.runtime_agent_ids.append(resolved)
+            return {"models": []}
+
+    config_service = ConfigServiceStub()
+    service = ToolTestService(
+        config_service=config_service,  # type: ignore[arg-type]
+        registry=ToolTestRegistry(),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+    )
+
+    with pytest.raises(ValueError, match="当前 Agent 不允许的模型"):
+        await service.start(
+            tool_name="apply_patch",
+            request=ToolTestStartRequest(agent_id=agent_id, model_refs=[ModelReferenceDTO(provider_id="shared", model_id="model_a")]),
+        )
+
+    assert config_service.runtime_agent_ids == [expected_agent_id]
 
 
 class _ConcurrentApplyPatchBoundModel:
@@ -165,11 +210,119 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
     assert model.bound_parameters is not None
     assert model.bound_parameters["properties"] == expected_parameters
     request_path = (
-        store.case_dir(case.tool_name, "provider_only", case.case_id) / "request.json"
+        store.case_dir(case.tool_name, ModelReferenceDTO(provider_id="provider_only", model_id="general"), case.case_id) / "request.json"
     )
     request_payload = json.loads(request_path.read_text(encoding="utf-8"))
     assert request_payload["tool"]["parameters"]["properties"] == expected_parameters
     assert "callback" not in request_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_cold_model_construction_does_not_block_workspace_event_loop(
+    tmp_path: Path,
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+    def build_model(**_: object) -> RuntimeInjectedArgumentModel:
+        entered.set()
+        if not release.wait(timeout=2):
+            raise TimeoutError("事件循环未能在模型构造期间继续处理请求")
+        return RuntimeInjectedArgumentModel()
+
+    case = RuntimeInjectedArgumentCase()
+    service = ToolTestService(
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[case]),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+        model_builder=build_model,
+    )
+    started = await service.start(tool_name=case.tool_name, request=ToolTestStartRequest())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        # 构造仍未完成时，原运行状态读取和事件循环必须保持可用。
+        assert service.get(started.run_id).status == "running"
+        release.set()
+        async with asyncio.timeout(2):
+            while service.get(started.run_id).status not in {"completed", "failed"}:
+                await asyncio.sleep(0.01)
+        result = service.get(started.run_id)
+        assert result.status == "completed"
+        assert len(result.attempts) == 1 and result.attempts[0].passed
+    finally:
+        release.set()
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+@pytest.mark.parametrize("build_fails", [False, True])
+async def test_shutdown_keeps_provider_lock_until_model_construction_finishes(
+    tmp_path: Path, repeat_cancel: bool, build_fails: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+    model = RuntimeInjectedArgumentModel()
+    builds: list[int] = []
+
+    def build_model(**_: object) -> RuntimeInjectedArgumentModel:
+        builds.append(threading.get_ident())
+        loop.call_soon_threadsafe(entered.set)
+        try:
+            if not release.wait(timeout=3):
+                raise TimeoutError("模型构造屏障未释放")
+            if build_fails:
+                raise RuntimeError("模型构造失败")
+            return model
+        finally:
+            finished.set()
+
+    case = RuntimeInjectedArgumentCase()
+    service = ToolTestService(
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[case]),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+        model_builder=build_model,
+    )
+    started = await service.start(tool_name=case.tool_name, request=ToolTestStartRequest(repetitions=2))
+    closing: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        closing = asyncio.create_task(service.shutdown())
+        done, _ = await asyncio.wait({closing}, timeout=0.02)
+        assert not done, "构造线程尚未退出，关闭就提前完成"
+        assert not finished.is_set()
+        assert service._provider_locks[ModelReferenceDTO(provider_id="provider_only", model_id="general")].locked()
+        if repeat_cancel:
+            closing.cancel("重复取消关闭等待")
+            done, _ = await asyncio.wait({closing}, timeout=0.02)
+            assert not done, "重复取消遗弃了仍在运行的构造线程"
+            assert service._provider_locks[ModelReferenceDTO(provider_id="provider_only", model_id="general")].locked()
+
+        release.set()
+        async with asyncio.timeout(1):
+            if repeat_cancel:
+                with pytest.raises(asyncio.CancelledError):
+                    await closing
+            else:
+                await closing
+        assert finished.is_set()
+        assert not service._provider_locks[ModelReferenceDTO(provider_id="provider_only", model_id="general")].locked()
+        assert not service._tasks
+        assert len(builds) == 1, "取消后不应因构造失败而继续下一次尝试"
+        assert model.bound_parameters is None, "关闭后不应继续发起模型调用"
+        result = service.get(started.run_id)
+        assert len(result.attempts) == int(build_fails)
+        if build_fails:
+            assert result.attempts[0].error == "工具测试失败: stage=model_build, type=RuntimeError"
+    finally:
+        release.set()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await service.shutdown()
 
 
 @pytest.mark.asyncio
@@ -179,22 +332,22 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
 ) -> None:
     workspace_root, asset_root = apply_patch_test_roots
     concurrency = {
-        "provider_a": 0,
-        "provider_b": 0,
+        "model_a": 0,
+        "model_b": 0,
         "active": 0,
         "max_active": 0,
-        "max:provider_a": 0,
-        "max:provider_b": 0,
+        "max:model_a": 0,
+        "max:model_b": 0,
     }
-    model_builds = {"provider_a": 0, "provider_b": 0}
+    model_builds = {"model_a": 0, "model_b": 0}
     redacted_provider_count = 0
     redact_secrets = tool_test_service_module._redact_secrets
 
     def count_provider_redaction(value: object) -> object:
         nonlocal redacted_provider_count
-        if isinstance(value, dict) and value.get("id") in {
-            "provider_a",
-            "provider_b",
+        if isinstance(value, dict) and value.get("model_id") in {
+            "model_a",
+            "model_b",
         }:
             redacted_provider_count += 1
         return redact_secrets(value)
@@ -207,7 +360,7 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
         *, provider: dict[str, Any], runtime_config: dict[str, Any]
     ) -> _ConcurrentApplyPatchModel:
         assert runtime_config["temperature"] == 0.2
-        provider_id = str(provider["id"])
+        provider_id = str(provider["model_id"])
         model_builds[provider_id] += 1
         return _ConcurrentApplyPatchModel(provider_id, concurrency)
 
@@ -222,7 +375,7 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
 
     monkeypatch.setattr(store, "read_run", count_run_reads)
     service = ToolTestService(
-        config_service=_TwoProviderConfigService(),  # type: ignore[arg-type]
+        config_service=_TwoModelConfigService(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=[create_apply_patch_cases()[0]]),
         store=store,
         workspace_root=workspace_root,
@@ -247,19 +400,21 @@ async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     assert all(attempt.passed for attempt in result.attempts)
     assert all(attempt.model_calls == 1 for attempt in result.attempts)
     assert all(attempt.reasoning_only_calls == 0 for attempt in result.attempts)
-    assert all(provider.success_rate == 100 for provider in result.providers)
-    assert all(provider.model_calls == 2 for provider in result.providers)
-    assert all(provider.reasoning_only_calls == 0 for provider in result.providers)
+    assert [model.model_ref for model in result.models] == [ModelReferenceDTO(provider_id="shared", model_id=name) for name in ("model_a", "model_b")]
+    assert {attempt.model_ref for attempt in result.attempts} == {model.model_ref for model in result.models}
+    assert all(provider.success_rate == 100 for provider in result.models)
+    assert all(provider.model_calls == 2 for provider in result.models)
+    assert all(provider.reasoning_only_calls == 0 for provider in result.models)
     assert concurrency["max_active"] >= 2
-    assert concurrency["max:provider_a"] == 1
-    assert concurrency["max:provider_b"] == 1
-    assert model_builds == {"provider_a": 1, "provider_b": 1}
+    assert concurrency["max:model_a"] == 1
+    assert concurrency["max:model_b"] == 1
+    assert model_builds == {"model_a": 1, "model_b": 1}
     assert redacted_provider_count == 2
     assert read_run_calls <= 1
     assert (store.tool_dir("apply_patch") / "run.json").is_file()
     case_dir = store.case_dir(
         "apply_patch",
-        "provider_a",
+        ModelReferenceDTO(provider_id="shared", model_id="model_a"),
         "apply_patch_update_single_file",
     )
     assert (case_dir / "request.json").is_file()
@@ -358,10 +513,10 @@ async def test_failed_model_construction_is_retried_on_next_attempt(
 ) -> None:
     workspace_root, asset_root = apply_patch_test_roots
     concurrency = {
-        "provider_a": 0,
+        "model_a": 0,
         "active": 0,
         "max_active": 0,
-        "max:provider_a": 0,
+        "max:model_a": 0,
     }
     model_builds = 0
 
@@ -373,11 +528,11 @@ async def test_failed_model_construction_is_retried_on_next_attempt(
         model_builds += 1
         if model_builds == 1:
             raise RuntimeError("模型客户端暂时不可用")
-        return _ConcurrentApplyPatchModel(str(provider["id"]), concurrency)
+        return _ConcurrentApplyPatchModel(str(provider["model_id"]), concurrency)
 
     store = ToolTestStore(root=workspace_root / ".boxteam" / "tool_tests")
     service = ToolTestService(
-        config_service=_TwoProviderConfigService(),  # type: ignore[arg-type]
+        config_service=_TwoModelConfigService(),  # type: ignore[arg-type]
         registry=ToolTestRegistry(cases=[create_apply_patch_cases()[0]]),
         store=store,
         workspace_root=workspace_root,
@@ -386,7 +541,7 @@ async def test_failed_model_construction_is_retried_on_next_attempt(
     )
     started = await service.start(
         tool_name="apply_patch",
-        request=ToolTestStartRequest(provider_ids=["provider_a"], repetitions=2),
+        request=ToolTestStartRequest(model_refs=[ModelReferenceDTO(provider_id="shared", model_id="model_a")], repetitions=2),
     )
     for _ in range(100):
         result = service.get(started.run_id)

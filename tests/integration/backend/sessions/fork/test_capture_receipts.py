@@ -8,10 +8,10 @@ import json
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.domain.itemized.serialization import normalize_wire_request
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (

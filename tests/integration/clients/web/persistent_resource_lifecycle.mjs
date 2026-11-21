@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { planChatCalls } from "../../../support/e2e_control/browser_client.mjs";
 
 const phase = process.argv[2];
-assert.ok(["before-unload", "after-unload", "workspace-browser"].includes(phase));
+assert.ok(["before-unload", "after-unload", "workspace-browser", "management-open"].includes(phase));
 const required = (name) => {
   const value = process.env[name];
   assert.ok(value, `缺少环境变量 ${name}`);
@@ -90,11 +90,26 @@ async function waitUntil(label, predicate, timeout = 30000) {
   }
   throw new Error(`等待超时：${label}`);
 }
+async function ownedResourceReply(reply) {
+  assert.equal(reply.status(), 200, await reply.text());
+  const headers = await reply.request().allHeaders();
+  assert.equal(headers["x-boxteam-workspace-id"], workspaceId);
+  assert.equal(headers["x-boxteam-target-gateway-id"], gatewayId);
+  const body = await reply.json();
+  assert.ok(body.request_id);
+  assert.equal(body.request_id, reply.headers()["x-request-id"]);
+  assert.equal(body.data.workspace_id, workspaceId);
+  result.checks.push({ method: reply.request().method(), path: new URL(reply.url()).pathname,
+    query: new URL(reply.url()).search, gateway_id: gatewayId, workspace_id: workspaceId,
+    request_id: body.request_id, resource_ids: body.data.items?.map(item => item.resource_id) });
+  return body.data;
+}
 async function selectSession(sessionId) {
   const main = await api(`/api/v1/sessions/${sessionId}/main-thread`);
   activeOwner = { session_id: sessionId, thread_id: main.thread_id };
-  await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
-  await page.locator(`button[data-session-id="${sessionId}"]`).dblclick();
+  await page.getByTestId("workspace-navigation-root-drop-target").waitFor({ state: "visible" });
+  await page.evaluate(uri => globalThis.workbench.commands.executeCommand("_workbench.open", uri),
+    `boxteam://${gatewayId}/workspace/${workspaceId}/resources/session/${sessionId}/threads/${main.thread_id}`);
   activeThread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${main.thread_id}"]`);
   await activeThread.locator("#input").waitFor({ state: "visible" });
 }
@@ -403,25 +418,80 @@ try {
   } else {
     const other = await createSession("工作区浏览器创建和删除");
     await selectSession(other.session_id);
+    if (phase === "management-open") {
+      step = "open-terminal-management";
+      const listReply = page.waitForResponse(reply => reply.request().method() === "GET"
+        && new URL(reply.url()).pathname === "/api/v1/resources"
+        && new URL(reply.url()).searchParams.get("kind") === "terminal");
+      const terminals = await terminalPanel();
+      assert.deepEqual((await ownedResourceReply(await listReply)).items, []);
+      const [createdReply] = await Promise.all([
+        page.waitForResponse(reply => reply.request().method() === "POST"
+          && new URL(reply.url()).pathname === "/api/v1/resources/terminals"),
+        terminals.getByRole("button", { name: "新建终端", exact: true }).click(),
+      ]);
+      const terminal = await ownedResourceReply(createdReply);
+      assert.deepEqual(terminal.source_thread, other);
+      assert.deepEqual(terminal.thread_associations, [other]);
+      assert.equal(terminal.retention_scope, "thread");
+      await terminals.locator(".terminal-panel-list button.active").waitFor({ state: "visible" });
+      const terminalList = await ownedResourceReply(await page.waitForResponse(reply => reply.request().method() === "GET"
+        && new URL(reply.url()).pathname === "/api/v1/resources"
+        && new URL(reply.url()).searchParams.get("kind") === "terminal"));
+      assert.deepEqual(terminalList.items.map(item => item.resource_id), [terminal.resource_id]);
+      assert.equal(terminalList.items[0].metadata.display_buffer, undefined);
+      await terminalInput("MANAGEMENT");
+      const terminalUrl = new URL(await terminals.locator(".terminal-panel-frame").getAttribute("src"), baseUrl);
+      assert.equal(terminalUrl.searchParams.get("workspaceId"), workspaceId);
+      assert.equal(terminalUrl.searchParams.get("target_gateway_id"), gatewayId);
+      assert.equal(terminalUrl.searchParams.get("terminalId"), terminal.resource_id);
+      assert.equal(terminalUrl.searchParams.get("sessionId"), other.session_id);
+      assert.equal(terminalUrl.searchParams.get("threadId"), other.thread_id);
+      step = "read-selected-terminal-output";
+      const outputReply = page.waitForResponse(reply => reply.request().method() === "GET"
+        && new URL(reply.url()).pathname === `/api/v1/resources/${terminal.resource_id}`);
+      const stopped = await command(terminals, "停止", "stop", terminal.resource_id);
+      assert.equal(stopped.status, "terminated");
+      const detail = await ownedResourceReply(await outputReply);
+      assert.equal(detail.resource_id, terminal.resource_id);
+      assert.ok(detail.metadata.display_buffer.includes("PERSIST_READY_MANAGEMENT"));
+      await waitUntil("停止终端的按需正文", async () =>
+        (await terminals.locator(".terminal-panel-final-output").innerText()).includes("PERSIST_READY_MANAGEMENT"));
+      result.terminal_management = { resource_id: terminal.resource_id, source_thread: other,
+        list_ids: terminalList.items.map(item => item.resource_id), list_omits_output: true,
+        real_pty_marker: "PERSIST_READY_MANAGEMENT", selected_output_visible: true, attach_url: terminalUrl.href };
+    }
+    step = "open-browser-management";
+    const browserListReply = phase === "management-open" ? page.waitForResponse(reply => reply.request().method() === "GET"
+      && new URL(reply.url()).pathname === "/api/v1/resources"
+      && new URL(reply.url()).searchParams.get("kind") === "browser") : null;
     const workspaceBrowsers = await browserPanel();
+    if (browserListReply) assert.deepEqual((await ownedResourceReply(await browserListReply)).items, []);
     await workspaceBrowsers.getByLabel("浏览器保留范围", { exact: true }).selectOption("workspace");
     const [workspaceCreated] = await Promise.all([
       page.waitForResponse(reply => reply.request().method() === "POST"
         && new URL(reply.url()).pathname === "/api/v1/resources/browsers"),
       workspaceBrowsers.getByRole("button", { name: "新建浏览器", exact: true }).click(),
     ]);
-    assert.equal(workspaceCreated.status(), 200, await workspaceCreated.text());
-    assert.equal(workspaceCreated.request().headers()["x-boxteam-workspace-id"], workspaceId);
-    assert.equal(workspaceCreated.request().headers()["x-boxteam-target-gateway-id"], gatewayId);
     const request = workspaceCreated.request().postDataJSON();
     assert.deepEqual({ session_id: request.session_id, thread_id: request.thread_id }, other);
-    const createdBody = await workspaceCreated.json();
-    assert.equal(createdBody.request_id, workspaceCreated.headers()["x-request-id"]);
-    const createdBrowser = createdBody.data;
+    const createdBrowser = await ownedResourceReply(workspaceCreated);
     assert.equal(createdBrowser.retention_scope, "workspace");
     assert.deepEqual(createdBrowser.source_thread, other);
     assert.deepEqual(createdBrowser.thread_associations, [other]);
     await attachedBrowser(workspaceBrowsers);
+    if (phase === "management-open") {
+      const browserUrl = new URL(await workspaceBrowsers.locator("iframe.workspace-runtime-preview-frame.browser").getAttribute("src"), baseUrl);
+      assert.equal(browserUrl.searchParams.get("workspaceId"), workspaceId);
+      assert.equal(browserUrl.searchParams.get("target_gateway_id"), gatewayId);
+      assert.equal(browserUrl.searchParams.get("browserId"), createdBrowser.resource_id);
+      const browserList = await ownedResourceReply(await page.waitForResponse(reply => reply.request().method() === "GET"
+        && new URL(reply.url()).pathname === "/api/v1/resources"
+        && new URL(reply.url()).searchParams.get("kind") === "browser"));
+      assert.deepEqual(browserList.items.map(item => item.resource_id), [createdBrowser.resource_id]);
+      result.browser_management = { resource_id: createdBrowser.resource_id, source_thread: other,
+        list_ids: browserList.items.map(item => item.resource_id), attached: true, attach_url: browserUrl.href };
+    }
     const detachedBrowser = await command(await browserRow(workspaceBrowsers, createdBrowser.resource_id), "解除关联", "detach", createdBrowser.resource_id,
       { expectedRevision: createdBrowser.owner_revision });
     assert.deepEqual(detachedBrowser.thread_associations, []);
@@ -430,8 +500,8 @@ try {
     assert.equal(removedBrowser.status, "deleted");
     result.workspace_browser_created_and_deleted = true;
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "刷新资源树", exact: true }).waitFor({ state: "visible" });
-    await deleteSession(other.session_id);
+    await page.getByTestId("workspace-navigation-root-drop-target").waitFor({ state: "visible" });
+    if (phase === "workspace-browser") await deleteSession(other.session_id);
   }
   assert.deepEqual(result.page_errors, []);
   await auditHttpErrors();

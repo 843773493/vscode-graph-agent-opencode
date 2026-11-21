@@ -6,13 +6,12 @@ import logging
 from collections.abc import Iterator, Mapping
 from typing import TypedDict
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, TypeAdapter
 from pydantic.json_schema import JsonSchemaValue
-
-from app.core.trace_middleware import get_request_id
 
 logger = logging.getLogger(__name__)
 

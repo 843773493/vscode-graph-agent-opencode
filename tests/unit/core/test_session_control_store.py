@@ -81,7 +81,7 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     try:
         version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
         # fresh schema 11 不再维护 SessionControl 的第二套 ToolSet 镜像。
-        assert version == SessionControlStore.SCHEMA_VERSION == 18
+        assert version == SessionControlStore.SCHEMA_VERSION == 20
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -178,7 +178,7 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         assert str(row["kind"]) == "main"
         version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
         # 当前 schema 重开保持完整 GraphBinding，不升级旧生成数据。
-        assert version == 18
+        assert version == 20
     finally:
         second.close()
 
@@ -196,7 +196,7 @@ def _assert_unsupported_schema_unchanged(target: Path, version: int) -> None:
     """拒绝旧库时不改数据库字节，也不产生 journal/WAL/shm 副作用。"""
     paths = tuple(target.with_name(target.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
     before = {path.name: path.read_bytes() for path in paths if path.exists()}
-    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=18"):
+    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=20"):
         SessionControlStore(target)
     after = {path.name: path.read_bytes() for path in paths if path.exists()}
     assert after == before
@@ -783,7 +783,7 @@ def test_current_schema_with_missing_graph_binding_columns_fails_closed(
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 18")
+        outside.execute("PRAGMA user_version = 20")
         outside.commit()
     finally:
         outside.close()
@@ -3859,7 +3859,7 @@ def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -
         empty.close()
     created = SessionControlStore(target)
     try:
-        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 20
         assert created.connection.execute("SELECT name FROM sqlite_schema WHERE name = 'thread_catalog'").fetchone() is not None
     finally:
         created.close()

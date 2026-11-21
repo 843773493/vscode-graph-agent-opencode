@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
-from app.api.deps import get_agent_service, get_request_id, verify_local_token
+from app.api.deps import get_agent_service, verify_local_token
 from app.api.errors import state_conflict_http_error
 from app.schemas.internal_v2.agent import (
     AgentDTO,
     WorkspaceDefaultAgentUpdateRequest,
-    WorkspaceDefaultProviderUpdateRequest,
+    WorkspaceDefaultModelUpdateRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.business.agent_service import AgentService
@@ -48,21 +49,21 @@ async def set_workspace_default_agent(
 
 
 @router.put(
-    "/{agent_id}/workspace-default-provider",
+    "/{agent_id}/workspace-default-model",
     response_model=APIResponse[list[AgentDTO]],
-    summary="设置 Agent 的工作区默认 provider",
+    summary="设置 Agent 的工作区默认模型",
 )
-async def set_workspace_default_provider(
+async def set_workspace_default_model(
     agent_id: str,
-    payload: WorkspaceDefaultProviderUpdateRequest,
+    payload: WorkspaceDefaultModelUpdateRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     agent_service: AgentService = Depends(get_agent_service),
 ):
     try:
-        result = await agent_service.set_workspace_default_provider(
+        result = await agent_service.set_workspace_default_model(
             agent_id,
-            payload.provider_id,
+            payload.model,
         )
     except ValidationError:
         raise

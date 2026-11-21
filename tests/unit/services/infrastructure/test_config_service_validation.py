@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import jsonschema
 import pytest
@@ -20,6 +21,29 @@ def validation_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     schema.write_bytes(Path("configs/workspace_schema.jsonc").read_bytes())
     monkeypatch.setattr(source_layers, "get_user_workspace_schema_path", lambda: tmp_path / "absent.jsonc")
     return inline, schema, tmp_path
+
+
+def _service_with_model_api_mode(
+    validation_files,
+    *,
+    provider_api_mode: dict[str, object],
+    model_overrides: dict[str, object] | None = None,
+) -> ConfigService:
+    inline, _schema, directory = validation_files
+    config = read_jsonc_object(inline)
+    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
+    primary = providers["primary"]
+    defaults = cast(dict[str, object], primary["defaults"])
+    defaults["api_mode"] = provider_api_mode
+    if model_overrides is not None:
+        models = cast(dict[str, dict[str, object]], primary["models"])
+        models["default"]["overrides"] = model_overrides
+    inline.write_text(json.dumps(config), encoding="utf-8")
+    return ConfigService(
+        config_dir=directory,
+        inline_config_path=inline,
+        config_path=directory / "workspace.jsonc",
+    )
 
 
 @pytest.mark.parametrize("stored", [False, True])
@@ -91,7 +115,7 @@ def test_shadow_schema_validation_rejects_without_echoing_config(validation_file
     service.validate_workspace_config()
     snapshot = service.get_snapshot()
     config = snapshot.to_dict()
-    config["llm"]["providers"][0]["api_mode"]["protocol"] = str(directory / "secret-marker")
+    config["llm"]["providers"]["primary"]["defaults"]["api_mode"]["protocol"] = str(directory / "secret-marker")
     with pytest.raises(ValueError, match="stage=config") as failure:
         service._validate_shadow_config(config)
     assert "secret-marker" not in str(failure.value)
@@ -99,3 +123,42 @@ def test_shadow_schema_validation_rejects_without_echoing_config(validation_file
     assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
     assert failure.value.__cause__.validator == "enum"
     assert service.get_snapshot() is snapshot
+
+
+def test_config_admission_resolves_model_protocol_override(validation_files) -> None:
+    service = _service_with_model_api_mode(
+        validation_files,
+        provider_api_mode={
+            "protocol": "chat_completions",
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {"reasoning_content": True},
+        },
+        model_overrides={
+            "custom_llm_provider": "anthropic",
+            "api_mode": {
+                "protocol": "anthropic_messages",
+                "model_info": {"supports_reasoning": True},
+                "supports_reasoning": {
+                    "thinking_blocks": {"thinking": True, "redacted_thinking": False}
+                },
+            },
+        },
+    )
+
+    service.validate_workspace_config()
+
+
+def test_config_admission_rejects_provider_fragment_invalid_for_resolved_protocol(
+    validation_files,
+) -> None:
+    service = _service_with_model_api_mode(
+        validation_files,
+        provider_api_mode={
+            "protocol": "responses",
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {"reasoning_content": True},
+        },
+    )
+
+    with pytest.raises(ValueError, match="reasoning_content"):
+        service.validate_workspace_config()

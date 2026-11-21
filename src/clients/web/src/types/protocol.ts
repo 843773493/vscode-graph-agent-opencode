@@ -197,9 +197,11 @@ export type AttachmentRef = Omit<GeneratedAttachmentRef, "name" | "content_type"
   content_type?: string | null;
   data_url?: string | null;
 };
-export type Agent = Omit<WorkspaceProtocol.AgentDTO, "description"> & {
+export type Agent = Omit<WorkspaceProtocol.AgentDTO, "description" | "models"> & {
   description?: string | null;
+  models: (Omit<WorkspaceProtocol.AgentModelDTO, "model_ref"> & { model_ref: ModelReference })[];
 };
+export type ModelReference = WorkspaceProtocol.ModelReferenceDTO;
 export type ExtensionCatalogBindingAudit = WorkspaceProtocol.ExtensionCatalogBindingAuditDTO;
 export type NodeDebugAction =
   | "continue"
@@ -506,11 +508,11 @@ export type PendingRequestList = Omit<WorkspaceProtocol.PendingRequestListDTO, "
 };
 export type PendingRequestPolicyUpdateRequest = WorkspaceProtocol.PendingRequestPolicyUpdateRequest;
 
-export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated_at" | "title_source" | "current_provider_id" | "parent_session_id" | "context_source_session_id" | "kind" | "generation_origin"> & {
+export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated_at" | "title_source" | "current_model" | "parent_session_id" | "context_source_session_id" | "kind" | "generation_origin"> & {
   created_at: string;
   updated_at: string;
   title_source?: "default" | "user" | "auto";
-  current_provider_id?: string | null;
+  current_model?: ModelReference | null;
   parent_session_id?: string | null;
   context_source_session_id?: string | null;
   kind?: "normal" | "context_fork";
@@ -541,10 +543,10 @@ export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDT
 };
 export type SessionInformationSnapshot = Omit<WorkspaceProtocol.SessionInformationSnapshotDTO, "generated_at" | "session" | "workspace" | "execution" | "trace" | "relations" | "resources" | "recent_errors"> & {
   generated_at: string;
-  session: Omit<WorkspaceProtocol.SessionInformationSessionDTO, "created_at" | "updated_at" | "current_provider_id" | "parent_session_id" | "context_source_session_id"> & {
+  session: Omit<WorkspaceProtocol.SessionInformationSessionDTO, "created_at" | "updated_at" | "current_model" | "parent_session_id" | "context_source_session_id"> & {
     created_at: string;
     updated_at: string;
-    current_provider_id?: string | null;
+    current_model?: ModelReference | null;
     parent_session_id?: string | null;
     context_source_session_id?: string | null;
   };
@@ -634,11 +636,12 @@ export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadReque
 };
 export type TurnHistoryPage = Omit<
   WorkspaceProtocol.TurnHistoryPageDTO,
-  "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor" | "internal_executions"
+  "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor" | "internal_executions" | "context_notices"
 > & {
   items: TurnDetail[];
   summaries?: TurnSummary[];
   internal_executions?: InternalExecutionHistory[];
+  context_notices?: Array<Omit<WorkspaceProtocol.ContextNoticeBatchDTO, "parts"> & { parts: TurnResponsePart[] }>;
   next_cursor?: string | null;
   before_cursor?: string | null;
   after_cursor?: string | null;
@@ -697,8 +700,9 @@ export type TurnSummary = Omit<
   activity_stats?: TurnActivityStats;
 };
 export type TurnResponseSource = WorkspaceProtocol.TurnResponseSourceDTO;
-export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result"> & {
-  kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text";
+export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result" | "context_cursor"> & {
+  context_cursor?: string | null;
+  kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text" | "context_notice";
   projection: "summary" | "detail" | "streaming";
   status?: "pending" | "running" | "completed" | "failed" | "cancelled";
   source: TurnResponseSource;

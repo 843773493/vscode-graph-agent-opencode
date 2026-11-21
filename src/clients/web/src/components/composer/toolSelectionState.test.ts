@@ -19,6 +19,8 @@ function makeTool(toolId: string, executionEnabled: boolean): ToolCatalogItem {
     execution_enabled: executionEnabled,
     model_visible: executionEnabled,
     test_supported: false,
+    execution_locked: false,
+    model_visibility_locked: false,
   };
 }
 

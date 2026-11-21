@@ -54,23 +54,24 @@ async def test_list_child_threads_is_a_guarded_sqlite_snapshot_during_real_publi
         snapshot_flags: list[bool] = []
         reader_results = []
         reader_errors: list[Exception] = []
-        original_projection = SessionControlStore._collaboration_member_from_row
+        original_projection = SessionControlStore.list_collaboration_member_summaries
 
-        def pause_after_member_row(control, row):
+        def pause_after_member_row(control, **kwargs):
+            rows = original_projection(control, **kwargs)
             if (
-                threading.current_thread().name == "child-list-reader"
+                not resume_reader.is_set()
                 and control.database_path == owner.control_store.database_path
-                and row["delegation_id"] == delegation_id
+                and any(row["delegation_id"] == delegation_id for row in rows)
             ):
                 snapshot_flags.append(control.connection.in_transaction)
                 row_loaded.set()
                 if not resume_reader.wait(timeout=10):
                     raise TimeoutError("测试读取屏障未释放")
-            return original_projection(control, row)
+            return rows
 
         monkeypatch.setattr(
             SessionControlStore,
-            "_collaboration_member_from_row",
+            "list_collaboration_member_summaries",
             pause_after_member_row,
         )
 

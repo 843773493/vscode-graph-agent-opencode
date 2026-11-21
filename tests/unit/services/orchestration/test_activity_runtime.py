@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityCapabilities,
     ActivityHandlerRegistry,
     ActivityRuntime,

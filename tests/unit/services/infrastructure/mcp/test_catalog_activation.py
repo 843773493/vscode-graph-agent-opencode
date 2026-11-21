@@ -4,22 +4,16 @@ from __future__ import annotations
 
 import errno
 import json
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
-from langchain_core.tools import BaseTool, StructuredTool
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import empty_checkpoint
-from pydantic import Field, create_model
 
-from app.agents.policy import ToolMetadata, ToolPolicyResolver
-from app.agents.tool_set_producer import RegisteredToolSetProducer
-from app.agents.tools.custom_invocation import create_extension_tool_invoker_tool
+from app.agents.policy import ToolPolicyResolver
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.source_protocol import (
     parse_source_blocks,
@@ -28,10 +22,6 @@ from app.domain.itemized.epoch.source_protocol import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.resource_activation import (
-    ResourceActivationBoundary,
-    ResourceActivationPolicySnapshot,
-)
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -42,17 +32,16 @@ from app.services.infrastructure.mcp import (
     McpCatalogRelistError,
     McpCatalogResourcePublisher,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_SOURCE_ID,
     MCP_GUIDANCE_SOURCE_ID,
     MCP_OWNER_CATALOG_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
-    extension_dispatch_from_activation,
-)
-from app.services.infrastructure.mcp.config import McpServerConfig
-from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
     extension_schema_hash,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_extension_dispatch,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -64,68 +53,20 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.checkpoint.seal import (
     preparation as seal_preparation,
 )
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
-    ContextSourceManager,
-    ContextSourceOwnerKey,
-)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径隔离 SQLite fixture
+from tests.support.mcp.frozen_catalog import (
+    catalog_workspace as catalog_workspace,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
-from tests.support.mcp.session_doubles import drain_pending_relists
-
-
-class CatalogSession:
-    def __init__(self) -> None:
-        self.minimum = 1
-        self.description = "回显给定文本"
-        self.empty = False
-        self.error: Exception | None = None
-        self.list_calls = 0
-
-    async def initialize(self) -> None:
-        return None
-
-    def supports_tool_list_changed(self) -> bool:
-        return True
-
-    async def list_tools(self) -> list[BaseTool]:
-        self.list_calls += 1
-        if self.error is not None:
-            raise self.error
-        if self.empty:
-            return []
-
-        async def echo(text: str) -> str:
-            return text
-
-        return [StructuredTool.from_function(
-            coroutine=echo, name="echo", description=self.description,
-            args_schema=create_model("EchoInput", text=(str, Field(min_length=self.minimum))),
-        )]
-
-
-class CatalogSessionFactory:
-    def __init__(self) -> None:
-        self.session = CatalogSession()
-        self.notify: Callable[[], None] | None = None
-
-    @asynccontextmanager
-    async def __call__(
-        self, server: McpServerConfig, notify: Callable[[], None],
-    ) -> AsyncIterator[CatalogSession]:
-        assert server.server_id == "mini"
-        self.notify = notify
-        yield self.session
-
-    def changed(self) -> None:
-        assert self.notify is not None
-        self.notify()
-
-
-@pytest.fixture
-def catalog_workspace(workspace_scope: tuple[str, Path]) -> Path:
-    return workspace_scope[1]
+from tests.support.mcp.frozen_catalog import (
+    prepare_tool_context as prepare_tool_context,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
+from tests.support.mcp.session_doubles import (
+    MutableSchemaSessionFactory,
+    drain_pending_relists,
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 
 @pytest.fixture
@@ -135,7 +76,7 @@ def catalog_selection(catalog_workspace):
 
 @pytest.fixture
 async def catalog_runtime(catalog_workspace, catalog_selection):
-    factory = CatalogSessionFactory()
+    factory = MutableSchemaSessionFactory()
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {"mini": {
@@ -344,70 +285,9 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
         await owner.shutdown()
 
 
-@pytest.fixture
-def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire, extension_catalog_policy_resolver):
-    owner, _factory, registry, _scope = catalog_runtime
-    saver, session, _connection, accepted = registry_db
-    thread = saver._storage.storage.main_thread_id(session)
-    admission = saver.execution_admission(
-        session, thread_id=thread, execution_id=accepted["initial_execution_id"],
-    )
-    manager = ContextSourceManager(
-        owner=ContextSourceOwnerKey(session, thread), control_state_port=saver,
-    )
-    envelope = create_extension_tool_invoker_tool(
-        owner.get_tools(), catalog_binding_resolver=owner.binding_snapshot,
-    )
-    producer = RegisteredToolSetProducer(
-        agent_id="default",
-        selection_reader=ToolSelectionStore(boxteam_root=saver._storage.storage.sessions_dir.parent),
-        policy_resolver=ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={}),
-        tools=(envelope,), metadata={envelope.name: ToolMetadata(
-            tool_id=envelope.name, origin="builtin", kind="default", group_id="extensions",
-        )},
-    )
-    producer.freeze_structured_output_tools({})
-
-    def prepare(
-        key, *, context_owner=None, boundary: ResourceActivationBoundary = "model_call",
-        checkpoint_ns: str = "", request_messages=(),
-        policies_for=extension_catalog_policy_resolver,
-        context_source_manager=None,
-    ):
-        target = saver if context_owner is None else context_owner
-        source_manager = context_source_manager
-        if source_manager is None:
-            source_manager = manager if target is saver else ContextSourceManager(
-                owner=ContextSourceOwnerKey(session, thread), control_state_port=target,
-            )
-        with (
-            session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
-            execution_admission_scope(admission, langgraph_thread_id=thread),
-        ):
-            activation = frozen_provider_activation(
-                target, plan_creation_idempotency_key=key, registry=registry,
-                checkpoint_ns=checkpoint_ns,
-                policy=ResourceActivationPolicySnapshot(
-                    default_boundary="turn", boundaries={"mcp_tool_catalog": boundary},
-                ),
-            )
-            result = target.prepare_context_for_provider(
-                session, thread, turn_id=admission.turn_id, execution_id=admission.execution_id,
-                plan_creation_idempotency_key=key, seal_idempotency_key="seal:" + key,
-                request_messages=request_messages, context_source_manager=source_manager,
-                extension_policy_resolver=policies_for,
-                tool_set_supplier=producer.snapshot,
-                checkpoint_ns=checkpoint_ns,
-                **frozen_provider_wire("fixture-model", "chat_completions"), **activation,
-            )
-        return result, activation["activation_snapshot"]
-
-    return prepare
-
-
 @pytest.mark.parametrize("boundary", ["turn", "model_call"])
 async def test_empty_guidance_reappears_after_cold_successor_without_identity_drift(
-    catalog_runtime, registry_db, guidance_prepare, boundary,
+    catalog_runtime, registry_db, prepare_tool_context, boundary,
 ):
     owner, factory, _registry, _scope = catalog_runtime
     saver, session, connection, _accepted = registry_db
@@ -416,7 +296,7 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
     factory.session.empty = True
     factory.changed()
     await drain_pending_relists(owner)
-    empty, initial = guidance_prepare("guidance-empty-initial", **prepare_options)
+    empty, initial = prepare_tool_context("guidance-empty-initial", **prepare_options)
     initial_binding = next(binding for binding in initial.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     initial_body = saver.read_resource_activation_payload(
         initial, initial_binding, checkpoint_ns=prepare_options["checkpoint_ns"],
@@ -433,16 +313,16 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
     factory.session.empty = False
     factory.changed()
     await drain_pending_relists(owner)
-    guidance_prepare("guidance-populated-before-restart", **prepare_options)
+    prepare_tool_context("guidance-populated-before-restart", **prepare_options)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
-        cold, _activation = guidance_prepare(
+        cold, _activation = prepare_tool_context(
             "guidance-populated-cold-successor", context_owner=restarted, **prepare_options,
         )
         cold_snapshot = restarted.get_context_assembly(session, thread, assembly_id=cold["assembly_id"])
         factory.session.empty = True
         factory.changed()
         await drain_pending_relists(owner)
-        returned, activation = guidance_prepare(
+        returned, activation = prepare_tool_context(
             "guidance-empty-after-cold-successor", context_owner=restarted, **prepare_options,
         )
         binding = next(binding for binding in activation.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
@@ -473,12 +353,12 @@ async def test_empty_guidance_reappears_after_cold_successor_without_identity_dr
 
 
 async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
-    catalog_runtime, registry_db, guidance_prepare, monkeypatch,
+    catalog_runtime, registry_db, prepare_tool_context, monkeypatch,
 ):
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    first, before = guidance_prepare("owner-guidance-first")
+    first, before = prepare_tool_context("owner-guidance-first")
     parent = next(binding for binding in before.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent.display_uri is None
     original_body = saver.read_resource_activation_payload(
@@ -500,7 +380,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     factory.session.minimum = 5
     factory.changed()
     await drain_pending_relists(_owner)
-    second, after = guidance_prepare("owner-guidance-schema-only")
+    second, after = prepare_tool_context("owner-guidance-schema-only")
     changed = next(binding for binding in after.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent.revision == changed.revision
     assert parent.content_hash == changed.content_hash
@@ -529,7 +409,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
 
     with monkeypatch.context() as patch:
         patch.setattr(registry, "capture", forbid_live_capture)
-        retry, restored_activation = guidance_prepare("owner-guidance-first")
+        retry, restored_activation = prepare_tool_context("owner-guidance-first")
     assert retry["messages"] == first["messages"]
     assert restored_activation == before
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
@@ -546,12 +426,12 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
 
 
 async def test_connection_identity_survives_cold_seal_without_changing_wire_hash(
-    catalog_runtime, registry_db, guidance_prepare,
+    catalog_runtime, registry_db, prepare_tool_context,
 ):
     owner, _factory, _registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    first, frozen = guidance_prepare("execution-identity-first")
+    first, frozen = prepare_tool_context("execution-identity-first")
     assembly = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     sealed_member, = parent.members
@@ -564,7 +444,7 @@ async def test_connection_identity_survives_cold_seal_without_changing_wire_hash
         )
         restored_parent, = (binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
         assert restored_parent.members == (sealed_member,)
-        dispatch = extension_dispatch_from_activation(
+        dispatch = restore_frozen_extension_dispatch(
             snapshot=restored, binding=restored_parent, model_call_id=assembly.model_call_id,
             payload=cold.read_resource_activation_payload(restored, restored_parent, storage_owner=(session, thread)),
         )
@@ -572,7 +452,7 @@ async def test_connection_identity_survives_cold_seal_without_changing_wire_hash
         assert sealed_target.connection_ref == sealed_member.revision
         with pytest.raises(ExtensionTargetResolutionError, match="原连接"):
             owner._resolve_execution_handle(sealed_target)
-    second, fresh = guidance_prepare("execution-identity-fresh")
+    second, fresh = prepare_tool_context("execution-identity-fresh")
     fresh_parent, = (binding for binding in fresh.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert fresh_parent.members[0].revision != sealed_member.revision
     later = saver.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
@@ -602,12 +482,12 @@ async def test_capture_rejects_stale_connection_with_identical_catalog_generatio
 
 @pytest.mark.parametrize("invalid", ["missing_receipt", "changed_content"])
 async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
-    catalog_runtime, registry_db, guidance_prepare, monkeypatch, invalid,
+    catalog_runtime, registry_db, prepare_tool_context, monkeypatch, invalid,
 ):
     owner, factory, _registry, _scope = catalog_runtime
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    first, _activation = guidance_prepare("guidance-guard-first")
+    first, _activation = prepare_tool_context("guidance-guard-first")
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     original_bytes = canonical_json_bytes(original.to_dict())
     counts = tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -654,10 +534,10 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
     monkeypatch.setattr(seal_preparation, "compile_prefix_context", corrupt_preparation)
     if invalid == "missing_receipt":
         with pytest.raises(ItemSchemaError, match="guidance applied revision"):
-            guidance_prepare("guidance-guard-invalid:" + invalid)
+            prepare_tool_context("guidance-guard-invalid:" + invalid)
     else:
         with pytest.raises(ValueError, match="source-mismatch: source 来源块与 sealed 正文或绑定不一致"):
-            guidance_prepare("guidance-guard-invalid:" + invalid)
+            prepare_tool_context("guidance-guard-invalid:" + invalid)
     assert tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                  for table in ("context_assemblies", "context_assembly_selections", "resource_activation_assembly_bindings")) == counts
     assert canonical_json_bytes(saver.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict()) == original_bytes
@@ -667,13 +547,13 @@ async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
 
 @pytest.mark.parametrize("boundary", ["model_call", "turn"])
 async def test_selection_publication_injects_full_definition_at_allowed_boundary(
-    catalog_runtime, catalog_selection, registry_db, guidance_prepare, boundary,
+    catalog_runtime, catalog_selection, registry_db, prepare_tool_context, boundary,
 ):
     _owner, factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     options = {"boundary": boundary, "checkpoint_ns": f"model:visibility-{boundary}"}
-    first, frozen = guidance_prepare("visibility-initial", **options)
+    first, frozen = prepare_tool_context("visibility-initial", **options)
     parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     original = saver.read_resource_activation_payload(frozen, parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread))
     assert json.loads(original["content"])["automatic_definitions"] == []
@@ -685,7 +565,7 @@ async def test_selection_publication_injects_full_definition_at_allowed_boundary
     assert definition["input_schema"]["properties"]["text"]["minLength"] == 1
     assert definition["input_schema"]["required"] == ["text"]
     assert factory.session.list_calls == list_calls
-    second, activation = guidance_prepare("visibility-enabled", **options)
+    second, activation = prepare_tool_context("visibility-enabled", **options)
     new_parent, = (binding for binding in activation.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     selected = saver.read_resource_activation_payload(activation, new_parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread))
     assert selected == (published.payload if boundary == "model_call" else original)
@@ -694,10 +574,10 @@ async def test_selection_publication_injects_full_definition_at_allowed_boundary
     assert second["tools"] == first["tools"]
     assert snapshot.seal_binding.prefix.state.epoch == prior.seal_binding.prefix.state.epoch
     assert (snapshot.request_hash != prior.request_hash) == (boundary == "model_call")
-    third, _ = guidance_prepare("visibility-stable", **options)
+    third, _ = prepare_tool_context("visibility-stable", **options)
     assert third["messages"] == second["messages"], "同一完整定义不能在稳定后继重复投递"
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
-        retry, _ = guidance_prepare("visibility-enabled", context_owner=restarted, **options)
+        retry, _ = prepare_tool_context("visibility-enabled", context_owner=restarted, **options)
         assert retry["messages"] == second["messages"]
     assert saver.read_resource_activation_payload(frozen, parent, checkpoint_ns=options["checkpoint_ns"], storage_owner=(session, thread)) == original
 

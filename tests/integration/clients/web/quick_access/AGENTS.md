@@ -12,6 +12,8 @@
 
 # 规范
 
+`file_watch.test.mjs` 从原 Provider 注册入口验证共享 WebSocket 中的文件事件，直接使用原文件事件请求，不保留旧聚合器的伪 subscriptions 或空 connect。原件读取的延迟装具分别阻塞响应头、首块和 EOF，覆盖凭据撤销／Gateway 往返切换时拒绝迟到正文及保存基线、工作区激活变化不改原 owner；不得再通过覆写 `Response.blob` 或 `Blob.arrayBuffer` 模拟已流式消费的路径。
+
 `file_open_menu.test.mjs` 执行正式转换后的真实菜单 Action，组服务、编辑器 writer 和打开方式选择结果为明确边界；核右键发起组、原侧开方向、组关闭拒绝及取消零打开，不将其称作真实 Workbench 页面。`test_file_canonical.py` 的完整页面先单击文件，核会话资源区预览原正文且零新 Workbench Tab，再经原生右键菜单打开编辑器；可复用既有 `file_search_web_assets` 提供的不可变产物，场景 Home／工作区／端口仍独立。
 
 文件搜索合同覆盖显式额外文件的名称／精确正文分支、owner隔离及目录分页前去重；HTTP页资产区分真实文件节点与目录。完整模型覆盖页面通过原文件编辑器修改node_modules中的未保存模型，沿真实Search Editor开启ignore，核本地正文、负命中、原Gateway请求及磁盘不变，不预写模型或替换业务响应。
@@ -106,7 +108,7 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 `language_analysis.test.mjs` 编译真实 OutlineModelService、LRU、语言 Provider registry 和取消令牌；仅文本模型与异步符号源为受控依赖。核旧版本取消／迟到不删除新缓存、同版本在途共享及模型移除／owner隔离；不将此装具称为真实 Worker，产品语言回归另由 `test_language_models.py` 证明。
 
-`target_settings.test.mjs` 编译真实设置 Command、原 JSONC AST／scanner 与配置来源 API；仅 Quick Input、通知及 HTTP 回执是服务边界，覆盖取消、只读、注释保留、409 显式重新预检、未知保存仅查原幂等键、pending 操作及身份失效。`test_target_settings.py` 经正式 Workbench、真实 Gateway 与 A/B 工作区，从原命令面板进入；注释预备也通过来源 API，核导航切换后的冻结目标保存、真实 source_saved／layer_imported／pending_restart 提示、原 active CAS 丢弃候选及删除本层覆盖。模型回放仅供启动且要求零调用；不预写配置文件或浏览器存储，不代替完整 Settings Editor、Backend 重启健康证明或原生客户端验收。
+`target_settings.test.mjs` 编译真实默认 Agent 来源 Command 与来源 API；仅 Quick Input、通知、命令交接和 HTTP 回执是服务边界，覆盖 owner／来源取消、进入 Agent 表单的精确 owner 与只读状态/pending 操作。`test_target_settings.py` 经正式 Workbench、真实 Gateway 与 A/B 工作区，从原命令面板选择来源进入 Agent 表单，通过同一 JSONC 模型设置 `default_agent` 并经来源保存；核保存确认取消、导航切换后的冻结目标、未知回执只查原幂等键、真实 source_saved／layer_imported／pending_restart 提示、原 pending discard／active CAS 及只读来源。模型回放仅供启动且要求零调用；不预写配置文件或浏览器存储，不代替 Backend 重启健康证明或原生客户端验收。
 
 只读恢复故障验收先经产品生成更改、来源及正常编辑器组状态；离开产品文档后，只改坏该组中一条来源序列化记录，分别注入未知版本和损坏 JSON。核重复刷新保留错误、零来源读取、相邻 Diff 正常恢复，以及原占位按钮只移除展示记录；新打开继续通过 Quick Open 的规范 URI Opener。该明确存储故障注入不代表正常业务预写状态，不代替 Electron 或所有资源删除场景。
 
@@ -123,3 +125,5 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 `test_workspace_actions` 的条件模式场景通过真实 Gateway 和正式 Workbench，遍历原帮助虚拟列表，核 term／task／debug／debug consoles 的真实空态、目标插件库存回执及安装来源选择后取消。mcpr／issue 按实际注册条件记录缺失，不把空列表或源码同源当作运行互通及 Electron 验收；POST 仅放行具名只读查询和订阅。可用 `BOXTEAM_WORKSPACE_ACTIONS_WEB_ASSETS` 显式复用本批不可变资产，保留主包指纹；Home、端口和进程仍归本用例隔离。
 
 `recent_history.mjs` 与真实 Electron 共用产品创建、原最近资源／命令历史及三项 preserveInput 配置的业务步骤；先关闭原搜索动作的选区种入以独立验证输入记忆。坏 JSON／未知版本／缺失 owner 只在离开产品文档后破坏一条真实 Thread 记录，重启保留原错并单条移除；正常状态不预写历史。凭据负例只改下一次真实 HTTP 发送边界的 token，401／原因／request_id 均由 Gateway 产生并原样返回。工作区通过原 managed API 删除登记、在隔离测试工作区搬迁及复用原路径，核旧稳定身份拒绝替代目标、重登记原 UUID 后恢复草稿；原 HistoryService 的打开失败单条移除行为保留，恢复从原规范 URI 进入。不新增产品 hook／IPC，不代替真实双 Gateway 切换或其它平台验收。
+
+`item_documents.test.mjs` 通过原 FileService 及只读 Item Provider 验证冻结引用、stat 零预读、运行中取消到 HTTP signal、字节范围和失败重读；目标解析、HTTP 及编辑器关闭事件为受控依赖。关闭最后一组取消原读取，另一组仍打开时保留；Gateway 离开后切回仍拒绝迟到路由。已取消令牌的零请求检查直接经过 Provider；上游 FileService 对预取消父令牌的传播可能延后，不把此项当作整个编辑器关闭的页面验收，真实页面关闭验收归原 context history markers 场景。

@@ -12,15 +12,15 @@ infrastructure/
 ├── attachment_blob_catalog/ # 附件目录准入、worker、holder 与取消结算
 ├── config/                # 配置策略、路径差异、监听、快照与 shadow lifecycle
 ├── events/                # typed 事件与 channel 生命周期/重放
-├── file_tree_settings/    # 会话和工作区文件树快捷方式设置
+├── file_tree_shortcuts/    # 会话和工作区文件树快捷方式设置
 ├── gateway_clients/       # Gateway HTTP client 的就绪检查、上下文与 fork relay
 ├── mcp/                   # MCP catalog owner、binding、配置与工具指引
 ├── node_debug/            # Node Debug 进程身份、Inspector、会话和恢复测试
 ├── resource_platform/     # 资源观察、注册与虚拟资源
 ├── rollout_context/       # rollout/checkpoint 持久化及恢复职责
 ├── team/                  # 团队协作服务
-├── tool_services/         # 工具目录、选择、输出存储与服务接口
-├── trace_event_store/     # 事件采集、trace 存储、索引和恢复
+├── tool_services/         # 工具选择与工具结果持久化
+├── session_trace/         # 事件采集、Trace 存储、索引和恢复
 ├── workspace_activity/    # 工作区活动事件与游标
 ├── workspace_files/       # 工作区文件路径、读取写入、资源观察与持久操作
 ├── workspace_service_clients/ # Browser/Terminal 辅助服务 HTTP client

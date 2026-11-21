@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import ChatTurn from "./ChatTurn";
+import { TurnActivitySummary } from "./TurnActivitySummary";
 import {
   chatTurnProps,
   conversation,
@@ -11,6 +12,35 @@ import {
 } from "./chatTurnTestFixtures";
 
 describe("ChatTurn 历史详情", () => {
+  test("摘要保留完整用量详情，键盘和读屏可读取相同信息", () => {
+    const value = conversation("done");
+    value.activityStats = { duration_ms: 16000, item_count: 1 };
+    const renderer = create(<TurnActivitySummary conversation={value} groups={[]} showRawDetails={false}
+      usage={{ modelUsage: { finalModelId: "provider/model-with-a-long-name" }, tokenUsage: {
+        inputTokens: 32000, outputTokens: 843, totalTokens: 32843, cacheReadInputTokens: 12000,
+        modelCalls: 1, reportedModelCalls: 1,
+      } }} />);
+    const toggle = renderer.root.findByType("button");
+    const details = renderer.root.findByProps({ className: "chat-turn-activity-header" }).props.title;
+    expect(toggle.props["aria-description"]).toBe(details);
+    const lines = details.split("\n");
+    expect(lines).toContain("耗时 16s");
+    expect(lines).toContain("Item 1 项");
+    expect(lines).toContain("输入：32,000");
+    expect(lines).toContain("输出：843");
+    expect(lines).toContain("缓存命中：12,000");
+    expect(lines).toContain("最后一次请求模型：provider/model-with-a-long-name");
+    renderer.unmount();
+  });
+
+  test("上游没有报告用量时不把上下文显示为零", () => {
+    const renderer = create(<TurnActivitySummary conversation={conversation("done")} groups={[]} showRawDetails={false}
+      usage={{ modelUsage: { finalModelId: "model" }, tokenUsage: null }} />);
+    expect(renderer.root.findAllByProps({ className: "chat-usage-context" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ className: "chat-turn-activity-header" }).props.title.split("\n")).toContain("用量未报告");
+    renderer.unmount();
+  });
+
   test("历史 Turn 折叠行提示边界，展开后在中间消息中显示未知工具结果", async () => {
     const value = conversation("error");
     value.turnId = "boundary-turn-0003";
@@ -58,7 +88,7 @@ describe("ChatTurn 历史详情", () => {
     renderer!.unmount();
   });
 
-  test("没有 Assistant 正文的稳定边界 Turn 末尾也显示回复操作", () => {
+  test("没有 Assistant 正文的边界 Turn 不渲染空操作栏", () => {
     const value = conversation("error");
     value.turnId = "boundary-turn-without-response";
     value.turnItemsView = "full";
@@ -77,23 +107,20 @@ describe("ChatTurn 历史详情", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain('aria-label="回复操作"');
-    expect(html).toContain('aria-label="复制（暂无可复制内容）"');
-    expect(html).toContain('aria-label="有帮助（暂未开放）"');
-    expect(html).toContain('aria-label="没有帮助（暂未开放）"');
+    expect(html).not.toContain('class="chat-response-actions"');
+    expect(html).not.toContain("暂未开放");
     expect(html).not.toContain("重新生成最后回复");
   });
 
-  test("完整历史回复和摘要 Turn 都提供复制和反馈且不显示重新生成", () => {
+  test("完整历史回复和摘要 Turn 保留正文且不渲染占位操作", () => {
     const value = conversation("done");
     value.turnId = "history-turn-0001";
     value.turnItemsView = "full";
 
     const historicalHtml = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    expect(historicalHtml).toContain('aria-label="回复操作"');
-    expect(historicalHtml).toContain('aria-label="复制"');
-    expect(historicalHtml).toContain('aria-label="有帮助（暂未开放）"');
-    expect(historicalHtml).toContain('aria-label="没有帮助（暂未开放）"');
+    expect(historicalHtml).toContain("原始回答");
+    expect(historicalHtml).not.toContain('class="chat-response-actions"');
+    expect(historicalHtml).not.toContain("暂未开放");
 
     const summaryValue = {
       ...value,
@@ -102,10 +129,9 @@ describe("ChatTurn 历史详情", () => {
     const summaryHtml = renderToStaticMarkup(
       <ChatTurn {...chatTurnProps(summaryValue)} isLastTurn />,
     );
-    expect(summaryHtml).toContain('aria-label="回复操作"');
-    expect(summaryHtml).toContain('aria-label="复制"');
-    expect(summaryHtml).toContain('aria-label="有帮助（暂未开放）"');
-    expect(summaryHtml).toContain('aria-label="没有帮助（暂未开放）"');
+    expect(summaryHtml).toContain("原始回答");
+    expect(summaryHtml).not.toContain('class="chat-response-actions"');
+    expect(summaryHtml).not.toContain("暂未开放");
     expect(summaryHtml).not.toContain('aria-label="重新生成最后回复"');
   });
 
@@ -593,7 +619,7 @@ describe("ChatTurn 历史详情", () => {
     });
 
     expect(renderer!.root.findAllByProps({ className: "chat-tool-row is-complete" })).toHaveLength(1);
-    expect(renderer!.root.findAllByProps({ className: "chat-markdown" })).toHaveLength(1);
+    expect(renderer!.root.findAllByProps({ "aria-label": "模型回复" })).toHaveLength(1);
     renderer!.unmount();
   });
 

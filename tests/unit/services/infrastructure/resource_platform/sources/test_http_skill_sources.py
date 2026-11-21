@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
 )

@@ -12,6 +12,7 @@ gateway_clients/
 ├── test_gateway_context_protocol_errors.py # 上下文查询畸形回执的错误与诊断边界
 ├── test_gateway_context_transport_errors.py # 上下文与 fork 传输拒绝的分类及原始诊断
 ├── test_resource_search.py                 # 原搜索流、范围／续点、期限和关闭
+├── test_named_secrets.py                   # 批量命名密钥解析、身份及拒绝脱敏
 ├── test_gateway_fork_protocol_errors.py    # fork 畸形回执的普通错误与原始诊断边界
 └── test_gateway_session_context_client.py   # 上下文查询与 fork relay 传输
 ```

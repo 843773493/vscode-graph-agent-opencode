@@ -23,7 +23,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.runtime.process_lifecycle import ManagedProcess
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式工作台构建装具
@@ -46,6 +46,7 @@ from tests.support.processes.gateway import (
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.sealed_request_audit import audit_sealed_requests
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
@@ -257,9 +258,7 @@ async def section8_product_nodes(
             )
         config = commentjson.loads(config_path.read_text())
         # 保留协议资产的 Provider URL；精确回放 transport 隔离网络与个人凭据。
-        for provider in config["llm"]["providers"]:
-            provider["api_key"] = "model-stream-replay-unused-key"
-            provider.pop("auth", None)
+        clear_test_provider_api_keys(config)
         config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
         if node_context.workspace_root.name == "workspace" and node_context.workspace_root.parent.name in {"a", "c"}:
             config["runtime"].setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
@@ -852,7 +851,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             assert counts["cold"] == counts["before"] and counts["collected"] == counts["before"] + 1
             assert mailbox["consumptionBefore"]["acknowledged"] == 0
             assert mailbox["consumptionAfter"]["acknowledged"] == 1
-            assert mailbox["consumptionBefore"]["batch_json"] == mailbox["consumptionAfter"]["batch_json"]
+            assert mailbox["consumptionAfter"] == {**mailbox["consumptionBefore"], "acknowledged": 1}
             assert mailbox["canonicalBefore"] == []
             canonical = mailbox["canonicalAfter"]
             carrier_kinds = [bool(json.loads(item["projection_manifest_json"])["projection_identity"].get("projection_message_id"))

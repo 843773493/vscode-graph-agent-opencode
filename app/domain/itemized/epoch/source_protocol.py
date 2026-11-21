@@ -6,15 +6,19 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal, cast
+from xml.etree import ElementTree
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.validation import _non_empty_string
+from app.prompting import PromptSection, internal_message_factory
+from app.prompting.validation import parse_root_section
 
-SourceProtocolVersion = Literal[1, 2]
-SOURCE_PROTOCOL = "boxteam-context-sources:v2"
+SourceProtocolVersion = Literal[1, 2, 3]
+CURRENT_SOURCE_PROTOCOL_VERSION: SourceProtocolVersion = 3
+SOURCE_PROTOCOL = "boxteam-context-sources:v3"
 SOURCE_PROTOCOLS: dict[SourceProtocolVersion, str] = {
-    1: "boxteam-context-sources:v1", 2: SOURCE_PROTOCOL,
+    1: "boxteam-context-sources:v1", 2: "boxteam-context-sources:v2", 3: SOURCE_PROTOCOL,
 }
 
 
@@ -111,16 +115,16 @@ class SourceReplacementIndex:
 
 
 def render_source_blocks(
-    blocks: Sequence[SourceModelBlock], *, version: SourceProtocolVersion = 2,
+    blocks: Sequence[SourceModelBlock], *, version: SourceProtocolVersion = CURRENT_SOURCE_PROTOCOL_VERSION,
 ) -> str:
-    """JSON 字符串转义隔离原正文，固定 JCS 编码供 root、tail 和重放共用。"""
+    """新来源统一由提示注册表编码；历史版本只用于原封存内容的精确重放。"""
     if not blocks or not all(isinstance(block, SourceModelBlock) for block in blocks):
         raise ItemSchemaError("来源封装需要非空 typed blocks")
     if type(version) is not int or version not in SOURCE_PROTOCOLS:
         raise ItemSchemaError("来源协议版本非法")
     sources = []
     for block in blocks:
-        if version == 2 and block.base_revision is not None and block.base_revision != block.revision and (
+        if version >= 2 and block.base_revision is not None and block.base_revision != block.revision and (
             SourceVersionRef(block.source_identity, block.base_revision) not in block.replaces
         ):
             raise ItemSchemaError("来源替代引用缺少具名基准版本")
@@ -130,9 +134,13 @@ def render_source_blocks(
                 raise ItemSchemaError("v1 来源协议不能编码替代引用")
             source.pop("replaces")
         sources.append(source)
-    return canonical_json_bytes({
+    wire = canonical_json_bytes({
         "protocol": SOURCE_PROTOCOLS[version], "sources": sources,
     }).decode("utf-8")
+    if version == 3:
+        return internal_message_factory.render_root_section(PromptSection("context_sources", json.loads(wire)))
+    # TODO：v1/v2 仅保留已封存历史的原编码；历史保留合同允许退出后删除。
+    return wire
 
 
 def parse_source_blocks(
@@ -141,7 +149,11 @@ def parse_source_blocks(
     """只解析已显式登记版本的封存帧，不从原正文猜测协议。"""
     if not isinstance(content, str):
         raise ItemSchemaError("source-mismatch: 来源封装必须是文本")
-    raw = json.loads(content)
+    tagged = content.startswith("<context_sources")
+    try:
+        raw = parse_root_section(content, tag="context_sources") if tagged else json.loads(content)
+    except (ValueError, ElementTree.ParseError) as exc:
+        raise ItemSchemaError(f"source-mismatch: 来源封装无效: {exc}") from exc
     if not isinstance(raw, dict) or set(raw) != {"protocol", "sources"}:
         raise ItemSchemaError("source-mismatch: 来源协议版本或字段非法")
     version = cast(SourceProtocolVersion | None, next(
@@ -149,6 +161,8 @@ def parse_source_blocks(
     ))
     if version is None or expected_version is not None and version != expected_version:
         raise ItemSchemaError("source-mismatch: 来源协议版本或字段非法")
+    if tagged != (version == 3):
+        raise ItemSchemaError("source-mismatch: 来源协议版本与标签封装不一致")
     if not isinstance(raw["sources"], list) or not raw["sources"]:
         raise ItemSchemaError("source-mismatch: 来源封装缺少 blocks")
     fields = set(SourceModelBlock.__dataclass_fields__)
@@ -158,7 +172,7 @@ def parse_source_blocks(
     for source in raw["sources"]:
         if not isinstance(source, dict) or set(source) != fields:
             raise ItemSchemaError("source-mismatch: 来源块字段非法")
-        if version == 2:
+        if version >= 2:
             refs = source["replaces"]
             if not isinstance(refs, list) or any(
                 not isinstance(ref, dict) or set(ref) != {"source_identity", "revision"} for ref in refs

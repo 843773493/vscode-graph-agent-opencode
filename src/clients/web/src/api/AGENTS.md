@@ -1,6 +1,6 @@
 # 目录用途
 
-存放浏览器前端按业务域拆分的 API 客户端，以及所有客户端共享的 HTTP 传输基础设施。业务端点在所属领域模块中定义；共享 SSE 帧原语位于 `../sse/`，跨订阅连接的编排位于 `stream/workspaceObservation.ts`。
+存放浏览器前端按业务域拆分的 API 客户端，以及所有客户端共享的 HTTP 传输基础设施。业务端点在所属领域模块中定义；共享 SSE 帧原语位于 `../sse/`，跨订阅连接的编排位于 `stream/realtime.ts`。
 
 ## 职责树
 
@@ -29,12 +29,12 @@ api/
 │   ├── sessionApiFetchMock.ts          会话 API 单测共用 fetch 桩
 │   ├── sessionTurnHistory.ts         Turn 历史与分页请求
 │   ├── sessionContext.ts             会话上下文读取
-│   ├── sessionGoals.ts               会话目标读写
+│   ├── sessionGoals.ts               会话目标控制及原操作回执
 │   ├── sessionResources.ts           会话资源读取和控制
 │   ├── sessionSkillTracking.ts       会话技能跟踪请求
 │   └── *.test.ts                     各会话 API 的就近契约测试
 ├── stream/
-│   ├── workspaceObservation.ts       多订阅者共享 Gateway SSE 观察连接
+│   ├── realtime.ts                   页面到 Gateway 的唯一常驻事件 WS
 │   ├── sessionMessageStream.ts       Turn 消息事件流
 │   ├── sessionTraceStream.ts         Trace 历史和事件流
 │   ├── workspaceFileEvents.ts        工作区文件事件流
@@ -51,7 +51,7 @@ api/
 # 可修改内容
 
 - 按所属业务域维护请求构造、响应解包与专用 HTTP 错误。
-- 维护共享 HTTP 屏障，以及 stream 层复用的观察连接编排。
+- 维护共享 HTTP 屏障，以及 stream 层共享的实时连接。
 
 # 不可修改内容
 
@@ -64,6 +64,9 @@ api/
 - 业务 API 按语义模块组织，根级 `api.ts` 只重导出迁移后的公开符号。
 - 专用 HTTP 错误定义在其所属业务客户端中。
 - 请求失败必须透明抛出，不得静默降级。
+- 凭据失效统一经 `http.ts` 通知，区分显式失效与 HTTP 屏障处理 401 的刷新。原文件读取从响应头等待到 EOF 都受显式失效取消，不能接受迟到正文或推进保存基线；响应头前仍允许原 401 一次刷新，不能因此重放写操作。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。
 
 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+- 常驻业务事件只调用 `consumeRealtimeSubscription`，禁止业务模块自行创建 WebSocket、EventSource 或常驻 HTTP SSE。有限搜索／模型测试流仍走 HTTP；终端字节、DAP、浏览器画面保留专用协议。

@@ -60,8 +60,8 @@ async def test_detail_deadline_or_caller_cancel_drains_only_its_waiter(
             return
         await recover(resource_ids)
 
-    async def receiving():
-        result = await listing()
+    async def receiving(**query):
+        result = await listing(**query)
         if asyncio.current_task().get_name() == "detail-under-test":
             calls.append(rid)
             if stage == "receipt":
@@ -133,8 +133,8 @@ async def test_detail_retains_committed_cold_recovery_when_the_shared_budget_exp
         if deadlines:
             deadlines[0].reschedule(deadlines[0].when() - 20)
 
-    async def receiving():
-        result = await listing()
+    async def receiving(**query):
+        result = await listing(**query)
         if revisions and asyncio.current_task().get_name() == "detail-under-test":
             entered.set()
             await release.wait()
@@ -175,7 +175,7 @@ async def test_detail_preserves_original_transport_timeout(
     original = TimeoutError("原传输超时")
     before, ledger = owner._store.path.read_bytes(), bundle.leases._state_path.read_bytes()
 
-    async def failed():
+    async def failed(**query):
         raise original
 
     monkeypatch.setattr(bundle.transport, "list_resources", failed)

@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.orchestration.thread_residency import (

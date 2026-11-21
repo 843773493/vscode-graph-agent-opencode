@@ -11,14 +11,14 @@ from langgraph.types import Command, StateSnapshot
 
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.core.turn_execution_scope import CancellationSignal, ScopeCancelledError
-from app.services.orchestration.agent_stream_helpers import is_tracked_chat_model_event
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
     AgentEventStreamTimeoutError,
 )
+from app.services.orchestration.event_stream.model_events import is_chat_model_run_name
 
 if TYPE_CHECKING:
-    from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+    from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 # 仅限制首次可观察进展；模型 idle watchdog 只在调用方显式配置时启用。
 DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS = 180.0
 DEFAULT_TOOL_DISPATCH_TIMEOUT_SECONDS = 30.0
@@ -32,7 +32,7 @@ def _is_progress_event(event: dict[str, Any]) -> bool:
         isinstance(event_type, str)
         and event_type.startswith("on_chat_model_")
         and isinstance(name, str)
-        and is_tracked_chat_model_event(name)
+        and is_chat_model_run_name(name)
     ):
         return True
     return event_type in {"on_tool_start", "on_tool_end", "on_tool_error"} or (
@@ -50,7 +50,7 @@ def _is_model_start_event(event: dict[str, Any]) -> bool:
     return (
         event.get("event") == "on_chat_model_start"
         and isinstance(event.get("name"), str)
-        and is_tracked_chat_model_event(event["name"])
+        and is_chat_model_run_name(event["name"])
     )
 
 
@@ -58,7 +58,7 @@ def _is_model_end_event(event: dict[str, Any]) -> bool:
     return (
         event.get("event") == "on_chat_model_end"
         and isinstance(event.get("name"), str)
-        and is_tracked_chat_model_event(event["name"])
+        and is_chat_model_run_name(event["name"])
     )
 
 

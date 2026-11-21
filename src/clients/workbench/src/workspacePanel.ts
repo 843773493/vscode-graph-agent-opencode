@@ -12,19 +12,19 @@ import { IEditorService } from '../upstream/src/vs/workbench/services/editor/com
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { WorkspacePanelSurface } from './react/workspacePanelView.js';
-import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import type { GatewayWorkspaceRequestTarget, WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 
 export class WorkspacePanel extends ViewPane {
   private surface?: WorkspacePanelSurface;
   constructor(options: IViewPaneOptions,
     @IKeybindingService keybindings: IKeybindingService,
-    @IContextMenuService menus: IContextMenuService,
+    @IContextMenuService private readonly menus: IContextMenuService,
     @IConfigurationService configuration: IConfigurationService,
     @IContextKeyService contexts: IContextKeyService,
     @IViewDescriptorService views: IViewDescriptorService,
     @IInstantiationService instantiation: IInstantiationService,
     @IOpenerService opener: IOpenerService,
-    @IThemeService themes: IThemeService,
+    @IThemeService private readonly themes: IThemeService,
     @IHoverService hover: IHoverService,
     @IEditorService private readonly editors: IEditorService,
     @INotificationService private readonly notifications: INotificationService,
@@ -32,16 +32,21 @@ export class WorkspacePanel extends ViewPane {
   ) {
     super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover);
     this._register(this.onDidChangeBodyVisibility(visible => this.surface?.setVisible(visible)));
+    this._register(themes.onDidColorThemeChange(theme => this.surface?.setTheme(theme)));
   }
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
     container.style.height = '100%';
-    this.surface = new WorkspacePanelSurface(container, this.editors, this.id, this.isBodyVisible(), this.notifications, this.commands);
+    this.surface = new WorkspacePanelSurface(container, this.editors, this.id, this.isBodyVisible(), this.notifications, this.commands, this.menus, this.themes.getColorTheme());
   }
-  override focus(): void { this.surface?.focus(); }
+  override focus(): void { super.focus(); this.surface?.focus(); }
   revealResource(owner: WorkspaceOwner, resourceId: string): void {
     if (!this.surface) throw new Error('工作区资源面板尚未挂载');
     this.surface.revealResource(owner, resourceId);
+  }
+  revealAgentTools(target: GatewayWorkspaceRequestTarget, agentId: string): void {
+    if (!this.surface) throw new Error('工作区工具面板尚未挂载');
+    this.surface.revealAgentTools(target, agentId);
   }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }
 }

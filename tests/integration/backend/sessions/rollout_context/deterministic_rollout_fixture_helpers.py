@@ -11,6 +11,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.session_thread_context import session_thread_owner_scope
+from app.services.business.runtime_reminder import submit_runtime_reminder
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -97,4 +98,10 @@ def seed_deterministic_v2_rollout(
                     {"source": "deterministic-integration", "step": ordinal},
                     checkpoint["channel_versions"],
                 )
+                if ordinal == 1:
+                    # 查询性能材料沿真实来源 owner 封存；后续127轮属于当前页之外的历史。
+                    submit_runtime_reminder(checkpointer=saver, session_id=session_id, thread_id=owner.thread_id,
+                        reminder="大来源冻结正文|" * 16384, response_metadata={"source": "interrupt"},
+                        checkpoint_source="interrupt", event_identity="deterministic-large-context",
+                        execution_id=admission.execution_id)
     return session_id, tool_bodies

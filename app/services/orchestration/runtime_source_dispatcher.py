@@ -7,6 +7,11 @@ import json
 from contextlib import closing
 from typing import cast
 
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import HumanMessage
 
 from app.abstractions.internal_message import (
@@ -21,11 +26,8 @@ from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -197,13 +199,13 @@ class RuntimeSourceDispatcher:
             frozen_wakeup = self._saver.runtime_wakeup_for_admission(
                 session_id, thread_id, intent.admission_idempotency_key,
             )
-            provider_id = session.current_provider_id
+            model = session.current_model.model_dump(mode="json") if session.current_model is not None else None
             if frozen_wakeup is not None:
                 frozen_metadata = self._saver.runtime_wakeup_message(frozen_wakeup).response_metadata
-                provider_id = frozen_metadata["boxteam_session_provider_id"]
+                model = frozen_metadata["boxteam_session_model"]
             message_metadata = {
                 **dict(message.metadata),
-                "boxteam_session_provider_id": provider_id,
+                "boxteam_session_model": model,
             }
             resolver = self._sessions.path_resolver
             resolver.resolve_thread_node(session_id, thread_id)

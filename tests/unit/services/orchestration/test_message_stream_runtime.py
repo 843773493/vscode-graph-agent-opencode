@@ -8,15 +8,18 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.job_event_bus import EventType
+from app.domain.message_stream.projection import apply_event
 from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
-from app.services.orchestration.message_stream_runtime import (
+from app.services.orchestration.message_stream.runtime import (
     MessageStreamRuntime,
 )
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 
 
 @pytest.fixture
@@ -569,7 +572,8 @@ async def test_tool_call_argument_completeness_requires_a_received_object(
         for call in writer.commit.await_args_list
         if call.args[0] == "tool_call.delta"
     )
-    assert delta["arguments"] == expected_arguments
+    projected = apply_event({}, {"type": "tool_call.delta", "event_seq": 1, "payload": delta})
+    assert projected["tool_calls"][0]["arguments"] == expected_arguments
     assert delta["arguments_complete"] is expected_complete
     assert runtime.pending_tool_calls() == (
         (call_id, "read_file", expected_complete),

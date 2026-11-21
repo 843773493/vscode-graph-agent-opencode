@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Protocol
 
 from langchain_core.tools import BaseTool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_mailbox import BackgroundMailboxProtocol
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
@@ -19,12 +20,9 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.session_resources import (
-    BackgroundTaskRegistryProtocol,
-)
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
-from app.agents.policy import parse_custom_tool_specs
+from app.agents.policy import ParsedCustomToolSpec
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 if TYPE_CHECKING:
@@ -41,12 +39,13 @@ class CustomToolFactoryContext:
     sender_agent_id: str
     workspace_root: Path
     background_task_registry: BackgroundTaskRegistryProtocol
-    background_message_bus: BackgroundMessageBusProtocol
+    # 扩展 factory 的公开字段名；实际依赖是持久邮箱，不是 Job 事件总线。
+    background_message_bus: BackgroundMailboxProtocol
     job_event_bus: JobEventBusProtocol
     job_service: JobServiceProtocol | None
     session_context_query_service: SessionContextQueryProtocol
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
-    session_orchestrator: SessionOrchestratorProtocol
+    session_orchestrator: SessionMessageOrchestratorProtocol
     config_service: CustomToolConfigProtocol
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
@@ -55,11 +54,6 @@ class CustomToolFactoryContext:
     tool_options: Mapping[str, object] = field(default_factory=dict)
     node_debug_service: NodeDebugService | None = None
     mcp_connection_service: McpConnectionService | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CustomToolBundle:
-    tools: list[BaseTool]
 
 
 class CustomToolFactory(Protocol):
@@ -97,13 +91,13 @@ def load_custom_tool_factory(factory_path: str) -> CustomToolFactory:
 
 
 def build_custom_tools(
-    specs: Iterable[object],
+    specs: Iterable[ParsedCustomToolSpec],
     *,
     context: CustomToolFactoryContext,
 ) -> list[BaseTool]:
-    """构建可由固定扩展入口调用的自定义工具集。"""
+    """消费已校验的声明构建扩展工具，检查 factory 结果与公开 schema。"""
     tools: list[BaseTool] = []
-    for spec in parse_custom_tool_specs(specs):
+    for spec in specs:
         factory = load_custom_tool_factory(spec.factory_path)
         tool = factory(replace(context, tool_options=spec.options))
         if not isinstance(tool, BaseTool):
@@ -130,49 +124,3 @@ def build_custom_tools(
         tools.append(tool)
 
     return tools
-
-
-def build_custom_tool_bundle(
-    specs: Iterable[object],
-    *,
-    session_id: str,
-    agent_id: str,
-    sender_agent_id: str,
-    workspace_root: Path,
-    background_task_registry: BackgroundTaskRegistryProtocol,
-    background_message_bus: BackgroundMessageBusProtocol,
-    job_event_bus: JobEventBusProtocol,
-    job_service: JobServiceProtocol | None,
-    session_context_query_service: SessionContextQueryProtocol,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol,
-    session_orchestrator: SessionOrchestratorProtocol,
-    config_service: CustomToolConfigProtocol,
-    terminal_resource_owner: TerminalResourceOwner,
-    browser_resource_owner: BrowserResourceOwner,
-    invocation_context: ToolInvocationContext,
-    session_communication_service: SessionCommunicationProtocol | None = None,
-    node_debug_service: NodeDebugService | None = None,
-    mcp_connection_service: McpConnectionService | None = None,
-) -> CustomToolBundle:
-    context = CustomToolFactoryContext(
-        session_id=session_id,
-        agent_id=agent_id,
-        sender_agent_id=sender_agent_id,
-        workspace_root=workspace_root,
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        session_context_query_service=session_context_query_service,
-        workspace_session_context_client=workspace_session_context_client,
-        session_orchestrator=session_orchestrator,
-        config_service=config_service,
-        terminal_resource_owner=terminal_resource_owner,
-        browser_resource_owner=browser_resource_owner,
-        invocation_context=invocation_context,
-        session_communication_service=session_communication_service,
-        node_debug_service=node_debug_service,
-        mcp_connection_service=mcp_connection_service,
-    )
-    tools = build_custom_tools(specs, context=context)
-    return CustomToolBundle(tools=tools)

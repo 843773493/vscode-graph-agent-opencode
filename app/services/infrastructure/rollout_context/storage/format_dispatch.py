@@ -15,7 +15,8 @@ def require_v2_runtime(format_version: int, *, expected: int = 2) -> None:
     if format_version == 1:
         raise FormatDispatchError(
             "v1_migration_required: 正常 runtime/history/provider/checkpoint "
-            "只接受 v2 rollout；请显式运行 legacy_import_v1_to_v2"
+            "只接受 v2 rollout；请显式运行 uv run python -m "
+            "app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl"
         )
 
 

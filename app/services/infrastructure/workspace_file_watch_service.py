@@ -8,15 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from watchfiles import Change, awatch
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+from watchfiles import Change
 from watchfiles.filters import DefaultFilter
 
 from app.core.failures import failure_detail
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryRevisionDTO,
     WorkspaceFileListDTO,
 )
+from app.services.infrastructure.workspace_files.watch_runtime import FileWatchRuntime
 
 FILE_WATCH_DEBOUNCE_MS = 200
 FILE_WATCH_STEP_MS = 50
@@ -68,6 +69,7 @@ class WorkspaceFileWatchService:
         self._watchers: dict[_WatcherKey, _SharedWatcher] = {}
         self._lock = asyncio.Lock()
         self._closing = False
+        self._runtime = FileWatchRuntime()
 
     def resolve_watch_roots(self, extra_paths: Iterable[str]) -> tuple[Path, ...]:
         candidates = [self._workspace_root]
@@ -172,6 +174,7 @@ class WorkspaceFileWatchService:
                     )
                     self._stop_watcher(watcher)
         await self._drain_watchers(watchers)
+        await self._runtime.close()
 
     def _require_open(self) -> None:
         if self._closing:
@@ -290,7 +293,7 @@ class WorkspaceFileWatchService:
     ) -> None:
         try:
             first_iteration = True
-            async for raw_changes in awatch(
+            async for raw_changes in self._runtime.watch(
                 root,
                 recursive=recursive,
                 # 先接收内部资源，再按订阅者过滤；否则 ResourceRegistry

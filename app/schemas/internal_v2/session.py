@@ -12,13 +12,14 @@ from app.core.session_catalog_store.contracts import (
 from app.schemas.canonical_params import CanonicalThreadId
 
 from .common import TimestampedDTO
+from .model_reference import ModelReferenceDTO
 from .session_context import (
     SessionContextScope,
     SessionContextURI,
     SessionResourceIdentity,
 )
 from .session_resource import SessionResourceKind
-from .team import TeamBoardDTO
+from .team import TeamBoardSummaryDTO
 from .workspace_resource import WorkspaceResourceDTO
 
 TitleSource = Literal["default", "user", "auto"]
@@ -190,7 +191,7 @@ class SessionUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str | None = None
-    provider_id: str | None = None
+    model: ModelReferenceDTO | None = None
 
 
 class SessionDTO(TimestampedDTO):
@@ -206,7 +207,7 @@ class SessionDTO(TimestampedDTO):
     title: str
     title_source: TitleSource = "default"
     current_agent_id: str
-    current_provider_id: str | None = None
+    current_model: ModelReferenceDTO | None = None
     parent_session_id: str | None = Field(default=None, description="catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。")
     context_source_session_id: str | None = Field(default=None, description="创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。")
     kind: SessionKind = "normal"
@@ -294,7 +295,7 @@ class ChildThreadListDTO(BaseModel):
     parent_session_id: str
     items: list[ChildThreadSummaryDTO] = Field(default_factory=list)
     total: int
-    teams: list[TeamBoardDTO] = Field(default_factory=list)
+    teams: list[TeamBoardSummaryDTO] = Field(default_factory=list)
 
 
 class SessionMainThreadDTO(BaseModel):
@@ -316,7 +317,7 @@ class SessionInformationSessionDTO(BaseModel):
     workspace_id: str
     title: str = Field(max_length=512)
     current_agent_id: str
-    current_provider_id: str | None = None
+    current_model: ModelReferenceDTO | None = None
     parent_session_id: str | None = Field(default=None, description="catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。")
     context_source_session_id: str | None = Field(default=None, description="创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。")
     kind: SessionKind

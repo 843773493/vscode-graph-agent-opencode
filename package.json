@@ -30,7 +30,8 @@
     "gen:openapi": "uv run python -m scripts.export_openapi_snapshot",
     "dev:electron": "bun run --cwd src/clients/electron start",
     "build:electron": "bun run --cwd src/clients/electron build",
-    "package:electron": "bun scripts/release/package-electron.mjs"
+    "package:electron": "bun scripts/release/package-electron.mjs",
+    "check:protocol:application": "bun scripts/check_protocol_application.mjs"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.72.0",
@@ -42,6 +43,7 @@
     "@lickle/lock": "0.0.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-unicode11": "0.8.0",
     "@xterm/xterm": "^5.5.0",
     "ajv": "^8.20.0",
     "cross-spawn": "7.0.6",
@@ -59,5 +61,11 @@
     "tar": "7.5.22",
     "ws": "^8.18.0",
     "yazl": "3.3.1"
-  }
+  },
+  "dependencies": {
+    "@boxteam/plugin-sdk": "workspace:*"
+  },
+  "workspaces": [
+    "sdk/node"
+  ]
 }

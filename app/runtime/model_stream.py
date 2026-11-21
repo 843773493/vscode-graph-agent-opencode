@@ -134,3 +134,12 @@ def ensure_model_stream_installed() -> None:
     controller = _configured_controller
     if controller is not None:
         controller.ensure_installed()
+
+
+def model_stream_async_transport() -> httpx.AsyncBaseTransport | None:
+    """实例 client 借用同一回放 transport，关闭时不关闭进程级 owner。"""
+    controller = _configured_controller
+    if controller is None:
+        return None
+    controller.ensure_installed()
+    return httpx.MockTransport(controller.transport.handle_async_request)

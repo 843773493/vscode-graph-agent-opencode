@@ -1,3 +1,4 @@
+.thread-history-host { height: 100%; min-height: 0; }
 .react-session-content { height: 100%; min-height: 0; }
 .native-thread-conversation { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .native-thread-conversation .chat-panel { flex: 1; min-height: 0; }
@@ -5,15 +6,33 @@
 .native-thread-toolbar { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; min-height: 28px; padding: 0 8px; border-bottom: var(--bt-surface-border); background: var(--vscode-editor-background); }
 .native-thread-toolbar button { display: flex; align-items: center; background: transparent; border: 0; padding: 4px; }
 .native-thread-toolbar button:hover { background: var(--bt-toolbar-hover-background); }
-.native-thread-status { padding: 2px 12px; font-size: 11px; color: var(--bt-text-muted); }
-.native-thread-cached-history { height: 100%; }
+.native-thread-toolbar .native-thread-picker { min-width: 0; max-width: min(70%, 320px); gap: 6px; margin-right: auto; color: var(--vscode-foreground); font: inherit; cursor: pointer; }
+.native-thread-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-thread-picker .codicon { flex: 0 0 auto; }
+.native-thread-cached-history { position: relative; height: 100%; }
 .native-thread-cached-content { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; margin: 0; padding: 0; border: 0; }
 
-.native-thread-layout { display: flex; height: 100%; min-height: 0; }
+.native-thread-content { display: flex; flex-direction: column; height: 100%; min-height: 0; container: thread-editor / inline-size; }
+.native-thread-layout { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .native-thread-conversation { flex: 1 1 0; min-width: 0; }
-.native-thread-resources { display: flex; flex: 1 1 0; flex-direction: column; min-width: 200px; border-left: var(--bt-surface-border); min-height: 0; }
+.native-thread-layout.has-resources > .native-thread-conversation { min-width: 280px; }
+.native-thread-resources { display: flex; flex: 1 1 0; flex-direction: column; min-width: 240px; border-left: var(--bt-surface-border); min-height: 0; container: thread-resources / inline-size; }
 .native-thread-resources[hidden] { display: none; }
 .native-thread-resources .auxiliary-panel { min-height: 0; flex: 1; }
+.native-file-tree-back { display: none; }
 .preserve-mounted-hidden { display: none !important; }
 
-.native-inspection-scope { flex: 0 0 auto; padding: 6px 12px; color: var(--bt-text-muted); font-size: 11px; border-bottom: var(--bt-surface-border); }
+.native-inspection-scope { flex: 0 0 auto; padding: 6px 12px; color: var(--bt-text-muted); font-size: var(--bt-font-size-small); border-bottom: var(--bt-surface-border); }
+/* 窄组一次查看聊天或资源；上方原切换按钮始终可返回，不把区域上下堆叠。 */
+@container thread-editor (width < 560px) {
+  .native-thread-layout.has-resources > .native-thread-conversation,
+  .native-thread-layout > .layout-sash { display: none; }
+  .native-thread-resources { min-width: 0; flex-grow: 1 !important; border-left: 0; }
+}
+/* 文件仍在原资源区预览，窄时以预览取代树，关闭预览即回到树。 */
+@container thread-resources (width < 560px) {
+  .native-file-tree-back { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; border: 0; border-bottom: var(--bt-surface-border); background: transparent; color: var(--bt-text-primary); cursor: pointer; }
+  .workspace-editor-body.has-shared-preview > .auxiliary-panel { display: none; }
+  .workspace-file-preview-toolbar .workspace-preview-scope,
+  .workspace-file-preview-toolbar .workspace-preview-meta { display: none; }
+}

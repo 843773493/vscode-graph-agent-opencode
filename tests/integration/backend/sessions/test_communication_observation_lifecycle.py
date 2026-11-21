@@ -16,6 +16,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.resource_uri import parse_resource_uri
 from app.core.session_control_communication_ledger.observations import (
@@ -23,12 +27,7 @@ from app.core.session_control_communication_ledger.observations import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from app.schemas.internal_v2.communication import (
     CommunicationAcceptanceRequest,
@@ -41,19 +40,19 @@ from app.services.business.communication.addresses import (
 )
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import WaitSelector, freeze_wait_deadline
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
-)
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionTarget,
     InboxExecutionBinding,
@@ -67,7 +66,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     CommunicationCase,
     _completed,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.session_navigation.http_operations import submit_navigation_operation
@@ -549,9 +548,9 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     source_id = await create_session(case.client, "HTTP observation source")
     target_id = await create_session(case.client, "HTTP observation target")
     await case.plan(target_id, [{"content": "冻结的目标回答"}])
-    seeded = await case.client.post(f"/api/v1/sessions/{target_id}/messages", json={
+    seeded = await case.client.post(f"/api/v1/sessions/{target_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "目标原始问题"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert seeded.status_code == 200, seeded.text
     await _completed(case.client, seeded.json()["data"]["job_id"])
     source_thread = (await case.client.get(f"/api/v1/sessions/{source_id}/main-thread")).json()["data"]["thread_id"]

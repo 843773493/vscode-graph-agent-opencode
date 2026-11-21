@@ -23,9 +23,8 @@ import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { AUDIO_PREVIEW_EDITOR_ID, IMAGE_PREVIEW_EDITOR_ID, VIDEO_PREVIEW_EDITOR_ID } from '../upstream/src/vs/workbench/contrib/mediaPreview/common/mediaPreview.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
-import { getWorkspaceFileRoots, getWorkspaceFiles, getWorkspaceRawFileBlob, getWorkspaceRawFileMimeType } from '../../web/src/api/workspaceFilesystem.js';
+import { getWorkspaceFileRoots, getWorkspaceFiles, readWorkspaceRawFile, getWorkspaceRawFileMimeType } from '../../web/src/api/workspaceFilesystem.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
-import { awaitWithAbort } from '../../web/src/utils/abortable.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -321,17 +320,22 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   async readFile(resource: URI): Promise<Uint8Array> {
     return this.readBytes(resource);
   }
-  private async readBytes(resource: URI, signal?: AbortSignal, options: IFileReadStreamOptions = {}): Promise<Uint8Array> {
-    if (options.length === 0) return new Uint8Array();
+  private async readBytes(resource: URI): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    await this.readInto(resource, chunk => { chunks.push(chunk); });
+    return VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer;
+  }
+  private async readInto(resource: URI, onChunk: (chunk: Uint8Array) => void | Promise<void>, signal?: AbortSignal, options: IFileReadStreamOptions = {}): Promise<void> {
+    signal?.throwIfAborted();
+    if (options.length === 0) return;
     const start = options.position ?? 0;
     const range = options.position !== undefined || options.length !== undefined
       ? { start, end: options.length === undefined ? undefined : start + options.length - 1 } : undefined;
     const source = workspaceFileSource(resource);
     const controller = new AbortController();
     const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    // raw 下载结束后仍须保护字节转换，失效或取消的结果不能交付或推进保存基线。
+    // 目标切换覆盖整个读取；正文期间的凭据撤销由共用 raw 读取负责。
     const invalidate = () => controller.abort(new DOMException('Gateway 或访问凭据已改变，请重新读取文件', 'AbortError'));
-    const releaseToken = onGatewayTokenInvalidated(0, invalidate);
     let gatewayId = workspaceContext.getSnapshot().gatewayId;
     const releaseGateway = workspaceContext.subscribe(() => {
       const current = workspaceContext.getSnapshot().gatewayId;
@@ -339,24 +343,22 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
       gatewayId = current;
     });
     try {
-      const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, reading, range), reading);
+      const hash = range ? undefined : sha256.create();
+      await this.access(resource, workspaceKey => readWorkspaceRawFile(0, source.path, workspaceKey, async chunk => {
+        hash?.update(chunk);
+        await onChunk(chunk);
+      }, reading, range), reading);
       reading.throwIfAborted();
-      const bytes = new Uint8Array(await awaitWithAbort(blob.arrayBuffer(), reading));
-      reading.throwIfAborted();
-      if (!range) {
-        // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
-        const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
-        this.revisions.set(this.key(resource), revision);
-      }
-      return bytes;
-    } finally { releaseToken(); releaseGateway(); }
+      // 仅完整 EOF 建立原字节 CAS；取消、读取失败及 Range 都不推进保存基线。
+      if (hash) this.revisions.set(this.key(resource), encodeHex(VSBuffer.wrap(hash.digest())));
+    } finally { releaseGateway(); }
   }
   readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
-    const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer);
+    const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer, { highWaterMark: 4 });
     const controller = new AbortController();
     const cancellation = token.onCancellationRequested(() => controller.abort());
     if (token.isCancellationRequested) controller.abort();
-    void this.readBytes(resource, controller.signal, options).then(bytes => stream.end(bytes), error => {
+    void this.readInto(resource, chunk => stream.write(chunk), controller.signal, options).then(() => stream.end(), error => {
       stream.error(error instanceof Error ? error : new Error(String(error)));
       stream.end();
     }).finally(() => cancellation.dispose());

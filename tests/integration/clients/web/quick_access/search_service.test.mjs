@@ -583,16 +583,38 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
   });
 
   test('正则、整词、多行、ignore、context 和文件字节上限完整送至原 owner', async () => {
-    const f = fixture([]);
+    const local = model(uri(ownerA, 'draft.txt'), '😀 Needle next'), f = fixture([local]);
     try {
       await withTransport(async calls => {
-        await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA), disregardIgnoreFiles: false }], contentPattern: { pattern: 'Need.*le', isRegExp: true,
+        const result = await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA), disregardIgnoreFiles: false }], contentPattern: { pattern: 'Need.*le', isRegExp: true,
           isWordMatch: true, wordSeparators: ' /', isCaseSensitive: false, isMultiline: true }, includePattern: { '*.txt': true }, excludePattern: { '**/hidden/**': true }, surroundingContext: 2, maxFileSize: 2048 }));
         const q = calls[0].request.queries[0]; expect(q.match_mode).toBe('regex');
         expect(q.file_targets[0].target).toEqual({ uri: root(ownerA), max_bytes: 2048, search_options: { case_mode: 'insensitive', is_regex: true,
-          whole_word: true, word_separators: ' /', is_multiline: true, all_matches: true, context_lines: 2, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'respect', excluded_resource_uris: [], excluded_subtree_uris: [] } });
+          whole_word: true, word_separators: ' /', is_multiline: true, all_matches: true, context_lines: 2, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'respect', excluded_resource_uris: [root(ownerA) + '/draft.txt'], excluded_subtree_uris: [] } });
+        expect(result.results.map(item => item.resource.toString())).toEqual([local.uri.toString()]);
+        expect(result.results[0].results[0].rangeLocations[0].source).toEqual({ startLineNumber: 0, startColumn: 3, endLineNumber: 0, endColumn: 9 });
       });
-    } finally { f.instantiation.dispose(); }
+    } finally { f.instantiation.dispose(); local.dispose(); }
+  });
+
+  test('已打开文件正则等待期间取消或修改模型会终止 worker，不发布迟到命中', async () => {
+    for (const mode of ['cancel', 'change']) {
+      const local = model(uri(ownerA, 'draft.txt'), 'needle'), pending = Promise.withResolvers(), started = Promise.withResolvers();
+      let disposed = false;
+      const f = fixture([local], undefined, undefined, { createWorkerClient: () => ({
+        proxy: { $findMatches: () => { started.resolve(); return pending.promise; } }, dispose() { disposed = true; },
+      }) });
+      const token = new CancellationTokenSource(), progress = [];
+      try {
+        const result = f.search.textSearch(query({ onlyOpenEditors: true, contentPattern: { pattern: 'need.*', isRegExp: true } }), token.token,
+          item => progress.push(item)).catch(error => error);
+        await started.promise;
+        if (mode === 'cancel') token.cancel(); else local.setValue('changed');
+        expect(await result).toBeInstanceOf(Error); expect(disposed).toBe(true);
+        pending.resolve({ count: 1, results: [] });
+        await Promise.resolve(); expect(progress).toEqual([]);
+      } finally { token.dispose(); f.instantiation.dispose(); local.dispose(); }
+    }
   });
 
   test('非法和未支持选项在任何 progress 与 HTTP 前失败；原生容器沿原服务', async () => {

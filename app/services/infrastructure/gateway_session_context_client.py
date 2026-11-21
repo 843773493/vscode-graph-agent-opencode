@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from pydantic import BaseModel
 
 from app.abstractions.session_context import (
@@ -13,15 +14,12 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
-from app.core.trace_middleware import (
-    require_current_gateway_id,
-    require_current_request_id,
-)
+from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import (
     FEDERATION_ERROR_CODES,
     FEDERATION_TARGET_OWNER_REJECTED,
 )
-from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
@@ -39,7 +37,9 @@ from app.schemas.search_federation import (
     GatewayContextSearchRequest,
     GatewayContextSearchResultDTO,
 )
-from app.services.business.session_context_resource import parse_session_context_ref
+from app.services.business.session_context_query.resources import (
+    parse_session_context_ref,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
     MODEL_RECOVERABLE_HTTP_STATUSES,

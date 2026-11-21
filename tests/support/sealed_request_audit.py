@@ -41,7 +41,8 @@ def logged_provider_wire(attempt: dict[str, object], *, target_format: str) -> d
             SimpleNamespace(custom_llm_provider=attempt["provider"]),
             {key: value for key, value in logged.items() if key not in {"messages", "tools"}},
         )
-        logged = finalize_chat_wire(messages=logged["messages"], tools=logged.get("tools"), params=params)
+        logged = finalize_chat_wire(messages=logged["messages"], tools=logged.get("tools"), params=params,
+                                    custom_llm_provider=attempt["provider"])
     else:
         assert target_format == "responses", target_format
         logged = provider_wire_params(logged)

@@ -46,11 +46,11 @@ class _JobService:
         )
 
 
-class _SessionOrchestrator:
+class _SessionMessageOrchestrator:
     def __init__(self) -> None:
         self.payload: MessageRunRequest | None = None
 
-    async def create_message(
+    async def submit_user_message(
         self,
         session_id: str,
         payload: MessageRunRequest,
@@ -189,7 +189,7 @@ async def test_policy_api_maps_stale_snapshot_to_conflict() -> None:
 
 @pytest.mark.asyncio
 async def test_message_api_forwards_delivery_policy() -> None:
-    orchestrator = _SessionOrchestrator()
+    orchestrator = _SessionMessageOrchestrator()
     payload = MessageRunRequest.model_validate(
         {
             "message": {"content": "按工具结果投递"},
@@ -206,7 +206,6 @@ async def test_message_api_forwards_delivery_policy() -> None:
         payload,
         _="local",
         request_id="request_1",
-        message_service=object(),
         session_orchestrator=orchestrator,
     )
 

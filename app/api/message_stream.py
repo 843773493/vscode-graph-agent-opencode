@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.protobuf import json_format
@@ -13,7 +14,6 @@ from pydantic import ValidationError
 
 from app.api.deps import (
     get_message_stream_store,
-    get_request_id,
     get_session_service,
     verify_local_token,
 )

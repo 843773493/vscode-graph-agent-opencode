@@ -14,6 +14,7 @@ from langchain_core.messages import (
 
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import ModelSource
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
@@ -198,9 +199,9 @@ def _message_id(item: CanonicalItemRecord) -> str:
 def _model_call_metadata(item: CanonicalItemRecord) -> dict[str, object]:
     """按 codec 合同镜像已提交的 typed model-call 归属。"""
     identity = item.projection_identity
-    if identity is None or identity.model_call_id is None:
-        return {}
-    return {"model_call_id": identity.model_call_id}
+    source = ModelSource.from_extensions(item.extensions)
+    return {**({"model_call_id": identity.model_call_id} if identity is not None and identity.model_call_id is not None else {}),
+            **({"model_source": source.to_dict()} if source is not None else {})}
 
 
 def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:
@@ -303,6 +304,53 @@ def project_tool_result(item: CanonicalItemRecord) -> ToolMessage:
     )
 
 
+def _internal_prompt_projection_metadata(item: CanonicalItemRecord) -> dict[str, object]:
+    """只恢复已保存的结构标记，不按正文或当前 schema 补造历史身份。"""
+    metadata: dict[str, object] = {"internal": True}
+    annotation = item.extensions.get("boxteam.checkpoint.annotations")
+    if annotation is not None:
+        if annotation["extension_version"] != "1":
+            raise ValueError(f"不支持的内部消息 annotation version: {annotation['extension_version']}")
+        values = annotation["value"]
+        if not isinstance(values, Mapping):
+            raise TypeError("内部消息 annotation value 必须是 object")
+        for key in ("structured_prompt_kind", "structured_prompt_schema_version"):
+            if key in values:
+                metadata[key] = values[key]
+    return metadata
+
+
+def project_compaction_summary(item: CanonicalItemRecord) -> HumanMessage:
+    """按已保存的结构标记恢复摘要；旧封存正文保持原字节，不从标签猜版本。"""
+    metadata = {**_internal_prompt_projection_metadata(item), "compaction_summary": True}
+    if internal_prompt_metadata(metadata) is not None:
+        validate_internal_message(item.payload["summary"], metadata)
+        if metadata["structured_prompt_kind"] != "compaction_summary":
+            raise ValueError("compaction summary 的结构标记与语义类型不一致")
+    return HumanMessage(content=item.payload["summary"], id=_message_id(item), response_metadata=metadata)
+
+
+def project_runtime_notice(item: CanonicalItemRecord) -> HumanMessage:
+    """checkpoint 与 canonical 投影共用通知身份、原 prompt 和展示事实。"""
+    metadata = _internal_prompt_projection_metadata(item)
+    content = item.payload
+    if isinstance(content, Mapping) and set(content) & {"prompt", "display_part"}:
+        notice = RuntimeNoticePayload.from_dict(content)
+        content = notice.prompt
+        if notice.display_part is not None:
+            display = notice.display_part
+            metadata.update(
+                internal_display_kind=display.kind, display_content=display.text,
+                internal_display_provenance=display.provenance.to_dict(),
+            )
+        if notice.attachments:
+            metadata["attachments"] = [dict(attachment) for attachment in notice.attachments]
+            metadata["attachment_blocks"] = [dict(block) for block in notice.attachment_blocks]
+    if internal_prompt_metadata(metadata) is not None:
+        validate_internal_message(content, metadata)
+    return HumanMessage(content=_message_content(content), id=_message_id(item), response_metadata=metadata)
+
+
 def project_canonical_items(
     items: Sequence[CanonicalItemRecord],
     *,
@@ -342,30 +390,21 @@ def project_canonical_items(
             content = project_runtime_notice_content(item.payload)
             if not content:
                 continue
-            messages.append(
-                HumanMessage(
-                    content=content,
-                    id=_message_id(item),
-                    response_metadata={
-                        "internal": True,
-                        "message_metadata": {
-                            "turn_scope": item.turn_scope,
-                            "item_id": item.item_id,
-                        },
-                    },
-                )
-            )
+            notice = project_runtime_notice(item)
+            # Provider 正文已包含附件块，不再把媒体正文重复封存到 metadata。
+            metadata = {key: value for key, value in notice.response_metadata.items() if key != "attachment_blocks"}
+            messages.append(notice.model_copy(update={
+                "content": content,
+                "response_metadata": {
+                    **metadata,
+                    "message_metadata": {"turn_scope": item.turn_scope, "item_id": item.item_id},
+                },
+            }))
             continue
         if item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
             if not include_summaries:
                 continue
-            messages.append(
-                HumanMessage(
-                    content=item.payload["summary"],
-                    id=_message_id(item),
-                    response_metadata={"internal": True, "compaction_summary": True},
-                )
-            )
+            messages.append(project_compaction_summary(item))
             continue
         if item.semantic_kind == SemanticKind.TOOL_CALL:
             group = _projection_message_group_id(item)

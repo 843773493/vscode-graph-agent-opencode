@@ -1,33 +1,40 @@
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import HumanMessage
 
 from app.core.exceptions import NotFoundError
 from app.core.trace_middleware import (
     get_current_gateway_id,
-    get_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionProgress,
-    RuntimeExecutionWakeup,
 )
 from app.schemas.internal_v2.goal import GoalStatus
-from app.services.business.message_service import MessageService
+from app.schemas.internal_v2.task_usage import (
+    TaskExecutionReferenceDTO,
+    TaskJobAccountingDTO,
+    TaskUsageStateDTO,
+)
 from app.services.business.persistent_tasks.goal import (
     continuation_message,
     objective_updated_message,
 )
 from app.services.business.session_goal_service import SessionGoalService
+from app.services.mapping.message_content import is_user_visible_message
 from app.services.orchestration.persistent_tasks.goal import GoalWork
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 
@@ -46,19 +53,70 @@ class _Sessions:
 class _Store:
     def __init__(self):
         self.goal = None
+        self._states = {}
+        self._owners = {}
 
     def goal_read(self, session_id):
         return self.goal
 
-    def goal_write(self, goal):
+    def goal_write(self, goal, *, expected_control_revision=None, operation=None, retiring_goal=None):
+        if expected_control_revision is not None and expected_control_revision != self.goal_control_revision(goal.session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = goal
+        self._states[goal.goal_id] = goal
+        self.control_revision = goal.control_revision
+        self.sync_version = goal.sync_version
 
-    def goal_clear(self, session_id):
+    def goal_control_revision(self, session_id):
+        return getattr(self, "control_revision", 0)
+
+    def goal_sync_version(self, session_id):
+        return getattr(self, "sync_version", 0)
+
+    def goal_operation(self, session_id, operation_id, request_hash=None):
+        return None
+
+    def goal_clear_versioned(self, session_id, expected_control_revision, operation=None, settled_goal=None):
+        existed = self.goal is not None
+        if expected_control_revision != self.goal_control_revision(session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = None
-        return True
+        self.control_revision = expected_control_revision + int(existed)
+        self.sync_version = self.goal_sync_version(session_id) + int(existed)
+        return existed, self.control_revision, self.sync_version
 
     def goal_list(self):
         return [self.goal] if self.goal else []
+
+    def usage_state(self, task_id):
+        return TaskUsageStateDTO.model_validate(self._states[task_id].model_dump())
+
+    def bind_execution(self, task_id, job_id, execution, now):
+        goal = self._states[task_id]
+        entry = goal.accounted_jobs.get(job_id, TaskJobAccountingDTO()).model_copy(update={"execution": execution})
+        self._owners[job_id] = task_id
+        self.goal_write(goal.model_copy(update={"accounted_jobs": {**goal.accounted_jobs, job_id: entry}}))
+
+    def record_dispatch(self, task_id, dispatch, now):
+        self.goal_write(self._states[task_id].model_copy(update={"dispatch": dispatch}))
+
+    def execution_owners(self, job_id):
+        owner = self._owners.get(job_id)
+        return [owner] if self.goal is not None and owner == self.goal.goal_id else []
+
+    def get(self, task_id):
+        return SimpleNamespace(application_type="goal")
+
+    def list_automations(self):
+        return []
+
+    def schedule_due(self, now):
+        return []
+
+    def next_schedule_at(self):
+        return None
 
 
 class _Jobs:
@@ -83,11 +141,7 @@ class _Orchestrator:
 
     def __init__(self):
         self.calls = []
-
-    async def create_and_run(
-        self, session_id, content, *, metadata, delivery_policy="after_turn"
-    ):
-        self.calls.append((session_id, content, metadata, delivery_policy))
+        self.accepted = {}
 
     async def submit_runtime_event(
         self,
@@ -102,6 +156,7 @@ class _Orchestrator:
         self.calls.append(
             (session_id, message.content, message.metadata, delivery_policy)
         )
+        self.accepted[idempotency_key] = SimpleNamespace(job_id=f"dispatched-{len(self.calls)}")
 
 
 class _Bus:
@@ -134,22 +189,51 @@ def session_orchestrator() -> _Orchestrator:
 
 @pytest.fixture
 async def goal_runtime(goal_service, job_service, session_orchestrator):
-    store = Mock()
-    store.list_automations.return_value = []
-    store.schedule_due.return_value = []
-    store.next_schedule_at.return_value = None
+    store = goal_service._store
     runtime = PersistentTaskRuntime(
         store=store, orchestrator=session_orchestrator, dispatcher=Mock(), sessions=_Sessions(),
         events=Mock(), clock=lambda: datetime.now(UTC), workspace_root=Path.cwd(), saver=Mock(),
         job_events=_Bus(), goals=goal_service, jobs=job_service, generation=Mock(), messages=Mock(), trace=Mock(),
     )
+    runtime._dispatcher.submitted.side_effect = lambda _session, _thread, *, idempotency_key: session_orchestrator.accepted.get(idempotency_key)
+
+    def record(session, thread, job):
+        observed = job_service.job
+        created = getattr(observed, "created_at", datetime.now(UTC))
+        return SimpleNamespace(cursor=SimpleNamespace(admission=SimpleNamespace(execution_id=f"execution-{job}")),
+                               input=SimpleNamespace(created_at=created.isoformat()))
+
+    runtime._saver.execution_queue_record.side_effect = record
+    runtime._saver.execution_progress.return_value = RuntimeExecutionProgress("completed", datetime.now(UTC).isoformat(), 17)
+    runtime._sessions.session_read_admission = lambda _session: _read_admission()
+    runtime._sessions.path_resolver = SimpleNamespace(resolve_thread_node=lambda *_args: None)
     await runtime.start()
     yield runtime
     if runtime._worker is not None:
         await runtime.stop()
 
 
-async def _work(runtime, work):
+@asynccontextmanager
+async def _read_admission():
+    yield
+
+
+def _bind(runtime, job_id, goal):
+    observed = runtime.jobs.job
+    created = getattr(observed, "created_at", datetime.now(UTC))
+    runtime.store.bind_execution(goal.goal_id, job_id, TaskExecutionReferenceDTO(
+        session_id=goal.session_id, thread_id=goal.thread_id, execution_id=f"execution-{job_id}",
+        started_at=created, control_revision=goal.control_revision), datetime.now(UTC))
+
+
+async def _work(runtime, work, *, tokens=0):
+    if work.job is not None and work.kind in {"agent_end", "failed", "cancelled"}:
+        job = work.job
+        owner = runtime.store._owners.get(job.job_id)
+        work = replace(work, owner_id=owner)
+        updated = getattr(job, "ended_at", None) or datetime.now(getattr(job, "created_at", datetime.now(UTC)).tzinfo)
+        runtime._saver.execution_progress.return_value = RuntimeExecutionProgress(
+            "completed" if work.kind == "agent_end" else work.kind, updated.isoformat(), tokens)
     done = asyncio.get_running_loop().create_future()
     runtime._queue_goal(work, done)
     await asyncio.wait_for(asyncio.shield(done), 1)
@@ -183,7 +267,7 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
         content=session_orchestrator.calls[0][1],
         response_metadata=session_orchestrator.calls[0][2],
     )
-    assert MessageService._is_user_visible_message(internal_message) is False
+    assert is_user_visible_message(internal_message) is False
     assert "完成目标" in str(internal_message.content)
     assert "相同阻塞连续至少三个 Goal 轮次" in str(internal_message.content)
     assert "当前工作区和外部状态为权威依据" in str(internal_message.content)
@@ -199,6 +283,15 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     await goal_service.set("sess_1", status=GoalStatus.active)
     await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ["goal_updated", "goal_cleared"])
+async def test_goal_notification_does_not_invalidate_run_history(goal_runtime, event_type):
+    goal_runtime.events.publish.reset_mock()
+    await goal_runtime.on_event(SimpleNamespace(type=event_type))
+    goal_runtime.events.publish.assert_called_once()
+    assert goal_runtime.events.publish.call_args.args[0].history_invalidated is False
 
 
 @pytest.mark.asyncio
@@ -220,7 +313,7 @@ async def test_job_started_listener_does_not_reenter_goal_lock(
                                                   payload=SimpleNamespace(session_id="sess_1", thread_id="thr_sess_1"))),
             timeout=0.1,
         )
-        assert goal_runtime._goal_job_owners["job_1"] == goal.goal_id
+        assert goal_runtime.store.execution_owners("job_1") == [goal.goal_id]
     finally:
         goal_lock.release()
 
@@ -240,16 +333,16 @@ async def test_replaced_goal_ignores_old_job_and_failed_job_blocks_owner(
         ended_at=None,
     )
     old = await goal_service.set("sess_1", objective="旧目标")
-    goal_runtime._goal_job_owners["job_1"] = old.goal_id
+    _bind(goal_runtime, "job_1", old)
     new = await goal_service.set("sess_1", objective="新目标", replace=True)
 
-    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=99))
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job), tokens=99)
     current = await goal_service.get("sess_1")
     assert current.goal_id == new.goal_id
     assert current.tokens_used == 0
     assert session_orchestrator.calls == []
 
-    goal_runtime._goal_job_owners["job_1"] = new.goal_id
+    _bind(goal_runtime, "job_1", new)
     await _work(goal_runtime, GoalWork("sess_1", "failed", job=job_service.job))
     assert (await goal_service.get("sess_1")).status == GoalStatus.blocked
 
@@ -264,12 +357,62 @@ async def test_failed_job_does_not_overwrite_goal_paused_during_active_turn(
         job_id="job_1", session_id="sess_1", thread_id="thr_sess_1"
     )
     goal = await goal_service.set("sess_1", objective="目标")
-    goal_runtime._goal_job_owners["job_1"] = goal.goal_id
+    _bind(goal_runtime, "job_1", goal)
     await goal_service.set("sess_1", status=GoalStatus.paused)
 
     await _work(goal_runtime, GoalWork("sess_1", "failed", job=job_service.job))
 
     assert (await goal_service.get("sess_1")).status == GoalStatus.paused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["failed", "cancelled"])
+@pytest.mark.parametrize("control", ["pause", "edit", "replace"])
+async def test_terminal_goal_work_preserves_concurrent_user_control_and_keeps_worker_alive(
+    monkeypatch, goal_service, goal_runtime, job_service, session_orchestrator, kind, control,
+):
+    goal = await goal_service.set("sess_1", objective="执行中的目标")
+    job_service.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
+    _bind(goal_runtime, "job_1", goal)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_get = goal_service.get
+    reads = 0
+
+    async def read_before_control(session_id):
+        nonlocal reads
+        observed = await original_get(session_id)
+        reads += 1
+        if reads == 2:
+            entered.set()
+            await release.wait()
+        return observed
+
+    monkeypatch.setattr(goal_service, "get", read_before_control)
+    terminal = asyncio.create_task(_work(goal_runtime, GoalWork("sess_1", kind, job=job_service.job), tokens=13))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        if control == "pause":
+            controlled = await goal_service.set("sess_1", status=GoalStatus.paused,
+                                                expected_control_revision=goal.control_revision)
+        else:
+            controlled = await goal_service.set("sess_1", objective="用户的新目标", replace=control == "replace",
+                                                expected_control_revision=goal.control_revision)
+    finally:
+        release.set()
+        await terminal
+
+    final = await original_get("sess_1")
+    assert (final.goal_id, final.objective, final.status, final.revision, final.control_revision) == (
+        controlled.goal_id, controlled.objective, controlled.status, controlled.revision, controlled.control_revision)
+    assert final.tokens_used == (0 if control == "replace" else 13)
+    goal_runtime.assert_healthy()
+    assert goal_runtime._worker is not None and not goal_runtime._worker.done()
+    assert not session_orchestrator.calls
+    following = await goal_service.set("sess_1", objective="继续处理后续目标", replace=True)
+    await goal_runtime.request_goal("sess_1")
+    goal_runtime.assert_healthy()
+    assert len(session_orchestrator.calls) == 1
+    assert session_orchestrator.calls[0][2]["goal_id"] == following.goal_id
 
 
 @pytest.mark.asyncio
@@ -314,9 +457,9 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt(
         ended_at=started_at + timedelta(seconds=37),
     )
     goal = await goal_service.set("sess_1", objective="完成预算目标", token_budget=100)
-    goal_runtime._goal_job_owners["job_budget"] = goal.goal_id
+    _bind(goal_runtime, "job_budget", goal)
 
-    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=120))
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job), tokens=120)
 
     current = await goal_service.get("sess_1")
     assert current.status == GoalStatus.budget_limited
@@ -348,12 +491,12 @@ async def test_active_objective_edit_queues_internal_goal_message(
     )
     job_service.items = [running]
     original = await goal_service.set("sess_1", objective="旧目标")
-    goal_runtime._goal_job_owners[running.job_id] = original.goal_id
+    _bind(goal_runtime, running.job_id, original)
     edited = await goal_service.set("sess_1", objective="新目标")
 
     await goal_runtime.request_goal("sess_1", objective=edited)
 
-    assert goal_runtime._goal_job_owners.get(running.job_id) is None
+    assert goal_runtime.store.usage_state(original.goal_id).accounted_jobs[running.job_id].execution.control_revision == original.control_revision
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0][3] == "after_turn"
     assert "取代此前的 Goal" in session_orchestrator.calls[0][1]
@@ -462,7 +605,7 @@ async def test_shutdown_exposes_background_failure_and_logs_all_inflight_errors(
 async def test_closed_action_admission_still_accounts_terminal_goal_work(goal_runtime, goal_service, job_service, kind, status):
     goal = await goal_service.set("sess_1", objective="关闭时保留终态")
     job_service.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
-    goal_runtime._goal_job_owners["job_1"] = goal.goal_id
+    _bind(goal_runtime, "job_1", goal)
     goal_runtime.close_admission()
     await _work(goal_runtime, GoalWork("sess_1", kind, job=job_service.job))
     assert (await goal_service.get("sess_1")).status == status
@@ -473,10 +616,10 @@ async def test_started_owner_is_frozen_before_a_later_goal_replacement(goal_runt
     old = await goal_service.set("sess_1", objective="旧目标")
     await goal_runtime.on_event(SimpleNamespace(type="job_started", job_id="job_old",
                                                payload=SimpleNamespace(session_id="sess_1", thread_id="thr_sess_1")))
-    assert goal_runtime._goal_job_owners["job_old"] == old.goal_id
+    assert goal_runtime.store.execution_owners("job_old") == [old.goal_id]
     replacement = await goal_service.set("sess_1", objective="新目标", replace=True)
     job_service.job = SimpleNamespace(job_id="job_old", session_id="sess_1", thread_id="thr_sess_1")
-    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job, tokens=50))
+    await _work(goal_runtime, GoalWork("sess_1", "agent_end", job=job_service.job), tokens=50)
     current = await goal_service.get("sess_1")
     assert current.goal_id == replacement.goal_id and current.tokens_used == 0
     assert not session_orchestrator.calls
@@ -534,7 +677,8 @@ async def test_terminal_work_uses_the_observed_job_after_registry_removal(goal_r
     now = datetime.now(timezone)
     job_service.job = SimpleNamespace(job_id="job_terminal", session_id="sess_1", thread_id="thr_sess_1",
                                       created_at=now - timedelta(seconds=3), ended_at=now if terminal_time else None)
-    goal_runtime._goal_job_owners["job_terminal"] = goal.goal_id
+    _bind(goal_runtime, "job_terminal", goal)
+    goal_runtime._saver.execution_progress.return_value = RuntimeExecutionProgress("completed", now.isoformat(), 17)
     await goal_runtime.on_event(SimpleNamespace(type="agent_end", job_id="job_terminal",
         payload=SimpleNamespace(token_usage=SimpleNamespace(total_tokens=17))))
 
@@ -560,23 +704,15 @@ async def test_terminal_work_uses_the_observed_job_after_registry_removal(goal_r
     ("failed", None, GoalStatus.blocked, 0),
     ("cancelled", None, GoalStatus.paused, 0),
 ])
-async def test_recovery_follows_the_original_continuation_chain_and_settles_its_tail(
+async def test_recovery_uses_the_persisted_execution_reference_and_settles_failure_usage(
     goal_runtime, goal_service, session_orchestrator, outcome, budget, status, calls,
 ):
     goal = await goal_service.set("sess_1", objective="恢复原执行", token_budget=budget)
-    wakeups = [RuntimeExecutionWakeup(
-        session_id=goal.session_id, thread_id=goal.thread_id, source_id=f"goal:{goal.goal_id}:state",
-        source_item_id=f"item-{index}", execution_id=f"execution-{index}", job_id=f"job-{index}",
-        admission_idempotency_key=f"admission-{index}", agent_id="default",
-        message_created_at="2026-10-27T00:00:00+00:00", gateway_id=None, request_id=None,
-        lease_id=f"lease-{index}", lifecycle_generation=1, lease_fencing_token=1,
-    ) for index in range(3)]
-    accepted = {f"goal:{goal.goal_id}:idle:{goal.goal_id}:{goal.revision}:goal_continuation": wakeups[0]}
-    accepted.update({f"goal:{goal.goal_id}:{previous.job_id}:goal_continuation": following
-                     for previous, following in pairwise(wakeups)})
-    goal_runtime._dispatcher.submitted.side_effect = lambda _session, _thread, *, idempotency_key: accepted.get(idempotency_key)
-    goal_runtime._saver.execution_queue_record.return_value = SimpleNamespace(cursor=SimpleNamespace(commit_id=1))
-    goal_runtime._saver.runtime_execution_progress.return_value = RuntimeExecutionProgress(
+    reference = TaskExecutionReferenceDTO(session_id=goal.session_id, thread_id=goal.thread_id,
+        execution_id="original-execution", started_at=datetime(2026, 10, 27, tzinfo=UTC),
+        control_revision=goal.control_revision)
+    goal_runtime.store.bind_execution(goal.goal_id, "original-job", reference, datetime.now(UTC))
+    goal_runtime._saver.execution_progress.return_value = RuntimeExecutionProgress(
         outcome, "2026-10-27T00:00:03+00:00", 17,
     )
 
@@ -584,16 +720,12 @@ async def test_recovery_follows_the_original_continuation_chain_and_settles_its_
 
     current = await goal_service.get(goal.session_id)
     assert current.status == status and len(session_orchestrator.calls) == calls
-    goal_runtime._saver.runtime_execution_progress.assert_called_once_with(wakeups[-1])
-    if outcome == "unknown":
-        assert goal_runtime._goal_job_owners == {wakeups[-1].job_id: goal.goal_id}
-    elif outcome in {"completed", "completed_empty"}:
-        assert set(current.accounted_jobs) == {wakeups[-1].job_id}
-        assert current.tokens_used == 17 and current.time_used_seconds == 3
-        if budget is not None:
-            assert session_orchestrator.calls[0][2]["goal_budget_limited"] is True
-    else:
-        assert current.tokens_used == 0 and current.accounted_jobs == {}
+    goal_runtime._saver.execution_progress.assert_called_once_with(goal.session_id, goal.thread_id,
+        job_id="original-job", execution_id="original-execution")
+    assert current.tokens_used == 17 and current.time_used_seconds == 3
+    assert current.accounted_jobs["original-job"].settled == (outcome != "unknown")
+    if budget is not None:
+        assert session_orchestrator.calls[0][2]["goal_budget_limited"] is True
 
 
 @pytest.mark.asyncio
@@ -606,12 +738,60 @@ async def test_recovery_does_not_attribute_a_previous_goal_revision_to_the_curre
 
     def submitted(_session, _thread, *, idempotency_key):
         requested.append(idempotency_key)
+        return session_orchestrator.accepted.get(idempotency_key)
 
     goal_runtime._dispatcher.submitted.side_effect = submitted
     await _work(goal_runtime, GoalWork(current.session_id, goal=current, recovering=True))
-    assert requested == [f"goal:{current.goal_id}:idle:{current.goal_id}:{current.revision}:goal_continuation",
-                         f"goal:{current.goal_id}:objective:{current.revision}:goal_objective_updated"]
+    assert requested == [f"goal:{current.goal_id}:idle:{current.goal_id}:{current.revision}:goal_continuation"] * 2
     assert current.revision == original.revision + 1
-    goal_runtime._saver.runtime_execution_progress.assert_not_called()
+    goal_runtime._saver.execution_progress.assert_not_called()
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0][2]["goal_objective"] == current.objective
+
+
+@pytest.mark.asyncio
+async def test_restart_skips_all_settled_rounds_and_only_samples_the_current_execution(
+    goal_runtime, goal_service, session_orchestrator,
+):
+    goal = await goal_service.set("sess_1", objective="多轮后恢复当前执行")
+    for job_id in ("old-first", "old-second", "current"):
+        _bind(goal_runtime, job_id, goal)
+    for job_id in ("old-first", "old-second"):
+        await goal_service.account_job("sess_1", job_id=job_id, tokens=10, elapsed_seconds=2,
+                                       close_time=True, settled=True)
+    goal_runtime._saver.execution_progress.return_value = RuntimeExecutionProgress(
+        "unknown", datetime.now(UTC).isoformat(), 3)
+
+    await _work(goal_runtime, GoalWork("sess_1", recovering=True, goal=goal))
+
+    goal_runtime._saver.execution_progress.assert_called_once_with(
+        goal.session_id, goal.thread_id, job_id="current", execution_id="execution-current")
+    assert session_orchestrator.calls == []
+    assert (await goal_service.get("sess_1")).tokens_used == 23
+
+
+@pytest.mark.asyncio
+async def test_restart_after_accounting_before_followup_keeps_original_dispatch_identity(
+    goal_runtime, goal_service, session_orchestrator,
+):
+    goal = await goal_service.set("sess_1", objective="已记账的终态仍需续跑")
+    _bind(goal_runtime, "original", goal)
+    await goal_service.account_job("sess_1", job_id="original", tokens=17, elapsed_seconds=3,
+                                   close_time=True)
+
+    await _work(goal_runtime, GoalWork("sess_1", recovering=True, goal=goal))
+
+    current = await goal_service.get("sess_1")
+    assert current.tokens_used == 17 and current.accounted_jobs["original"].settled
+    assert len(session_orchestrator.calls) == 1
+    assert current.dispatch.trigger_id == "original"
+    assert current.dispatch.job_id == "dispatched-1"
+    goal_runtime._saver.execution_progress.reset_mock()
+    goal_runtime._saver.execution_progress.return_value = RuntimeExecutionProgress(
+        "unknown", datetime.now(UTC).isoformat(), 0)
+
+    await _work(goal_runtime, GoalWork("sess_1", recovering=True, goal=current))
+
+    goal_runtime._saver.execution_progress.assert_called_once_with(
+        goal.session_id, goal.thread_id, job_id="dispatched-1", execution_id="execution-dispatched-1")
+    assert len(session_orchestrator.calls) == 1

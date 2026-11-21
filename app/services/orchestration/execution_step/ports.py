@@ -7,14 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
 
 if TYPE_CHECKING:
-    from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+    from app.abstractions.background_mailbox import BackgroundMailboxProtocol
     from app.abstractions.job_event_bus import JobEventBusProtocol
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
-    from app.abstractions.session_context import SessionLookupProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
     from app.domain.itemized.execution_admission import ExecutionAdmission
     from app.domain.itemized.records import CanonicalItemRecord
@@ -50,7 +50,7 @@ class StepAgentFactory(Protocol):
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
-        preferred_provider_id: str | None,
+        preferred_model: ModelReferenceDTO | None,
         include_team_tools: bool,
     ) -> ThreadRuntimeLease[StepAgentRuntime]: ...
 
@@ -64,7 +64,7 @@ class StepExecutionPorts:
     tool_selection_store: ToolSelectionReader
     session_changes_service: SessionChangesRecorderProtocol
     message_stream_store: MessageStreamStore
-    background_message_bus: BackgroundMessageBusProtocol
+    background_mailbox: BackgroundMailboxProtocol
     committed_item_observer: Callable[[str, str, Sequence[CanonicalItemRecord]], None]
     workspace_root: Path
     agent_factory: StepAgentFactory
@@ -73,7 +73,6 @@ class StepExecutionPorts:
     # .boxteam/sessions 会话节点下；测试可用显式实现替换。
     control_inbox_state_path: Callable[[str, str], Path]
     checkpointer_provider: Callable[[], RolloutCheckpointSaver]
-    session_service_provider: Callable[[], SessionLookupProtocol]
     tool_approvals: ToolApprovalService
     external_resource_leases: ExternalResourceLeaseLedger | None = None
     model_timeout_seconds: float | None = None

@@ -6,18 +6,24 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { PluginBinding, PluginTarget, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
-import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { GatewayRequestTarget, GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
 import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument, type SourceTarget } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
+export interface PluginConfigurationTarget extends PluginTarget {
+  workspace_id?: string;
+  package_id: string;
+  package_version: string;
+  plugin_id: string;
+}
 type ConfigDocument = SourceDocument;
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
-type Source = { source_key?: string | null; layer: string; presence: string; uri?: string | null; writable?: boolean };
+type Source = Awaited<ReturnType<ConfigurationSourceOwner['list']>>['sources'][number];
 type PrivateParameter = { pointer: string; schema: Record<string, unknown> };
 
 const targetHeader = (gatewayId: string) => ({ 'X-BoxTeam-Target-Gateway-Id': gatewayId });
@@ -104,11 +110,18 @@ function privateParameterStatus(document: ConfigDocument, binding: Configuration
     + t('plugins.privateRevisionsStatus', document.active_revision ?? t('plugins.none'), document.status?.pending_revision ?? t('plugins.none'));
 }
 
-async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string,
+async function chooseSource(quickInput: IQuickInputService, sources: Source[], scope: Scope, title: string,
   token?: CancellationToken): Promise<Source | undefined> {
-  const selected = await quickInput.pick(sources.filter(item => item.source_key).map(source => ({
-    label: source.source_key!, description: `${source.layer} · ${source.presence}${source.writable === false ? t('plugins.readOnlySuffix') : ''}`,
-    detail: source.uri ?? undefined, source,
+  // 范围开关只能修改该范围；跨工作区的用户配置仍从正式设置来源编辑器管理。
+  // 目录只公布来源层；是否可写仍读取所选文档的权威 writable，不猜测缺失字段。
+  const candidates = sources.filter(source => source.source_key
+    && (scope === 'workspace' ? source.layer === 'workspace' : source.layer === 'user' || source.layer === 'user_local'));
+  if (!candidates.length) throw new Error(t('plugins.noWritableScopeSource'));
+  if (candidates.length === 1) return candidates[0];
+  const selected = await quickInput.pick(candidates.map(source => ({
+    label: source.layer === 'user_local' ? t('plugins.source.localOverride') : t('plugins.source.gateway'),
+    description: source.presence === 'absent' ? t('plugins.source.createOnSave') : undefined,
+    detail: source.uri ?? source.source_key!, source,
   })), { title, placeHolder: t('plugins.chooseConfigurationSource'), canPickMany: false }, token);
   return selected?.source;
 }
@@ -132,7 +145,7 @@ async function saveSourceEdit(owner: ConfigurationSourceOwner,
   }
 }
 
-export async function readPluginBindings(scope: Scope, target: SourceTarget): Promise<PluginBinding[]> {
+export async function readPluginBindings(scope: Scope, target: GatewayRequestTarget): Promise<PluginBinding[]> {
   const owner = new ConfigurationSourceOwner(target);
   // 任一正式来源文档都返回完整的来源合并值；无需先列目录再猜选最高层。
   const document = await owner.read(target.workspace_id ? 'inline' : 'inline:0');
@@ -150,7 +163,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
   try {
     const listed = await owner.list(signal);
     check();
-    selected = await chooseSource(quickInput, listed.sources,
+    selected = await chooseSource(quickInput, listed.sources, scope,
       scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
     check();
   } catch (error) {
@@ -191,7 +204,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
   return results;
 }
 
-export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
+export async function manageConfig(scope: Scope, gatewayTarget: PluginTarget, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
   quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null | 'preserve',
   editParameters: boolean, privateParameter: PrivateParameter | undefined, check: () => void, token: CancellationToken, signal: AbortSignal): Promise<void> {
   check();
@@ -200,7 +213,7 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspaceTarget! : gatewayTarget);
   const listed = await owner.list(signal);
   check();
-  const selected = await chooseSource(quickInput, listed.sources, scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
+  const selected = await chooseSource(quickInput, listed.sources, scope, scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
   check();
   if (!selected) return;
   const source = selected;
@@ -358,32 +371,41 @@ export function writeOnlyFields(schema: Record<string, unknown> | undefined, pre
 }
 
 /** 设置发现只消费安装清单和原配置 owner，不依赖插件管理权限或运行状态。 */
-export async function configureServicePlugin(accessor: ServicesAccessor): Promise<void> {
+export async function configureServicePlugin(accessor: ServicesAccessor, supplied?: PluginConfigurationTarget): Promise<void> {
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   const dialogs = accessor.get(IDialogService);
+  const frozen = supplied ? { ...supplied } : undefined;
+  if (frozen && (![frozen.gateway_id, frozen.package_id, frozen.package_version, frozen.plugin_id].every(value => typeof value === 'string' && value.trim())
+    || frozen.workspace_id !== undefined && (typeof frozen.workspace_id !== 'string' || !frozen.workspace_id.trim()))) {
+    throw new Error(t('plugins.settingsTargetChanged'));
+  }
   const initial = await workspaceContext.ensureReady();
   const lifecycle = createManagementTargetLifecycle(t('plugins.settingsTargetChanged'), initial.gatewayId ?? undefined);
-  const target = managementGateway('settings');
+  const target = frozen ? { gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id } : managementGateway('settings');
   const { check, token, signal } = lifecycle;
   try {
-    const scope = await quickInput.pick([{ label: t('plugins.gatewayParameters'), scope: 'gateway' as const },
+    const scope = frozen ? { scope: frozen.workspace_id ? 'workspace' as const : 'gateway' as const } : await quickInput.pick([{ label: t('plugins.gatewayParameters'), scope: 'gateway' as const },
       { label: t('plugins.workspaceParameters'), scope: 'workspace' as const }],
-    { title: t('plugins.settingsTitle', managementTargetDisplayName(target), target.gateway_id), canPickMany: false }, token);
+    { title: t('plugins.settingsTitle', managementTargetDisplayName(managementGateway('settings')), target.gateway_id), canPickMany: false }, token);
     check();
     if (!scope) return;
-    const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;
+    const workspace = frozen?.workspace_id ? { ...target, workspace_id: frozen.workspace_id }
+      : scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;
     check();
     if (scope.scope === 'workspace' && !workspace) return;
     check();
     const schemas = await new ConfigurationSourceOwner({ ...target, workspace_id: workspace?.workspace_id }).configurationSchemas(signal);
     check();
-    if (!schemas.plugins.length) { notifications.info(t('plugins.noConfigurationDeclarations')); return; }
-    const selected = await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
+    if (!schemas.plugins.length && !frozen) { notifications.info(t('plugins.noConfigurationDeclarations')); return; }
+    const selected = frozen ? { plugin: schemas.plugins.find(plugin => plugin.package_id === frozen.package_id
+      && plugin.package_version === frozen.package_version && plugin.plugin_id === frozen.plugin_id && plugin.instance_scope === scope.scope) }
+      : await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
       description: `${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
       detail: `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''} · ${plugin.instance_scope}`, plugin })),
     { title: t('plugins.chooseConfigurationVersion'), canPickMany: false }, token);
     check();
     if (!selected) return;
+    if (!selected.plugin) throw new Error(t('plugins.versionUnavailable', frozen!.package_id, frozen!.plugin_id, frozen!.package_version));
     const plugin = selected.plugin;
     const selectedAction = await quickInput.pick([{ label: t('plugins.viewSchema'), action: 'schema' },
       { label: t('plugins.editParametersJson'), action: 'json' },
@@ -404,7 +426,7 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
   } finally { lifecycle.dispose(); }
 }
 
-export async function choosePluginWorkspace(target: ReturnType<typeof managementGateway>, quickInput: IQuickInputService,
+export async function choosePluginWorkspace(target: PluginTarget, quickInput: IQuickInputService,
   token?: CancellationToken): Promise<GatewayWorkspaceRequestTarget | undefined> {
   const workspaces = (await gateway.workspaces(false)).items.filter(item => item.gateway_id === target.gateway_id);
   const selected = await quickInput.pick(workspaces.map(workspace => ({ label: workspace.name, description: workspace.status,

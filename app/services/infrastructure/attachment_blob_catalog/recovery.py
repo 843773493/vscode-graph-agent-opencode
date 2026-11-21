@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 from app.core.phase_observer import observe_phase_sync
@@ -22,6 +23,10 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     DirectoryIngestRecord,
+)
+from app.services.infrastructure.attachment_blob_catalog.uploads import (
+    DRAFT_UPLOAD_RETENTION,
+    is_draft_upload,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +66,8 @@ class AttachmentIngestRecoveryMixin:
                 if control.list_background_tasks(thread_id=thread_id, active_only=True):
                     return ()
                 for pin in control.list_non_terminal_leases():
+                    if pin.operation_kind == "attachment" and pin.operation_identity.startswith("attkey_") and is_draft_upload(self._upload_pin_owner(session_id, pin)[1]):
+                        continue
                     if pin.operation_kind == "attachment" and (
                         not pin.operation_identity.startswith(("attkey_", "attref_"))
                         or self._upload_pin_owner(session_id, pin)[0] == thread_id
@@ -153,6 +160,16 @@ class AttachmentIngestRecoveryMixin:
                     "attachment_id": record.attachment_id, "lease_id": pin.lease_id,
                 })
                 self._settle_pin(control, pin, outcome="completed")
+            # 预上传 pin 不属于真实消息；只有 canonical 接受附件引用才完成交接。
+            for draft_pin in control.list_non_terminal_leases():
+                if draft_pin.operation_kind != "attachment" or not draft_pin.operation_identity.startswith("attkey_"):
+                    continue
+                _, draft_message = self._upload_pin_owner(session_id, draft_pin)
+                if is_draft_upload(draft_message):
+                    record = self._catalog.get_ingest_record(draft_pin.operation_identity)
+                    if record.attachment_id in ids:
+                        self._catalog.release_unused_ingest(record, now=self._clock())
+                        self._settle_pin(control, draft_pin, outcome="completed")
         finally:
             control.close()
 
@@ -174,7 +191,8 @@ class AttachmentIngestRecoveryMixin:
                             if thread_id is None or record.owner_thread_id == thread_id)
             if {record.ingest_idempotency_key for record in pending} - {pin.operation_identity for pin in pins}:
                 raise RuntimeError("非终态目录上传缺少有效 pin，不能猜测恢复")
-            for pin in pins:
+            # 先结算未接受消息的引用，再处理预上传，避免引用交接中断留下假占用。
+            for pin in sorted(pins, key=lambda pin: pin.operation_identity.startswith("attkey_")):
                 if pin.operation_identity.startswith("attref_"):
                     owner_thread, message_id = self._upload_pin_owner(session_id, pin)
                     references = None if messages is None else messages.attachment_message_references(session_id, owner_thread, message_id)
@@ -193,6 +211,17 @@ class AttachmentIngestRecoveryMixin:
                     record = None
                 owner_thread, message_id = self._validate_upload_pin(session_id, pin, record)
                 outcome = "failed"
+                if record is not None and record.state == "published" and is_draft_upload(message_id):
+                    if messages is not None and messages.attachment_reference_in_use(session_id, owner_thread, record.attachment_id):
+                        outcome = "completed"
+                    elif messages is not None and self._clock() < datetime.fromisoformat(record.created_at) + DRAFT_UPLOAD_RETENTION:
+                        continue
+                    else:
+                        self._discard_draft_record(record)
+                    recovered = control.takeover_lease(lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token)
+                    self._settle_pin(control, recovered, outcome=outcome)
+                    actions.append("settled-pin")
+                    continue
                 if record is not None and record.state == "published" and messages is not None:
                     references = messages.attachment_message_references(session_id, owner_thread, message_id)
                     if references is not None:
@@ -209,6 +238,8 @@ class AttachmentIngestRecoveryMixin:
                                                     reason="恢复：原上传 holder 已排空，未发布 intent 终止", now=self._clock())
                     remove_directory(resolve_staging_path(self._attachments_root, record.staging_relative_locator))
                     remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
+                    if is_draft_upload(message_id):
+                        self._remove_unused_upload_versions((record.digest,))
                     actions.append("aborted-ingest")
                 recovered = control.takeover_lease(lease_id=pin.lease_id, expected_fencing_token=pin.fencing_token)
                 self._settle_pin(control, recovered, outcome=outcome)

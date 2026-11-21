@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from contextlib import aclosing
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import (
-    get_request_id,
     get_workspace_activity_service,
     verify_local_token,
 )

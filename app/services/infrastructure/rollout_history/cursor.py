@@ -14,11 +14,11 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryLoadRequest,
     TurnInclude,
 )
-from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
-from app.services.infrastructure.turn_history.models import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
 )
+from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
 
 
 @dataclass(frozen=True, slots=True)

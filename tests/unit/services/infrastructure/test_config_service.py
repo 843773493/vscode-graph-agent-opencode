@@ -12,16 +12,17 @@ from typing import NoReturn
 import httpx
 import jsonschema
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from watchfiles import Change
 
 import app.services.infrastructure.config_service.config_reload as config_reload_module
 import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
-from app.core.lifecycle import LifetimeScope
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_workspace_config_path
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigSourceEditRequest, ConfigUpdateRequest
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.snapshot import ConfigSnapshot
@@ -33,6 +34,9 @@ from app.services.infrastructure.config.watcher import ConfigFileWatcher
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
+PRIMARY_MODEL = ModelReferenceDTO(provider_id="primary", model_id="default")
+BACKUP_MODEL = ModelReferenceDTO(provider_id="backup", model_id="default")
+
 
 def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
     config_path = tmp_path / "workspace.jsonc"
@@ -42,13 +46,11 @@ def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
 
 def _base_config() -> dict:
     return {
-        "config_version": 2,
+        "config_version": 3,
         "llm": {
-            "providers": [
-                {
-                    "id": "primary",
+            "providers": {"primary": {
+                "defaults": {
                     "endpoint": "https://example.com/v1",
-                    "model": "model-a",
                     "api_key": "${TEST_API_KEY}",
                     "custom_llm_provider": "openai",
                     "api_mode": {
@@ -59,22 +61,59 @@ def _base_config() -> dict:
                         },
                         "supports_reasoning": {"reasoning_content": True},
                     },
-                }
-            ]
+                },
+                "models": {"default": {"model": "model-a"}},
+            }}
         },
         "mcp": {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}},
         "default_agent": "default",
         "agents": {
+            **{name: {"model": {"primary": PRIMARY_MODEL.model_dump(), "fallbacks": []}}
+               for name in ("coder", "reviewer", "researcher")},
             "default": {
                 "name": "Default Agent",
                 "instructions": {"system_prompt": "hello"},
                 "model": {
-                    "primary_provider": "primary",
-                    "fallback_providers": [],
+                    "primary": PRIMARY_MODEL.model_dump(),
+                    "fallbacks": [],
                 },
             }
         },
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launched_url", [None, "http://127.0.0.1:18030"])
+async def test_plugin_refresh_uses_bound_gateway_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launched_url: str | None,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    if launched_url is None:
+        monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
+    else:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", launched_url)
+    config = _base_config()
+    configured_url = "http://127.0.0.1:18014"
+    config["runtime"] = {"gateway": {"connection": {"url": configured_url}}}
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
+    )
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"code": 0, "data": True})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(config_reload_module.httpx, "AsyncClient", lambda **kwargs:
+                        client_type(**kwargs, transport=httpx.MockTransport(handle)))
+    monkeypatch.setattr(config_reload_module, "get_gateway_local_token", lambda: "test-token")
+    await service._notify_gateway_workspace_plugins(workspace_id="workspace-test", candidate_id="candidate-test")
+    assert len(requests) == 1
+    assert str(requests[0].url) == (
+        f"{launched_url or configured_url}/api/internal/service-plugins/workspaces/workspace-test/refresh"
+    )
+    assert requests[0].headers["X-Request-ID"] == "config-candidate-test"
 
 
 @pytest.mark.parametrize("legacy_logger", [{"level": "info"}, {"level": "verbose"}, {"pretty": False}])
@@ -222,11 +261,9 @@ def test_config_event_cursor_family_uses_store_state_gate_and_cursor(
 
 def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
     config = _base_config()
-    config["llm"]["providers"].append(
-        {
-            "id": "backup_4",
+    config["llm"]["providers"]["backup_4"] = {
+        "defaults": {
             "endpoint": "https://chatgpt.com/backend-api/codex",
-            "model": "gpt-5.6-luna",
             "custom_llm_provider": "chatgpt",
             "api_mode": {
                 "protocol": "responses",
@@ -243,21 +280,22 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
                 "replay_policy": {"encrypted_content": "same_source"},
             },
             "auth": {"type": "oauth", "method": "chatgpt"},
-        }
-    )
+        },
+        "models": {"default": {"model": "gpt-5.6-luna"}},
+    }
     config_path = _write_workspace_config(tmp_path, config)
 
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     service.validate_workspace_config()
-    assert service.get_llm_provider("backup_4")["auth"]["method"] == "chatgpt"
+    assert service.get_llm_model(ModelReferenceDTO(provider_id="backup_4", model_id="default"))["auth"]["method"] == "chatgpt"
 
 
-def test_literal_provider_key_is_persisted_verbatim_in_workspace_sqlite(
+def test_literal_provider_key_is_rejected_before_publishing_workspace_snapshot(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"][0]["api_key"] = "literal-provider-key"
+    config["llm"]["providers"]["primary"]["defaults"]["api_key"] = "literal-provider-key"
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
     store = WorkspaceStateStore(workspace_root=workspace_root)
@@ -268,22 +306,10 @@ def test_literal_provider_key_is_persisted_verbatim_in_workspace_sqlite(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        service.validate_workspace_config()
-        active = store.get_active_config_snapshot("workspace")
-        assert active is not None
-        persist_state = store.connection()
-        try:
-            row = persist_state.execute(
-                """
-                SELECT payload_json FROM config_active_snapshot
-                WHERE config_domain = 'workspace'
-                """
-            ).fetchone()
-        finally:
-            persist_state.close()
-        assert row is not None
-        payload = json.loads(row[0])
-        assert payload["llm"]["providers"][0]["api_key"] == "literal-provider-key"
+        with pytest.raises(ValueError, match="配置验证失败"):
+            service.validate_workspace_config()
+        assert store.get_active_config_snapshot("workspace") is None
+        assert json.loads(config_path.read_text(encoding="utf-8")) == config
     finally:
         store.close()
 
@@ -296,9 +322,11 @@ def test_provider_secret_resolution_observes_environment_rotation(
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     monkeypatch.setenv("TEST_API_KEY", "first-secret")
-    first = service.get_llm_provider("primary")
+    with service.use_llm_credentials({}):
+        first = service.get_llm_model(PRIMARY_MODEL)
     monkeypatch.setenv("TEST_API_KEY", "second-secret")
-    second = service.get_llm_provider("primary")
+    with service.use_llm_credentials({}):
+        second = service.get_llm_model(PRIMARY_MODEL)
 
     assert first["api_key"] == "first-secret"
     assert second["api_key"] == "second-secret"
@@ -436,7 +464,7 @@ def test_source_message_grouping_uses_workspace_layers(tmp_path: Path, grouping:
         config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
     )
     assert service.get_source_message_grouping() == (grouping or "aggregate")
-    assert service.get_snapshot().to_dict()["config_version"] == 2
+    assert service.get_snapshot().to_dict()["config_version"] == 3
 
 
 def test_source_message_grouping_rejects_unknown_mode(tmp_path: Path) -> None:
@@ -463,7 +491,11 @@ def test_config_rejects_unknown_agent_run_mode(tmp_path: Path) -> None:
 
 def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
     config = _base_config()
-    del config["llm"]["providers"][0]["api_key"]
+    defaults = config["llm"]["providers"]["primary"]["defaults"].copy()
+    del defaults["api_key"]
+    config["llm"]["providers"]["missing_key"] = {
+        "defaults": defaults, "models": {"default": {"model": "model-a"}},
+    }
     config_path = _write_workspace_config(tmp_path, config)
 
     with pytest.raises(ValueError, match="配置验证失败") as failure:
@@ -1050,12 +1082,12 @@ async def test_get_public_config_fails_when_default_agent_provider_is_missing(
     tmp_path: Path,
 ):
     config = _base_config()
-    config["agents"]["default"]["model"]["primary_provider"] = "missing"
+    config["agents"]["default"]["model"]["primary"] = {"provider_id": "missing", "model_id": "default"}
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     with pytest.raises(
-        ValueError, match="default agent 引用了不存在的 provider: missing"
+        ValueError, match="引用了不存在的 Provider: missing"
     ):
         await service.get()
 
@@ -1250,7 +1282,7 @@ def test_workspace_config_overrides_user_global_config(
     )
 
     assert service.list_agents()["default"]["name"] == "Workspace Override"
-    assert service.list_agents()["default"]["model"]["primary_provider"] == "primary"
+    assert service.list_agents()["default"]["model"]["primary"] == PRIMARY_MODEL.model_dump()
     assert service.development_test_tools_enabled() is True
 
 
@@ -1258,19 +1290,12 @@ def test_workspace_config_overrides_user_global_config(
 
 
 
-def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> None:
+def test_web_fetch_config_needs_no_embedding_options(tmp_path: Path) -> None:
     config = _base_config()
     config["agents"]["default"]["tools"] = {
         "custom": [
             {
-                "name": "fetch_webpage",
-                "factory": "app.agents.tools.web:create_fetch_webpage_tool",
-                "options": {
-                    "embedding": {
-                        "provider_id": "primary",
-                        "model": "text-embedding-3-small",
-                    }
-                },
+                "tool_id": "fetch_webpage",
             }
         ]
     }
@@ -1280,41 +1305,67 @@ def test_custom_tool_options_schema_accepts_embedding_config(tmp_path: Path) -> 
     service.validate_workspace_config()
 
 
-def test_get_llm_provider_only_resolves_selected_provider_secret(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["environment", "gateway"])
+async def test_resolve_llm_model_only_prepares_selected_model_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    credential: str,
 ) -> None:
+    from app.schemas.gateway.secrets import ResolvedSecret
+    from app.services.infrastructure.gateway_secrets.client import GatewaySecretsClient
+
     config = _base_config()
-    config["llm"]["providers"].append(
-        {
-            "id": "embedding",
+    secret_id = "sec_00000000000040008000000000000001"
+    config["llm"]["providers"]["embedding"] = {
+        "defaults": {
             "endpoint": "https://embedding.example.com/v1",
-            "model": "embedding-model",
             "api_key": "${EMBEDDING_API_KEY}",
             "custom_llm_provider": "openai",
-        }
-    )
+            "api_mode": {"protocol": "chat_completions",
+                         "model_info": {"supports_function_calling": False, "supports_reasoning": False},
+                         "supports_reasoning": {}},
+        },
+        "models": {
+            "default": {"model": "embedding-model", "overrides": {
+                "api_key": "${EMBEDDING_API_KEY}" if credential == "environment" else "secret:" + secret_id,
+            }},
+            "unused": {"model": "unused-model", "overrides": {"api_key": "${UNUSED_EMBEDDING_API_KEY}"}},
+        },
+    }
     monkeypatch.delenv("TEST_API_KEY", raising=False)
+    monkeypatch.delenv("UNUSED_EMBEDDING_API_KEY", raising=False)
     monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-secret")
+    resolved_ids = []
+
+    async def resolve(self, ids):
+        resolved_ids.extend(ids)
+        return {secret_id: ResolvedSecret(revision=7, value="gateway-embedding-secret")}
+
+    monkeypatch.setattr(GatewaySecretsClient, "resolve", resolve)
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    provider = service.get_llm_provider("embedding")
+    reference = ModelReferenceDTO(provider_id="embedding", model_id="default")
+    before = service.get_llm_model(reference)
+    resolved = await service.resolve_llm_model(reference)
+    assert resolved["provider_id"] == "embedding" and resolved["model_id"] == "default"
+    assert resolved["api_key"] == ("embedding-secret" if credential == "environment" else "gateway-embedding-secret")
+    assert resolved_ids == ([] if credential == "environment" else [secret_id])
+    assert service.get_llm_model(reference) == before
 
-    assert provider["api_key"] == "embedding-secret"
 
-
-def test_provider_request_override_schema_accepts_raw_completion_parameters(
+def test_model_request_parameters_schema_accepts_raw_completion_parameters(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"][0]["request_options"] = {
-        "overrides": {
+    config["llm"]["providers"]["primary"]["defaults"]["request_options"] = {
+        "parameters": {
             "temperature": 1,
             "max_tokens": None,
             "extra_body": {
                 "reasoning": True,
-                "max_output_tokens": 1200,
+                "extension_limit": 1200,
             },
         }
     }
@@ -1344,11 +1395,12 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
 def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigService:
     monkeypatch.setenv("TEST_API_KEY", "initial-key")
     config = _base_config()
-    config["llm"]["providers"][0]["request_options"] = {"default_headers": {"X-Runtime": "original"}}
-    config["llm"]["providers"].append({
-        **config["llm"]["providers"][0], "id": "backup", "model": "model-b",
-    })
-    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    primary = config["llm"]["providers"]["primary"]
+    primary["defaults"]["request_options"] = {"default_headers": {"X-Runtime": "original"}}
+    config["llm"]["providers"]["backup"] = {
+        "defaults": primary["defaults"].copy(), "models": {"default": {"model": "model-b"}},
+    }
+    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
     service = ConfigService(config_dir=Path.cwd() / "configs",
                             config_path=_write_workspace_config(tmp_path, config))
     service.get_revision()
@@ -1356,8 +1408,10 @@ def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("preferred", [None, "backup"])
+@pytest.mark.parametrize("agent_id", [None, "default"])
 def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_isolated(
     runtime_provider_service: ConfigService, monkeypatch: pytest.MonkeyPatch, preferred: str | None,
+    agent_id: str | None,
 ) -> None:
     service = runtime_provider_service
     decode = ConfigSnapshot.to_dict
@@ -1368,22 +1422,50 @@ def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_iso
         return decode(snapshot)
 
     monkeypatch.setattr(ConfigSnapshot, "to_dict", observe)
-    first = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    preferred_model = BACKUP_MODEL if preferred else None
+    with service.use_llm_credentials({}):
+        first = service.get_agent_runtime_config(agent_id, preferred_model=preferred_model)
     assert len(reads) == 1
     expected_order = ["backup", "primary"] if preferred else ["primary", "backup"]
-    assert [provider["id"] for provider in first["providers"]] == expected_order
+    assert [model["provider_id"] for model in first["models"]] == expected_order
+    assert all(model["model_id"] == "default" for model in first["models"])
     assert first["system_prompt"] == "hello"
-    assert all(provider["api_key"] == "initial-key" for provider in first["providers"])
-    first["providers"][0]["request_options"]["default_headers"]["X-Runtime"] = "caller mutation"
+    assert all(model["api_key"] == "initial-key" for model in first["models"])
+    first["models"][0]["request_options"]["default_headers"]["x-runtime"] = "caller mutation"
 
     # 不缓存展开后的凭据或可变配置；同一 revision 的下一次读取仍反映环境变化。
     monkeypatch.setenv("TEST_API_KEY", "updated-key")
-    second = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    with service.use_llm_credentials({}):
+        second = service.get_agent_runtime_config(agent_id, preferred_model=preferred_model)
     assert len(reads) == 2 and len(set(reads)) == 1
-    assert [provider["id"] for provider in second["providers"]] == expected_order
-    assert all(provider["api_key"] == "updated-key" for provider in second["providers"])
-    assert second["providers"][0]["request_options"]["default_headers"]["X-Runtime"] == "original"
-    assert service.get_llm_providers()[0]["api_key"] == "updated-key"
+    assert [model["provider_id"] for model in second["models"]] == expected_order
+    assert all(model["api_key"] == "updated-key" for model in second["models"])
+    assert second["models"][0]["request_options"]["default_headers"]["x-runtime"] == "original"
+    with service.use_llm_credentials({}):
+        assert service.get_llm_model(PRIMARY_MODEL)["api_key"] == "updated-key"
+
+
+@pytest.mark.parametrize("agent_id", ["deep_agent", "removed", ""])
+def test_agent_identity_is_not_replaced_by_default_or_unrelated_credential_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str,
+) -> None:
+    monkeypatch.delenv("UNRELATED_AGENT_PROVIDER_KEY", raising=False)
+    config = _base_config()
+    config["llm"]["providers"]["primary"]["defaults"]["api_key"] = "${UNRELATED_AGENT_PROVIDER_KEY}"
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
+    assert service.get_default_agent_id() == "default"
+    assert service.validate_agent_id(None) == "default"
+    for resolve in (service.validate_agent_id, service.get_agent_runtime_config):
+        with pytest.raises(ValueError, match=f"agent {agent_id} 不存在"):
+            resolve(agent_id)
+
+
+def test_invalid_config_default_agent_is_not_replaced_by_another_definition(tmp_path: Path) -> None:
+    config = _base_config()
+    config["default_agent"] = "removed"
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
+    with pytest.raises(ValueError, match="default_agent 引用了不存在的 Agent: removed"):
+        service.get_default_agent_id()
 
 
 def test_instruction_inputs_use_merged_configuration_without_python_prompt_defaults(
@@ -1423,40 +1505,35 @@ def test_agent_runtime_can_require_delegated_report(
     assert runtime["require_delegated_report"] is True
 
 
-def test_agent_runtime_places_session_provider_first(
+def test_agent_runtime_places_session_model_first(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config["llm"]["providers"].append(
-        {
-            "id": "backup",
-            "endpoint": "https://example.com/v1",
-            "model": "model-b",
-            "api_key": "${TEST_API_KEY}",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    config["llm"]["providers"]["backup"] = {
+        "defaults": config["llm"]["providers"]["primary"]["defaults"].copy(),
+        "models": {"default": {"model": "model-b"}},
+    }
+    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
     runtime = service.get_agent_runtime_config(
         "default",
-        preferred_provider_id="backup",
+        preferred_model=BACKUP_MODEL,
     )
 
-    assert [provider["id"] for provider in runtime["providers"]] == [
+    assert [model["provider_id"] for model in runtime["models"]] == [
         "backup",
         "primary",
     ]
-    assert service.resolve_agent_provider_id("default", "backup") == "backup"
+    assert service.resolve_agent_model("default", BACKUP_MODEL) == BACKUP_MODEL
 
-    with pytest.raises(ValueError, match="不允许使用 provider"):
+    with pytest.raises(ValueError, match="不允许使用模型"):
         service.get_agent_runtime_config(
             "default",
-            preferred_provider_id="unknown",
+            preferred_model=ModelReferenceDTO(provider_id="backup", model_id="unknown"),
         )
 
 
@@ -1500,21 +1577,21 @@ def test_workspace_session_defaults_file_guards_reject_corrupt_and_stale_files(
     with pytest.raises(json.JSONDecodeError):
         _service().get_workspace_default_agent_id()
 
-    # provider 映射不是对象必须报错
+    # 模型映射不是对象必须报错
     defaults_path.write_text(
-        json.dumps({"schema_version": 1, "provider_by_agent": "nope"}),
+        json.dumps({"schema_version": 2, "model_by_agent": "nope"}),
         encoding="utf-8",
     )
     with pytest.raises(TypeError, match="映射必须是对象"):
-        _service().get_workspace_default_provider_id("default")
+        _service().get_workspace_default_model("default")
 
     # 写回必须带 schema_version，且未绑定工作区时明确报错
     defaults_path.write_text(
-        json.dumps({"schema_version": 1}), encoding="utf-8"
+        json.dumps({"schema_version": 2}), encoding="utf-8"
     )
     _service().set_workspace_default_agent("default")
     persisted = json.loads(defaults_path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 1
+    assert persisted["schema_version"] == 2
     assert persisted["default_agent_id"] == "default"
 
     unbound = ConfigService(
@@ -1530,22 +1607,17 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config["llm"]["providers"].append(
-        {
-            "id": "backup",
-            "endpoint": "https://example.com/v1",
-            "model": "model-b",
-            "api_key": "${TEST_API_KEY}",
-            "custom_llm_provider": "openai",
-        }
-    )
-    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    config["llm"]["providers"]["backup"] = {
+        "defaults": config["llm"]["providers"]["primary"]["defaults"].copy(),
+        "models": {"default": {"model": "model-b"}},
+    }
+    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
     config["agents"]["coder"] = {
         "name": "Coder",
         "instructions": {"system_prompt": "code"},
         "model": {
-            "primary_provider": "primary",
-            "fallback_providers": ["backup"],
+            "primary": PRIMARY_MODEL.model_dump(),
+            "fallbacks": [BACKUP_MODEL.model_dump()],
         },
     }
     config_path = _write_workspace_config(tmp_path, config)
@@ -1557,7 +1629,7 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
     )
 
     service.set_workspace_default_agent("coder")
-    service.set_workspace_default_provider("coder", "backup")
+    service.set_workspace_default_model("coder", BACKUP_MODEL)
 
     restored = ConfigService(
         config_dir=Path.cwd() / "configs",
@@ -1565,17 +1637,17 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
         workspace_root=workspace_root,
     )
     assert restored.get_workspace_default_agent_id() == "coder"
-    assert restored.get_workspace_default_provider_id("coder") == "backup"
+    assert restored.get_workspace_default_model("coder") == BACKUP_MODEL
     assert restored.get_default_agent_id() == "default"
-    assert restored.resolve_agent_provider_id("coder") == "primary"
+    assert restored.resolve_agent_model("coder") == PRIMARY_MODEL
     persisted = json.loads(
         (workspace_root / ".boxteam" / "settings" / "session_defaults.json").read_text(
             encoding="utf-8"
         )
     )
     assert persisted == {
-        "schema_version": 1,
-        "provider_by_agent": {"coder": "backup"},
+        "schema_version": 2,
+        "model_by_agent": {"coder": BACKUP_MODEL.model_dump()},
         "default_agent_id": "coder",
     }
 
@@ -1584,7 +1656,7 @@ def test_provider_request_override_schema_rejects_legacy_extra_body(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"][0]["request_options"] = {
+    config["llm"]["providers"]["primary"]["defaults"]["request_options"] = {
         "extra_body": {"reasoning": True}
     }
     config_path = _write_workspace_config(tmp_path, config)
@@ -1636,13 +1708,13 @@ async def test_config_uses_stable_snapshot_until_reload(
 
     original_snapshot = service.get_snapshot()
     original_revision = original_snapshot.revision
-    config["llm"]["providers"][0]["model"] = "model-b"
+    config["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    assert service.get_llm_providers()[0]["model"] == "model-a"
+    assert service.get_llm_model(PRIMARY_MODEL)["model"] == "model-a"
     assert await service.reload() is True
     assert service.get_revision() != original_revision
-    assert service.get_llm_providers()[0]["model"] == "model-b"
+    assert service.get_llm_model(PRIMARY_MODEL)["model"] == "model-b"
     with service.use_snapshot(original_snapshot):
         assert (await service.get()).default_model == "model-a"
 
@@ -1794,7 +1866,7 @@ async def test_invalid_reload_retains_last_valid_snapshot_and_exposes_error(
         await service.reload()
 
     assert service.get_revision() == original_revision
-    assert service.get_llm_providers()[0]["model"] == "model-a"
+    assert service.get_llm_model(PRIMARY_MODEL)["model"] == "model-a"
     status = service.get_reload_status()
     assert status.healthy is False
     assert status.revision == original_revision
@@ -1834,7 +1906,7 @@ async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     assert status.last_error == "Workspace 配置热重载失败: stage=invalid_config, error=ValueError"
     assert any(record.exc_info and "missing_package.tools:create_missing_tool" in str(record.exc_info[1]) for record in caplog.records)
     rejected = json.loads(config_path.read_text(encoding="utf-8"))
-    assert rejected["config_version"] == 2
+    assert rejected["config_version"] == 3
     assert rejected["agents"]["default"]["tools"]["custom"][0]["factory"] == (
         "missing_package.tools:create_missing_tool"
     )
@@ -2315,7 +2387,7 @@ async def test_pinned_snapshot_survives_await_and_runtime_reload(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_snapshot = service.get_snapshot()
-    config["llm"]["providers"][0]["model"] = "model-b"
+    config["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     with service.use_snapshot(original_snapshot):
@@ -2644,7 +2716,7 @@ def test_config_active_snapshot_is_persisted_redacted_and_restored(
         service.validate_workspace_config()
         snapshot = store.get_active_config_snapshot("workspace")
         assert snapshot is not None
-        assert snapshot.payload["llm"]["providers"][0]["api_key"].startswith(
+        assert snapshot.payload["llm"]["providers"]["primary"]["defaults"]["api_key"].startswith(
             "env:"
         )
         assert "test-key" not in json.dumps(snapshot.payload)
@@ -2992,7 +3064,7 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
             config_domain="workspace",
             candidate_id="candidate-1",
             idempotency_key="reload-1",
-            payload={"config_version": 2},
+            payload={"config_version": 3},
             source_baseline={},
             candidate_digest="digest",
             effective_digest="digest",

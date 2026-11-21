@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from boxteam_plugin_sdk.logging_contract import (
+    RuntimeLogContract,
+    load_runtime_log_contract,
+)
+
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
-from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
 from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
+from app.services.infrastructure.config.recovery import plan_stopped_config_recovery
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 4, "workspace": 2}
+TARGET_CONFIG_VERSIONS = {"gateway": 5, "workspace": 3}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (
@@ -29,7 +36,7 @@ _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
 class LoggingMigrationInput:
     domain: ConfigDomain
     path: Path
-    kind: Literal["file", "source_layer", "active", "connection_identity"]
+    kind: Literal["file", "source_layer", "active", "pending", "connection_identity"]
     key: str
     payload: dict[str, object] | None
     digest: str | None
@@ -46,8 +53,13 @@ class LoggingMigrationInput:
             return self.source_config_version
         return self.payload.get("config_version", 1) if self.payload is not None else None
 
+    @property
+    def target_version(self) -> int:
+        return _CONNECTION_ID_RECORD_VERSION if self.kind == "connection_identity" else TARGET_CONFIG_VERSIONS[self.domain]
+
     def settings(self, contract: RuntimeLogContract) -> dict[str, str | bool]:
         payload = self.payload or {}
+        validate_retired_defaults(payload, self.domain, source=self.identity)
         if self.domain == "workspace":
             if "logging" in payload:
                 raise ValueError(f"Workspace 不能包含 Gateway logging 配置: {self.identity}")
@@ -60,6 +72,32 @@ class LoggingMigrationInput:
         if not isinstance(value, dict) or set(value) - {"level", "pretty"}:
             raise ValueError(f"日志设置必须是仅含 level/pretty 的对象: {self.identity}")
         return _validated_settings(value, contract=contract, source=self.identity)
+
+
+def validate_retired_defaults(payload: dict[str, object], domain: ConfigDomain, *, source: str) -> None:
+    if domain == "gateway" and "ui" in payload:
+        if payload.get("config_version", 1) == TARGET_CONFIG_VERSIONS["gateway"]:
+            raise ValueError(f"当前 Gateway 配置不支持 ui；保留原件: {source}")
+        if payload["ui"] != {"theme": {"default_theme_id": "warm", "custom_themes": []}}:
+            raise ValueError(f"旧 Gateway 外观包含自定义值，需要用户决定；保留原件: {source}")
+    runtime = payload.get("runtime")
+    if (domain == "workspace" and isinstance(runtime, dict) and "auxiliary_services" in runtime
+            and runtime["auxiliary_services"] != {
+            "terminal_backend": {"url": "http://127.0.0.1:8012"},
+            "browser_backend": {"url": "http://127.0.0.1:8015"},
+            }):
+        raise ValueError(f"已退役的辅助服务地址包含自定义值，需要用户决定；保留原件: {source}")
+
+
+def without_retired_defaults(payload: dict[str, object], domain: ConfigDomain, *, source: str) -> dict[str, object]:
+    """布局候选和最终发布共用退役规则，自定义值不能按默认值丢弃。"""
+    validate_retired_defaults(payload, domain, source=source)
+    result = deepcopy(payload)
+    if domain == "gateway":
+        result.pop("ui", None)
+    elif isinstance(runtime := result.get("runtime"), dict):
+        runtime.pop("auxiliary_services", None)
+    return result
 
 
 def _validated_settings(
@@ -87,18 +125,20 @@ class RuntimeLoggingMigrationPlan:
     choices: dict[str, str | bool]
     contract: RuntimeLogContract
     databases: tuple[tuple[ConfigDomain, Path], ...] = ()
+    recoveries: tuple[dict[str, str], ...] = ()
 
     def report(self) -> dict[str, object]:
         # 只输出日志字段与来源身份，不能把模型密钥或完整业务配置带入预览。
         return {
             "validation_stage": "logging_preflight",
             "target_config_versions": dict(TARGET_CONFIG_VERSIONS),
-            "retired_gateway_fields": ["/features/session_generators"],
+            "retired_gateway_fields": ["/features/session_generators", "/ui/theme"],
             "settings": self.settings,
             "preserve_gateway_layers": self.settings is None,
             "explicit_choices": self.choices,
             "conflicts": list(self.conflicts),
             "unsettled": list(self.unsettled),
+            "recoveries": list(self.recoveries),
             "sources": [
                 {
                     "source": item.identity, "domain": item.domain,
@@ -153,9 +193,9 @@ def read_connection_identity(connection: sqlite3.Connection) -> tuple[int, dict[
 
 def _read_database(
     path: Path, domain: ConfigDomain,
-) -> tuple[list[LoggingMigrationInput], list[dict[str, str]]]:
+) -> tuple[list[LoggingMigrationInput], list[dict[str, str]], list[dict[str, str]]]:
     if not path.exists():
-        return [], []
+        return [], [], []
     inputs: list[LoggingMigrationInput] = []
     unsettled: list[dict[str, str]] = []
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
@@ -186,14 +226,19 @@ def _read_database(
                 raise ValueError(f"SQLite 配置 active 状态非法: {path}#{domain}")
             if state != "active":
                 unsettled.append({"source": str(path), "kind": "active", "id": domain, "state": state})
-        for candidate_id, state in connection.execute(
-            "SELECT candidate_id, state FROM config_pending_candidate WHERE config_domain = ? ORDER BY candidate_id",
+        for candidate_id, state, content, revision, digest in connection.execute(
+            "SELECT candidate_id, state, payload_json, pending_revision, effective_digest "
+            "FROM config_pending_candidate WHERE config_domain = ? ORDER BY candidate_id",
             (domain,),
         ):
             if state not in CONFIG_LIFECYCLE_STATES:
                 raise ValueError(f"SQLite 配置候选状态非法: {path}#{candidate_id}")
             if state not in {"active", "rejected", "discarded"}:
                 unsettled.append({"source": str(path), "kind": "candidate", "id": candidate_id, "state": state})
+                inputs.append(LoggingMigrationInput(
+                    domain, path, "pending", candidate_id,
+                    _json_payload(content, source=f"{path}#pending:{candidate_id}"), digest, revision,
+                ))
         for apply_id, state in connection.execute(
             "SELECT apply_id, state FROM config_apply_journal WHERE config_domain = ? ORDER BY apply_id",
             (domain,),
@@ -206,6 +251,17 @@ def _read_database(
             "SELECT apply_id FROM config_apply_claim WHERE config_domain = ?", (domain,),
         ):
             unsettled.append({"source": str(path), "kind": "claim", "id": apply_id[0], "state": "claimed"})
+        recovery = plan_stopped_config_recovery(connection, domain)
+        recoveries = [{"source": str(path), **action} for action in recovery.actions]
+        discarded = {action["id"] for action in recovery.actions
+                     if action["kind"] == "candidate" and action["state"] == "discarded"}
+        # 已被较新 active 替代的候选仅结算归档，原文不再作为待生效配置校验或转换。
+        inputs = [item for item in inputs if item.kind != "pending" or item.key not in discarded]
+        if not recovery.blockers:
+            unsettled = []
+        else:
+            unsettled.extend({"source": str(path), **blocker} for blocker in recovery.blockers
+                             if not any(item["kind"] == blocker["kind"] and item["id"] == blocker["id"] for item in unsettled))
         if domain == "gateway":
             identity = read_connection_identity(connection)
             if identity is not None:
@@ -219,7 +275,7 @@ def _read_database(
                     unsettled.append({"source": str(path), "kind": "connection_id_migration", "id": "gateway_connection_ids", "state": "planned"})
     finally:
         connection.close()
-    return inputs, unsettled
+    return inputs, unsettled, recoveries
 
 
 def _read_shared_source_owner(path: Path) -> list[dict[str, str]]:
@@ -239,9 +295,10 @@ def preview_runtime_logging_migration(
     *, boxteam_home: Path, workspaces: tuple[Path, ...] = (),
     level: str | None = None, pretty: bool | None = None,
     project_root: Path | None = None, gateway_sqlite_path: Path | None = None,
+    planned_files: Mapping[Path, bytes] | None = None,
 ) -> RuntimeLoggingMigrationPlan:
     """读取显式输入；不扫描工作区、不打开可写 store、不改变 active/pending。"""
-    contract = load_runtime_log_contract(project_root)
+    contract = load_runtime_log_contract()
     choices = _validated_settings(
         {**({"level": level} if level is not None else {}), **({"pretty": pretty} if pretty is not None else {})},
         contract=contract, source="迁移命令显式选择",
@@ -265,18 +322,22 @@ def preview_runtime_logging_migration(
         legacy_files.append(root / ".boxteam/boxteam.jsonc")
     inputs: list[LoggingMigrationInput] = []
     unsettled: list[dict[str, str]] = []
+    recoveries: list[dict[str, str]] = []
     for path in legacy_files:
-        if path.exists():
+        if path.exists() and (planned_files is None or path.with_name("workspace.jsonc") not in planned_files):
             unsettled.append({"source": str(path), "kind": "legacy_layout", "id": path.name, "state": "migration_required"})
     for domain, path in files:
         snapshot = read_stable_config_file(path)
+        payload = (_json_payload(planned_files[path].decode("utf-8"), source=str(path))
+                   if planned_files is not None and path in planned_files else parse_stable_config_file(snapshot))
         inputs.append(LoggingMigrationInput(
-            domain, path, "file", path.name, parse_stable_config_file(snapshot), snapshot.digest,
+            domain, path, "file", path.name, payload, snapshot.digest,
         ))
     for domain, path in databases:
-        stored, pending = _read_database(path, domain)
+        stored, pending, recovery = _read_database(path, domain)
         inputs.extend(stored)
         unsettled.extend(pending)
+        recoveries.extend(recovery)
     unsettled.extend(_read_shared_source_owner(home / "config/workspace-source.sqlite"))
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
@@ -284,7 +345,7 @@ def preview_runtime_logging_migration(
         if item.payload is not None and "config_version" in item.payload:
             versions.append(item.payload["config_version"])
         for version in versions:
-            if type(version) is not int or not 1 <= version <= TARGET_CONFIG_VERSIONS[item.domain]:
+            if type(version) is not int or not 1 <= version <= item.target_version:
                 raise ValueError(f"配置版本不在日志迁移支持范围: {item.identity}")
         for field, value in item.settings(contract).items():
             observed[field].append((item.identity, value))
@@ -305,4 +366,5 @@ def preview_runtime_logging_migration(
     return RuntimeLoggingMigrationPlan(
         tuple(inputs), settings, tuple(conflicts), tuple(unsettled), choices, contract,
         tuple(databases),
+        tuple(recoveries),
     )

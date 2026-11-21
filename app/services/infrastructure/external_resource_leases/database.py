@@ -3,15 +3,47 @@
 import json
 import sqlite3
 from collections.abc import Iterator, Sequence
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
 from pydantic_core import to_json
 
+from app.core.atomic_fs import atomic_write_bytes, fsync_directory, native_io_path
 from app.core.failures import failure_detail
-from app.core.sqlite_state import SQLiteStateDatabase, load_sql, sqlite_file_uri
+from app.core.sqlite_state import (
+    SQLiteProcessOwnership,
+    SQLiteStateDatabase,
+    load_sql,
+    sqlite_file_uri,
+)
 
 from .models import RESOURCE_LEASES, RESOURCE_RECORD, ResourceLease, ResourceRecord
+
+
+def retire_empty_legacy_ledger(workspace_root: Path, *, preview: bool = False) -> bool:
+    """仅退休用户批准的空开发账本；非空或未知形状没有自动迁移合同。"""
+    root = workspace_root / ".boxteam"
+    path = native_io_path(root / "resources.json")
+    if not path.exists():
+        return False
+    with ExitStack() as access:
+        if not preview:
+            ownership = SQLiteProcessOwnership(root / "state/workspace.sqlite")
+            ownership.acquire()
+            access.callback(ownership.release)
+        original = path.read_bytes()
+        if json.loads(original) != {"records": [], "leases": []}:
+            raise ValueError(f"旧资源账本非空或形状未知，需要用户决定；保留原件: {path}")
+        backup = native_io_path(root / "resources.json.retired-empty.bak")
+        if backup.exists() and backup.read_bytes() != original:
+            raise ValueError(f"空资源账本的原始备份内容不同，拒绝覆盖: {backup}")
+        if preview:
+            return True
+        if not backup.exists():
+            atomic_write_bytes(backup, original)
+        path.unlink()
+        fsync_directory(root)
+        return True
 
 
 class LeaseDatabase:

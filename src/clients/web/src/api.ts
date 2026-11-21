@@ -59,7 +59,7 @@ export {
   getWorkspace,
   listAgents,
   setWorkspaceDefaultAgent,
-  setWorkspaceDefaultProvider,
+  setWorkspaceDefaultModel,
 } from "./api/workspace";
 export {
   compactSessionContext,
@@ -73,12 +73,12 @@ export {
   listSessions,
   updateSession,
   updateSessionAgent,
-  updateSessionProvider,
+  updateSessionModel,
 } from "./api/session/sessions";
 export { untrackSessionSkill } from "./api/session/sessionSkillTracking";
 export {
   clearSessionGoal,
-  getSessionGoal,
+  getSessionGoalOperation,
   updateSessionGoal,
 } from "./api/session/sessionGoals";
 export {

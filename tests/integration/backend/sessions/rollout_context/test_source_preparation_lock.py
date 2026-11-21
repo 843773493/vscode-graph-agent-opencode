@@ -8,7 +8,7 @@ import pytest
 from langchain.agents.middleware import ModelRequest
 from langgraph.runtime import ExecutionInfo, Runtime
 
-from app.agents.skill_runtime import WorkspaceSkillsMiddleware
+from app.agents.skill_context import WorkspaceSkillsMiddleware
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner

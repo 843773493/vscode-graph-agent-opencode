@@ -40,7 +40,7 @@ try {
     responseReads.push(searchReceipt(request).then(receipt => result.receipts.push(receipt)).catch(error => responseErrors.push(String(error))));
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const api = async (path, owner, data) => page.evaluate(async ({ path, owner, data }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', body: data === undefined ? undefined : JSON.stringify(data),
@@ -90,7 +90,7 @@ try {
     expect(JSON.stringify(receipt.body)).toContain('总执行期限');
   }
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const key = target => `${target.gateway_id}/${target.workspace_id}`;
   const status = (target, category) => quick.locator(`[data-quick-input-id="status-${key(target)}/${category}"]`);

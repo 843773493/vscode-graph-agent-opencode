@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections import deque
 
 import pytest
@@ -44,12 +45,15 @@ def test_channel_name_helpers_cover_all_kinds() -> None:
     assert CHANNEL_KINDS == frozenset(
         {
             "job.events",
+            "session.trace",
             "resource.observe",
             "resource.state",
             "config.lifecycle",
             "context.source",
             "mcp.catalog",
             "task.lifecycle",
+            "user.questions",
+            "workspace.resources",
         }
     )
     for name, expected in (
@@ -180,6 +184,8 @@ async def test_fail_closed_overflow_removes_subscriber_and_raises_on_next(
     )
     slow = channel.subscribe(label="slow")
     healthy = channel.subscribe(label="healthy")
+    waiting = asyncio.create_task(slow.next())
+    await asyncio.sleep(0)
 
     channel.publish("e1")
     channel.publish("e2")
@@ -194,7 +200,7 @@ async def test_fail_closed_overflow_removes_subscriber_and_raises_on_next(
 
     # 溢出错误优先于剩余排队投递；后续投递不再到达该订阅者。
     with pytest.raises(EventChannelOverflowError, match="subscription_id="):
-        await slow.next()
+        await asyncio.wait_for(waiting, timeout=1)
     assert len(channel.history) == 3
     channel.publish("e4")
     assert channel.subscriber_ids == (healthy.subscription_id,)
@@ -215,8 +221,14 @@ async def test_pending_raises_after_fail_closed_overflow(
         )
     )
     subscription = channel.subscribe(label="slow")
-    channel.publish("e1")
+    payload = deque(["e1"])
+    retained = weakref.ref(payload)
+    channel.publish(payload)
+    del payload
+    assert retained() is not None
     channel.publish("e2")
+    # 失效句柄仍在，已不能消费的正文也必须释放。
+    assert retained() is None
     with pytest.raises(EventChannelOverflowError):
         subscription.pending()
 

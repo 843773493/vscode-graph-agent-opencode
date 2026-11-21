@@ -30,7 +30,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - fixture 按当前测试文件隔离
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
@@ -259,9 +259,9 @@ async def test_context_only_fork_keeps_consumed_source_without_importing_later_o
             source.payload, source.producer_ref, source.source_manifest, source.projection_identity,
         )
     child_call, = await case.plan(session_id, [{"content": "child 独立消费历史来源。"}], thread_id=child)
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/threads/{child}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "继续 fork 历史。"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _job(case, response.json()["data"]["job_id"])
     wire = _wire_text(case.request(child_call)["messages"])

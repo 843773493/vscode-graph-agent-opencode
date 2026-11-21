@@ -23,6 +23,7 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414 - 工作区和产物归本文件。
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 
@@ -84,9 +85,9 @@ async def test_failed_file_blocks_new_execution_without_persisting_native_diagno
             thread_id = thread.json()["data"]["thread_id"]
 
             async def send():
-                response = await client.post(base + f"/sessions/{session_id}/messages", json={
+                response = await client.post(base + f"/sessions/{session_id}/messages", json=with_message_run_operation_id({
                     "message": {"content": "核对提示词来源"}, "run": {},
-                })
+                }))
                 assert response.status_code == 200, response.text
                 job = jobs._jobs[response.json()["data"]["job_id"]]
                 assert job.task is not None

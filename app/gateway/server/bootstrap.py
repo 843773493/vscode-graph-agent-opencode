@@ -12,7 +12,7 @@ from uuid import uuid4
 from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
-from app.core.logging_contract import get_runtime_log_root
+from app.core.logging_layout import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.config import (
@@ -37,6 +37,8 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
+from app.gateway.runtime.service_plugins.runtime import workspace_default_bindings
+from app.schemas.gateway.service_plugin_workspace import WorkspacePluginCreation
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +256,14 @@ async def _complete_registry_startup(
             raise ValueError("外部默认后端不能替换共享 managed Backend 组")
         registry.discard_stopped_backend_owner(owner)
         owner = None
+    plugin_creation = persisted_default.plugin_creation if persisted_default is not None else None
+    defaults = workspace_default_bindings(resolved_gateway_config.payload)
+    if persisted_default is None and defaults:
+        plugin_creation = WorkspacePluginCreation(
+            intent_id=f"workspace-create-{uuid4().hex}",
+            revision=resolved_gateway_config.revision,
+            bindings=defaults,
+        ).model_dump(mode="json")
     registry.upsert(
         WorkspaceTarget(
             gateway_id=registry.gateway_id,
@@ -265,6 +275,7 @@ async def _complete_registry_startup(
             managed=external_backend_url is None, removable=False, system_default=True,
             desired_running=external_backend_url is None,
             local_service_urls=persisted_default.local_service_urls if persisted_default is not None else {},
+            plugin_creation=plugin_creation,
         ), activate=persisted_active_workspace is None,
     )
     if external_backend_url is None and owner is None:

@@ -4,6 +4,8 @@
 > **适用范围**：Agent 终端工具、持久 PTY、Workspace Terminal Manager、后台命令通知、Session 终端资源  
 > **核心约束**：`exec_command` 与 `write_stdin` 保持 Codex 的模型可见契约；增强能力通过可选扩展字段或新增工具提供
 
+> 本文为早期终端设计，API 列表不是当前路由清单。当前 Terminal 为 Gateway 受管插件，页面资源状态经工作区 `/api/v1/resources/events` owner 和共享实时 WebSocket 交付，PTY 字节连接仍独立；不要照本文另建 `/api/terminal-events/stream` 页面连接。见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
+
 ---
 
 ## 1. 背景

@@ -131,7 +131,7 @@ export default function SessionResourceOverlays({
             });
           }}>
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">{workspaceFolderMenu.nodeId ? t('navigation.folder.newChild') : t('navigation.workspace.newFolder')}</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.workspace.newFolder')}</span>
           </button>
           {workspaceFolderMenu.nodeId ? (
             <>
@@ -227,7 +227,7 @@ export default function SessionResourceOverlays({
             });
           }}>
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newChild')}</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newSessionFolder')}</span>
           </button>
           {canonicalFolderMenu ? <button type="button" role="menuitem" onClick={() => {
             const target = canonicalFolderMenu;
@@ -325,7 +325,7 @@ export default function SessionResourceOverlays({
     <WarmActionDialog
       open={resourceDialog !== null}
       title={resourceDialog?.kind === "create_session_folder"
-        ? t('navigation.folder.newChild')
+        ? t('navigation.folder.newSessionFolder')
         : resourceDialog?.kind === "rename_session_folder"
           ? t('navigation.folder.renameSessionFolder')
           : resourceDialog?.kind === "delete_workspace_folder"
@@ -345,7 +345,8 @@ export default function SessionResourceOverlays({
       initialValue={resourceDialog?.kind === "rename_session_folder"
         ? resourceDialog.name
         : t('navigation.folder.newName')}
-      confirmText={resourceDialog?.kind.startsWith("delete_") ? t('navigation.delete') : t('navigation.save')}
+      confirmText={resourceDialog?.kind.startsWith("delete_") ? t('navigation.delete')
+        : resourceDialog?.kind === "create_session_folder" ? t('navigation.create') : t('navigation.save')}
       danger={resourceDialog?.kind.startsWith("delete_") ?? false}
       onClose={() => setResourceDialog(null)}
       onConfirm={async (value) => {

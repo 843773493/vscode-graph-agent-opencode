@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
+from app.core.logging_layout import get_runtime_log_root
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerApplyResult,

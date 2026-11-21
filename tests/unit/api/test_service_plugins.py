@@ -38,7 +38,8 @@ async def creation_config(empty_workspace_scope: tuple[str, Path], tmp_path: Pat
 
     def respond(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        if len(calls) == 1:
+        # 文件写入前的准入先通过，再在原候选 apply 阶段制造失败。
+        if len(calls) == 2:
             return httpx.Response(503, json={"detail": "controlled validation unavailable"})
         return httpx.Response(200, json={"code": 0, "data": True, "request_id": request.headers["X-Request-ID"]})
 
@@ -66,6 +67,18 @@ def creation() -> WorkspacePluginCreation:
     ])
 
 
+@pytest.mark.parametrize("entries", [[], [{"package_id": "probe.defaults", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}]])
+async def test_first_registration_preserves_existing_explicit_switches(creation_config, creation, entries):
+    import json
+
+    container, _, _, path, calls = creation_config
+    text = json.dumps({"plugins": {"runtime": {"entries": entries}}}) + "\n"
+    path.write_text(text)
+    assert (await initialize_workspace_plugins(creation, "import-existing", container)).data is True
+    assert path.read_text() == text
+    assert calls == []
+
+
 async def test_rejected_initialization_retries_same_candidate_then_preserves_later_edits(creation_config, creation):
     container, service, store, path, calls = creation_config
     with pytest.raises(httpx.HTTPStatusError, match="503"):
@@ -80,11 +93,11 @@ async def test_rejected_initialization_retries_same_candidate_then_preserves_lat
     assert active is not None and active.state == "active"
     assert active.candidate_id == rejected.candidate_id and active.last_apply_id != rejected.last_apply_id
     assert path.read_text() == original_text and service.get_revision() != first_revision
-    assert len(calls) == 3  # 首次验证失败、重试验证、成功提交通知。
+    assert len(calls) == 4  # 写前准入、候选失败、重试验证、成功提交通知。
     path.write_text('{"plugins":{"runtime":{"entries":[]}}}\n')
     assert (await initialize_workspace_plugins(creation, "already-created", container)).data is True
     assert path.read_text() == '{"plugins":{"runtime":{"entries":[]}}}\n'
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 async def test_rejected_initialization_does_not_overwrite_changed_source(creation_config, creation):
@@ -95,7 +108,7 @@ async def test_rejected_initialization_does_not_overwrite_changed_source(creatio
     path.write_text(text)
     with pytest.raises(ConfigConflictError, match="基线已改变"):
         await initialize_workspace_plugins(creation, "retry-create", container)
-    assert path.read_text() == text and len(calls) == 1
+    assert path.read_text() == text and len(calls) == 2
     pending = store.get_pending_config_candidate(config_domain="workspace", idempotency_key=creation.intent_id)
     assert pending is not None and pending.state == "rejected"
     assert service.get_snapshot().to_dict()["plugins"]["runtime"]["entries"] == []

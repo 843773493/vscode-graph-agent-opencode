@@ -3,13 +3,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import ValidationError
 
 from app.api.deps import (
     get_mcp_catalog_owner,
     get_mcp_connection_service,
-    get_request_id,
     verify_local_token,
 )
 from app.core.trace_middleware import get_current_gateway_id

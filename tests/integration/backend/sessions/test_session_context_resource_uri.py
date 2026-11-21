@@ -11,7 +11,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,
@@ -26,7 +26,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试路径隔离
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 AMBIGUOUS_SESSION = "ses_019c390d6a707c858709afddc785bf93"
 
@@ -124,9 +124,9 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
             "resource_identity": str(refs[0][0]), "uri": session_uri, "scope": "workspace", "view": "information",
         }}, "call_a04_remote_read"), {"content": "a04-uri-completed"},
     ])
-    response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message":{"content":"a04-uri-source"}, "run":{"mode":"single_agent","agent_id":"default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(source.client, response.json()["data"]["job_id"])
     tool_message, = [message for message in case.request(calls[-1])["messages"] if message["role"] == "tool"]
@@ -233,9 +233,9 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
     ])
     send_call = first_call + ":tool-call:call_a06_send_0"
     control.arm(send_call, "test.tool_result.committed")
-    response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    response = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "a06-joint-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     try:
         await asyncio.to_thread(control.acknowledged, send_call, "test.tool_result.committed", 40)

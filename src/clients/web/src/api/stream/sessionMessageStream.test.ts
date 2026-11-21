@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, describe, expect, jest, test } from "bun:test";
 
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
@@ -35,7 +37,7 @@ async function flushMicrotasks(rounds = 50): Promise<void> {
 }
 
 function sseInit(): ResponseInit {
-  return { status: 200, headers: { "content-type": "text/event-stream" } };
+  return { status: 200, headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": "stream_message_test" } };
 }
 
 function streamResponse(chunks: string[]): Response {

@@ -1,7 +1,7 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
-import { createPluginRuntimeManagement } from "../../../shared/serverPluginRuntime.mjs";
-import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
+import { createJsonRequestReader } from "@boxteam/plugin-sdk/http";
+import { createPluginRuntimeManagement } from "@boxteam/plugin-sdk/runtime";
+import { closeHttpServer } from "@boxteam/plugin-sdk/http";
 
 import http from "node:http";
 import { randomUUID } from "node:crypto";

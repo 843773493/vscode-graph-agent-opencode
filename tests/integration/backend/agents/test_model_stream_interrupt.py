@@ -68,7 +68,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from app.testing.model_stream import StreamFrame, get_protocol_codec, load_scenario
 from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
@@ -567,8 +567,7 @@ async def _read_until(
     while True:
         if producer_task is not None and producer_task.done():
             producer_task.result()
-        record = await asyncio.wait_for(subscription.get(), timeout=2)
-        event = record.event
+        event = await asyncio.wait_for(subscription.get(), timeout=2)
         observed.append(event)
         if predicate(event):
             return event

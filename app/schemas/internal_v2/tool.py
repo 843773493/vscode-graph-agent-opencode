@@ -16,6 +16,10 @@ class ToolDTO(BaseModel):
     execution_enabled: bool
     model_visible: bool
     test_supported: bool = False
+    execution_locked: bool = False
+    model_visibility_locked: bool = False
+    availability: str | None = None
+    availability_detail: str | None = None
 
 
 class ToolSelectionChange(BaseModel):
@@ -25,7 +29,7 @@ class ToolSelectionChange(BaseModel):
 
 
 class ToolSelectionPatchRequest(BaseModel):
-    agent_id: str = "default"
+    agent_id: str | None = None
     changes: list[ToolSelectionChange] = Field(min_length=1)
 
     @field_validator("changes")

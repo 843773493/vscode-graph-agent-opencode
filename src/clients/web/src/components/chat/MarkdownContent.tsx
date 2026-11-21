@@ -13,6 +13,8 @@ import {
   remarkWorkspaceFileReferences,
 } from "../../utils/workspaceFileReferences";
 import WorkspaceFileReferenceLink from "./WorkspaceFileReferenceLink";
+import { truncateDisplayText } from "../../utils/displayText";
+import type { ChatItemMenuHandlers } from "./itemContextMenu";
 
 function isExternalHref(href: string): boolean {
   return /^(https?:|mailto:|tel:)/i.test(href);
@@ -210,54 +212,64 @@ export interface MarkdownContentProps {
   value: string;
   className?: string;
   streaming?: boolean;
+  preview?: "head" | "tail";
   renderMode?: MarkdownRenderMode;
   responseSources?: string;
+  contextMenu?: ChatItemMenuHandlers;
 }
 
 function MarkdownContent({
   value,
   className = "",
   streaming = false,
+  preview = "head",
   renderMode = "progressive",
   responseSources,
+  contextMenu,
 }: MarkdownContentProps): React.ReactNode {
   const renderedValue = useStreamingMarkdownValue(value, streaming);
-  const [fullyRenderedValue, setFullyRenderedValue] = useState<string | null>(null);
-  const renderMarkdown = useProgressiveMarkdown(
-    renderedValue,
-    streaming,
-    renderMode,
-  );
-  const boundedMarkdown = renderMarkdown
-    && renderedValue.length >= LARGE_MARKDOWN_DEFER_THRESHOLD
-    && fullyRenderedValue !== renderedValue;
-  const markdownValue = boundedMarkdown
-    ? renderedValue.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
+  const [expanded, setExpanded] = useState(false);
+  const showTail = streaming || preview === "tail";
+  const large = renderedValue.length >= LARGE_MARKDOWN_DEFER_THRESHOLD;
+  const bounded = large && !expanded;
+  const displayValue = bounded
+    ? showTail
+      ? renderedValue.slice(-LARGE_MARKDOWN_PREVIEW_LENGTH).replace(/^[\uDC00-\uDFFF]/, "")
+      : truncateDisplayText(renderedValue, LARGE_MARKDOWN_PREVIEW_LENGTH)
     : renderedValue;
-  const markdown = <MemoizedMarkdown value={markdownValue} />;
+  const renderMarkdown = useProgressiveMarkdown(displayValue, streaming, renderMode);
+  const content = renderMarkdown
+    ? <MemoizedMarkdown value={displayValue} />
+    : <div className="chat-markdown-lightweight">{displayValue}</div>;
   return (
     <div
       className={`chat-markdown ${className}`.trim()}
       data-response-sources={responseSources}
       data-markdown-rendering={renderMarkdown ? "enhanced" : "lightweight"}
       aria-busy={!renderMarkdown}
+      {...contextMenu}
     >
-      {renderMarkdown ? (
-        boundedMarkdown ? (
-          <>
-            <div className="chat-markdown-bounded">{markdown}</div>
-            <button
-              type="button"
-              className="chat-markdown-show-full"
-              onClick={() => setFullyRenderedValue(renderedValue)}
-            >
-              {t("chat.markdown.full", formatNumber(renderedValue.length))}
-            </button>
-          </>
-        ) : markdown
-      ) : (
-        <div className="chat-markdown-lightweight">{renderedValue}</div>
-      )}
+      {large ? (
+        <>
+          {bounded && showTail ? (
+            <div className="chat-markdown-preview-note">{t("chat.markdown.tail")}</div>
+          ) : null}
+          <div className={bounded
+            ? `chat-markdown-bounded${showTail ? " chat-markdown-tail" : ""}`
+            : undefined}>
+            {content}
+          </div>
+          <button
+            type="button"
+            className="chat-markdown-show-full"
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? t("chat.markdown.collapse")
+              : t("chat.markdown.full", formatNumber(renderedValue.length))}
+          </button>
+        </>
+      ) : content}
     </div>
   );
 }
@@ -266,6 +278,8 @@ export default React.memo(MarkdownContent, (previous, next) =>
   previous.value === next.value
   && previous.className === next.className
   && previous.streaming === next.streaming
+  && previous.preview === next.preview
   && previous.renderMode === next.renderMode
-  && previous.responseSources === next.responseSources,
+  && previous.responseSources === next.responseSources
+  && previous.contextMenu === next.contextMenu,
 );

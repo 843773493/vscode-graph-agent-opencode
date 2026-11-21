@@ -1,0 +1,57 @@
+.settings-editor.boxteam-settings.no-results:not(.narrow-width) > .settings-body .settings-toc-container,
+.settings-editor.boxteam-settings.no-results > .settings-body .settings-tree-container {
+  display: block;
+}
+
+.settings-editor.boxteam-settings .settings-tree-container > .no-results-message {
+  display: none;
+  padding: 12px 24px;
+}
+
+.settings-editor.boxteam-settings.no-results .settings-tree-container > .no-results-message {
+  display: block;
+}
+
+
+/* 搜索、范围栏和左右分栏共享固定结构；分类只更换内容，不移除范围栏。 */
+.settings-editor.boxteam-settings > .settings-header > .settings-header-controls {
+  min-height: 28px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-editor.boxteam-settings .settings-category-context {
+  flex: 1;
+}
+
+.settings-editor.boxteam-settings:not(.boxteam-business-settings):not(.narrow-width) .settings-category-context {
+  display: none;
+}
+
+.settings-editor.boxteam-settings .settings-context-label {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.settings-editor.boxteam-settings .settings-context-label details[open] {
+  max-width: 100%;
+}
+
+
+.settings-editor.boxteam-settings .settings-context-label summary {
+  white-space: nowrap;
+}
+
+.settings-editor.boxteam-settings.narrow-width .settings-context-label summary > span:not(.codicon) {
+  display: none;
+}
+
+/* 用户展开来源详情时另起一行，不能把同一栏的范围选择器挤到不可操作。 */
+.settings-editor.boxteam-settings > .settings-header > .settings-header-controls:has(details[open]) {
+  flex-wrap: wrap;
+}
+
+.settings-editor.boxteam-settings .settings-context-label:has(details[open]) {
+  flex: 1 0 100%;
+}

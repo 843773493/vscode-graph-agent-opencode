@@ -1,3 +1,4 @@
+import { PanelToolbar, type RenderPanelToolbar } from "./PanelToolbar";
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -42,7 +43,7 @@ function mount(item: WorkspaceResourceDTO, thread: ResourceThreadRef | null = cu
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(<WarmConfirmProvider><BrowserContent controller={controller} workspaceId="gateway-workspace"
-      currentThread={thread} selectedId={selectedId} onSelect={() => {}} renderToolbar={tools => <header>{tools}</header>} /></WarmConfirmProvider>);
+      currentThread={thread} selectedId={selectedId} onSelect={() => {}} renderToolbar={controls => <PanelToolbar controls={controls} />} /></WarmConfirmProvider>);
   });
   renderers.push(renderer);
   act(() => renderer.root.findByProps({ className: "resource-tree-chevron" }).props.onClick());

@@ -182,6 +182,31 @@ for (const mode of ['success', 'failure', 'cancel', 'unsupported']) test(`Compos
   }
 });
 
+for (const action of ['reference', 'paste']) for (const outcome of ['success', 'cancel', 'gateway-returned']) {
+  const mode = `recipient-${action}-${outcome}`;
+  test(`Composer ${mode} 在接收者等待期间固定发起身份与原内容`, async () => {
+    const result = await exercise('composerResourceSelectionContract', mode);
+    expect(result.beforeSecondWrites).toEqual([[], []]); expect(result.writes[1]).toEqual([]);
+    if (outcome === 'success') {
+      expect(result.outcome).toEqual({}); expect(result.writes[0]).toHaveLength(1);
+      expect(result.requests).toHaveLength(action === 'reference' ? 1 : 0);
+      if (action === 'paste') expect(result.writes[0]).toEqual(['发起时选定的正文']);
+      else expect(result.writes[0][0]).toContain('/alpha.txt');
+    } else {
+      expect(result.requests).toEqual([]); expect(result.writes).toEqual([[], []]);
+      expect(result.events).toEqual(['recipient']);
+      if (outcome === 'cancel') expect(result.outcome).toEqual({});
+      else expect(result.outcome.failure).toBeTruthy();
+    }
+  });
+}
+test('Composer files-gateway-returned 在来源选择期间离开再返回也零解析和追加', async () => {
+  const result = await exercise('composerResourceSelectionContract', 'files-gateway-returned');
+  expect(result.canPickMany).toBe(true); expect(result.beforeSecondWrites).toEqual([[], []]);
+  expect(result.requests).toEqual([]); expect(result.writes).toEqual([[], []]);
+  expect(result.events).toEqual(['capture:0', 'pick']); expect(result.outcome.failure).toBeTruthy();
+});
+
 test('正文类别集合确认后同时查询消息和工具，未选类别及工作区零请求', async () => {
   const result = await exercise('contentSelectionContract', { mode: 'confirm' });
   expect(result.beforeConfirm).toBe(0); expect(result.canPickMany).toBe(true);

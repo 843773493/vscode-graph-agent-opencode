@@ -118,6 +118,54 @@ class DetailRegistryMixin(DetailRetentionMixin):
     if TYPE_CHECKING:
         _storage: RolloutStorage
 
+    def get_context_contribution_detail(
+        self, snapshot: RolloutReadSnapshot, *, historical_owner: tuple[str, str],
+        assembly_id: str, contribution_id: str,
+    ) -> tuple[DetailRecord, str, str]:
+        """按选入贡献定位原 request detail；不展开 assembly 或其它来源正文。"""
+        assembly_id = strict_text(assembly_id, field="assembly_id")
+        contribution_id = strict_text(contribution_id, field="contribution_id")
+        with self._storage.read_connection(
+            snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns, snapshot=snapshot,
+        ) as connection:
+            row = connection.execute(
+                "SELECT assembly.session_id,assembly.thread_id,assembly.status,"
+                "source.contribution_kind,source.content_hash,source.source_revision,"
+                "source.content_length,source.visibility,source.protection,"
+                "selected.detail_ref,selected.source_revision,selected.content_length,"
+                "selected.visibility,selected.protection,selected.availability,selected.content_hash "
+                "FROM context_assemblies assembly "
+                "JOIN context_assembly_contributions source ON source.assembly_id=assembly.assembly_id "
+                "JOIN context_assembly_selections selected ON selected.assembly_id=source.assembly_id "
+                "AND selected.contribution_id=source.contribution_id "
+                "WHERE assembly.assembly_id=? AND source.contribution_id=? "
+                "AND selected.ref_type='request_only' AND selected.included=1",
+                (assembly_id, contribution_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"detail-unavailable: assembly 没有选入该贡献: {assembly_id}/{contribution_id}")
+            if tuple(row[:2]) != historical_owner or row[2] not in {"sealed", "terminal"}:
+                raise ValueError("source-mismatch: contribution 历史 owner 或封存状态不一致")
+            require_historical_scope(
+                connection, *historical_owner, current_owner=(snapshot.session_id, snapshot.thread_id),
+            )
+            if tuple(row[5:9]) != tuple(row[10:14]) or row[4] != row[15]:
+                raise ValueError("source-mismatch: contribution 与 selection 版本不一致")
+            if row[14] != "available" or row[9] is None:
+                raise ValueError("detail-unavailable: contribution 正文不可用")
+            ref = detail_ref_from_key(row[9])
+            ref.require_owner(*historical_owner, assembly_id)
+            record = self.get_context_plan_detail(
+                snapshot.session_id, snapshot.thread_id, detail_ref=ref,
+                checkpoint_ns=snapshot.checkpoint_ns, snapshot=snapshot,
+            )
+            if (record.detail_kind, record.retention_class, record.source_revision,
+                record.length, record.visibility, record.protection) != (
+                "request_source", "request_replay", *row[5:9],
+            ):
+                raise ValueError("source-mismatch: contribution 与 detail manifest 不一致")
+            return record, row[3], row[4]
+
     @staticmethod
     def check_fork_target_resources(
         connection: sqlite3.Connection, source: ResourceTargetFacts, target: ResourceTargetContext,

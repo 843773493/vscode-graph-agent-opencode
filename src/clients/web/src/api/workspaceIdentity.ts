@@ -2,6 +2,12 @@ import type { GatewayWorkspace } from "../types/backend";
 
 export type GatewayWorkspaceRequestTarget = Pick<GatewayWorkspace, "gateway_id" | "workspace_id"> & { gateway_connection_id?: string };
 
+/** 稳定资源归属与可选连接路由；未指定工作区时管理 Gateway 本身。 */
+export type GatewayRequestTarget = Readonly<
+  Pick<GatewayWorkspaceRequestTarget, "gateway_id" | "gateway_connection_id">
+  & Partial<Pick<GatewayWorkspaceRequestTarget, "workspace_id">>
+>;
+
 export interface WorkspaceOwner {
   gatewayId: string;
   workspaceId: string;

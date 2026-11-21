@@ -26,6 +26,7 @@ from tests.integration.backend.sessions.rollout_context.test_execution_history_s
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     history_target as history_target,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -126,10 +127,10 @@ async def test_thread_attachment_quick_access_paginates_and_opens_original_previ
     attachments.append(_inline_attachment(media_name, "application/pdf", media_content))
     sent = await client.post(
         f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "请确认已收到这些附件。", "attachments": attachments},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     accepted = _api_data(sent)
     assert accepted["thread_id"] == thread_id

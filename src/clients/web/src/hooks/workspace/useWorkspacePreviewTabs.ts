@@ -261,6 +261,7 @@ export function useWorkspacePreviewTabs({
   const openWorkspaceFileContent = useCallback((
     content: WorkspaceFileContent,
     selection: WorkspaceFileSelection | null,
+    fragment = "",
   ) => {
     setVisible(true);
     setActivePath(content.path);
@@ -268,12 +269,12 @@ export function useWorkspacePreviewTabs({
     setError(null);
     setTabs((prev) => [
       ...prev.filter((tab) => tab.path !== content.path),
-      { ...content, previewType: "file", selection },
+      { ...content, previewType: "file", selection, fragment },
     ]);
     onStatusChange(t("workspace.preview.status.fileSelected", content.path));
   }, [onStatusChange]);
 
-  const selectWorkspacePreviewTab = useCallback((path: string) => {
+  const selectWorkspacePreviewTab = useCallback((path: string, fragment = "") => {
     if (!isWorkspaceTextFilePath(path)) {
       setError(null);
       setLoadingPath(null);
@@ -295,7 +296,7 @@ export function useWorkspacePreviewTabs({
         if (fileOpenIntentRef.current !== intent) {
           return;
         }
-        openWorkspaceFileContent(content, null);
+        openWorkspaceFileContent(content, null, fragment);
       })
       .catch((openError: unknown) => {
         if (fileOpenIntentRef.current !== intent) {
@@ -318,7 +319,7 @@ export function useWorkspacePreviewTabs({
     tabs,
   ]);
 
-  const openWorkspaceFilePath = useCallback(async (path: string) => {
+  const openWorkspaceFilePath = useCallback(async (path: string, fragment = "") => {
     if (!isWorkspaceTextFilePath(path)) {
       setError(null);
       setLoadingPath(null);
@@ -328,7 +329,7 @@ export function useWorkspacePreviewTabs({
     const existingTab = tabs.find((tab) => tab.path === path);
     if (existingTab) {
       if (existingTab.previewType === "file-placeholder") {
-        selectWorkspacePreviewTab(existingTab.path);
+        selectWorkspacePreviewTab(existingTab.path, fragment);
         return;
       }
       // 直接切到已装载的页签同样是一次新的打开意图：必须作废此前仍在路上的读取，
@@ -337,10 +338,10 @@ export function useWorkspacePreviewTabs({
       setVisible(true);
       setActivePath(existingTab.path);
       setError(null);
-      if (existingTab.previewType === "file" && existingTab.selection) {
+      if (existingTab.previewType === "file") {
         setTabs((prev) => prev.map((tab) =>
           tab.path === existingTab.path && tab.previewType === "file"
-            ? { ...tab, selection: null }
+            ? { ...tab, selection: null, fragment }
             : tab,
         ));
       }
@@ -361,7 +362,7 @@ export function useWorkspacePreviewTabs({
       if (fileOpenIntentRef.current !== intent) {
         return;
       }
-      openWorkspaceFileContent(content, null);
+      openWorkspaceFileContent(content, null, fragment);
     } catch (openError) {
       if (fileOpenIntentRef.current !== intent) {
         return;

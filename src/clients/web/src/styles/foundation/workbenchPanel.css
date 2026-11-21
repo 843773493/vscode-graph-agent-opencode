@@ -1,272 +1,52 @@
-/* 五个底部面板共用头部；专属工具不能改变标签尺寸。 */
-
-.workbench-bottom-panel-icon-button {
-  display: inline-flex;
-  flex: 0 0 25px;
-  align-self: center;
-  align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  border: 1px solid transparent;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-muted);
-  cursor: pointer;
-}
-
-.workbench-bottom-panel-icon-button:hover {
-  background: var(--bt-toolbar-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.workbench-bottom-panel-icon-button:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-/* 底部面板遵循 VS Code 的“标签栏 + 内容区”结构，日志内容保持独立滚动。 */
-.gateway-log-panel {
-  display: flex;
-  flex: 0 0 min(300px, 36vh);
-  flex-direction: column;
-  min-width: 0;
-  min-height: 190px;
-  border-top: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-background);
-  color: var(--bt-text-primary);
-  box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
-}
-
-.gateway-log-panel-content,
-.gateway-log-panel-toolbar {
-  display: flex;
-  min-width: 0;
-}
-
-.gateway-log-panel-toolbar {
-  align-items: center;
-  justify-content: flex-end;
-  flex: 1 1 auto;
-  gap: 4px;
-  min-width: 0;
-  padding: 0 5px;
-}
-
-.gateway-log-panel-filter,
-.gateway-log-panel-channel {
-  display: flex;
-  min-width: 0;
-}
-
-.gateway-log-panel-filter {
-  flex: 0 1 200px;
-}
-
-.gateway-log-panel-channel {
-  flex: 0 1 170px;
-}
-
-.gateway-log-panel-filter input,
-.gateway-log-panel-channel select {
-  box-sizing: border-box;
-  width: 100%;
-  height: 24px;
-  min-width: 0;
-  padding: 0 7px;
-  border: 1px solid var(--bt-input-border);
-  border-radius: var(--bt-radius-small);
-  background: var(--bt-input-background);
-  color: var(--bt-input-foreground);
-  font: inherit;
-  font-size: 10px;
-}
-
-.gateway-log-panel-filter input::placeholder {
-  color: var(--bt-text-muted);
-  opacity: 0.85;
-}
-
-.gateway-log-panel-filter input:focus-visible,
-.gateway-log-panel-channel select:focus-visible {
-  border-color: var(--bt-focus-border);
-  outline: 1px solid var(--bt-focus-border);
-  outline-offset: -1px;
-}
-
-.gateway-log-panel-channel select {
-  background: var(--bt-dropdown-background);
-  color: var(--bt-dropdown-foreground);
-  cursor: pointer;
-}
-
-.gateway-log-panel-channel select:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.gateway-log-panel-alert {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--bt-status-danger) 26%, var(--bt-panel-border));
-  background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
-  color: var(--bt-status-danger);
-  font-size: 10px;
-}
-
-.gateway-log-panel-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.gateway-log-panel-viewer-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 90px;
-  padding: 14px;
-  color: var(--bt-text-muted);
-  font-size: 10px;
-  text-align: center;
-}
-
-.gateway-log-panel-viewer {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--bt-bottom-panel-viewer-background);
-}
-
-.gateway-log-panel-viewer pre {
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: 0;
-  padding: 7px 9px 18px;
-  overflow: auto;
-  background: var(--bt-bottom-panel-viewer-background);
-  color: var(--bt-text-primary);
-  font-family: var(--bt-font-family-mono);
-  font-size: 10px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.gateway-log-panel-viewer-empty {
-  flex: 1 1 auto;
-}
-
-.gateway-log-panel-viewer-empty strong {
-  color: var(--bt-text-primary);
-  font-size: 11px;
-}
-
 /* 终端是主窗口底部面板中的工作区级交互区，和 Gateway 日志共享高度与切换入口。 */
+/* 高度与标题由原生 Panel 分配，内部只划分左侧内容与右侧终端列表。 */
 .terminal-panel {
   display: flex;
-  flex: 0 0 min(300px, 36vh);
+  flex: 1;
   flex-direction: column;
   min-width: 0;
-  min-height: 190px;
-  border-top: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-background);
-  color: var(--bt-text-primary);
-  box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
-}
-
-.terminal-panel-content {
-  display: flex;
-  min-width: 0;
-}
-
-.terminal-panel-resource-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  font-size: 12px;
-}
-
-.terminal-panel-resource-actions button,
-.terminal-panel-resource-actions select {
-  padding: 3px 7px;
-  border: 1px solid var(--bt-input-border);
-  border-radius: 4px;
-  color: inherit;
-  background: var(--bt-input-background);
-  font: inherit;
-}
-
-.terminal-panel-resource-actions button:disabled {
-  opacity: 0.45;
-  cursor: default;
+  min-height: 0;
+  background: var(--bt-terminal-background);
+  color: var(--bt-terminal-foreground);
 }
 
 .terminal-panel-error-slot {
+  position: absolute;
+  z-index: 5;
+  inset-inline: 8px;
+  bottom: 4px;
+  background: var(--bt-terminal-background);
   display: flex;
-  flex: 0 0 22px;
+  max-height: 40%;
   align-items: center;
   min-width: 0;
   padding: 0 10px;
-  overflow: hidden;
+  overflow: auto;
   border-bottom: 1px solid var(--bt-panel-border);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 18px;
 }
 
+.terminal-panel-error-slot:empty { display: none; }
+
 .terminal-panel-error-slot [role="alert"] {
   min-width: 0;
-  overflow: hidden;
   color: var(--bt-status-danger);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.terminal-panel-association {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .terminal-panel-final-output {
-  max-height: 180px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   overflow: auto;
-  white-space: pre-wrap;
   text-align: left;
+  color: var(--bt-terminal-foreground);
+  background: var(--bt-terminal-background);
 }
 
-.workbench-bottom-panel-count {
-  display: inline-flex;
-  align-items: center;
-  min-width: 18px;
-  height: 17px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--bt-badge-background);
-  color: var(--bt-badge-foreground);
-  font-size: 10px;
-  line-height: 1;
-}
-
-.workbench-bottom-panel-context {
-  max-width: min(240px, 28vw);
-  margin-right: 6px;
-  overflow: hidden;
-  color: var(--bt-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.terminal-panel-output-screen { font-family: var(--vscode-editor-font-family, monospace); }
 
 .terminal-panel-viewer-empty button {
   display: inline-flex;
@@ -279,7 +59,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -300,31 +80,40 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
 .terminal-panel-content {
+  display: flex;
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  container: terminal-content / inline-size;
 }
 
 .terminal-panel-list {
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
-  min-width: 0;
+  min-width: 40px;
+  max-width: calc(100% - 127px);
   min-height: 0;
-  border-right: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-list-background);
+  border-left: 1px solid var(--bt-panel-border);
+  background: var(--bt-bottom-panel-background);
+  container: terminal-list / inline-size;
+}
+
+@container terminal-content (width < 480px) {
+  .terminal-panel-list { flex: 0 0 40px !important; }
+  .terminal-panel-sash { display: none; }
 }
 
 .terminal-panel-sash {
   flex: 0 0 7px;
   min-width: 7px;
   border: 0;
-  border-right: 1px solid var(--bt-panel-border);
   background: transparent;
   cursor: col-resize;
   touch-action: none;
@@ -341,37 +130,81 @@
   overflow: auto;
 }
 
-.terminal-panel-list-scroll button {
+.terminal-panel-list-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  min-width: 0;
+  color: var(--bt-text-muted);
+}
+
+.terminal-panel-list-item {
   display: grid;
+  flex: 1;
+  min-width: 0;
   grid-template-columns: 17px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 26px;
-  padding: 4px 8px;
+  height: 22px;
+  padding: 0 8px;
   border: 0;
-  border-left: 2px solid transparent;
-  border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
+  font: inherit;
+  font-size: var(--bt-font-size);
   background: transparent;
-  color: var(--bt-text-muted);
+  color: inherit;
   line-height: 16px;
   text-align: left;
   cursor: pointer;
 }
 
-.terminal-panel-list-scroll button:hover,
-.terminal-panel-list-scroll button.active {
+.terminal-panel-list-row:hover,
+.terminal-panel-list-row.active {
   background: var(--bt-toolbar-hover-background);
   color: var(--bt-text-primary);
 }
 
-.terminal-panel-list-scroll button.active {
-  border-left-color: var(--bt-accent);
+.terminal-panel-list-scroll button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
+
+.terminal-panel-list-action {
+  display: flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.terminal-panel-list-row:hover .terminal-panel-list-action,
+.terminal-panel-list-row:focus-within .terminal-panel-list-action { opacity: 1; }
+.terminal-panel-list-action:hover { background: var(--bt-toolbar-hover-background); }
+.terminal-panel-list-action:disabled { opacity: 0; cursor: default; }
+.terminal-panel-list-row:hover .terminal-panel-list-action:disabled,
+.terminal-panel-list-row:focus-within .terminal-panel-list-action:disabled { opacity: 0.4; }
 
 .terminal-panel-list-copy {
   display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+}
+
+.terminal-panel-list-status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--bt-text-muted);
+  font-size: var(--bt-font-size-small);
 }
 
 .terminal-panel-list-name {
@@ -380,20 +213,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: inherit;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: inherit;
+  font-weight: normal;
+}
+
+@container terminal-list (width < 100px) {
+  .terminal-panel-list-copy,
+  .terminal-panel-list-action { display: none; }
 }
 
 .terminal-panel-empty-list {
   padding: 18px 12px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
 .terminal-panel-viewer {
+  position: relative;
   display: flex;
-  flex: 9 1 0;
+  flex: 1 1 120px;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
@@ -422,19 +261,20 @@
   inset: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex-direction: column;
   gap: 8px;
-  padding: 24px;
-  background: var(--bt-bottom-panel-viewer-background);
+  padding: 8px 12px;
+  overflow: auto;
+  background: var(--bt-terminal-background);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
 .terminal-panel-frame-fallback strong {
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .terminal-panel-viewer-empty {
@@ -447,13 +287,13 @@
   flex-direction: column;
   padding: 24px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
 .terminal-panel-viewer-empty strong {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 /* 端口面板复用工作区端口转发能力，但以底部面板的标签结构承载。 */
@@ -461,27 +301,6 @@
 /* 自动化属于当前工作区，与终端、输出和端口共享底部面板的标签栏。 */
 
 @media (max-width: 720px) {
-  .gateway-log-panel {
-    flex-basis: min(360px, 44vh);
-  }
-
-  .gateway-log-panel-toolbar {
-    gap: 2px;
-    padding: 0 2px;
-  }
-
-  .gateway-log-panel-filter {
-    flex-basis: min(180px, 27vw);
-  }
-
-  .gateway-log-panel-channel {
-    flex-basis: min(150px, 23vw);
-  }
-
-  .workbench-bottom-panel-context {
-    display: none;
-  }
-
   .terminal-panel-list {
     min-width: 0;
   }

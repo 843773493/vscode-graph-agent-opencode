@@ -351,7 +351,7 @@ class RolloutStorage(
         return self._maintenance_owner._validate_schema_state(connection)
 
     def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
-        return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items)
+        return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items, cache=self._catalog_body_validation_cache)
 
     def read_lock(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> _RolloutFileLock:
         return self._maintenance_owner.read_lock(session_id, thread_id, checkpoint_ns)

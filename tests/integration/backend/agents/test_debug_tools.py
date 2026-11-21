@@ -10,26 +10,25 @@ from uuid import uuid4
 import commentjson
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
-from app.agents.tools.custom_invocation import (
-    create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
-)
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.debugging import create_debugging_tools
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
+    create_extension_tool_invoker_tool,
 )
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugControlActionRequest,
@@ -108,20 +107,31 @@ def use_unused_model_provider(integration_workspace_config_path: str) -> None:
     """本文件不调用模型；避免健康检查依赖宿主机 API 凭据。"""
     config_path = Path(integration_workspace_config_path)
     source = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    source["llm"]["providers"] = [{
-        "id": "primary", "endpoint": "http://127.0.0.1:1/v1", "model": "unused-debug-model",
-        "api_key": "unused-debug-test-key", "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions",
-            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-            "supports_reasoning": {"reasoning_content": False}},
-    }]
+    source["llm"]["providers"] = {
+        "primary": {
+            "defaults": {
+                "endpoint": "http://127.0.0.1:1/v1",
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": "unused-debug-model"}},
+        }
+    }
     for agent in source["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'primary', 'model_id': 'default'}, 'fallbacks': []}
         for tool in agent.get("tools", {}).get("custom", []):
             embedding = tool.get("options", {}).get("embedding")
             if embedding is not None:
-                embedding["provider_id"] = "primary"
+                embedding["model_ref"] = {"provider_id": "primary", "model_id": "default"}
     config_path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 # 本文件的调试执行经真实 Gateway Debug 插件；工具 factory 仍保留适配器行为断言。
@@ -363,7 +373,7 @@ def test_provider_model_schema_keeps_only_fixed_extension_envelope(
     )
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(debug_tools),
     )
     provider_agent = create_agent(
         FakeListChatModel(responses=["ok"]),

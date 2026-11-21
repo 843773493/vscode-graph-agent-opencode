@@ -49,6 +49,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case,
     runtime_case,
 )
+from tests.support.api_helpers import new_message_operation_id
 
 __all__ = [
     "fork_context", "fork_gateway_request_context", "production_fork_container",
@@ -115,7 +116,7 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
     pending = await messages.create(source.session_id, MessageCreateRequest(content="只属于来源的排队任务"), thread_id=thread)
     identity = production_fork_container.job_service.reserve_user_execution_identity()
     messages.accept_user_message(pending, execution_identity=identity, queue_input=ExecutionQueueInput(
-        execution_binding=identity, message_id=pending.message_id, agent_id="default", provider_id=None,
+        execution_binding=identity, message_id=pending.message_id, agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=pending.created_at.isoformat(),
     ))
     assert [row.cursor.admission.job_id for row in saver.execution_queue_snapshot(source.session_id, thread).records] == [identity.job_id]
@@ -165,8 +166,8 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
     accepted = []
     first_messages = None
     for content in ("历史第一轮", "历史第二轮"):
-        result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
-            message=MessageCreateRequest(content=content), run=RunOptions(),
+        result = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
+            message=MessageCreateRequest(content=content), run=RunOptions(), operation_id=new_message_operation_id(),
         ))
         accepted.append(result)
         task = jobs._jobs[result.job_id].task
@@ -216,8 +217,8 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
             assert tuple(connection.iterdump()) == frozen
         assert (rollout / "rollout.jsonl").read_bytes() == frozen_jsonl
     assert len(case.model_requests) == 2
-    successor = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
-        message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(),
+    successor = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
+        message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     task = jobs._jobs[successor.job_id].task
     assert task is not None

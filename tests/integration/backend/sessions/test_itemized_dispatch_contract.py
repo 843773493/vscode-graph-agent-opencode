@@ -111,8 +111,8 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
@@ -121,6 +121,7 @@ from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
 from app.tool_testing.store import ToolTestStore
+from configs.runtime import read_jsonc_object
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     chat_reply_frames,
@@ -141,7 +142,10 @@ from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 __all__ = ["dispatch_saver", "native_dispatch_workspace", "native_http_server"]
 
@@ -341,6 +345,8 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     assert body["tools"] == projection["request"]["tools"]
     # compiled root 独立记录 provenance；其余 wire source 忠实消费同一 selection。
     root = restored.seal_binding.root
+    assert root.source_protocol == 3
+    assert root.content.startswith('<context_sources encoding="json" trust="source_defined">\n')
     assert [(block.source_identity, block.body) for block in parse_source_blocks(root.content)] == [("instruction:native-contract", "HTTP system prompt")]
     root_sources = tuple(
         source.source_binding.source_ref
@@ -366,6 +372,8 @@ async def test_native_dispatch_sends_sealed_selection_over_real_http(
     }
     assert sum(item.get("role") == "system" for item in body["input"]) == 1
     overlay_frame = restored.seal_binding.prefix.state.frames[-1]
+    assert overlay_frame.source_protocol == 3
+    assert overlay_frame.content.startswith('<context_sources encoding="json" trust="source_defined">\n')
     assert body["input"][-1] == {"role": "user", "content": [{"type": "input_text", "text": overlay_frame.content}]}
     assert [(ref.ref_id, block.body) for ref, block in zip(overlay_frame.item_refs, parse_source_blocks(overlay_frame.content), strict=True)] == [
         ("z-base", [{"type": "text", "text": "HTTP overlay base"}]),
@@ -1472,7 +1480,7 @@ async def test_restart_rejects_corrupt_detail_owner_before_native_http(
 
 
 @pytest.fixture
-def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace):
+def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace, monkeypatch):
     """经真实默认模型构建器运行探针，独立于 Session/Saver 授权。"""
     state, endpoint = native_http_server
     state.call_tool = True
@@ -1482,22 +1490,28 @@ def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace):
         template_root=template,
     )
     expected = (workspace / "README.md").read_text(encoding="utf-8")
-    provider = {
-        "id": "nonagent-probe",
-        "model": "openai/gpt-4.1",
+    config_path = install_test_workspace_config(workspace_root=workspace,
+        config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
+    config = read_jsonc_object(config_path)
+    providers = cast(dict, config["llm"])["providers"]
+    providers["nonagent-probe"] = {"defaults": {
         "endpoint": endpoint,
-        "api_key": state.api_key,
+        "api_key": "${BOXTEAM_TEST_NONAGENT_MODEL_KEY}",
         "custom_llm_provider": "openai",
         "api_mode": {
             "protocol": "responses",
             "model_info": {"supports_function_calling": True},
+            "supports_reasoning": {},
         },
+    }, "models": {"default": {"model": "openai/gpt-4.1"}}}
+    cast(dict, config["agents"])["default"]["model"] = {
+        "primary": {"provider_id": "nonagent-probe", "model_id": "default"}, "fallbacks": [],
     }
-
-    class ProbeConfig:
-        def get_agent_runtime_config(self, agent_id: str) -> dict[str, object]:
-            assert agent_id == "default"
-            return {"providers": [provider]}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setenv("BOXTEAM_TEST_NONAGENT_MODEL_KEY", state.api_key)
+    config_service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=workspace)
+    config_service.validate_workspace_config()
 
     class ProbeCase:
         case_id = "nonagent-default-builder"
@@ -1531,7 +1545,7 @@ def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace):
             )
 
     service = ToolTestService(
-        config_service=ProbeConfig(),  # type: ignore[arg-type]
+        config_service=config_service,
         registry=ToolTestRegistry(cases=[ProbeCase()]),
         store=ToolTestStore(root=workspace / ".boxteam/tool_tests"),
         workspace_root=workspace,
@@ -2693,8 +2707,8 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
     assert case.controller.transport.call_count == 1
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
-    # 只读 pending 容器，避免测试自身调用 prepare_sources 污染边界计数。
-    assert tuple(case.manager._pending.values()) == pending.deltas
+    # 被测调用结束后从原只读入口核对候选，不计入其准备边界调用数。
+    assert originals["sources"]().deltas == pending.deltas
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
         assert snapshot.connection.execute(
             "SELECT status, result_message_sequence FROM tool_calls WHERE tool_call_id = 'toolset-call'"
@@ -2849,7 +2863,8 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
         "instruction:native-contract", "工具终态闭合后才应用",
         revision="native-contract:noncompleted-unknown",
     )
-    pending = tuple(case.manager._pending.values())
+    read_sources = case.manager.prepare_sources
+    pending = read_sources().deltas
     model_call_id = f"terminal-scope-{canonical_status}"
     scoped_call_id = f"{model_call_id}:tool-call:unknown-result-call"
     with dispatch_execution_scope(case.saver, case.session, case.turn):
@@ -2937,7 +2952,7 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
     assert _latest_contract_assembly(case).seal_binding.prefix == first.seal_binding.prefix
-    assert tuple(case.manager._pending.values()) == pending
+    assert read_sources().deltas == pending
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
         assert case.saver._context_reader.read_canonical_items(
             snapshot, item_ids=(committed_result.item_id,),

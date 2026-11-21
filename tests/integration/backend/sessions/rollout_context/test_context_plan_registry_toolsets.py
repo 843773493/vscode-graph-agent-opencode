@@ -33,7 +33,9 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     _insert_snapshot,
-    registry_db,
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 __all__ = ["registry_db"]

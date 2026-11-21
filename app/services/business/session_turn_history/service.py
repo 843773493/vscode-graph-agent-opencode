@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
+from app.core.exceptions import NotFoundError
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
@@ -14,18 +15,26 @@ from app.schemas.internal_v2.turn import (
     TurnJobSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    CanonicalContextContentReference,
+    SealedContextContentReference,
+    ThreadItemInspectionDTO,
+    ThreadItemInspectionRequest,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
 )
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_history.message_search import (
     MessageSearchBudget,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.infrastructure.turn_history.trace_cursor import bind_trace_cursor
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.infrastructure.session_trace.trace_cursor import bind_trace_cursor
+from app.services.mapping.itemized.history_turns.item_content import (
+    context_source_contents,
+)
 
 _BOOTSTRAP_ACTIVE_JOB_LIMIT = 8
 
@@ -37,7 +46,7 @@ class SessionTurnHistoryService:
         self,
         *,
         checkpointer: RolloutCheckpointSaver,
-        session_service: TurnSessionLookupProtocol,
+        session_service: SessionThreadReaderProtocol,
         job_service: JobServiceProtocol,
         trace_event_store: TraceEventStore,
     ) -> None:
@@ -138,6 +147,34 @@ class SessionTurnHistoryService:
                 policy=history_loading,
             )
             return page.model_copy(update={"thread_id": thread_id})
+
+    async def inspect_item(self, session_id: str, thread_id: str, request: ThreadItemInspectionRequest,
+                           *, request_logs: LLMRequestLogReader) -> ThreadItemInspectionDTO:
+        async with self._session_service.session_read_admission(session_id):
+            thread_id = await self._session_service.resolve_thread(session_id, thread_id)
+            reference = request.content_ref
+            if isinstance(reference, SealedContextContentReference):
+                body = await run_sync_shielded(
+                    self._checkpointer.read_context_contribution, session_id, thread_id,
+                    historical_owner=(reference.session_id, reference.thread_id),
+                    assembly_id=reference.assembly_id, contribution_id=reference.contribution_id,
+                )
+                return ThreadItemInspectionDTO(content_ref=reference, contents=context_source_contents(body))
+            if isinstance(reference, CanonicalContextContentReference):
+                request = request.model_copy(update={"item_id": reference.item_id, "content_ref": None})
+            result = await run_sync_shielded(self._checkpointer.inspect_history_item, session_id, thread_id, request)
+            location = result.location
+            if location is None:
+                raise RuntimeError("canonical Item inspection 缺少真实位置")
+            result.content_ref = CanonicalContextContentReference(item_id=location.item_id)
+            if request.operation == "trace":
+                if not location.job_id:
+                    raise NotFoundError("此 Item 没有所属执行 Trace")
+                result.trace = await run_sync_shielded(self._trace_event_store.locate_job_start, session_id, thread_id, location.job_id)
+            elif request.operation == "request":
+                result.request_log = await run_sync_shielded(request_logs.find_item_request, session_id,
+                    model_call_id=location.model_call_id, message_id=location.message_id, job_id=location.job_id)
+            return result
 
     async def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
                                 limit: int = 100, view_id: str | None = None,

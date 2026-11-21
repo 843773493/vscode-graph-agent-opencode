@@ -8,6 +8,7 @@
 
 ```text
 tests/unit/services/business/
+├── agent_tool_settings/   Agent 工具管理目录、能力状态与开关变更
 ├── communication/        Session 间消息与接纳规则
 ├── job/                   Job 队列、取消、超时和服务收口
 ├── resource_derivations/  语义资源投影与派生
@@ -17,6 +18,7 @@ tests/unit/services/business/
 ├── session_generation/    Session 创建与默认值
 ├── session_children/      child-thread 读模型、Team board 发布投影与创建 owner
 ├── session_navigation/    Session 导航目录与操作队列
+├── session_resources/     会话关联资源聚合、控制与 Provider 分派
 ├── session_turn_history/ Turn 历史读取
 ├── team/                  团队协作与成员状态
 └── 根目录测试
@@ -25,22 +27,20 @@ tests/unit/services/business/
     │   ├── test_session_information_service.py
     │   ├── test_session_changes_service.py、test_session_interrupt_service.py
     │   └── test_session_goal_service*.py
-    ├── 上下文、分页与回放
-    │   ├── test_session_context_*.py、test_internal_history_paging.py
-    │   └── test_session_turn_replay_service.py
+    ├── 上下文与分页
+    │   └── test_session_context_*.py、test_internal_history_paging.py
     ├── checkpoint 与提醒
     │   ├── test_*checkpoint*.py
-    │   └── test_system_reminder_checkpoint_service.py
+    │   └── test_runtime_reminder.py
     ├── 资源 owner
-    │   ├── test_browser_resource_owner.py、test_terminal_resource_owner.py
-    │   └── test_session_resource_*.py
+    │   └── test_browser_resource_owner.py、test_terminal_resource_owner.py
     └── Agent、Gateway 与内容
         ├── test_agent_service.py、test_gateway_context_query_service.py
         ├── test_user_content_builder.py
         └── session_service_test_support.py（共享测试装具）
 ```
 
-根目录直接测试模块仍超过 20 个的结构审查阈值；`test_message_service_checkpoint.py`、`test_reasoning_checkpoint_service.py`、`test_session_context_query_service.py` 和 `test_session_service.py` 都超过约 800 行，应在各自行为边界稳定后优先做文件拆分审查。child-thread 的列表读模型、Team board 发布投影和创建 owner 校验已分到 `session_children/`，避免混在一个超长模块中。移动测试时检查测试矩阵、`out/tests/` 镜像路径和引用；不要只按行数切文件。
+根目录直接测试模块仍超过 20 个的结构审查阈值；`test_message_service_checkpoint.py`、`test_session_context_query_service.py` 和 `test_session_service.py` 都超过约 800 行，应在各自行为边界稳定后优先做文件拆分审查。child-thread 的列表读模型、Team board 发布投影和创建 owner 校验已分到 `session_children/`，避免混在一个超长模块中。移动测试时检查测试矩阵、`out/tests/` 镜像路径和引用；不要只按行数切文件。
 
 ## 可修改内容
 

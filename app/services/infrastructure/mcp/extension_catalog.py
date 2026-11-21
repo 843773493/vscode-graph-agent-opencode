@@ -35,6 +35,14 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.resource_activation import ResourceMemberBinding
 
+MCP_TOOL_CATALOG_RESOURCE_ID = "mcp-tool-catalog:v1"
+MCP_GUIDANCE_SOURCE_ID = "mcp-tool-guidance:v1"
+MCP_OWNER_CATALOG_SOURCE_ID = "mcp-owner-catalog:v1"
+EXTENSION_CATALOG_SOURCE_ID = "extension-catalog:v3"
+
+
+
+
 # 固定 Provider 信封的 binding identity。信封名称/参数形状变化必须产生新的
 # provider_binding_identity，才允许进入 ToolSet hard rebase 合同（E3/E4 边界）。
 EXTENSION_TOOL_ENVELOPE_IDENTITY = (

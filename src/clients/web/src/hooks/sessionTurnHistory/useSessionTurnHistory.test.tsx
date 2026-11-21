@@ -15,7 +15,7 @@ import {
   SCOPE_KEY,
   WORKSPACE_KEY,
   WORKSPACE_OWNER,
-  appState,
+  appState, emptyPendingResponse,
   bootstrap,
   emptyHistoryPageResponse,
   installWindow,
@@ -44,6 +44,10 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       const thread = url.searchParams.get("thread_id") ?? threads.find((id) => url.pathname.includes(`/threads/${id}/`)) ?? null;
       const body = args[1]?.body ? JSON.parse(String(args[1].body)) : null;
       requests.push({ path: url.pathname, thread, ...(body ? { direction: body.direction } : {}) });
+      if (url.pathname.endsWith("/pending-requests")) {
+        if (!thread) throw new Error("pending 请求缺少精确 Thread");
+        return emptyPendingResponse(thread);
+      }
       if (url.pathname.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "bootstrap-thread", data: { ...bootstrap("ready", 1), thread_id: thread, latest_turn: null } });
       if (url.pathname.endsWith("/history")) return Response.json({ code: 0, message: "ok", request_id: "history-thread", data: { thread_id: thread, ...HISTORY_SOURCE_BINDING, projection_epoch: 1, items: [turnDetail(1)], internal_executions: [], before_cursor: "older", has_before: true } });
       throw new Error(`未声明的精确 Thread 请求: ${url}`);
@@ -61,7 +65,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       const key = `${SCOPE_KEY}::${threads[index]}`;
       expect(states[index].turnTimelinesBySession.get(key)?.threadId).toBe(threads[index]);
       await act(async () => { await readers[index].loadOlderTurns(); await readers[index].loadTurnDetails(["job_latest"], "explicit-thread-detail", true); });
-      expect(requests.filter((request) => request.thread === threads[index]).map((request) => request.direction ?? "bootstrap")).toEqual(["bootstrap", "tail", "before", "around"]);
+      expect(requests.filter((request) => request.thread === threads[index]).map((request) => request.direction ?? (request.path.endsWith("/pending-requests") ? "pending" : "bootstrap"))).toEqual(["bootstrap", "pending", "tail", "before", "around"]);
     }
     expect(requests.every((request) => request.thread !== null)).toBe(true);
     act(() => renderer.unmount());
@@ -75,6 +79,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       const path = new URL(String(args[0]), `http://127.0.0.1:${apiPort}`).pathname;
       if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "history-owner-token" } });
       paths.push(path);
+      if (path.endsWith("/pending-requests")) return emptyPendingResponse();
       if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "req_owner_bootstrap",
         data: { ...bootstrap("ready", 1), latest_turn: null } });
       if (path.endsWith("/history")) return Response.json({ code: 0, message: "ok", request_id: "req_owner_page",
@@ -127,6 +132,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-scope-reset-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           return Response.json({
             code: 0,
@@ -248,6 +254,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-cached-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({
@@ -332,6 +339,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       const [input, init] = args;
       const path = new URL(String(input), `http://127.0.0.1:${apiPort}`).pathname;
       if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "history-return-token" } });
+      if (path.endsWith("/pending-requests")) return emptyPendingResponse();
       if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
         bootstrapCalls += 1;
         return Response.json({ code: 0, message: "ok", request_id: "request-return-bootstrap", data: {
@@ -442,6 +450,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-test-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           bootstrapInFlight += 1;
@@ -546,6 +555,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-cleanup-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({
@@ -632,6 +642,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-abort-token" },
           });
         }
+        if (path.endsWith("/pending-requests")) return emptyPendingResponse();
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({

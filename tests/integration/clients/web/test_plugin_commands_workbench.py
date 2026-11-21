@@ -27,6 +27,7 @@ from tests.support.plugin_package import native_plugin_target
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
+    clear_test_provider_api_keys,
     install_test_workspace_config,
     prepare_test_workspace,
 )
@@ -36,9 +37,9 @@ import sys, os, asyncio, json
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI
 import uvicorn
-from app.core.logging_config import configure_application_logging
+from boxteam_plugin_sdk.logging import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='command-ui-proof')
 async def execute(arguments, context):
     await context.progress(1, 2, '真实插件进度')
@@ -79,9 +80,7 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     configuration = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(configuration.read_text())
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "command-ui-unused-key"
+    clear_test_provider_api_keys(config)
     configuration.write_text(json.dumps(config), encoding="utf-8")
     command = {"id": "execute", "handler": "execute", "title": "命令验收：执行", "category": "插件验收",
         "arguments_schema": {"type": "object", "additionalProperties": False,

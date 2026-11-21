@@ -10,9 +10,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 
-from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    message_to_dict,
+    messages_from_dict,
+)
 
-from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
+from app.agents.providers.wire_finalize import (
+    WIRE_PROJECTOR_ID,
+    WIRE_PROJECTOR_VERSION,
+    ChatWireProfile,
+    ResponsesWireProfile,
+)
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -46,6 +56,7 @@ from app.services.mapping.itemized.projection import (
     ProjectionEvidence,
     build_projection_evidence,
 )
+from app.services.mapping.itemized.provider_request import project_ai_message_content
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
@@ -200,6 +211,7 @@ class ContextOwnerMixin(
         *,
         target_format: str,
         checkpoint_ns: str = "",
+        wire_profile: ChatWireProfile | ResponsesWireProfile | None = None,
     ) -> ContextProjectionResult:
         """从一次已提交读取生成本次 dispatch 的 provider 与 native 投影。"""
         return self._project_committed_context_plan(
@@ -207,6 +219,7 @@ class ContextOwnerMixin(
             include_runtime_notices=True, include_summaries=True,
             target_format=target_format, collect_capability_losses=True,
             include_native=target_format == "responses",
+            wire_profile=wire_profile,
         )
 
     def project_context_plan_to_messages_with_evidence(
@@ -321,6 +334,7 @@ class ContextOwnerMixin(
         collect_capability_losses: bool = False,
         include_request_only: bool = True,
         include_native: bool = False,
+        wire_profile: ChatWireProfile | ResponsesWireProfile | None = None,
     ) -> ContextProjectionResult:
         """从同一个已提交 selection 生成所有外部 context projection。
 
@@ -338,6 +352,7 @@ class ContextOwnerMixin(
             include_runtime_notices=include_runtime_notices, include_summaries=include_summaries,
             target_format=target_format, collect_capability_losses=collect_capability_losses,
             include_request_only=include_request_only, include_native=include_native,
+            wire_profile=wire_profile,
         )
 
     def _project_context_projection(
@@ -354,6 +369,7 @@ class ContextOwnerMixin(
         collect_capability_losses: bool = True,
         include_request_only: bool = True,
         include_native: bool = False,
+        wire_profile: ChatWireProfile | ResponsesWireProfile | None = None,
     ) -> ContextProjectionResult:
         """只映射当前 seal owner 或冷读取 owner 已验证的材料，不读取持久化。"""
         # 正文解析、LangChain/Native 投影共用本次已构造的 plan；不跨操作缓存。
@@ -364,6 +380,7 @@ class ContextOwnerMixin(
         native_messages, native = self._project_native_context(
             session_id, thread_id, context, items, resolved_request_content,
             resource_refs=resources,
+            wire_profile=wire_profile if isinstance(wire_profile, ResponsesWireProfile) else None,
         ) if include_native else (None, None)
         losses: list[str] = []
         if include_request_only and native_messages is not None:
@@ -388,6 +405,17 @@ class ContextOwnerMixin(
                 capability_losses=losses if collect_capability_losses else None,
             )
         messages = self.project_message_attachment_refs(session_id, thread_id, messages)
+        if native is not None:
+            losses.extend(native["losses"])
+        elif wire_profile is not None:
+            for message in messages:
+                if isinstance(message, AIMessage):
+                    projection = project_ai_message_content(
+                        message.content, target_source=wire_profile.model_source,
+                        target_capabilities=wire_profile.replay_capabilities(),
+                        response_metadata=message.response_metadata,
+                    )
+                    losses.extend(f"{message.id}:{diagnostic['detail']}" for diagnostic in projection["diagnostics"])
         tools: list[dict[str, object]] = []
         if target_format == "responses" and native is not None:
             # 同次 Responses 只编码一次工具；返回副本保持两份投影可独立编辑。

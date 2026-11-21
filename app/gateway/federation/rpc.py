@@ -29,13 +29,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from app.core.trace_middleware import (
+from boxteam_plugin_sdk.request_context import (
     require_current_request_id,
-    reset_current_gateway_id,
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.channel import (
     FederationChannelSession,
@@ -61,13 +61,8 @@ from app.gateway.federation.grants import (
     GRANT_CLOCK_SKEW_SECONDS,
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
-    ContextGrantTarget,
     FederationGrant,
-    ForkGrantTarget,
-    GrantTarget,
     OperationKind,
-    ResourceNavigationGrantTarget,
-    TextMutationGrantTarget,
     sign_grant,
     validate_grant_operation,
     verify_grant,
@@ -105,6 +100,14 @@ from app.gateway.federation.skill_sources import (
 from app.gateway.federation.store import (
     TRANSPORT_REPLAY_MARGIN_SECONDS,
     FederationControlStore,
+)
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    FederationGrantTarget,
+    ForkGrantTarget,
+    GrantTarget,
+    ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
 )
 
 logger = logging.getLogger(__name__)
@@ -416,7 +419,7 @@ class FederationRpcService:
     async def relay_operation(
         self,
         *,
-        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget,
+        target: FederationGrantTarget,
         operation: OperationKind,
         body: dict[str, object],
         deadline_at: float | None = None,
@@ -791,7 +794,7 @@ class FederationRpcService:
         self._authorize(capability=capability, origin=grant.origin_gateway_id, session=session)
         return result
 
-    async def _execute_local(self, *, target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
+    async def _execute_local(self, *, target: FederationGrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
         local_deadline = time.time() + remaining
         if target.gateway_id != self.gateway_id:
             raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "target audience 不是本 Gateway")
@@ -999,7 +1002,7 @@ class FederationRpcService:
         principal_ref: str,
         lifetime: float,
         request_preimage: dict[str, object],
-        target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None,
+        target: FederationGrantTarget | None = None,
         operation: OperationKind | None = None,
     ) -> FederationGrant:
         if lifetime <= 0:

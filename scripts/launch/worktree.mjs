@@ -32,7 +32,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     if (command === "setup") {
       if (rest.length !== 1) throw new Error("setup 只接受一个目标");
       const copied = metadata.role === "release" ? [] : copyLocalConfiguration(context, target, settings);
-      setupWorktree(target, scopes);
+      setupWorktree(target, scopes, undefined, { frozen: metadata.role === "release" });
       return { target, copied, scopes };
     }
     if (command === "archive") {

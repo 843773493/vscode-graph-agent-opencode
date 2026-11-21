@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import cast
 
 import pytest
+from boxteam.workspace.message.v1 import message_stream_pb2
 from google.protobuf import message_factory, struct_pb2, timestamp_pb2
 from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorProto
@@ -16,7 +17,6 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_json,
     message_stream_to_proto,
 )
-from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 
 
 @pytest.fixture

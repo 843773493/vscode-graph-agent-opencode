@@ -209,6 +209,9 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   const frontendBuilds = [];
   const downloadCalls = [];
   let buildStarts = 0;
+  for (const name of ["developer-tools", "mcp-stdio"]) {
+    write(`resources/plugins/${name}/plugin.jsonc`, JSON.stringify({ package_id: `boxteam.${name}`, version: "0.1.0" }));
+  }
   // 两份不同的旧产物用于识别构建、复制目录错配，不能由装具替构建入口选中来源。
   for (const client of ["web", "workbench"]) write(`src/clients/${client}/dist/index.html`, `stale-${client}`);
   process.env.BOXTEAM_PROJECT_ROOT = fixtureRoot;
@@ -273,7 +276,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
         write(path.relative(fixtureRoot, options.output), `ZIP fixture\n${JSON.stringify(options.target)}\n`);
       },
     };
-    else if (specifier === "./application-sources.mjs") exports = { copyApplicationSources() {} };
+    else if (specifier === "./application-sources.mjs") exports = { copyApplicationSources() {}, writeApplicationNodeManifest() {} };
     else if (specifier === "./windows-python-dependencies.mjs") exports = { installWindowsPythonDependencies() {} };
     else {
       exports = { ...await import(specifier.startsWith(".") ? new URL(specifier, builderUrl).href : specifier) };
@@ -289,7 +292,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
             assert.match(args[1], /process\.report\.getReport\(\)\.header\.glibcVersionRuntime/);
             return { status: 0, stdout: JSON.stringify({ version: "22.17.0", abi: "127", glibc: "2.35" }) };
           }
-          if (command === nodeExecutable && args.includes("await import('./src/shared/serverPluginRuntime.mjs');")) {
+          if (command === nodeExecutable && args.includes("await import('@boxteam/plugin-sdk/runtime');")) {
             assert.equal(options.cwd, path.join(runtimePackageRoot, "application"));
             return { status: 0, stdout: "" };
           }
@@ -396,7 +399,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   const nodeDependencyInstall = buildEvents.findIndex((event) => event.startsWith("bun install --production"));
   assert(nodeDependencyInstall >= 0, "构建入口必须先准备产品 Node 依赖");
   assert(nodeDependencyInstall < buildEvents.indexOf("developer-tools.zip"));
-  const runtimeImport = buildEvents.findIndex((event) => event.includes("await import('./src/shared/serverPluginRuntime.mjs');"));
+  const runtimeImport = buildEvents.findIndex((event) => event.includes("await import('@boxteam/plugin-sdk/runtime');"));
   assert(runtimeImport > nodeDependencyInstall, "必须用目标 Node 校验发行应用的插件管理依赖");
   assert(runtimeImport < buildEvents.indexOf("developer-tools.zip"));
   assert(buildEvents.indexOf("developer-tools.zip") < buildEvents.indexOf("mcp-stdio.zip"));

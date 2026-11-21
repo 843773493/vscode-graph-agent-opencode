@@ -5,6 +5,7 @@ import type { LLMRequestLogMatchDTO } from "../../types/protocol_generated/boxte
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface RequestLogNavigation {
+  recordOnly?: boolean;
   match: LLMRequestLogMatchDTO;
   location?: LocatedLLMRequestLog;
   error?: string;

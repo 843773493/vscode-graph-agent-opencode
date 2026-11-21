@@ -3,9 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from html import escape
+from typing import TYPE_CHECKING
 
-from app.abstractions.internal_message import PreparedInternalMessage
-from app.domain.itemized.records import InternalDisplayProvenance
 from app.prompting.registry import (
     InternalDisplayPolicy,
     PromptContentCodec,
@@ -14,6 +13,10 @@ from app.prompting.registry import (
     structured_prompt_registry,
 )
 from app.prompting.serialization import serialize_prompt_json
+
+if TYPE_CHECKING:
+    from app.abstractions.internal_message import PreparedInternalMessage
+    from app.domain.itemized.records import InternalDisplayProvenance
 
 INTERNAL_PROMPT_SCHEMA_VERSION = 2
 INTERNAL_PROMPT_KIND_METADATA_KEY = "structured_prompt_kind"
@@ -41,6 +44,8 @@ class InternalMessageFactory:
         display_content: str | None = None,
         display_provenance: InternalDisplayProvenance | None = None,
     ) -> PreparedInternalMessage:
+        from app.abstractions.internal_message import PreparedInternalMessage
+
         kind_spec = self._registry.internal_message_kind(kind)
         section_names: set[str] = set()
         duplicate_names: set[str] = set()
@@ -82,6 +87,8 @@ class InternalMessageFactory:
         display_provenance: InternalDisplayProvenance | None = None,
     ) -> dict[str, object]:
         """新建与已冻结正文恢复共用注册表中的唯一 metadata 投影。"""
+        from app.domain.itemized.records import InternalDisplayProvenance
+
         kind_spec = self._registry.internal_message_kind(kind)
         resolved_metadata = dict(metadata or {})
         reserved_keys = {
@@ -127,11 +134,11 @@ class InternalMessageFactory:
             )
         return resolved_metadata
 
-    def render_system_prompt_section(self, section: PromptSection) -> str:
+    def render_root_section(self, section: PromptSection) -> str:
         spec = self._registry.tag(section.tag)
-        if spec.placement != PromptPlacement.system_prompt:
+        if spec.placement != PromptPlacement.standalone:
             raise ValueError(
-                f"标签 {section.tag} 不能作为独立 system prompt section"
+                f"标签 {section.tag} 不能作为独立提示 section"
             )
         return self._render_section(section, expected_parent=None)
 

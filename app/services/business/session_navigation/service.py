@@ -6,12 +6,10 @@ from typing import Literal
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core import session_subtree_delete
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store.contracts import CatalogTransactionHook
 from app.core.session_subtree_delete import SubtreeDeleteResult
-from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     AutoSessionTitleCommand,
@@ -21,6 +19,9 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationIntentDTO,
     NavigationMutationStatusPageDTO,
     NavigationSnapshotDTO,
+)
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
 )
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
@@ -83,12 +84,10 @@ class SessionCatalogService(SessionCatalogReadService):
         *,
         session_service: SessionService,
         job_service: JobServiceProtocol | None = None,
-        background_task_registry: BackgroundTaskRegistry | None = None,
         operations_service: SessionCatalogOperationsService | None = None,
     ) -> None:
         super().__init__(session_service=session_service)
         self._job_service = job_service
-        self._background_task_registry = background_task_registry
         # 未显式注入时按容器装配的同一 resolver/store 构造导航 operation 栈。
         self._operations_service = operations_service or self._build_operations()
         self._session_service.register_change_listener(self._on_session_changed)
@@ -140,20 +139,6 @@ class SessionCatalogService(SessionCatalogReadService):
             include_self=True,
         )
 
-        registry = self._background_task_registry
-        if registry is not None:
-            blockers = await run_sync_shielded(lambda: [
-                handle for session_id in frozen_session_ids
-                for handle in registry.list_handles(session_id)
-            ])
-            if blockers:
-                raise RuntimeError(
-                    "会话存在运行中后台任务，拒绝递归删除: "
-                    + ",".join(
-                        f"{handle.session_id}:{handle.task_id}" for handle in blockers
-                    )
-                )
-
         async def run() -> SubtreeDeleteResult:
             return await self._path_resolver.delete_subtree(
                 idempotency_key=idempotency_key,
@@ -165,7 +150,7 @@ class SessionCatalogService(SessionCatalogReadService):
 
         if self._job_service is None:
             return await run()
-        return await self._job_service.run_sessions_delete_operation(
+        return await self._job_service.run_sessions_control_operation(
             frozen_session_ids,
             run,
             deadline=deadline,
@@ -180,11 +165,6 @@ class SessionCatalogService(SessionCatalogReadService):
     @property
     def path_resolver(self) -> SessionCatalogPathResolver:
         return self._path_resolver
-
-    @property
-    def workspace_id(self) -> str:
-        """本工作区后端的权威 workspace 身份（导航 operation 幂等 scope 的一维）。"""
-        return self._path_resolver.workspace_id
 
     def _on_session_changed(self, action: str, session_id: str) -> None:
         self.invalidate()
@@ -329,8 +309,17 @@ class SessionCatalogService(SessionCatalogReadService):
     ) -> NavigationMutationStatusPageDTO:
         return self.operations.status(operation_ids, scope)
 
-    def navigation_snapshot(self) -> NavigationSnapshotDTO:
-        return self.operations.snapshot()
+    def navigation_snapshot(self, *, minimum_catalog_revision: int = 0) -> NavigationSnapshotDTO:
+        snapshot = self.operations.snapshot()
+        if snapshot.catalog_revision < minimum_catalog_revision:
+            raise RuntimeError(
+                "会话目录权威版本低于读取下限: "
+                f"catalog_revision={snapshot.catalog_revision}, minimum_catalog_revision={minimum_catalog_revision}"
+            )
+        snapshot.projection_revision = catalog_projection_revision(
+            snapshot.catalog_revision, self._session_service.catalog_projection_revision,
+        )
+        return snapshot
 
     def navigation_events(
         self,

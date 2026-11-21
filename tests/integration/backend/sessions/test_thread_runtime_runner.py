@@ -17,6 +17,12 @@ from uuid import UUID
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import FastAPI
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
@@ -48,21 +54,18 @@ from app.api import session_turns as session_turns_api
 from app.api import sessions as sessions_api
 from app.api.deps import (
     get_message_stream_store,
-    get_request_id,
     get_session_orchestrator,
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
     get_session_turn_history_service,
     verify_local_token,
 )
-from app.core.background_task_contracts import BackgroundTaskDescriptor
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
     current_execution_admission,
     execution_admission_scope,
     require_current_execution_admission,
 )
-from app.core.lifecycle import LifetimeScope
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
 from app.core.path_utils import get_boxteam_home, workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
@@ -72,12 +75,8 @@ from app.core.session_thread_context import (
     session_thread_owner_scope,
 )
 from app.core.thread_creation import ThreadCreationService
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.domain.background_work import BackgroundTaskDescriptor
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
@@ -95,6 +94,8 @@ from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_OWNER_CATALOG_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     ExtensionCatalogUnavailableError,
 )
 from app.services.infrastructure.message_stream_store import (
@@ -131,7 +132,7 @@ from app.services.orchestration.event_stream import processor as event_processor
 from app.services.orchestration.execution_step import retry as stream_retry
 from app.services.orchestration.execution_step import stream_bindings
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from app.services.orchestration.session_title_service import SessionTitleService
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
@@ -147,6 +148,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.session_navigation.catalog_intents import create_catalog_intent
 from tests.support.workspaces import render_test_workspace_config
 
@@ -164,9 +166,9 @@ def runner_case(
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "runtime-contract-unused-key"
-        provider.pop("auth", None)
+    for provider in config["llm"]["providers"].values():
+        if "auth" not in provider["defaults"]:
+            provider["defaults"]["api_key"] = ""
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -203,6 +205,16 @@ class RuntimeCase:
     @property
     def tracker(self):
         return self.runner.container.agent_execution_service._residency_tracker
+
+
+@pytest.fixture
+async def recording_runtime_case(runtime_case: RuntimeCase):
+    recorder = runtime_case.runner.container.trace_event_recorder
+    await recorder.start()
+    try:
+        yield runtime_case
+    finally:
+        await recorder.stop()
 
 
 @pytest.fixture
@@ -290,7 +302,7 @@ async def runtime_case(
         return RuntimeProtocolModel(
             name="BoxteamLiteLLMChatModel",
             model=provider["model"],
-            provider_id=provider["id"],
+            provider_id=provider["provider_id"],
             api_key="runtime-fixture-key",
             api_base="http://127.0.0.1:1/v1",
             custom_llm_provider="openai",
@@ -302,7 +314,7 @@ async def runtime_case(
 
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", recording_resolve)
     monkeypatch.setattr(agent_factory, "ContextSourceReactor", recording_reactor)
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", model_from_provider)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", model_from_provider)
     if not case.shutdown_owned_by_lifespan:
         await runner_case.container.mcp_catalog_owner.start()
         platform = runner_case.container.resource_platform
@@ -728,7 +740,7 @@ async def _lease(case: RuntimeCase, admission: ExecutionAdmission, **overrides):
         agent_id="default",
         execution_overrides=overrides,
         model_visibility_overrides={},
-        preferred_provider_id=None,
+        preferred_model=None,
         include_team_tools=False,
     )
 
@@ -898,7 +910,7 @@ async def test_real_initialized_child_file_tool_reaches_canonical_commit(
     assert (f"{call_id}:tool-call:runtime-file-read", "canonical.tool_result.before_commit") in phases, events
 
 
-async def test_real_child_runtime_default_and_explicit_same_provider_share_generation(
+async def test_real_child_runtime_default_and_explicit_same_model_share_generation(
     runtime_case: RuntimeCase,
 ) -> None:
     """initial 默认模型和直接 Turn 的同一显式模型不能重新编译 child。"""
@@ -906,13 +918,13 @@ async def test_real_child_runtime_default_and_explicit_same_provider_share_gener
     session_id, _main = await _session(case.runner)
     child_id = await _child(case, session_id)
     service = case.runner.container.agent_execution_service
-    provider_id = case.runner.container.config_service.resolve_agent_provider_id("default")
+    model = case.runner.container.config_service.resolve_agent_model("default")
     generations = []
-    for origin, preference in (("internal", None), ("user", provider_id)):
+    for origin, preference in (("internal", None), ("user", model)):
         lease = await service._acquire_step_agent(
             admission=_admit(case.runner, session_id, child_id, origin),
             agent_id="default", execution_overrides={}, model_visibility_overrides={},
-            preferred_provider_id=preference, include_team_tools=False,
+            preferred_model=preference, include_team_tools=False,
         )
         generations.append(lease.generation)
         lease.release()
@@ -983,13 +995,13 @@ async def test_real_http_queued_child_turn_is_readable_and_fenced_from_active_ex
     jobs = []
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         try:
-            first_response = await client.post(endpoint + "/messages", json={"message": {"content": first_prompt}, "run": {}})
+            first_response = await client.post(endpoint + "/messages", json=with_message_run_operation_id({"message": {"content": first_prompt}, "run": {}}))
             assert first_response.status_code == 200, first_response.text
             first = first_response.json()["data"]
             jobs.append(container.job_service._jobs[first["job_id"]])
             await asyncio.wait_for(entered.wait(), 8)
             compiled_count = len(case.compiled)
-            second_response = await client.post(endpoint + "/messages", json={"message": {"content": queued_prompt}, "run": {}})
+            second_response = await client.post(endpoint + "/messages", json=with_message_run_operation_id({"message": {"content": queued_prompt}, "run": {}}))
             assert second_response.status_code == 200, second_response.text
             second = second_response.json()["data"]
             queued_job = container.job_service._jobs[second["job_id"]]
@@ -1601,6 +1613,77 @@ async def test_real_compiler_cold_reads_idle_boundary_background_blocker_and_exa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
+async def test_real_job_reuses_runtime_after_background_work_blocks_idle_unload(
+    runtime_case: RuntimeCase, runtime_clock, monkeypatch: pytest.MonkeyPatch,
+    origin: str,
+):
+    case = runtime_case
+    container = case.runner.container
+    session_id, thread_id = await _session(case.runner)
+    first = await _complete_job(case, session_id, thread_id)
+    _pair, graph, scope = case.compiled[0]
+    entered, proceed, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    close_runtime = case.tracker._close_runtime
+    wait_runtime = case.tracker._wait_runtime_task
+
+    async def held_close(*args, **kwargs):
+        entered.set()
+        await proceed.wait()
+        await close_runtime(*args, **kwargs)
+
+    async def observed_wait(task, state, deadline, operation):
+        if operation == "admission" and task is state.runtime_unload:
+            waiting.set()
+        return await wait_runtime(task, state, deadline, operation)
+
+    monkeypatch.setattr(case.tracker, "_close_runtime", held_close)
+    monkeypatch.setattr(case.tracker, "_wait_runtime_task", observed_wait)
+    runtime_clock[0] = 1800
+    sweep = asyncio.create_task(case.tracker.sweep())
+    handle = job = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        handle = await container.background_task_registry.spawn(
+            session_id=session_id, thread_id=thread_id, agent_id="default",
+            task_id="bgt_unload-race", descriptor=BackgroundTaskDescriptor(
+                kind="emit_system_time_messages", version=1, payload={
+                    "interval_seconds": 7200, "message_count": 1, "source_id": "unload-race",
+                    "started_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+                },
+            ),
+        )
+        job = await _start_job(case.runner, origin, session_id, thread_id)
+        assert job.task is not None
+        await asyncio.wait_for(waiting.wait(), 3)
+        assert not job.task.done() and scope.state == "open"
+        proceed.set()
+        assert await asyncio.wait_for(sweep, 3) == ()
+        await asyncio.wait_for(asyncio.shield(job.task), 20)
+        assert job.status == JobStatus.completed, job.error_message
+        second = case.runner.saver.execution_admission_for_job(
+            session_id, thread_id=thread_id, job_id=job.job_id,
+        )
+        assert case.model_admissions == [first, second]
+        assert first.execution_id != second.execution_id
+        assert case.compiled == [((session_id, thread_id), graph, scope)]
+        assert scope.state == "open" and not case.reactors[0].released
+        executions, _turns, _commits = _facts(case.runner, session_id, thread_id)
+        assert len(executions) == 2 and all(row[3] == "completed" for row in executions)
+        snapshot = case.tracker.snapshot(session_id, thread_id)
+        assert snapshot.residency == "resident"
+        assert [blocker.kind for blocker in snapshot.blockers] == ["background_task"]
+    finally:
+        proceed.set()
+        await asyncio.gather(
+            sweep, *([job.task] if job is not None and job.task is not None else []),
+            return_exceptions=True,
+        )
+        if handle is not None:
+            await container.background_task_registry.cancel(session_id, handle.task_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["user", "internal"])
 async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_lease(
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
@@ -1610,7 +1693,7 @@ async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_l
     service = case.runner.container.agent_execution_service
     session_id, thread_id = await _session(case.runner)
     entered, release = threading.Event(), threading.Event()
-    build = service._build_agent
+    build = service._assemble_agent
 
     def held_build(**kwargs):
         assert current_execution_admission() is None
@@ -1619,7 +1702,7 @@ async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_l
             raise TimeoutError("真实 compiler 屏障未释放")
         return build(**kwargs)
 
-    monkeypatch.setattr(service, "_build_agent", held_build)
+    monkeypatch.setattr(service, "_assemble_agent", held_build)
     job = await _start_job(case.runner, origin, session_id, thread_id)
     try:
         assert await asyncio.to_thread(entered.wait, 3), job.error_message
@@ -1885,8 +1968,7 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             allow_close = asyncio.Event()
             wake_worker = asyncio.Event()
             original_sleep = asyncio.sleep
-            original_sweep = case.tracker.sweep
-            sweep_calls = 0
+            worker_failure = RuntimeError("真实 residency worker 失败")
 
             def held_failure():
                 if not allow_close.is_set():
@@ -1895,30 +1977,29 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             async def worker_sleep(seconds):
                 if seconds == 60:
                     await wake_worker.wait()
+                    # 周期回调失败应继续重试；此处验证调度任务本身意外停止。
+                    raise worker_failure
                 else:
                     await original_sleep(seconds)
 
-            async def fail_worker_sweep():
-                nonlocal sweep_calls
-                sweep_calls += 1
-                if sweep_calls == 2:
-                    raise RuntimeError("真实 residency worker 失败")
-                return await original_sweep()
-
             failed_scope.register(held_failure, label="待重试资源")
             monkeypatch.setattr(asyncio, "sleep", worker_sleep)
-            monkeypatch.setattr(case.tracker, "sweep", fail_worker_sweep)
             await service.start()
             worker = service._sweep_task
             assert worker is not None
             wake_worker.set()
             with pytest.raises(RuntimeError, match="真实 residency worker"):
                 await asyncio.wait_for(asyncio.shield(worker), 3)
-            with pytest.raises(RuntimeError, match="真实 residency worker"):
-                service._check_sweeper()
+            service._check_owner_open()
+            await service.start()
+            assert service._sweep_task is worker
             with pytest.raises(ExceptionGroup, match="ThreadRuntime owner") as failure:
                 await asyncio.wait_for(service.shutdown(), 3)
-            assert str(failure.value.exceptions[0]) == "真实 residency worker 失败"
+            maintenance_error = failure.value.exceptions[0]
+            assert isinstance(maintenance_error, ExceptionGroup)
+            task_error, = maintenance_error.exceptions
+            assert isinstance(task_error, RuntimeError) and task_error.__cause__ is worker_failure
+            assert worker.exception() is worker_failure
             assert failed_scope.state == "close_failed" and healthy_scope.state == "closed"
             assert case.tracker._states[(session_id, main_thread_id)].runtime.lifetime_scope is failed_scope
             healthy = case.tracker.snapshot(session_id, child_id)
@@ -1927,6 +2008,67 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
             allow_close.set()
             await asyncio.wait_for(service.shutdown(), 3)
             assert failed_scope.state == "closed" and service._sweep_task is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["user", "internal"])
+@pytest.mark.parametrize("worker_stop", ["cancelled", "failed"])
+async def test_stopped_residency_worker_keeps_new_jobs_available(
+    runtime_case: RuntimeCase, origin: str, worker_stop: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+):
+    case = runtime_case
+    service = case.runner.container.agent_execution_service
+    session_id, thread_id = await _session(case.runner)
+    original_sleep = asyncio.sleep
+    worker_failure = RuntimeError("真实 residency worker 意外退出")
+
+    async def sleep(seconds):
+        if seconds == 60 and asyncio.current_task() is service._sweep_task:
+            raise worker_failure
+        await original_sleep(seconds)
+
+    if worker_stop == "failed":
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+    await service.start()
+    worker = service._sweep_task
+    assert worker is not None
+    if worker_stop == "cancelled":
+        worker.cancel("模拟驻留维护任务意外取消")
+    await asyncio.gather(worker, return_exceptions=True)
+    if worker_stop == "cancelled":
+        assert "闲置维护任务意外停止" in caplog.text and "cancelled=True" in caplog.text
+    else:
+        assert worker.exception() is worker_failure
+        assert "真实 residency worker 意外退出" in caplog.text
+
+    for _ in range(2):
+        job = await _start_job(case.runner, origin, session_id, thread_id)
+        assert job.task is not None
+        await asyncio.wait_for(asyncio.shield(job.task), 8)
+        assert job.status == JobStatus.completed, job.error_message
+        assert job.cancellation_reason is None
+    executions, turns, _commits = _facts(case.runner, session_id, thread_id)
+    assert len(executions) == 2 and {execution[3] for execution in executions} == {"completed"}
+    assert len(turns) == (2 if origin == "user" else 0)
+    assert len(case.compiled) == 1 and len(case.model_admissions) == 2
+    await service.start()
+    assert service._sweep_task is worker and worker.done()
+    admission = case.runner.saver.execution_admission_for_job(
+        session_id, thread_id=thread_id, job_id=job.job_id,
+    )
+    if worker_stop == "failed":
+        with pytest.raises(ExceptionGroup) as caught:
+            await service.shutdown()
+        maintenance_error, = caught.value.exceptions
+        assert isinstance(maintenance_error, ExceptionGroup)
+        task_error, = maintenance_error.exceptions
+        assert isinstance(task_error, RuntimeError) and task_error.__cause__ is worker_failure
+        await service.shutdown()
+    else:
+        await service.shutdown()
+    with pytest.raises(RuntimeError, match="owner 正在关闭"):
+        await _lease(case, admission)
 
 
 @pytest.mark.asyncio
@@ -1991,7 +2133,7 @@ async def test_real_turn_close_failure_releases_lease_after_error_and_shutdown_e
 
 
 @pytest.mark.asyncio
-async def test_real_compiler_uses_the_same_mcp_tool_snapshot_as_generation_key(
+async def test_real_compiler_uses_mcp_publication_for_tools_and_resource_context(
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1999,32 +2141,22 @@ async def test_real_compiler_uses_the_same_mcp_tool_snapshot_as_generation_key(
     service = case.runner.container.agent_execution_service
     owner = service._dependency_provider.get_mcp_catalog_owner()
     publication = owner.publication_snapshot()
-    publications = []
-    read_publication = owner.publication_snapshot
-    build_agent = service._build_agent
-
-    def record_publication():
-        current = read_publication()
-        publications.append(current)
-        return current
+    assemble_agent = service._assemble_agent
 
     def compile_same_publication(**kwargs):
         assert kwargs["mcp_catalog_owner"] is owner
         assert tuple(kwargs["mcp_tools"]) == tuple(publication.tools.values())
-        return build_agent(**kwargs)
+        return assemble_agent(**kwargs)
 
-    monkeypatch.setattr(owner, "publication_snapshot", record_publication)
-    monkeypatch.setattr(service, "_build_agent", compile_same_publication)
+    monkeypatch.setattr(service, "_assemble_agent", compile_same_publication)
     session_id, thread_id = await _session(case.runner)
     lease = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
     try:
-        # 准入和 generation 订阅各读取一次同一原子 publication；不再走旧 get_mcp_tools。
-        assert len(publications) == 2 and all(value is publication for value in publications)
         assert len(case.compiled) == 1
-        runtime = case.tracker._states[(session_id, thread_id)].runtime
-        assert runtime.generation_key[-2:] == (
-            publication.binding_ref.catalog_revision, publication.binding_ref.generation,
-        )
+        # MCP 版本属于资源上下文；固定执行图的 generation 不随目录发布变化。
+        catalog = case.resource_registries[0].snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert dict(catalog.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID] == publication.binding_ref.catalog_revision
+        assert catalog.generation == publication.binding_ref.generation
     finally:
         lease.release()
 
@@ -2272,12 +2404,12 @@ async def test_real_runner_refreshes_tracked_skill_in_same_generation_and_stops_
 
 
 @pytest.fixture
-async def skill_tracking_client(runtime_case: RuntimeCase):
-    """通过真实 HTTP handler 和服务操作当前 runner 的持久 Skill tracking。"""
+async def skill_untrack_client(runtime_case: RuntimeCase):
+    """通过真实 HTTP handler 和服务停止当前 runner 的 Skill 追踪。"""
     container = runtime_case.runner.container
     application = FastAPI()
     application.include_router(sessions_api.router, prefix="/api/v1")
-    application.dependency_overrides[get_session_skill_tracking_service] = lambda: container.session_skill_tracking_service
+    application.dependency_overrides[get_session_skill_untrack_service] = lambda: container.session_skill_untrack_service
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     application.dependency_overrides[get_request_id] = lambda: "request-skill-tracking"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
@@ -2332,7 +2464,7 @@ async def gateway_skill_publication(runtime_case: RuntimeCase):
 @pytest.mark.asyncio
 async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebinding_tracked_source(
     runtime_case: RuntimeCase,
-    skill_tracking_client: httpx.AsyncClient,
+    skill_untrack_client: httpx.AsyncClient,
     gateway_skill_publication,
 ):
     case = runtime_case
@@ -2492,7 +2624,7 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
         file_registry.snapshot(gateway_uri)
 
     # 用户通过已有受信入口停止原 tracking，无需恢复已删除来源即可继续真实请求。
-    response = await skill_tracking_client.post(
+    response = await skill_untrack_client.post(
         f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack", json={"name": name},
     )
     assert response.status_code == 200

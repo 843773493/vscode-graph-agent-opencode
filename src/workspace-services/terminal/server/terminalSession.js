@@ -1,9 +1,9 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 import {
   readProcessStat,
   terminateProcessTree,
-} from "../../../shared/serverProcessLifecycle.mjs";
+} from "@boxteam/plugin-sdk/process-lifecycle";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";

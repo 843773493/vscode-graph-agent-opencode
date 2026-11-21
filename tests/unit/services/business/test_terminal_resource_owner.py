@@ -900,3 +900,127 @@ async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_rece
     assert cold["reconciliation_status"] == "unknown"
     assert target not in terminal_owner.owner._store.get(rid).thread_associations
     assert terminal_owner.transport.creates == 1
+
+
+async def test_resource_changes_follow_committed_owner_records_without_read_feedback(
+    terminal_owner: TerminalOwnerFixture,
+) -> None:
+    owner = terminal_owner.owner
+    changes = owner.changes()
+    assert await anext(changes) is None
+    created = await terminal_owner.create(scope="workspace")
+    assert await asyncio.wait_for(anext(changes), 0.5) == frozenset({created["resource_id"]})
+    # 查询相同事实不能自己制造下一轮失效通知。
+    await owner.list_resources()
+    waiting = asyncio.create_task(anext(changes))
+    done, _ = await asyncio.wait((waiting,), timeout=0.03)
+    assert not done
+    record = owner._store.get(created["resource_id"])
+    record.title = "已修改标题"
+    await owner._store.save(record)
+    assert await asyncio.wait_for(waiting, 0.5) == frozenset({created["resource_id"]})
+    await changes.aclose()
+    assert not owner._observations.subscriber_ids
+
+
+async def test_selected_reads_only_request_selected_summaries_and_keep_missing_resource_unknown(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = await terminal_owner.create(scope="workspace")
+    second = await terminal_owner.create(scope="workspace")
+    selected = frozenset({first["resource_id"]})
+    calls: list[frozenset[str] | None] = []
+    listing = terminal_owner.transport.list_resources
+
+    async def read(*, resource_ids: frozenset[str] | None = None):
+        calls.append(resource_ids)
+        return await listing(resource_ids=resource_ids)
+
+    def forbid_full_record_scan():
+        raise AssertionError("局部观察不能复制整份 owner 资源记录")
+
+    monkeypatch.setattr(terminal_owner.transport, "list_resources", read)
+    monkeypatch.setattr(terminal_owner.owner._store, "all", forbid_full_record_scan)
+    detail = await terminal_owner.owner.get_resource(first["resource_id"], include_output=False)
+    assert detail["resource_id"] == first["resource_id"] and "buffer" not in detail
+    rows = await terminal_owner.owner.list_resources(resource_ids=selected)
+    assert [row["resource_id"] for row in rows] == [first["resource_id"]]
+    assert calls == [selected, selected]
+    assert terminal_owner.owner._store.get(second["resource_id"]).status == "running"
+    del terminal_owner.transport.records[first["resource_id"]]
+    missing = await terminal_owner.owner.get_resource(first["resource_id"], include_output=False)
+    assert missing["reconciliation_status"] == "unknown"
+    assert missing["status"] != "deleted"
+
+
+async def test_runtime_disconnect_invalidates_resource_view_and_keeps_original_error(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnected = asyncio.Event()
+    failure = ConnectionError("终端插件连接已断开")
+
+    async def runtime_changes() -> AsyncIterator[None]:
+        yield None
+        await disconnected.wait()
+        raise failure
+
+    monkeypatch.setattr(terminal_owner.transport, "changes", runtime_changes)
+    owner = terminal_owner.owner
+    changes, runtime = owner.changes(), owner.runtime_changes()
+    try:
+        await anext(changes)
+        await anext(runtime)
+        await anext(changes)
+        disconnected.set()
+        with pytest.raises(ConnectionError) as caught:
+            await anext(runtime)
+        assert caught.value is failure
+        assert await asyncio.wait_for(anext(changes), 0.5) is None
+    finally:
+        await runtime.aclose()
+        await changes.aclose()
+    assert not owner._observations.subscriber_ids
+
+
+async def test_unconnected_runtime_retries_do_not_invalidate_resources(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = ConnectionError("插件未启用")
+
+    async def unavailable() -> AsyncIterator[None]:
+        raise failure
+        yield None
+
+    monkeypatch.setattr(terminal_owner.transport, "changes", unavailable)
+    owner = terminal_owner.owner
+    changes = owner.changes()
+    await anext(changes)
+    waiting = asyncio.create_task(anext(changes))
+    try:
+        for _ in range(3):
+            with pytest.raises(ConnectionError) as caught:
+                await anext(owner.runtime_changes())
+            assert caught.value is failure
+        done, _ = await asyncio.wait((waiting,), timeout=0.03)
+        assert not done
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await changes.aclose()
+
+
+async def test_resource_notifications_merge_ids_and_overflow_to_scope(
+    terminal_owner: TerminalOwnerFixture,
+) -> None:
+    owner = terminal_owner.owner
+    changes = owner.changes()
+    try:
+        assert await anext(changes) is None
+        owner.notify_changed(frozenset({"a"}))
+        owner.notify_changed(frozenset({"b"}))
+        assert await anext(changes) == frozenset({"a", "b"})
+        for index in range(70):
+            owner.notify_changed(frozenset({str(index)}))
+        assert await anext(changes) is None
+    finally:
+        await changes.aclose()

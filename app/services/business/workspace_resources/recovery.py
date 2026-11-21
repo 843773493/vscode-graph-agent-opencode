@@ -8,8 +8,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.abstractions.workspace_resources import ResourceSnapshot
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.facts import (
     index_resources,
     lease_status,

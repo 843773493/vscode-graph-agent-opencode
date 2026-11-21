@@ -7,10 +7,12 @@ import sqlite3
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
+import commentjson
 import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
@@ -31,23 +33,11 @@ def e2e_workspace_config_path(
     source_path = Path(e2e_config_path).resolve()
     target_path = Path(e2e_workspace_root_path) / ".boxteam" / "workspace.jsonc"
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = source_path.read_text(encoding="utf-8")
-    payload = payload.replace(
-        '"primary_provider": "primary"',
-        '"primary_provider": "backup_3"',
-        1,
-    )
-    payload = payload.replace(
-        '  "development": {',
-        '  "runtime": {\n'
-        '    "agent": {\n'
-        '      "run": {"mode": "team"}\n'
-        '    }\n'
-        '  },\n'
-        '  "development": {',
-        1,
-    )
-    target_path.write_text(payload, encoding="utf-8")
+    payload = commentjson.loads(source_path.read_text(encoding="utf-8"))
+    payload["agents"]["default"]["model"]["primary"] = {"provider_id": "backup_3", "model_id": "default"}
+    payload.setdefault("runtime", {}).setdefault("agent", {})["run"] = {"mode": "team"}
+    # TODO：团队协作按用户裁定延期；这里只迁齐模型配置，不重启该功能的实现与验收。
+    target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.copy2(
         Path.cwd().resolve() / "configs" / "workspace_schema.jsonc",
         target_path.parent / "workspace_schema.jsonc",
@@ -100,10 +90,10 @@ async def _run_turn(
 ) -> str:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200, response.text
     job_id = response.json()["data"]["job_id"]

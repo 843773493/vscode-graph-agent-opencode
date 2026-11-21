@@ -22,10 +22,12 @@ from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
-def goal_sidebar_gateway(request: pytest.FixtureRequest, web_workbench_assets: Path):
+def goal_sidebar_gateway(request: pytest.FixtureRequest):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     artifacts.mkdir()
+    prepared = os.getenv("BOXTEAM_GOAL_SIDEBAR_WEB_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
     prepare_test_workspace(
         workspace_root=context.workspace_root,
@@ -36,7 +38,7 @@ def goal_sidebar_gateway(request: pytest.FixtureRequest, web_workbench_assets: P
         workspace_root=context.workspace_root,
         default_backend_url=None,
         port=e2e_port_block_for_file(Path(request.node.path)).port(21),
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
+        extra_env={"BOXTEAM_WEB_ASSETS": str(assets)},
     )
     try:
         yield gateway, artifacts

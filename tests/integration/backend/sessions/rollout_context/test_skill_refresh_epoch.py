@@ -1,12 +1,12 @@
 """显式 snapshot 在真实 rewind/compaction transition 期间仍须由同一 seal 接受。"""
 
-import json
 
 import pytest
 from langchain_core.messages import AIMessage
 
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
@@ -86,7 +86,7 @@ def test_named_selection_follows_checkpoint_and_does_not_revive_old_source(epoch
                if state.source_id == expected_state.source_id)
     assert sealed.durable_fields() == expected_state.durable_fields()
     blocks = [block for frame in rebuilt.seal_binding.prefix.state.frames if frame.source_protocol is not None
-              for block in json.loads(frame.content)["sources"] if block["name"] == "switch"]
+              for block in parse_root_section(frame.content, tag="context_sources")["sources"] if block["name"] == "switch"]
     assert [(block["source_identity"], block["body"]) for block in blocks] == [("skill:" + expected.entry_identity, expected.body)]
     assert "skill:" + excluded.entry_identity in case.manager.deselected_skill_source_ids()
     assert tuple(canonical_json_bytes(case.snapshot({"assembly_id": snapshot.assembly_id}).to_dict()) for snapshot in snapshots) == before

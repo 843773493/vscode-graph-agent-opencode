@@ -13,11 +13,11 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from fastapi import FastAPI
 
 from app.api import mcp as mcp_api
 from app.api.deps import get_mcp_connection_service, verify_local_token
-from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler
 from app.schemas.internal_v2.mcp import McpConnectionRequestDTO

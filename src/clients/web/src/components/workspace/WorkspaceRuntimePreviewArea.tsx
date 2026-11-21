@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { WorkspacePreviewTab } from "./WorkspaceFilePreviewArea";
+import { useTerminalFrameObservation } from "../../hooks/workspace/useTerminalFrameObservation";
 
 export type WorkspaceRuntimePreviewTab = Extract<
   WorkspacePreviewTab,
@@ -21,6 +22,8 @@ export default function WorkspaceRuntimePreviewArea({
   onExitExtensionWindow,
 }: WorkspaceRuntimePreviewAreaProps) {
   const [expanded, setExpanded] = useState(true);
+  const frame = useRef<HTMLIFrameElement>(null);
+  useTerminalFrameObservation(frame, expanded && tab?.previewType === "terminal" ? tab.attachUrl : null);
 
   useEffect(() => {
     setExpanded(true);
@@ -83,6 +86,7 @@ export default function WorkspaceRuntimePreviewArea({
       </header> : null}
       {expanded ? (
         <iframe
+          ref={frame}
           className={`workspace-runtime-preview-frame${isBrowser ? " browser" : " terminal"}`}
           src={tab.attachUrl}
           title={`${isBrowser ? t("workspace.runtime.browser") : t("workspace.runtime.terminal")} ${tab.name}`}

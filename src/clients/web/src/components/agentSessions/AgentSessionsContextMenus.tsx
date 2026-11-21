@@ -56,6 +56,7 @@ interface AgentSessionsContextMenusProps {
     sessionId: string,
   ) => Promise<void>;
   onRenameWorkspace: (workspaceId: string) => void;
+  onOpenWorkspaceDetails: (workspaceId: string) => Promise<void>;
   onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onRemoveWorkspace: (workspaceId: string, name: string) => void;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
@@ -79,6 +80,7 @@ export default function AgentSessionsContextMenus({
   onRequestCreateSessionFolder,
   onCopySessionInformation,
   onRenameWorkspace,
+  onOpenWorkspaceDetails,
   onCopyWorkspaceInformation,
   onRemoveWorkspace,
   onStartWorkspace,
@@ -235,7 +237,7 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newChild')}</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newSessionFolder')}</span>
           </button>
           <button type="button" role="menuitem" title={t('navigation.clipboard.copySessionIdHint')} onClick={handleCopySessionId}>
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
@@ -318,6 +320,16 @@ export default function AgentSessionsContextMenus({
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
+          <button type="button" role="menuitem" onClick={() => {
+            const target = workspaceMenu;
+            onCloseWorkspaceMenu();
+            void onOpenWorkspaceDetails(target.workspaceId).catch((error: unknown) => {
+              if (!isErrorReported(error)) onError(t('gateway.workspaceDetails.openFailed', target.workspaceId, errorMessage(error)));
+            });
+          }}>
+            <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">{t('gateway.workspaceDetails.title')}</span>
+          </button>
           {canStartWorkspace ? (
             <button
               type="button"

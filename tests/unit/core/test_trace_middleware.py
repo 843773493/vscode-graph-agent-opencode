@@ -4,24 +4,29 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from uuid import UUID
 
 import pytest
+from boxteam_plugin_sdk.commands import PluginCommandEventDTO
+from boxteam_plugin_sdk.http import get_request_id
+from boxteam_plugin_sdk.logging import RuntimeLogRecord, format_runtime_log_record
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
+from boxteam_plugin_sdk.request_context import (
+    get_current_request_id,
+    require_current_request_id,
+)
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
-from app.api.deps import get_request_id
 from app.core import failures
 from app.core.trace_middleware import (
     GATEWAY_ID_HEADER,
     TraceMiddleware,
     get_current_gateway_id,
     get_current_navigation_actor,
-    get_current_request_id,
     require_current_gateway_id,
-    require_current_request_id,
-    reset_current_request_id,
-    set_current_request_id,
 )
 from app.schemas.internal_v2.common import APIResponse
 
@@ -72,7 +77,7 @@ def test_generated_request_id_is_identical_in_header_and_body(
 
     assert response.status_code == 200
     request_id = response.headers["X-Request-ID"]
-    assert request_id
+    assert UUID(request_id).version == 7
     assert response.json()["request_id"] == request_id
     assert response.json()["data"]["request_id"] == request_id
 
@@ -125,40 +130,40 @@ def test_request_scope_contextvar_is_reset_after_dispatch(
     assert get_current_request_id() is None
 
 
-def test_require_current_request_id_fails_closed_without_binding() -> None:
-    """无请求绑定即 fail-closed 抛错，且消息带消费者名；MUST NOT 回退虚假默认值。"""
-    assert get_current_request_id() is None
+def test_concurrent_trace_requests_share_authoritative_id_with_logging_and_commands(
+    trace_client: TestClient,
+) -> None:
+    barrier = asyncio.Barrier(2)
 
-    with pytest.raises(RuntimeError) as excinfo:
-        require_current_request_id("测试消费方")
+    async def context_endpoint(request_id: str = Depends(get_request_id)) -> APIResponse[dict[str, str]]:
+        await barrier.wait()
+        observed = require_current_request_id("test-command")
+        log = format_runtime_log_record(RuntimeLogRecord(
+            timestamp="2026-11-20T00:00:00Z", level="info", service="plugin", pid=1,
+            runtime_instance_id="instance", logger="test", message="ok", context={"request_id": observed},
+        ), pretty=False, contract=load_runtime_log_contract())
+        event = PluginCommandEventDTO(
+            instance_id="instance", registration_id="registration", command_id="command", call_id="call",
+            request_id=observed, sequence=1, kind="started",
+        )
+        return APIResponse(data={"request_id": observed, "log": log, "event": event.request_id},
+                           request_id=request_id)
 
-    message = str(excinfo.value)
-    assert "测试消费方" in message
-    assert "未绑定" in message
-
-
-def test_require_current_request_id_returns_bound_authority_verbatim() -> None:
-    """与宽容版读同一 ContextVar：绑定后原样返回；复位后回到 fail-closed。"""
-    token = set_current_request_id("req_bound_authority")
-    try:
-        assert get_current_request_id() == "req_bound_authority"
-        assert require_current_request_id("测试消费方") == "req_bound_authority"
-    finally:
-        reset_current_request_id(token)
-
-    assert get_current_request_id() is None
-    with pytest.raises(RuntimeError):
-        require_current_request_id("测试消费方")
-
-
-def test_require_current_request_id_rejects_blank_binding() -> None:
-    """空串等同无绑定：fail-closed 不把空串当合法权威 ID（与 gateway_id 守卫一致）。"""
-    token = set_current_request_id("")
-    try:
-        with pytest.raises(RuntimeError):
-            require_current_request_id("测试消费方")
-    finally:
-        reset_current_request_id(token)
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.add_api_route("/context", context_endpoint)
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(client.get, "/context", headers={"X-Request-ID": request_id})
+                   for request_id in ("req-concurrent-a", "req-concurrent-b")]
+        responses = [future.result() for future in futures]
+    assert {response.json()["data"]["request_id"] for response in responses} == {
+        "req-concurrent-a", "req-concurrent-b",
+    }
+    for response in responses:
+        expected = response.headers["X-Request-ID"]
+        assert response.json()["request_id"] == expected
+        assert f'request_id="{expected}"' in response.json()["data"]["log"]
+        assert response.json()["data"]["event"] == expected
 
 
 def test_successful_request_trace_is_emitted_at_debug_level(

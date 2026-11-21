@@ -4,11 +4,11 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.navigation import WorkspaceNavigationStore

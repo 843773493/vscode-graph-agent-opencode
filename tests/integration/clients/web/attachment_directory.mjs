@@ -30,7 +30,10 @@ try {
   const target = new URL("/", required("BOXTEAM_BROWSER_BASE_URL"));
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
-  const metadata = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/workspace");
+  const metadata = page.waitForResponse((response) => response.request().method() === "GET"
+    && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.sessionId}`
+    && response.request().headers()["x-boxteam-workspace-id"] === fixture.workspaceId
+    && response.request().headers()["x-boxteam-target-gateway-id"] === fixture.gatewayId);
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   await page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)
@@ -41,6 +44,8 @@ try {
   const initialized = await response.json();
   assert.equal(response.headers()["x-request-id"], initialized.request_id);
   assert.equal(initialized.data.workspace_id, fixture.workspaceId);
+  assert.equal(initialized.data.session_id, fixture.sessionId);
+  assert.equal(initialized.data.thread_id, fixture.threadId);
   await thread.locator(`.chat-stream-virtual-shell[data-owner-session-id="${fixture.sessionId}"]`).waitFor({ state: "visible" });
   const card = thread.locator(".message-attachment").filter({ hasText: fixture.attachment.name });
   await card.getByRole("button", { name: `在右侧打开附件：${fixture.attachment.name}`, exact: true }).click();

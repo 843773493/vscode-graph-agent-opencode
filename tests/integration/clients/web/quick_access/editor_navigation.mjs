@@ -110,7 +110,7 @@ export async function verifyViewNavigation({ page, command, owner, result }) {
   result.textSymbolsAfterThread = true;
   await command('workbench.action.quickOpen', 'view 会话');
   await view('会话').click();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const panels = [
     ['工作区终端', 'terminal'], ['工作区输出', 'output'], ['自动化', 'automation'],
     ['端口', 'ports'], ['MCP 连接', 'mcp'], ['浏览器', 'browser'],

@@ -25,6 +25,7 @@ export interface GatewayThreadAddressRequest {
   workspace_id: string;
   session_id: string;
   thread_id: string;
+  item_id?: string | undefined;
 }
 
 /** 会话变更文件的当前逻辑引用；不读取正文，也不新增快照或版本字段。 */
@@ -52,6 +53,7 @@ export interface GatewayResourceAddressDTO {
   reference_uri: string;
   changeset_id?: string | undefined;
   change_file_uri?: string | undefined;
+  item_id?: string | undefined;
 }
 
 /** 同机认证控制链专用，不作为普通文件响应或联邦资源投影。 */
@@ -89,14 +91,6 @@ export interface AddRemoteGatewayRequest {
   connection_id?: string | undefined;
 }
 
-export interface ChangePortForwardLabelRequest {
-  label?: string | undefined;
-}
-
-export interface ChangePortForwardLocalPortRequest {
-  local_port: number;
-}
-
 export interface CreateFederationManagedWorkspaceRequest {
   root_path: string;
   name?: string | undefined;
@@ -110,11 +104,18 @@ export interface CreateGatewayManagedWorkspaceRequest {
   gateway_connection_id?: string | undefined;
 }
 
+export interface PortForwardEndpoint {
+  host_id: string;
+  address?: string | undefined;
+  port: number;
+}
+
 export interface CreatePortForwardRequest {
-  remote_port: number;
-  local_port?: number | undefined;
   protocol?: string | undefined;
   label?: string | undefined;
+  listener: PortForwardEndpoint | undefined;
+  destination: PortForwardEndpoint | undefined;
+  enabled?: boolean | undefined;
 }
 
 export interface DevelopmentRuntimeRestartDTO {
@@ -458,6 +459,9 @@ export interface GatewayDiagnosticsDTO {
   processes: GatewayDiagnosticProcessDTO[];
   observation?: RuntimeObservationStatus | undefined;
   plugin_observations: PluginRuntimeObservationDTO[];
+  /** 目标机器上的原生展示位置；不能作为资源 URI 或当前机器上的操作目标。 */
+  control_directory?: string | undefined;
+  log_directory?: string | undefined;
 }
 
 export interface GatewayDiagnosticLogQueryScopeDTO {
@@ -540,6 +544,24 @@ export interface GatewayDirectoryListDTO {
   truncated?: boolean | undefined;
   limit: number;
   name: string;
+}
+
+export interface WorkspaceIdentityMappingDTO {
+  legacy_workspace_id: string;
+  gateway_id: string;
+  workspace_id: string;
+}
+
+export interface WorkspaceIdentityRecoveryDTO {
+  format_version: number;
+  migration_id: string;
+  registry_gateway_id: string;
+  mappings: WorkspaceIdentityMappingDTO[];
+}
+
+export interface GatewayClientRecoveryDTO {
+  gateway_id: string;
+  workspace_identity: WorkspaceIdentityRecoveryDTO | undefined;
 }
 
 export interface GatewayHealthDTO {
@@ -763,6 +785,8 @@ export interface GatewayManagementTargetDTO {
   connection_kind: string;
   gateway_connection_id?: string | undefined;
   connection_error?: string | undefined;
+  source_owner?: string | undefined;
+  remote_gateway_port?: number | undefined;
 }
 
 export interface GatewayManagementDirectoryDTO {
@@ -799,23 +823,32 @@ export interface GatewayWorkspaceListDTO {
 }
 
 export interface PortForwardDTO {
-  gateway_id: string;
   forward_id: string;
-  workspace_id: string;
-  connection_id: string;
-  remote_host: string;
-  remote_port: number;
-  local_host: string;
-  local_port: number;
   protocol: string;
   label: string;
   status: string;
   error: string;
-  local_url: string;
+  gateway_id: string;
+  listener: PortForwardEndpoint | undefined;
+  destination: PortForwardEndpoint | undefined;
+  enabled: boolean;
 }
 
 export interface PortForwardListDTO {
   items: PortForwardDTO[];
+  gateway_id: string;
+}
+
+export interface PortForwardHostDTO {
+  host_id: string;
+  label: string;
+  description: string;
+  kind: string;
+}
+
+export interface PortForwardHostsDTO {
+  gateway_id: string;
+  items: PortForwardHostDTO[];
 }
 
 export interface ReorderGatewayWorkspacesRequest {
@@ -997,7 +1030,14 @@ export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressReq
 };
 
 function createBaseGatewayThreadAddressRequest(): GatewayThreadAddressRequest {
-  return { local_gateway_id: "", resource_gateway_id: "", workspace_id: "", session_id: "", thread_id: "" };
+  return {
+    local_gateway_id: "",
+    resource_gateway_id: "",
+    workspace_id: "",
+    session_id: "",
+    thread_id: "",
+    item_id: undefined,
+  };
 }
 
 export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest> = {
@@ -1008,6 +1048,7 @@ export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
     };
   },
 
@@ -1028,6 +1069,9 @@ export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
     return obj;
   },
 
@@ -1041,6 +1085,7 @@ export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest
     message.workspace_id = object.workspace_id ?? "";
     message.session_id = object.session_id ?? "";
     message.thread_id = object.thread_id ?? "";
+    message.item_id = object.item_id ?? undefined;
     return message;
   },
 };
@@ -1119,6 +1164,7 @@ function createBaseGatewayResourceAddressDTO(): GatewayResourceAddressDTO {
     reference_uri: "",
     changeset_id: undefined,
     change_file_uri: undefined,
+    item_id: undefined,
   };
 }
 
@@ -1136,6 +1182,7 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
       reference_uri: isSet(object.reference_uri) ? globalThis.String(object.reference_uri) : "",
       changeset_id: isSet(object.changeset_id) ? globalThis.String(object.changeset_id) : undefined,
       change_file_uri: isSet(object.change_file_uri) ? globalThis.String(object.change_file_uri) : undefined,
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
     };
   },
 
@@ -1174,6 +1221,9 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     if (message.change_file_uri !== undefined) {
       obj.change_file_uri = message.change_file_uri;
     }
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
     return obj;
   },
 
@@ -1193,6 +1243,7 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     message.reference_uri = object.reference_uri ?? "";
     message.changeset_id = object.changeset_id ?? undefined;
     message.change_file_uri = object.change_file_uri ?? undefined;
+    message.item_id = object.item_id ?? undefined;
     return message;
   },
 };
@@ -1436,66 +1487,6 @@ export const AddRemoteGatewayRequest: MessageFns<AddRemoteGatewayRequest> = {
   },
 };
 
-function createBaseChangePortForwardLabelRequest(): ChangePortForwardLabelRequest {
-  return { label: undefined };
-}
-
-export const ChangePortForwardLabelRequest: MessageFns<ChangePortForwardLabelRequest> = {
-  fromJSON(object: any): ChangePortForwardLabelRequest {
-    return { label: isSet(object.label) ? globalThis.String(object.label) : undefined };
-  },
-
-  toJSON(message: ChangePortForwardLabelRequest): unknown {
-    const obj: any = {};
-    if (message.label !== undefined) {
-      obj.label = message.label;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<ChangePortForwardLabelRequest>, I>>(base?: I): ChangePortForwardLabelRequest {
-    return ChangePortForwardLabelRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<ChangePortForwardLabelRequest>, I>>(
-    object: I,
-  ): ChangePortForwardLabelRequest {
-    const message = createBaseChangePortForwardLabelRequest();
-    message.label = object.label ?? undefined;
-    return message;
-  },
-};
-
-function createBaseChangePortForwardLocalPortRequest(): ChangePortForwardLocalPortRequest {
-  return { local_port: 0 };
-}
-
-export const ChangePortForwardLocalPortRequest: MessageFns<ChangePortForwardLocalPortRequest> = {
-  fromJSON(object: any): ChangePortForwardLocalPortRequest {
-    return { local_port: isSet(object.local_port) ? globalThis.Number(object.local_port) : 0 };
-  },
-
-  toJSON(message: ChangePortForwardLocalPortRequest): unknown {
-    const obj: any = {};
-    if (message.local_port !== 0) {
-      obj.local_port = Math.round(message.local_port);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<ChangePortForwardLocalPortRequest>, I>>(
-    base?: I,
-  ): ChangePortForwardLocalPortRequest {
-    return ChangePortForwardLocalPortRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<ChangePortForwardLocalPortRequest>, I>>(
-    object: I,
-  ): ChangePortForwardLocalPortRequest {
-    const message = createBaseChangePortForwardLocalPortRequest();
-    message.local_port = object.local_port ?? 0;
-    return message;
-  },
-};
-
 function createBaseCreateFederationManagedWorkspaceRequest(): CreateFederationManagedWorkspaceRequest {
   return { root_path: "", name: undefined, create_directory: undefined };
 }
@@ -1589,33 +1580,76 @@ export const CreateGatewayManagedWorkspaceRequest: MessageFns<CreateGatewayManag
   },
 };
 
+function createBasePortForwardEndpoint(): PortForwardEndpoint {
+  return { host_id: "", address: undefined, port: 0 };
+}
+
+export const PortForwardEndpoint: MessageFns<PortForwardEndpoint> = {
+  fromJSON(object: any): PortForwardEndpoint {
+    return {
+      host_id: isSet(object.host_id) ? globalThis.String(object.host_id) : "",
+      address: isSet(object.address) ? globalThis.String(object.address) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
+    };
+  },
+
+  toJSON(message: PortForwardEndpoint): unknown {
+    const obj: any = {};
+    if (message.host_id !== "") {
+      obj.host_id = message.host_id;
+    }
+    if (message.address !== undefined) {
+      obj.address = message.address;
+    }
+    if (message.port !== 0) {
+      obj.port = Math.round(message.port);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PortForwardEndpoint>, I>>(base?: I): PortForwardEndpoint {
+    return PortForwardEndpoint.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PortForwardEndpoint>, I>>(object: I): PortForwardEndpoint {
+    const message = createBasePortForwardEndpoint();
+    message.host_id = object.host_id ?? "";
+    message.address = object.address ?? undefined;
+    message.port = object.port ?? 0;
+    return message;
+  },
+};
+
 function createBaseCreatePortForwardRequest(): CreatePortForwardRequest {
-  return { remote_port: 0, local_port: undefined, protocol: undefined, label: undefined };
+  return { protocol: undefined, label: undefined, listener: undefined, destination: undefined, enabled: undefined };
 }
 
 export const CreatePortForwardRequest: MessageFns<CreatePortForwardRequest> = {
   fromJSON(object: any): CreatePortForwardRequest {
     return {
-      remote_port: isSet(object.remote_port) ? globalThis.Number(object.remote_port) : 0,
-      local_port: isSet(object.local_port) ? globalThis.Number(object.local_port) : undefined,
       protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : undefined,
       label: isSet(object.label) ? globalThis.String(object.label) : undefined,
+      listener: isSet(object.listener) ? PortForwardEndpoint.fromJSON(object.listener) : undefined,
+      destination: isSet(object.destination) ? PortForwardEndpoint.fromJSON(object.destination) : undefined,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : undefined,
     };
   },
 
   toJSON(message: CreatePortForwardRequest): unknown {
     const obj: any = {};
-    if (message.remote_port !== 0) {
-      obj.remote_port = Math.round(message.remote_port);
-    }
-    if (message.local_port !== undefined) {
-      obj.local_port = Math.round(message.local_port);
-    }
     if (message.protocol !== undefined) {
       obj.protocol = message.protocol;
     }
     if (message.label !== undefined) {
       obj.label = message.label;
+    }
+    if (message.listener !== undefined) {
+      obj.listener = PortForwardEndpoint.toJSON(message.listener);
+    }
+    if (message.destination !== undefined) {
+      obj.destination = PortForwardEndpoint.toJSON(message.destination);
+    }
+    if (message.enabled !== undefined) {
+      obj.enabled = message.enabled;
     }
     return obj;
   },
@@ -1625,10 +1659,15 @@ export const CreatePortForwardRequest: MessageFns<CreatePortForwardRequest> = {
   },
   fromPartial<I extends Exact<DeepPartial<CreatePortForwardRequest>, I>>(object: I): CreatePortForwardRequest {
     const message = createBaseCreatePortForwardRequest();
-    message.remote_port = object.remote_port ?? 0;
-    message.local_port = object.local_port ?? undefined;
     message.protocol = object.protocol ?? undefined;
     message.label = object.label ?? undefined;
+    message.listener = (object.listener !== undefined && object.listener !== null)
+      ? PortForwardEndpoint.fromPartial(object.listener)
+      : undefined;
+    message.destination = (object.destination !== undefined && object.destination !== null)
+      ? PortForwardEndpoint.fromPartial(object.destination)
+      : undefined;
+    message.enabled = object.enabled ?? undefined;
     return message;
   },
 };
@@ -3830,6 +3869,8 @@ function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
     processes: [],
     observation: undefined,
     plugin_observations: [],
+    control_directory: undefined,
+    log_directory: undefined,
   };
 }
 
@@ -3861,6 +3902,8 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
       plugin_observations: globalThis.Array.isArray(object?.plugin_observations)
         ? object.plugin_observations.map((e: any) => PluginRuntimeObservationDTO.fromJSON(e))
         : [],
+      control_directory: isSet(object.control_directory) ? globalThis.String(object.control_directory) : undefined,
+      log_directory: isSet(object.log_directory) ? globalThis.String(object.log_directory) : undefined,
     };
   },
 
@@ -3905,6 +3948,12 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     if (message.plugin_observations?.length) {
       obj.plugin_observations = message.plugin_observations.map((e) => PluginRuntimeObservationDTO.toJSON(e));
     }
+    if (message.control_directory !== undefined) {
+      obj.control_directory = message.control_directory;
+    }
+    if (message.log_directory !== undefined) {
+      obj.log_directory = message.log_directory;
+    }
     return obj;
   },
 
@@ -3929,6 +3978,8 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
       : undefined;
     message.plugin_observations = object.plugin_observations?.map((e) => PluginRuntimeObservationDTO.fromPartial(e)) ||
       [];
+    message.control_directory = object.control_directory ?? undefined;
+    message.log_directory = object.log_directory ?? undefined;
     return message;
   },
 };
@@ -4505,6 +4556,129 @@ export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
     message.truncated = object.truncated ?? undefined;
     message.limit = object.limit ?? 0;
     message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceIdentityMappingDTO(): WorkspaceIdentityMappingDTO {
+  return { legacy_workspace_id: "", gateway_id: "", workspace_id: "" };
+}
+
+export const WorkspaceIdentityMappingDTO: MessageFns<WorkspaceIdentityMappingDTO> = {
+  fromJSON(object: any): WorkspaceIdentityMappingDTO {
+    return {
+      legacy_workspace_id: isSet(object.legacy_workspace_id) ? globalThis.String(object.legacy_workspace_id) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+    };
+  },
+
+  toJSON(message: WorkspaceIdentityMappingDTO): unknown {
+    const obj: any = {};
+    if (message.legacy_workspace_id !== "") {
+      obj.legacy_workspace_id = message.legacy_workspace_id;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceIdentityMappingDTO>, I>>(base?: I): WorkspaceIdentityMappingDTO {
+    return WorkspaceIdentityMappingDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceIdentityMappingDTO>, I>>(object: I): WorkspaceIdentityMappingDTO {
+    const message = createBaseWorkspaceIdentityMappingDTO();
+    message.legacy_workspace_id = object.legacy_workspace_id ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceIdentityRecoveryDTO(): WorkspaceIdentityRecoveryDTO {
+  return { format_version: 0, migration_id: "", registry_gateway_id: "", mappings: [] };
+}
+
+export const WorkspaceIdentityRecoveryDTO: MessageFns<WorkspaceIdentityRecoveryDTO> = {
+  fromJSON(object: any): WorkspaceIdentityRecoveryDTO {
+    return {
+      format_version: isSet(object.format_version) ? globalThis.Number(object.format_version) : 0,
+      migration_id: isSet(object.migration_id) ? globalThis.String(object.migration_id) : "",
+      registry_gateway_id: isSet(object.registry_gateway_id) ? globalThis.String(object.registry_gateway_id) : "",
+      mappings: globalThis.Array.isArray(object?.mappings)
+        ? object.mappings.map((e: any) => WorkspaceIdentityMappingDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: WorkspaceIdentityRecoveryDTO): unknown {
+    const obj: any = {};
+    if (message.format_version !== 0) {
+      obj.format_version = Math.round(message.format_version);
+    }
+    if (message.migration_id !== "") {
+      obj.migration_id = message.migration_id;
+    }
+    if (message.registry_gateway_id !== "") {
+      obj.registry_gateway_id = message.registry_gateway_id;
+    }
+    if (message.mappings?.length) {
+      obj.mappings = message.mappings.map((e) => WorkspaceIdentityMappingDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceIdentityRecoveryDTO>, I>>(base?: I): WorkspaceIdentityRecoveryDTO {
+    return WorkspaceIdentityRecoveryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceIdentityRecoveryDTO>, I>>(object: I): WorkspaceIdentityRecoveryDTO {
+    const message = createBaseWorkspaceIdentityRecoveryDTO();
+    message.format_version = object.format_version ?? 0;
+    message.migration_id = object.migration_id ?? "";
+    message.registry_gateway_id = object.registry_gateway_id ?? "";
+    message.mappings = object.mappings?.map((e) => WorkspaceIdentityMappingDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayClientRecoveryDTO(): GatewayClientRecoveryDTO {
+  return { gateway_id: "", workspace_identity: undefined };
+}
+
+export const GatewayClientRecoveryDTO: MessageFns<GatewayClientRecoveryDTO> = {
+  fromJSON(object: any): GatewayClientRecoveryDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_identity: isSet(object.workspace_identity)
+        ? WorkspaceIdentityRecoveryDTO.fromJSON(object.workspace_identity)
+        : undefined,
+    };
+  },
+
+  toJSON(message: GatewayClientRecoveryDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_identity !== undefined) {
+      obj.workspace_identity = WorkspaceIdentityRecoveryDTO.toJSON(message.workspace_identity);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayClientRecoveryDTO>, I>>(base?: I): GatewayClientRecoveryDTO {
+    return GatewayClientRecoveryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayClientRecoveryDTO>, I>>(object: I): GatewayClientRecoveryDTO {
+    const message = createBaseGatewayClientRecoveryDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_identity = (object.workspace_identity !== undefined && object.workspace_identity !== null)
+      ? WorkspaceIdentityRecoveryDTO.fromPartial(object.workspace_identity)
+      : undefined;
     return message;
   },
 };
@@ -5944,6 +6118,8 @@ function createBaseGatewayManagementTargetDTO(): GatewayManagementTargetDTO {
     connection_kind: "",
     gateway_connection_id: undefined,
     connection_error: undefined,
+    source_owner: undefined,
+    remote_gateway_port: undefined,
   };
 }
 
@@ -5957,6 +6133,10 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
         ? globalThis.String(object.gateway_connection_id)
         : undefined,
       connection_error: isSet(object.connection_error) ? globalThis.String(object.connection_error) : undefined,
+      source_owner: isSet(object.source_owner) ? globalThis.String(object.source_owner) : undefined,
+      remote_gateway_port: isSet(object.remote_gateway_port)
+        ? globalThis.Number(object.remote_gateway_port)
+        : undefined,
     };
   },
 
@@ -5977,6 +6157,12 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
     if (message.connection_error !== undefined) {
       obj.connection_error = message.connection_error;
     }
+    if (message.source_owner !== undefined) {
+      obj.source_owner = message.source_owner;
+    }
+    if (message.remote_gateway_port !== undefined) {
+      obj.remote_gateway_port = Math.round(message.remote_gateway_port);
+    }
     return obj;
   },
 
@@ -5990,6 +6176,8 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
     message.connection_kind = object.connection_kind ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     message.connection_error = object.connection_error ?? undefined;
+    message.source_owner = object.source_owner ?? undefined;
+    message.remote_gateway_port = object.remote_gateway_port ?? undefined;
     return message;
   },
 };
@@ -6232,66 +6420,37 @@ export const GatewayWorkspaceListDTO: MessageFns<GatewayWorkspaceListDTO> = {
 
 function createBasePortForwardDTO(): PortForwardDTO {
   return {
-    gateway_id: "",
     forward_id: "",
-    workspace_id: "",
-    connection_id: "",
-    remote_host: "",
-    remote_port: 0,
-    local_host: "",
-    local_port: 0,
     protocol: "",
     label: "",
     status: "",
     error: "",
-    local_url: "",
+    gateway_id: "",
+    listener: undefined,
+    destination: undefined,
+    enabled: false,
   };
 }
 
 export const PortForwardDTO: MessageFns<PortForwardDTO> = {
   fromJSON(object: any): PortForwardDTO {
     return {
-      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
       forward_id: isSet(object.forward_id) ? globalThis.String(object.forward_id) : "",
-      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      connection_id: isSet(object.connection_id) ? globalThis.String(object.connection_id) : "",
-      remote_host: isSet(object.remote_host) ? globalThis.String(object.remote_host) : "",
-      remote_port: isSet(object.remote_port) ? globalThis.Number(object.remote_port) : 0,
-      local_host: isSet(object.local_host) ? globalThis.String(object.local_host) : "",
-      local_port: isSet(object.local_port) ? globalThis.Number(object.local_port) : 0,
       protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : "",
       label: isSet(object.label) ? globalThis.String(object.label) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
-      local_url: isSet(object.local_url) ? globalThis.String(object.local_url) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      listener: isSet(object.listener) ? PortForwardEndpoint.fromJSON(object.listener) : undefined,
+      destination: isSet(object.destination) ? PortForwardEndpoint.fromJSON(object.destination) : undefined,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
     };
   },
 
   toJSON(message: PortForwardDTO): unknown {
     const obj: any = {};
-    if (message.gateway_id !== "") {
-      obj.gateway_id = message.gateway_id;
-    }
     if (message.forward_id !== "") {
       obj.forward_id = message.forward_id;
-    }
-    if (message.workspace_id !== "") {
-      obj.workspace_id = message.workspace_id;
-    }
-    if (message.connection_id !== "") {
-      obj.connection_id = message.connection_id;
-    }
-    if (message.remote_host !== "") {
-      obj.remote_host = message.remote_host;
-    }
-    if (message.remote_port !== 0) {
-      obj.remote_port = Math.round(message.remote_port);
-    }
-    if (message.local_host !== "") {
-      obj.local_host = message.local_host;
-    }
-    if (message.local_port !== 0) {
-      obj.local_port = Math.round(message.local_port);
     }
     if (message.protocol !== "") {
       obj.protocol = message.protocol;
@@ -6305,8 +6464,17 @@ export const PortForwardDTO: MessageFns<PortForwardDTO> = {
     if (message.error !== "") {
       obj.error = message.error;
     }
-    if (message.local_url !== "") {
-      obj.local_url = message.local_url;
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.listener !== undefined) {
+      obj.listener = PortForwardEndpoint.toJSON(message.listener);
+    }
+    if (message.destination !== undefined) {
+      obj.destination = PortForwardEndpoint.toJSON(message.destination);
+    }
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
     }
     return obj;
   },
@@ -6316,31 +6484,32 @@ export const PortForwardDTO: MessageFns<PortForwardDTO> = {
   },
   fromPartial<I extends Exact<DeepPartial<PortForwardDTO>, I>>(object: I): PortForwardDTO {
     const message = createBasePortForwardDTO();
-    message.gateway_id = object.gateway_id ?? "";
     message.forward_id = object.forward_id ?? "";
-    message.workspace_id = object.workspace_id ?? "";
-    message.connection_id = object.connection_id ?? "";
-    message.remote_host = object.remote_host ?? "";
-    message.remote_port = object.remote_port ?? 0;
-    message.local_host = object.local_host ?? "";
-    message.local_port = object.local_port ?? 0;
     message.protocol = object.protocol ?? "";
     message.label = object.label ?? "";
     message.status = object.status ?? "";
     message.error = object.error ?? "";
-    message.local_url = object.local_url ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.listener = (object.listener !== undefined && object.listener !== null)
+      ? PortForwardEndpoint.fromPartial(object.listener)
+      : undefined;
+    message.destination = (object.destination !== undefined && object.destination !== null)
+      ? PortForwardEndpoint.fromPartial(object.destination)
+      : undefined;
+    message.enabled = object.enabled ?? false;
     return message;
   },
 };
 
 function createBasePortForwardListDTO(): PortForwardListDTO {
-  return { items: [] };
+  return { items: [], gateway_id: "" };
 }
 
 export const PortForwardListDTO: MessageFns<PortForwardListDTO> = {
   fromJSON(object: any): PortForwardListDTO {
     return {
       items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => PortForwardDTO.fromJSON(e)) : [],
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
     };
   },
 
@@ -6348,6 +6517,9 @@ export const PortForwardListDTO: MessageFns<PortForwardListDTO> = {
     const obj: any = {};
     if (message.items?.length) {
       obj.items = message.items.map((e) => PortForwardDTO.toJSON(e));
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
     }
     return obj;
   },
@@ -6358,6 +6530,87 @@ export const PortForwardListDTO: MessageFns<PortForwardListDTO> = {
   fromPartial<I extends Exact<DeepPartial<PortForwardListDTO>, I>>(object: I): PortForwardListDTO {
     const message = createBasePortForwardListDTO();
     message.items = object.items?.map((e) => PortForwardDTO.fromPartial(e)) || [];
+    message.gateway_id = object.gateway_id ?? "";
+    return message;
+  },
+};
+
+function createBasePortForwardHostDTO(): PortForwardHostDTO {
+  return { host_id: "", label: "", description: "", kind: "" };
+}
+
+export const PortForwardHostDTO: MessageFns<PortForwardHostDTO> = {
+  fromJSON(object: any): PortForwardHostDTO {
+    return {
+      host_id: isSet(object.host_id) ? globalThis.String(object.host_id) : "",
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+      description: isSet(object.description) ? globalThis.String(object.description) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+    };
+  },
+
+  toJSON(message: PortForwardHostDTO): unknown {
+    const obj: any = {};
+    if (message.host_id !== "") {
+      obj.host_id = message.host_id;
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
+    }
+    if (message.description !== "") {
+      obj.description = message.description;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PortForwardHostDTO>, I>>(base?: I): PortForwardHostDTO {
+    return PortForwardHostDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PortForwardHostDTO>, I>>(object: I): PortForwardHostDTO {
+    const message = createBasePortForwardHostDTO();
+    message.host_id = object.host_id ?? "";
+    message.label = object.label ?? "";
+    message.description = object.description ?? "";
+    message.kind = object.kind ?? "";
+    return message;
+  },
+};
+
+function createBasePortForwardHostsDTO(): PortForwardHostsDTO {
+  return { gateway_id: "", items: [] };
+}
+
+export const PortForwardHostsDTO: MessageFns<PortForwardHostsDTO> = {
+  fromJSON(object: any): PortForwardHostsDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => PortForwardHostDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PortForwardHostsDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => PortForwardHostDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PortForwardHostsDTO>, I>>(base?: I): PortForwardHostsDTO {
+    return PortForwardHostsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PortForwardHostsDTO>, I>>(object: I): PortForwardHostsDTO {
+    const message = createBasePortForwardHostsDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.items = object.items?.map((e) => PortForwardHostDTO.fromPartial(e)) || [];
     return message;
   },
 };

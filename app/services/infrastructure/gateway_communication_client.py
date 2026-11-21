@@ -8,10 +8,10 @@ from copy import copy
 from dataclasses import asdict
 
 import httpx
+from boxteam_plugin_sdk.request_context import require_current_request_id
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
 from app.core.resource_uri import parse_resource_uri
-from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.federation.errors import FEDERATION_ERROR_CODES
 from app.services.business.communication.addresses import (

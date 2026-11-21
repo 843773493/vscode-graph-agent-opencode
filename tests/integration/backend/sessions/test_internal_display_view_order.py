@@ -50,9 +50,9 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from app.services.infrastructure.rollout_history.errors import InvalidTurnCursorError
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
-from app.services.infrastructure.turn_history.models import InvalidTurnCursorError
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.support.rollout.view_mutations import (
     mutate_view_members,
     mutate_view_members_many,

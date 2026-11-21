@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol
 
 from app.abstractions.workspace_resources import (
     ResourceRequestError,
@@ -64,7 +64,7 @@ class BrowserRequestError(ResourceRequestError):
 
 
 
-class BrowserTransport(ResourceTransport):
+class BrowserTransport(ResourceTransport, Protocol):
     async def create_browser(
         self, *, browser_id: str, owner_revision: int, title: str, url: str,
         viewport: dict[str, int] | None = None, device_profile: str | None = None,

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 from typing import Literal
 
+from app.core.text_diff import iter_unified_diff
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
         ContextSourceDelta,
 )
@@ -15,51 +15,52 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceDeltaMixin:
-        def _queue_delta(self, state: SourceState) -> None:
+        def _queue_source(self, state: SourceState) -> None:
             if state.latest_revision is None or state.latest_content is None:
                 raise RuntimeError("Context source 缺少 latest revision/content")
-            if state.pending_kind in {"activation", "rebuild"}:
-                self._pending[state.source_id] = ContextSourceDelta(
-                    source_id=state.source_id,
-                    source_name=state.name,
-                    source_kind=state.source_kind,
-                    revision=state.latest_revision,
-                    previous_revision=state.latest_visible_committed_revision,
-                    content=state.latest_content,
-                    content_hash=_revision(state.latest_content),
-                    kind=state.pending_kind,
-                    observation_provenance=tuple(state.observed_revisions),
-                    selection_sequence=state.selection_sequence,
-                    control_revision=state.persisted_state_revision,
-                )
+            # 从未向模型发布过的空来源没有需要激活或撤销的正文。
+            if state.latest_visible_committed_revision is None and not state.latest_content:
+                state.pending_kind = None
+                state.observed_revisions.clear()
+                self._pending.pop(state.source_id, None)
                 return
+            if (
+                state.pending_kind not in {"activation", "rebuild"}
+                and state.latest_revision == state.latest_visible_committed_revision
+                and state.latest_content == state.latest_visible_committed_content
+            ):
+                state.latest_content = state.latest_visible_committed_content
+                state.pending_kind = None
+                state.observed_revisions.clear()
+                self._pending.pop(state.source_id, None)
+                return
+            # 观察只合并来源标记；中间版本不会发给模型，不提前计算其 diff。
+            self._pending[state.source_id] = None
+
+        @staticmethod
+        def _build_source_delta(state: SourceState) -> ContextSourceDelta:
+            if state.latest_revision is None or state.latest_content is None:
+                raise RuntimeError("Context source 缺少 latest revision/content")
+            content = state.latest_content
             previous_content = state.latest_visible_committed_content
-            if previous_content is None:
-                content = state.latest_content
-                kind: Literal["activation", "delta", "rebuild"] = state.pending_kind or "activation"
-            else:
+            kind: Literal["activation", "delta", "rebuild"] = state.pending_kind or (
+                "activation" if previous_content is None else "delta"
+            )
+            if kind not in {"activation", "rebuild"} and previous_content is not None:
                 diff = "".join(
-                    # difflib 不为缺少行尾的内容补分隔；用标准标记避免 -旧+新粘连。
+                    # diff 不为缺少行尾的内容补分隔；用标准标记避免 -旧+新粘连。
                     line if line.endswith(("\n", "\r")) else line + "\n\\ No newline at end of file\n"
-                    for line in difflib.unified_diff(
-                        previous_content.splitlines(keepends=True),
-                        state.latest_content.splitlines(keepends=True),
+                    for line in iter_unified_diff(
+                        previous_content,
+                        state.latest_content,
                         fromfile=f"{state.name}@{state.latest_visible_committed_revision}",
                         tofile=f"{state.name}@{state.latest_revision}",
                     )
                 )
-                if not diff and state.latest_revision == state.latest_visible_committed_revision:
-                    state.latest_revision = state.latest_visible_committed_revision
-                    state.latest_content = state.latest_visible_committed_content
-                    state.pending_kind = None
-                    state.observed_revisions.clear()
-                    self._pending.pop(state.source_id, None)
-                    return
                 # semantic revision 与正文 hash 独立；同正文的新 owner revision
                 # 仍需在下一次 seal 精确应用，不能回退到旧 revision。
                 content = diff or state.latest_content
-                kind = state.pending_kind or "delta"
-            self._pending[state.source_id] = ContextSourceDelta(
+            return ContextSourceDelta(
                 source_id=state.source_id,
                 source_name=state.name,
                 source_kind=state.source_kind,

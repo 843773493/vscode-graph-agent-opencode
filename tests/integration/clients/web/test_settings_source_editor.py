@@ -25,6 +25,8 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
+from tests.support.workspaces import clear_test_provider_api_keys
 
 
 @pytest.mark.asyncio
@@ -32,6 +34,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    prepared_developer_tools_package: Path,
 ) -> None:
     prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
     assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
@@ -43,9 +46,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     ports = integration_port_block_for_file(Path(request.node.fspath))
     config_path = Path(integration_workspace_config_path)
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in configuration["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "source-editor-unused-key"
+    clear_test_provider_api_keys(configuration)
     configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "source-settings-package.zip"
@@ -57,8 +58,10 @@ async def test_settings_source_editor_preserves_owner_and_draft(
                     "password": {"type": "string", "writeOnly": True}}}}}]}
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
-        port=ports.port(20), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+        port=ports.port(20), boxteam_home=gateway_home,
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(assets)})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
@@ -89,6 +92,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["readonly"] and result["frozen_owner"]
         assert result["original_settings_form_saved"] and result["draft_restored_after_reload"]
         assert result["plugin_schema_saved_without_runtime"] and result["form_and_json_share_draft"]
+        assert result["grid_kept_shared_dirty_source"]
         assert result["resource_browse_only"] and result["resource_open_and_save"] and result["resource_readonly"]
         assert result["configuration_uri_opened"]
         assert len(result["configurationReferences"]) == 2

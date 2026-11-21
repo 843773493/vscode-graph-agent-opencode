@@ -12,11 +12,29 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 )
 
 _CARRIERS_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "migrations/history_message_carriers.sql",
-) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/content_carrier_replacements.sql")
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/history_message_carriers.sql",
+) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/history/content_carrier_replacements.sql")
 _SURVIVOR_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/survivor.sql",
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/survivor.sql",
 )
+# 无模型 scope 的 item 各自独立；其余用 raw/scoped ID 缩小候选后核对权威还原身份。
+# 较早载体必须仍在当前 view 存活，查重范围不能随本页的 lower_ordinal 截断。
+_TOOL_REPRESENTATIVE_SQL = """
+(membership.part_scope IS NULL OR NOT EXISTS (
+    SELECT 1 FROM item_catalog AS previous INDEXED BY item_catalog_model_tool_index
+    CROSS JOIN carriers AS prior ON prior.item_id = previous.item_id
+    WHERE (json_extract(previous.projection_manifest_json, '$.projection_identity.model_call_id') = membership.part_scope
+        OR json_extract(previous.projection_manifest_json, '$.projection_identity.model_call_id') IS NULL)
+        AND previous.semantic_kind = 'tool_result' AND previous.turn_id = item.turn_id
+        AND previous.tool_call_id IN (
+            search_tool_call_id(membership.part_scope, item.tool_call_id),
+            membership.part_scope || ':tool-call:' || search_tool_call_id(membership.part_scope, item.tool_call_id)
+        )
+        AND previous.item_sequence < item.item_sequence AND prior.part_scope = membership.part_scope
+        AND search_tool_call_id(prior.part_scope, previous.tool_call_id) =
+            search_tool_call_id(membership.part_scope, item.tool_call_id)
+))
+"""
 
 
 def message_search_candidates(
@@ -37,30 +55,22 @@ def message_search_candidates(
     connection.create_function("search_tool_call_id", 2, lambda model, call:
         provider_tool_call_id(ItemProjectionIdentity(model_call_id=model), call))
     tools = category == "tool_result"
-    candidates = (
-        ", ranked_tools AS MATERIALIZED (SELECT membership.*, ROW_NUMBER() OVER ("
-        "PARTITION BY item.turn_id, COALESCE(membership.part_scope, item.item_id), "
-        "search_tool_call_id(membership.part_scope,item.tool_call_id) "
-        "ORDER BY item.item_sequence) AS result_rank FROM carriers AS membership "
-        "JOIN item_catalog AS item ON item.item_id=membership.item_id "
-        "WHERE item.semantic_kind='tool_result') "
-        if tools else ""
-    )
     try:
         return connection.execute(
-            _CARRIERS_SQL + candidates +
+            _CARRIERS_SQL +
             "SELECT membership.logical_item_ordinal,item.item_id,item.turn_id,item.jsonl_length "
-            f"FROM {'ranked_tools' if tools else 'carriers'} AS membership "
-            "JOIN item_catalog AS item ON item.item_id=membership.item_id "
+            "FROM carriers AS membership "
+            "CROSS JOIN item_catalog AS item ON item.item_id=membership.item_id "
             "JOIN context_view_turns AS cvt ON cvt.view_id=membership.view_id AND cvt.turn_id=item.turn_id "
             "WHERE membership.logical_item_ordinal>=:lower_ordinal "
-            + ("AND membership.result_rank=1 " if tools else
+            + (f"AND item.semantic_kind='tool_result' AND {_TOOL_REPRESENTATIVE_SQL} " if tools else
                "AND item.semantic_kind IN ('user_input','assistant_output') "
                "AND item.wire_role IN ('user','assistant') "
                "AND item.payload_kind IN ('text','structured_content') ") +
             f"AND {VISIBLE_NORMAL_TURN_PREDICATE} AND {_SURVIVOR_SQL} "
             + ("AND item.item_id=:item_id " if item_id is not None else "")
-            + "ORDER BY membership.logical_item_ordinal LIMIT :limit",
+            # 成员块按逻辑序号有序发布；沿块内索引取页，避免先检查全部候选再全量排序。
+            + "ORDER BY membership.block_ordinal,membership.logical_item_ordinal LIMIT :limit",
             {"view_id": view_id, "lower_ordinal": lower_ordinal, "item_id": item_id, "limit": limit},
         ).fetchall()
     except sqlite3.OperationalError as error:
@@ -89,9 +99,12 @@ def tool_result_metadata(
         rows = connection.execute(
             "SELECT item.item_id,item.turn_id,item.tool_call_id,"
             "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'),"
-            "item.status,COALESCE((SELECT call.tool_name FROM tool_calls call "
-            "JOIN messages assistant ON assistant.message_sequence=call.assistant_message_sequence "
-            "JOIN item_catalog source ON source.jsonl_offset=assistant.jsonl_offset AND source.jsonl_length=assistant.jsonl_length "
+            # 先按模型调用定位声明；从 Turn 消息起扫会对本页每条结果重扫全部调用历史。
+            "item.status,COALESCE((SELECT call.tool_name "
+            "FROM item_catalog source INDEXED BY item_catalog_model_tool_index "
+            "CROSS JOIN messages assistant ON assistant.jsonl_offset=source.jsonl_offset "
+            "AND assistant.jsonl_length=source.jsonl_length "
+            "CROSS JOIN tool_calls call ON call.assistant_message_sequence=assistant.message_sequence "
             "WHERE assistant.turn_id=item.turn_id AND "
             "json_extract(source.projection_manifest_json,'$.projection_identity.model_call_id') IS "
             "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id') "

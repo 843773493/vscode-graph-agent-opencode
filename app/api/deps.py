@@ -9,48 +9,43 @@ from starlette.requests import HTTPConnection
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
-from app.core.trace_middleware import (
-    get_request_id,  # noqa: F401
-)
 from app.core.workspace_identity import validate_workspace_id
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
+from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
-from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_navigation.service import SessionCatalogService
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
-from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.log_service import LogService
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -68,9 +63,7 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
-from app.services.infrastructure.tool_service import ToolService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -83,7 +76,15 @@ from app.services.orchestration.agent_execution_service import AgentExecutionSer
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
+from app.services.orchestration.session_stop import SessionStopService
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from app.tool_testing.service import ToolTestService
 
 
@@ -95,17 +96,17 @@ class _AppContainerProtocol(Protocol):
     config_service: ConfigService
     agent_service: AgentService
     artifact_service: ArtifactService
-    event_service: EventService
     job_service: JobServiceProtocol
     agent_execution_service: AgentExecutionService
     message_service: MessageService
+    user_question_service: UserQuestionService
     attachment_blob_store: AttachmentBlobStore
-    runtime_service: RuntimeService
+    runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
     persistent_task_runtime: PersistentTaskRuntime
     persistent_task_service: PersistentTaskService
-    session_interrupt_service: SessionInterruptService
-    session_skill_tracking_service: SessionSkillTrackingService
+    session_stop_service: SessionStopService
+    session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -117,16 +118,16 @@ class _AppContainerProtocol(Protocol):
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
     session_service: SessionService
-    llm_request_log_service: LLMRequestLogService
-    log_service: LogService
-    tool_service: ToolService
+    llm_request_log_reader: LLMRequestLogReader
+    html_snapshot_store: HtmlSnapshotStore
+    agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
     workspace_service: WorkspaceService
     resource_navigation: ResourceNavigation
     workspace_file_watch_service: WorkspaceFileWatchService
-    file_tree_settings_service: FileTreeSettingsService
+    file_tree_shortcut_store: FileTreeShortcutStore
     node_debug_service: NodeDebugService
-    session_orchestrator: SessionOrchestrator
+    session_orchestrator: SessionMessageOrchestrator
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
     session_communication_service: SessionCommunicationService
@@ -263,10 +264,6 @@ def get_artifact_service(request: Request) -> ArtifactService:
     return _require_service(request, "artifact_service", ArtifactService, "ArtifactService 尚未在应用启动阶段初始化")
 
 
-def get_event_service(request: Request) -> EventService:
-    return _require_service(request, "event_service", EventService, "EventService 尚未在应用启动阶段初始化")
-
-
 def get_job_service(request: Request) -> JobServiceProtocol:
     return _require_service(request, "job_service", JobServiceProtocol, "JobService 尚未在应用启动阶段初始化")
 
@@ -283,6 +280,10 @@ def get_node_debug_service(request: HTTPConnection) -> NodeDebugService:
     return _require_service(request, "node_debug_service", NodeDebugService, "NodeDebugService 尚未在应用启动阶段初始化")
 
 
+def get_user_question_service(request: Request) -> UserQuestionService:
+    return get_workspace_container(request).user_question_service
+
+
 def get_message_service(request: Request) -> MessageService:
     return _require_service(request, "message_service", MessageService, "MessageService 尚未在应用启动阶段初始化")
 
@@ -291,8 +292,8 @@ def get_attachment_blob_store(request: Request) -> AttachmentBlobStore:
     return _require_service(request, "attachment_blob_store", AttachmentBlobStore, "AttachmentBlobStore 尚未在应用启动阶段初始化")
 
 
-def get_runtime_service(request: Request) -> RuntimeService:
-    return _require_service(request, "runtime_service", RuntimeService, "RuntimeService 尚未在应用启动阶段初始化")
+def get_runtime_service(request: Request) -> WorkspaceRuntimeLifecycleService:
+    return _require_service(request, "runtime_service", WorkspaceRuntimeLifecycleService, "WorkspaceRuntimeLifecycleService 尚未在应用启动阶段初始化")
 
 
 def get_goal_service(request: Request) -> SessionGoalService:
@@ -303,12 +304,12 @@ def get_persistent_task_runtime(request: Request) -> PersistentTaskRuntime:
     return _require_service(request, "persistent_task_runtime", PersistentTaskRuntime, "PersistentTaskRuntime 尚未在应用启动阶段初始化")
 
 
-def get_session_interrupt_service(request: Request) -> SessionInterruptService:
-    return _require_service(request, "session_interrupt_service", SessionInterruptService, "SessionInterruptService 尚未在应用启动阶段初始化")
+def get_session_stop_service(request: Request) -> SessionStopService:
+    return _require_service(request, "session_stop_service", SessionStopService, "SessionStopService 尚未在应用启动阶段初始化")
 
 
-def get_session_skill_tracking_service(request: Request) -> SessionSkillTrackingService:
-    return _require_service(request, "session_skill_tracking_service", SessionSkillTrackingService, "SessionSkillTrackingService 尚未在应用启动阶段初始化")
+def get_session_skill_untrack_service(request: Request) -> SessionSkillUntrackService:
+    return _require_service(request, "session_skill_untrack_service", SessionSkillUntrackService, "SessionSkillUntrackService 尚未在应用启动阶段初始化")
 
 
 def get_message_stream_store(request: Request) -> MessageStreamStore:
@@ -351,20 +352,20 @@ def get_session_turn_history_service(request: Request) -> SessionTurnHistoryServ
     return _require_service(request, "session_turn_history_service", SessionTurnHistoryService, "SessionTurnHistoryService 尚未在应用启动阶段初始化")
 
 
-def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
-    return _require_service(request, "llm_request_log_service", LLMRequestLogService, "LLMRequestLogService 尚未在应用启动阶段初始化")
+def get_llm_request_log_reader(request: Request) -> LLMRequestLogReader:
+    return _require_service(request, "llm_request_log_reader", LLMRequestLogReader, "LLMRequestLogReader 尚未在应用启动阶段初始化")
 
 
 def get_trace_event_store(request: Request) -> TraceEventStore:
     return _require_service(request, "trace_event_store", TraceEventStore, "TraceEventStore 尚未在应用启动阶段初始化")
 
 
-def get_log_service(request: Request) -> LogService:
-    return _require_service(request, "log_service", LogService, "LogService 尚未在应用启动阶段初始化")
+def get_html_snapshot_store(request: Request) -> HtmlSnapshotStore:
+    return _require_service(request, "html_snapshot_store", HtmlSnapshotStore, "HtmlSnapshotStore 尚未在应用启动阶段初始化")
 
 
-def get_tool_service(request: Request) -> ToolService:
-    return _require_service(request, "tool_service", ToolService, "ToolService 尚未在应用启动阶段初始化")
+def get_agent_tool_settings_service(request: Request) -> AgentToolSettingsService:
+    return _require_service(request, "agent_tool_settings_service", AgentToolSettingsService, "AgentToolSettingsService 尚未在应用启动阶段初始化")
 
 
 def get_tool_test_service(request: Request) -> ToolTestService:
@@ -409,8 +410,8 @@ def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchServ
     return _require_service(request, "workspace_file_watch_service", WorkspaceFileWatchService, "WorkspaceFileWatchService 尚未在应用启动阶段初始化")
 
 
-def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
-    return _require_service(request, "file_tree_settings_service", FileTreeSettingsService, "FileTreeSettingsService 尚未在应用启动阶段初始化")
+def get_file_tree_shortcut_store(request: Request) -> FileTreeShortcutStore:
+    return _require_service(request, "file_tree_shortcut_store", FileTreeShortcutStore, "FileTreeShortcutStore 尚未在应用启动阶段初始化")
 
 
 def get_session_communication_service(request: Request) -> SessionCommunicationService:
@@ -421,8 +422,8 @@ def get_team_service(request: Request) -> TeamCoordinationService:
     return _require_service(request, "team_service", TeamCoordinationService, "TeamCoordinationService 尚未初始化")
 
 
-def get_session_orchestrator(request: Request) -> SessionOrchestrator:
-    return _require_service(request, "session_orchestrator", SessionOrchestrator, "SessionOrchestrator 尚未在应用启动阶段初始化")
+def get_session_orchestrator(request: Request) -> SessionMessageOrchestrator:
+    return _require_service(request, "session_orchestrator", SessionMessageOrchestrator, "SessionMessageOrchestrator 尚未在应用启动阶段初始化")
 
 
 def get_persistent_task_service(request: Request) -> PersistentTaskService:

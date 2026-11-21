@@ -35,6 +35,19 @@ async def enable_developer_tools_plugins(
     """经 Gateway 正式配置与生命周期入口启用已准备的插件。"""
     if not plugin_ids or len(set(plugin_ids)) != len(plugin_ids) or set(plugin_ids) - {"terminal", "browser", "debugging"}:
         raise ValueError(f"开发工具插件列表无效: {plugin_ids}")
+    # 新建工作区会先由原 writer 导入默认绑定；等该创建动作结清后再冻结编辑基线。
+    async with asyncio.timeout(30):
+        while True:
+            status = await client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id})
+            status.raise_for_status()
+            configuration = next((item for item in status.json()["data"]["workspace_configurations"]
+                                  if item["workspace_id"] == workspace_id), None)
+            if configuration is not None:
+                if configuration["state"] == "ready":
+                    break
+                if configuration["state"] == "failed":
+                    raise RuntimeError(f"工作区插件初始配置失败: {configuration}")
+            await asyncio.sleep(0.1)
     headers = {"X-BoxTeam-Workspace-Id": workspace_id}
     source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
     loaded = await client.get(source_path, headers=headers)
@@ -56,7 +69,7 @@ async def enable_developer_tools_plugins(
         "expected_active_revision": document["active_revision"],
         "expected_active_digest": document["active_digest"], "idempotency_key": uuid4().hex,
     })
-    saved.raise_for_status()
+    assert saved.status_code == 200, saved.text
     if saved.json()["data"]["edit"]["state"] != "active":
         raise RuntimeError(f"Terminal 插件配置未生效: {saved.text}")
     async with asyncio.timeout(30):

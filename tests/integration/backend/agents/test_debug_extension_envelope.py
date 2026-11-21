@@ -33,6 +33,7 @@ from tests.integration.backend.agents.test_debug_prompt_flow import (
     _session_main_thread_id,
     _write_debug_fixture,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -104,10 +105,10 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     )
     message_response = await scripted_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]

@@ -16,7 +16,7 @@ describe("ComposerAgentControl", () => {
             model: "primary",
             tools: [],
             capabilities: [],
-            providers: [],
+            models: [],
             workspace_default: true,
           },
           {
@@ -26,7 +26,7 @@ describe("ComposerAgentControl", () => {
             model: "primary",
             tools: [],
             capabilities: [],
-            providers: [],
+            models: [],
             workspace_default: false,
           },
         ]}

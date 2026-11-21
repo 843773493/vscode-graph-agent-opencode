@@ -51,8 +51,8 @@ async def test_real_lock_permission_failure_is_visible_and_retry_preserves_histo
         session = created.json()["data"]
         assert session["workspace_id"] == active_owner["workspace_id"]
         session_id = session["session_id"]
-        updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
-        assert updated.status_code == 200 and updated.json()["data"]["current_provider_id"] == "primary", updated.text
+        updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "primary", "model_id": "default"}})
+        assert updated.status_code == 200 and updated.json()["data"]["current_model"] == {"provider_id": "primary", "model_id": "default"}, updated.text
         main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]

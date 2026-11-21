@@ -3,8 +3,32 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import ChatTurn, { areChatTurnPropsEqual, type ChatTurnProps } from "./ChatTurn";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
+import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
 describe("ChatTurn memo 比较", () => {
+  test("同 revision 新增来源标记不会被复用挡住，标记位于真实用户消息前", () => {
+    const previous = conversation("done");
+    previous.turnId = "turn-context";
+    previous.threadId = "thread-context";
+    previous.turnRevision = 1;
+    const next = { ...previous, responseParts: [...previous.responseParts!, {
+      part_id: "context-first", kind: "context_notice" as const, projection: "summary" as const,
+      source: { message_sequence: 0 }, context_model_call_id: "call-context",
+      context_content_ref: { kind: "sealed_contribution", session_id: "session", thread_id: "thread",
+        assembly_id: "assembly", contribution_id: "prompt" },
+      context_anchor: "before_user_message", context_before_item_id: "root-context", context_anchor_ordinal: 0,
+    }] };
+    expect(areChatTurnPropsEqual(chatTurnProps(previous), chatTurnProps(next))).toBe(false);
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<ChatTurn {...chatTurnProps(next)} />); });
+    try {
+      const nodes = renderer.root.findAll(node => typeof node.type === "string"
+        && (node.props["data-context-marker"] || node.props.className === "chat-user-row"));
+      expect(nodes.map(node => node.props["data-context-marker"] ?? "user")).toEqual(["context-first", "user"]);
+      expect(renderer.root.findAllByProps({ "data-context-marker": "context-first" })).toHaveLength(1);
+    } finally { act(() => renderer.unmount()); }
+  });
+
   test("历史回答点击携带展示 owner 与快照，同 Turn revision 更新绑定后不复用旧回调", () => {
     const value = conversation("done");
     value.turnId = "turn-visible-final";
@@ -23,22 +47,31 @@ describe("ChatTurn memo 比较", () => {
       clicks.push(selection);
     };
     let renderer: ReactTestRenderer;
+    let menu: ChatItemMenuRequest | undefined;
+    const render = (current: typeof value) => <ChatItemMenuContext.Provider value={request => { menu = request; }}>
+      <ChatTurn {...chatTurnProps(current)} onForkConversation={onForkConversation} />
+    </ChatItemMenuContext.Provider>;
+    const forkFromResponse = () => {
+      const source = { closest: () => null, getRootNode: () => ({}), ownerDocument: { getSelection: () => null } };
+      renderer!.root.findByProps({ "aria-label": "模型回复" }).props.onKeyDown({
+        key: "ContextMenu", target: source, currentTarget: source, preventDefault() {}, stopPropagation() {},
+      });
+      menu!.actions.find(action => action.id === "forkItem")!.run();
+    };
     act(() => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} onForkConversation={onForkConversation} />);
+      renderer = create(render(value));
     });
     expect(renderer!.root.findAllByProps({ className: "chat-user-row" })).toHaveLength(0);
-    const responseActions = renderer!.root.findByProps({ className: "chat-response-actions" });
-    expect(responseActions.findAllByType("button")[0]?.props["data-fork-item-id"])
-      .toBe("item-visible-final");
+    expect(renderer!.root.findAllByProps({ "data-fork-item-id": "item-visible-final" })).toHaveLength(0);
     act(() => {
-      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+      forkFromResponse();
     });
     const next = { ...value, sourceViewId: "view-next", sourceViewRevision: 9 };
     act(() => {
-      renderer!.update(<ChatTurn {...chatTurnProps(next)} onForkConversation={onForkConversation} />);
+      renderer!.update(render(next));
     });
     act(() => {
-      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+      forkFromResponse();
     });
     expect(clicks).toEqual([
       { workspaceId: "gw_test", sessionId: "ses_web_replay", threadId: "thread-display",

@@ -163,11 +163,11 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
             assert pending is not None
             changed = [delta for delta in pending.deltas if delta.source_id == source_id]
             assert len(changed) == 1
-            assert changed[0].previous_revision == produced[0].revision_token()
-            assert changed[0].revision == produced[1].revision_token()
+            assert changed[0].previous_revision == produced[0].revision
+            assert changed[0].revision == produced[1].revision
             state_before_retry = source_state()
-            assert state_before_retry.latest_visible_committed_revision == produced[0].revision_token()
-            assert state_before_retry.latest_revision == produced[1].revision_token()
+            assert state_before_retry.latest_visible_committed_revision == produced[0].revision
+            assert state_before_retry.latest_revision == produced[1].revision
             read_sources = manager.prepare_sources
             source_reads = 0
 
@@ -258,13 +258,13 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         if source.source_identity == source_id
     ]
     assert len(root_sources) == 1
-    assert root_sources[0].revision == produced[0].revision_token()
+    assert root_sources[0].revision == produced[0].revision
     assert case.compiled[0][0] == (session_id, thread_id)
     first_wire = first_snapshot.request_hash_preimage
     assert isinstance(first_wire, dict)
     assert len(case.model_requests) == 1
     assert canonical_json_bytes(case.model_requests[0]["messages"]) == canonical_json_bytes(first_wire["messages"])
-    assert source_state().latest_visible_committed_revision == produced[0].revision_token()
+    assert source_state().latest_visible_committed_revision == produced[0].revision
 
     # 写入正式测试工作区的真实 source 层，由 ConfigService 发布并激活快照。
     config_path = case.runner.workspace / ".boxteam" / "workspace.jsonc"
@@ -326,7 +326,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         before_identity, after_identity = json.loads(produced[0].content), json.loads(produced[1].content)
         assert after_identity["text"] == new_content
         assert after_identity["runtime_facts"] == before_identity["runtime_facts"]
-        assert produced[1].revision_token() != produced[0].revision_token()
+        assert produced[1].revision != produced[0].revision
     assert case.tracker.snapshot(session_id, thread_id).generation == first_generation + 1
     assert case.compiled[1][0] == (session_id, thread_id)
     assert case.compiled[1][1] is not case.compiled[0][1]
@@ -344,7 +344,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     assert second_binding.previous_assembly_id == first_snapshot.assembly_id
     changed_frames = [
         frame for frame in second_binding.prefix.state.frames
-        if any(ref.source_identity == source_id and ref.source_revision == produced[1].revision_token()
+        if any(ref.source_identity == source_id and ref.source_revision == produced[1].revision
                for ref in frame.item_refs)
     ]
     assert len(changed_frames) == 1 and changed_frames[0].role == "user"
@@ -366,10 +366,10 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
     assert actual_second["messages"].count(changed_messages[0]) == 1
     applied = [revision for revision in second_binding.source_revisions if revision.source_id == source_id]
     assert len(applied) == 1
-    assert applied[0].previous_revision == produced[0].revision_token()
-    assert applied[0].revision == produced[1].revision_token()
+    assert applied[0].previous_revision == produced[0].revision
+    assert applied[0].revision == produced[1].revision
     applied_state = source_state()
-    assert applied_state.latest_revision == applied_state.latest_visible_committed_revision == produced[1].revision_token()
+    assert applied_state.latest_revision == applied_state.latest_visible_committed_revision == produced[1].revision
 
     # seal 只确认启用策略的来源；完整 sources 中保留已应用来源，pending 以 deltas 为准。
     second_manager = projections[1][0]._context_source_manager
@@ -427,7 +427,7 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         stable_prefix_bytes(second_binding.prefix.state.frames)
     )
     assert sum(
-        ref.source_identity == source_id and ref.source_revision == produced[1].revision_token()
+        ref.source_identity == source_id and ref.source_revision == produced[1].revision
         for frame in third_binding.prefix.state.frames for ref in frame.item_refs
     ) == 1
     assert all(revision.source_id != source_id for revision in third_binding.source_revisions)

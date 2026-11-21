@@ -55,6 +55,7 @@ from tests.e2e.system.agent.context.test_provider_provenance import (
 from tests.e2e.system.agent.context.test_provider_provenance import (
     provenance_gateway as provenance_gateway,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.processes.workspace import terminate_process
 
 
@@ -190,11 +191,12 @@ async def test_real_provider_follows_tool_results_and_preserves_cold_history(
     _save(artifacts / "input-chain.json", {"uris": uris, "bodies": bodies, "marker": marker, "prompt": prompt})
     session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider 多次工具循环"}), artifacts / "created-session.json")["data"]
     session_id, thread_id = session["session_id"], session["thread_id"]
-    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
+    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "backup_3", "model_id": "default"}}), artifacts / "selected-model.json")["data"]
+    assert session["current_model"] == {"provider_id": "backup_3", "model_id": "default"}
     desired = ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default")
-    sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }), artifacts / "message-entry.json")["data"]
+    })), artifacts / "message-entry.json")["data"]
     # TODO：补齐真实 Provider 限流／开流超时及回退参数纠错后的完整验收；保留既有等待期限和严格工具配对断言。
     job = await _terminal_job(client, sent["job_id"], artifacts / "job.json")
     logs = await _audit_log_api(client, get_session_path_resolver(workspace / ".boxteam" / "sessions").resolve_session_node(session_id),
@@ -277,9 +279,9 @@ async def test_real_provider_follows_tool_results_and_preserves_cold_history(
     # 继续经消息入口执行一次，证明新进程真正恢复旧模型上下文，而非只读历史展示。
     continuation_prompt = "不要调用工具或重新读取文件。只复述上一任务得到的完整最终回执标记，不加其它内容。"
     assert marker not in continuation_prompt
-    continued = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    continued = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": continuation_prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }), artifacts / "continued-message-entry.json")["data"]
+    })), artifacts / "continued-message-entry.json")["data"]
     continued_job = await _terminal_job(client, continued["job_id"], artifacts / "continued-job.json")
     assert continued_job["status"] in {"completed", "succeeded"}, continued_job
     continued_calls = _audit_calls(session_node, thread_node, session_id=session_id, thread_id=thread_id,

@@ -17,13 +17,13 @@ from app.services.infrastructure.rollout_context.checkpoint.projection.message_p
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.migration import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl import (
     importer as migration_importer,
 )
-from app.services.infrastructure.rollout_context.migration.artifacts import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.artifacts import (
     artifact_manifest,
 )
-from app.services.infrastructure.rollout_context.migration.importer import (
+from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.importer import (
     LegacyRolloutImporter,
 )
 from tests.harness.python.run_context import TestRunContext
@@ -69,9 +69,9 @@ def test_v1_cli_uses_catalog_owner_and_round_trips_nonempty_namespace(
     source_before = artifact_manifest(storage.storage.root(SOURCE_SESSION_ID))
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     entry = (
-        ["scripts/legacy_import_v1_to_v2.py"]
+        ["app/services/infrastructure/rollout_context/migrations/v1_jsonl_to_v2_jsonl/__main__.py"]
         if invocation == "direct"
-        else ["-m", "scripts.legacy_import_v1_to_v2"]
+        else ["-m", "app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl"]
     )
     common = [
         "--sessions-dir",

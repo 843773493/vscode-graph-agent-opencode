@@ -15,7 +15,7 @@ from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     sealed_extension_catalog_binding_resolver,
 )
@@ -36,7 +36,7 @@ from app.services.infrastructure.mcp.invocation import (
     mcp_progress_scope,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamWriter
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )

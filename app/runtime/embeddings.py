@@ -1,29 +1,33 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class LiteLLMEmbeddingComputer:
-    """通过已有 LiteLLM provider 配置调用远程 Embedding API。"""
+    """通过已解析的完整模型配置调用远程 Embedding API。"""
 
     provider_id: str
+    model_id: str
     model: str
     endpoint: str
     api_key: str
     custom_llm_provider: str
     default_headers: Mapping[str, str]
+    no_proxy: bool
 
     @classmethod
-    def from_provider(
+    def from_model(
         cls,
-        provider: Mapping[str, object],
+        resolved: Mapping[str, object],
         *,
         model: str | None = None,
     ) -> LiteLLMEmbeddingComputer:
-        provider_id = _required_string(provider, "id")
-        request_options = provider.get("request_options", {})
+        provider_id = _required_string(resolved, "provider_id")
+        model_id = _required_string(resolved, "model_id")
+        request_options = resolved.get("request_options", {})
         if not isinstance(request_options, Mapping):
             raise TypeError(f"provider {provider_id} 的 request_options 必须是对象")
         default_headers = request_options.get("default_headers", {})
@@ -31,6 +35,9 @@ class LiteLLMEmbeddingComputer:
             raise TypeError(
                 f"provider {provider_id} 的 request_options.default_headers 必须是对象"
             )
+        no_proxy = request_options.get("no_proxy", False)
+        if not isinstance(no_proxy, bool):
+            raise TypeError("Embedding Model request_options.no_proxy 必须是布尔值")
         normalized_headers: dict[str, str] = {}
         for name, value in default_headers.items():
             if not isinstance(name, str) or not isinstance(value, str):
@@ -39,14 +46,24 @@ class LiteLLMEmbeddingComputer:
                 )
             normalized_headers[name] = value
 
-        resolved_model = model or _required_string(provider, "model")
+        api_key = resolved.get("api_key", "")
+        if not isinstance(api_key, str):
+            raise TypeError("Embedding Model api_key 必须是字符串")
+        if api_key.startswith("secret:") or (api_key.startswith("${") and api_key.endswith("}")):
+            raise ValueError("Embedding Model api_key 尚未解析")
+        custom_llm_provider = _required_string(resolved, "custom_llm_provider")
+        # TODO：其它 Embedding 适配族接通显式无认证前，保留原非空凭据要求，禁止回退进程凭据。
+        if custom_llm_provider != "openai" and not api_key:
+            raise ValueError(f"Embedding 适配族 {custom_llm_provider} 需要显式非空凭据")
         return cls(
             provider_id=provider_id,
-            model=resolved_model,
-            endpoint=_required_string(provider, "endpoint"),
-            api_key=_required_string(provider, "api_key"),
-            custom_llm_provider=_required_string(provider, "custom_llm_provider"),
+            model_id=model_id,
+            model=model or _required_string(resolved, "model"),
+            endpoint=_required_string(resolved, "endpoint"),
+            api_key=api_key,
+            custom_llm_provider=custom_llm_provider,
             default_headers=normalized_headers,
+            no_proxy=no_proxy,
         )
 
     async def compute(self, inputs: Sequence[str]) -> list[list[float]]:
@@ -57,21 +74,39 @@ class LiteLLMEmbeddingComputer:
         # LiteLLM 是可选运行时边界，避免仅导入工具定义时加载完整 provider 栈。
         from app.runtime.litellm_runtime import litellm
 
-        response = await litellm.aembedding(
-            model=self.model,
-            input=list(inputs),
-            api_base=self.endpoint,
-            api_key=self.api_key,
-            custom_llm_provider=self.custom_llm_provider,
-            extra_headers=dict(self.default_headers),
-            max_retries=3,
-            timeout=60,
-        )
+        async with AsyncExitStack() as scope:
+            client = None
+            headers: dict[str, object] = dict(self.default_headers)
+            if self.custom_llm_provider == "openai":
+                from openai import Omit
+
+                from app.agents.providers.provider_http_client import (
+                    build_provider_openai_client,
+                )
+
+                # SDK client 持有本次明确凭据，避免 LiteLLM 将空 Key 回退到进程环境。
+                client = await scope.enter_async_context(build_provider_openai_client(
+                    is_async=True, base_url=self.endpoint, api_key=self.api_key,
+                    trust_env=not self.no_proxy,
+                ))
+                if not self.api_key and not any(name.lower() == "authorization" for name in headers):
+                    headers["Authorization"] = Omit()
+            response = await litellm.aembedding(
+                model=self.model,
+                input=list(inputs),
+                api_base=self.endpoint,
+                api_key=self.api_key,
+                custom_llm_provider=self.custom_llm_provider,
+                extra_headers=headers,
+                client=client,
+                max_retries=3,
+                timeout=60,
+            )
         response_items = response.data
         if len(response_items) != input_count:
             raise RuntimeError(
                 "Embedding API 返回数量不匹配: "
-                f"provider={self.provider_id}, model={self.model}, "
+                f"provider={self.provider_id}, model_id={self.model_id}, model={self.model}, "
                 f"expected={input_count}, actual={len(response_items)}"
             )
 
@@ -118,5 +153,5 @@ class LiteLLMEmbeddingComputer:
 def _required_string(values: Mapping[str, object], key: str) -> str:
     value = values.get(key)
     if not isinstance(value, str) or not value:
-        raise ValueError(f"Embedding provider 缺少非空字符串字段: {key}")
+        raise ValueError(f"Embedding Model 缺少非空字符串字段: {key}")
     return value

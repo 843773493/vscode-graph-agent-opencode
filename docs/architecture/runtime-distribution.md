@@ -19,17 +19,15 @@ BoxTeam 区分“代码从哪里来”和“以什么方式运行”，不为每
 ```text
 BoxTeam Launcher
 └── Gateway
-    ├── 默认工作区运行时
-    │   ├── Workspace API
-    │   ├── Terminal Manager
-    │   └── Browser Manager
-    └── 其他本地托管工作区运行时
-        ├── Workspace API
-        ├── Terminal Manager
-        └── Browser Manager
+    ├── 受管 Backend：承载明确挂载的工作区
+    ├── 其他本地受管 Backend
+    └── 受管插件实例：按插件绑定的 Gateway／工作区范围运行
+        ├── Terminal
+        ├── Browser
+        └── Debug 等
 ```
 
-Launcher 只监督 Gateway，负责前台进程、实例锁、信号转发和发行资源定位。Gateway 是所有本地托管工作区的生命周期所有者，包括默认工作区。Workspace API 负责 Job、工具调用和业务状态的排空及中断对账。
+Launcher 只监督 Gateway，负责前台进程、实例锁、信号转发和发行资源定位。Gateway 是本地受管 Backend 和插件运行实例的生命周期所有者；默认工作区同样显式挂载于 Backend。Workspace API 负责 Job、工具调用和业务状态的排空及中断对账，不创建 Terminal／Browser 插件进程。
 
 Linux 源码开发完整启动由 worktree 专属的 transient user-systemd unit 承载。unit 使用 `Restart=no` 且停止后由 systemd 回收，不安装永久 unit，也不参与开机启动；其他平台和 focused 调试仍可直接运行底层开发管理器。
 
@@ -50,6 +48,32 @@ Linux 源码开发完整启动由 worktree 专属的 transient user-systemd unit
 本地 Gateway 从远程 Gateway 发现其直接管理的工作区，并把业务请求、SSE、辅助服务请求和后端重启请求委托给远程 Gateway。首个协议版本不导出远程 Gateway 从第三个 Gateway 导入的工作区，避免递归、循环和不清晰的进程所有权。
 
 Gateway-to-Gateway 凭据与浏览器本地凭据分离，只存放在 `${BOXTEAM_HOME}/state/gateway/` 控制面目录，不进入工作区 `.boxteam/`、前端 DTO 或日志。
+
+## 页面实时订阅
+
+同一页面到同一入口 Gateway 的常驻业务事件统一使用 `/api/gateway/realtime` WebSocket。会话、Thread、工作区和远端目标只增加逻辑订阅，不各自占用一条 HTTP SSE 连接。共享范围是当前页面与入口 URL，不跨浏览器标签页；Vite 热更新连接也不属于业务连接。
+
+```text
+业务 API／Hook
+  → api/stream/realtime.ts：凭据、逻辑订阅消费、有界重连
+  → src/shared/realtime.js：页面共享 WS、订阅 ID、取消和字节额度
+  → 入口 Gateway /api/gateway/realtime
+  → 原 ASGI HTTP 路由／目标代理
+  → 原领域 SSE owner：授权、快照、事件、游标和心跳
+```
+
+Gateway 只复用传输，不合并领域事件、不读写工作区业务数据，也不创建第二事件总线。工作区活动、导航快照、消息、Trace、文件、持续任务、留言和插件状态／命令／配置声明均走该入口。后端原 SSE API 继续服务透明代理及非页面消费者；有限搜索和模型配置测试仍是原请求的 HTTP 流，不自动重放。
+
+- 客户端复用 `http.ts` 的凭据获取／失效机制，凭据放认证首帧，不放 URL。同一旧连接的并发认证失败只按原凭据身份发起一次刷新，不让迟到的旧 401 撤销新连接。认证完成后以 `subscribe`／`unsubscribe` 管理逻辑请求；`ack` 只确认已消费字节，不代表业务执行成功或推进领域游标。
+- 逻辑请求保留原路径、方法、请求体、目标身份和游标；Gateway 仅允许已登记的事件入口及路由／游标头，并使它重新经过原 HTTP 鉴权和 Trace。每条逻辑请求有自己的 `request_id`，响应头和错误仍属于原 owner；握手身份不替代逻辑请求身份。
+- 控制响应为 `ready`／`headers`／`end`／`error` JSON；数据帧为四字节大端订阅 ID 加原 SSE 字节，不重新序列化业务正文。合同见 `proto/boxteam/gateway/v2/realtime.proto`，实现入口见 `app/gateway/server/realtime.py`。
+- 每订阅最多有 1 MiB 未确认正文，按最多 64 KiB 分帧；慢订阅独立反压。响应头期限、空闲判断和取消也按逻辑订阅执行，其他订阅的心跳不能掩盖某个 source 停滞。
+- 断线由统一客户端入口有界重试，请求工厂重新取得各 owner 已消费的游标。游标失效仍由对应业务按原快照恢复；不借共享连接重放写操作，不在业务 Hook 再叠加传输重试。单个订阅失败只结清该订阅；认证、协议或物理连接失败影响该连接的全部订阅。
+- 取消单个订阅须关闭其原迭代器、上游和租约；清理任务保持登记直至完成，不在控制帧循环中等待它阻塞其他订阅，连接关闭时统一等待未结清任务。迟到的已取消数据不再交付。已取消的调用不创建连接，最后订阅释放后关闭共享连接。隐藏视图按原观察生命周期释放，不能因此停止 Agent、任务或 PTY。
+
+终端 PTY 字节、DAP、浏览器画面／输入保留专用协议连接。嵌入终端的资源通知复用宿主逻辑订阅，独立 attach 页面使用相同共享连接实现；后台 Backend 对插件的事件订阅仍属于 Backend，自身不是浏览器页面连接。
+
+新增常驻事件须同时接入原领域 owner、Gateway 允许列表和共享客户端；不能恢复已删除的 `/workspace/observations/stream` 聚合器。验证应观察真实 WS 的订阅／响应头／数据／结束帧，覆盖多视图、跨工作区、断线游标、独立取消和慢流，并保留普通 HTTP 请求可达证据；观察工具复用 `tests/support/workbench/realtime.mjs`。
 
 ## 数据目录
 
@@ -117,11 +141,11 @@ npm 发行版的 Node 来源为 `launcher`，即使用执行 `boxteam` 的 `proc
 
 ## 正式 Web UI
 
-当前唯一开发和维护的客户端源码位于 `src/clients/web/`。development 模式由 Vite 8011 提供 HMR，并把 `/api` 转发到 Gateway 8014。installed 模式不启动 Vite；Gateway 在 8014 端口通过同一 origin 提供构建后的 Web UI。源码开发实例通过 `BOXTEAM_DEV_PORT_OFFSET` 偏移到独立端口，默认偏移 16。
+完整工作台入口为 `src/clients/workbench/`，复用 `src/clients/web/` 的 React 会话产品；Web 与 Electron 构建同一份工作台。development 模式由 Vite 提供 HMR，并将同源 `/api`（含 WebSocket）转发到 Gateway。基础端口为 Vite 8011、Gateway 8014；固定 dev 与显式偏移以 `bun run workspace dev status` 和启动记录为准，不复制 Codex App／SSH 转发端口为服务配置。
 
 installed 模式下由 Python Gateway 直接监听 8014；Launcher 只负责启动、信号转发和进程生命周期，不再占用 8014 做反向代理。源码 development 模式仍可由 Launcher 使用稳定代理支持 Gateway generation handoff。
 
-Electron、Electron renderer parity、React Native 和 Mobile Web parity 当前只预留 TODO，不参与运行时打包。
+installed 模式不启动 Vite，由 Gateway 同源托管静态 Web 资源。Electron 是现有工作台的桌面容器，自带静态资源并连接已有 Gateway，宿主只负责窗口、生命周期和固定存储；使用 `bun run build:electron`／`bun run package:electron` 构建打包。React Native 和 Mobile Web parity 仍是独立 TODO，不能替代原生验收。
 
 静态资源和 SPA fallback 必须位于 API、SSE、WebSocket 与辅助代理路由之后。未知 `/api/*` 必须返回 API 错误，不能返回 `index.html`。
 

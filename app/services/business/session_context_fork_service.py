@@ -8,6 +8,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 
+from boxteam_plugin_sdk.request_context import (
+    require_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import TypeAdapter
 
 from app.abstractions.session_context import (
@@ -45,15 +50,12 @@ from app.core.thread_creation import (
 from app.core.trace_middleware import (
     get_current_gateway_id,
     require_current_gateway_id,
-    require_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.goal import SessionGoalSetRequest
 from app.schemas.internal_v2.session import (
     SessionDTO,
@@ -76,7 +78,7 @@ from app.schemas.internal_v2.workspace_resource import (
     ResourceThreadRef,
     WorkspaceResourceDTO,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     parse_session_context_ref,
     session_resource_identity,
     workspace_session_inventory_uri,

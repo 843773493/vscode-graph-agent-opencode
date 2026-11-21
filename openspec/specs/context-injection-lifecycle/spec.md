@@ -102,7 +102,7 @@ CSM/source producer MUST以 typed `SourceObservation`、`ApplySourceLifecycleDec
 
 系统 SHALL 将 ToolSetSnapshot/ToolSetRef保持为独立于 canonical message和 CSM source的Provider可见权威事实。Provider `tools` SHALL仅包含按capability profile选出的少量直接工具和始终存在、名称/schema/description固定的`invoke_extension_tool(tool_name, arguments)`；其描述不得枚举内部target。直接工具或信封自身的Provider可见名称、schema、description、visibility、确认policy发生有效变化 SHALL产生 desired ToolSet revision；owner MUST在安全边界通过hard rebase生效。内层ExtensionToolCatalog的MCP/内置/自定义target增删改、schema、目录revision或执行时权限变化不属于ToolSetRef，不得仅因此创建prefix epoch。hard rebase MUST封存新的 ToolSetSnapshot/Ref、创建 `epoch_reason=toolset_changed`的新 prefix epoch并重编译 root context、active canonical/source projection和 tools；不得向旧 context追加“工具已切换”之类的软通知，也不得修改 in-flight sealed assembly。
 
-ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；直接工具选择影响Provider ToolSet，扩展目标选择只影响ExtensionToolCatalog。每次新 preparation 的完整 desired ToolSetSnapshot MUST由该 SessionThread ContextStore owner冻结，并与当前合法执行链的 sealed assembly binding 比较。该 binding MUST是 applied ToolSetRef/revision 的唯一权威；工具正文、policy 和 wire tool order MUST共同参与 revision/compatibility 校验。ToolSetSnapshot 作为 typed prepare/seal 输入，不另建 SwitchToolSetIntent 或独立 SessionControl observed/applied 字段。applied 与 ExtensionCatalogBindingRef及其原始model-call binding MUST在同一成功 seal 边界保存；失败 preparation/seal 不得提前推进 applied。恢复或重放历史 assembly MUST使用两种已封存binding，不得用当前 desired selection反推历史工具集或扩展目标。
+ToolSelectionStore/AgentToolSettingsService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；直接工具选择影响Provider ToolSet，扩展目标选择只影响ExtensionToolCatalog。每次新 preparation 的完整 desired ToolSetSnapshot MUST由该 SessionThread ContextStore owner冻结，并与当前合法执行链的 sealed assembly binding 比较。该 binding MUST是 applied ToolSetRef/revision 的唯一权威；工具正文、policy 和 wire tool order MUST共同参与 revision/compatibility 校验。ToolSetSnapshot 作为 typed prepare/seal 输入，不另建 SwitchToolSetIntent 或独立 SessionControl observed/applied 字段。applied 与 ExtensionCatalogBindingRef及其原始model-call binding MUST在同一成功 seal 边界保存；失败 preparation/seal 不得提前推进 applied。恢复或重放历史 assembly MUST使用两种已封存binding，不得用当前 desired selection反推历史工具集或扩展目标。
 
 #### Scenario: model call 期间修改工具选择
 
@@ -282,7 +282,15 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 系统 SHALL 提供集中且版本化的CSM模型使用提示，说明这些消息来自应用上下文管理器、与真实用户任务的区别、来源与版本的对应关系，以及unified diff上下文行、删除行和新增行的含义。提示 MUST说明新版替代同来源旧版、删除行对应的旧规则不再生效、完整替换的适用范围，以及untrack只停止未来更新而不撤销正文。跨来源显式切换 MUST说明旧、新来源的替代关系，不能把它解释为对其它来源的普遍撤销。包装、提示和wire role MUST NOT提升来源的信任资格或改变既有指令优先级。该提示自身 MUST经过已登记instruction来源和同一seal链路，不得由Provider adapter临时拼入。
 
-新来源协议 SHALL使用显式`boxteam-context-sources:v2`及frame标记`source_protocol=2`，以`replaces`列出被替代的`source_identity`与`revision`。同来源更新 MUST列出精确基准；跨来源替代仅允许显式切换同名Skill。软件 MUST按有序封存内容核对可见目标的名称与类型，不能替代canonical用户或工具事实。历史v1来源块 MUST按原协议解析、重编码和重放，不能补写替代字段或改变原sealed bytes；新旧帧可在同一继承前缀中共存。
+新来源协议 SHALL使用显式`boxteam-context-sources:v3`及frame标记`source_protocol=3`，由已有结构化提示注册表、Factory和校验入口统一生成与检查`<context_sources encoding="json" trust="source_defined">…</context_sources>`，不得另建一套标签拼装规则。标签内的JSON以`replaces`列出被替代的`source_identity`与`revision`；`source_defined`沿用各来源的原有信任资格，不将正文提升为控制指令。同来源更新 MUST列出精确基准；跨来源替代仅允许显式切换同名Skill。软件 MUST按有序封存内容核对可见目标的名称与类型，不能替代canonical用户或工具事实。历史v1/v2来源块 MUST按原协议解析、重编码和重放，不能补写字段、标签或改变原sealed bytes；新旧帧可在同一继承前缀中共存。本项不改变数据库schema。
+
+从未发布过且正文为空的来源 SHALL不产生模型可见激活消息；已发布来源后来清空时 MUST保留相应更新或撤销，不能因空正文丢掉已生效规则的删除。来源标签是背景上下文边界，集中提示 MUST说明模型应继续处理真实用户任务，无需确认收到或复述元数据。普通用户正文出现同名标签 MUST NOT据此被识别为内部来源；内部来源校验由typed frame身份触发。
+
+明确接收内部附加消息的入口 MUST要求完整的结构化 metadata 并执行注册校验，缺少 schema version 不得跳过。混合消息列表 MUST按 typed metadata 识别消息职责，不能按正文标签推断内部身份。Provider 的非 Agent 工具测试路径 MUST保留真实用户正文及合法重试消息，只有具名 checkpoint 中断提醒可作为旧工具事务边界。
+
+新内部通知 MUST在底层执行准入发布前校验，不能仅依赖上层分发器。checkpoint 恢复与 canonical 通知投影 MUST共用已保存结构标记的恢复规则，保留 kind、schema version 及展示身份；不得用当前 schema version 补造历史身份。未带结构标记的旧封存通知继续按原正文重放。
+
+新 compaction 续接消息 MUST通过同一 Factory 生成 `compaction_summary`，将软件说明放入 `system_reminder`，历史摘要放入编码为 text、信任级别为 untrusted_data 的 `summary` section；正文中的闭合标签 MUST被转义。canonical 摘要通过既有 annotation 保存结构标记，checkpoint 恢复、历史投影及 fork MUST保留标记和正文；旧封存摘要继续按原字节重放，不按内容猜测版本或自动改写。集中提示 MUST解释摘要和其它不可信 section 不能改写软件说明或创建新用户任务。
 
 #### Scenario: 首次正文与后续差分使用同一表达规则
 
@@ -306,8 +314,13 @@ Workspace配置`context.resource_activation.overrides.mcp_tool_catalog` SHALL使
 
 #### Scenario: 旧来源协议续写与fork保持原形
 
-- **WHEN** 历史前缀含v1来源块，当前版本继续执行并产生v2来源块，再fork与冷恢复
-- **THEN** 原v1块、request hash与历史owner保持不变，新增块使用v2，恢复不依赖当前文件或把旧块重编码成v2
+- **WHEN** 历史前缀含v1/v2来源块，当前版本继续执行并产生v3来源块，再fork与冷恢复
+- **THEN** 原历史块、request hash与历史owner保持不变，新增块使用注册的v3标签，恢复不依赖当前文件或把旧块重编码成v3
+
+#### Scenario: 首次空来源与已加载后的清空
+
+- **WHEN** 来源初次观察为空，之后发布有效指令，再清空
+- **THEN** 首次空观察不产生模型可见通知；有效指令正常激活；后续清空携带已发布基准和删除内容，撤销原指令
 
 ### Requirement: CSM 来源消息默认聚合但保留逐来源投影配置
 
@@ -1108,3 +1121,12 @@ tracked source 变化 MUST 继续由 Resource Observation Platform 异步观察�
 
 - **WHEN** 某本轮必做场景只有 helper、健康接口、文档校验或未经核对的历史收据
 - **THEN** 该场景保持未完成，补与行为及风险对应的产品验证；不以延期拆分放宽身份、顺序、授权、事务或恢复断言
+
+### Requirement: 可重排队列按首次领取冻结消费上下文
+
+用户输入 acceptance SHALL 先冻结稳定身份及正文；调度队列的首次领取 SHALL 在同一 rollout 写事务分配消费顺序、发布该用户 Turn 的活动上下文位置并冻结 runtime notice 消费选集。重排不修改准入提交，恢复同一 claim 不重新选取 notice。上下文因果边界 SHALL 排除尚未领取或后领取执行的输入和私有结果，包含已先执行的用户消息。未领取持久任务提示不提前消费。未执行就撤回的消息仍有可读的取消历史，但不因历史展示而被当作已领取执行。
+
+#### Scenario: 后接受消息先领取
+
+- **WHEN** B 后于 A 接受，但用户将 B 排在 A 前且 B 首先领取
+- **THEN** B 的 sealed request 不含未领取 A；之后 A 的 request 使用 B、A 的实际消费顺序，原 acceptance 身份、封存历史与已消费 notice 不被改写

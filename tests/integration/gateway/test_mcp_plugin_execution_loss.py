@@ -31,7 +31,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_case as mcp_plugin_case,  # noqa: PLC0414 - 独立真实 Gateway／Backend
 )
 from tests.integration.gateway.test_service_plugin_lifecycle import _same_process
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.plugin_package import install_plugin_async
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -95,10 +95,10 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
         return case.replay.control.plan_model_calls(session, thread, interactions), call_id
 
     async def send(phase: str) -> str:
-        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": f"发现并调用 probe，验证 {phase}。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        }, headers={"X-Request-ID": f"loss-{boundary}-{phase}"})
+        }), headers={"X-Request-ID": f"loss-{boundary}-{phase}"})
         response.raise_for_status()
         assert response.json()["request_id"] == response.headers["X-Request-ID"] == f"loss-{boundary}-{phase}"
         return response.json()["data"]["job_id"]

@@ -17,10 +17,13 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
 )
-from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai.chat_models.base import (
+    _construct_lc_result_from_responses_api,
     _convert_responses_chunk_to_generation_chunk,
 )
+from openai._models import construct_type_unchecked
+from openai.types.responses import Response
 
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.provider_capabilities import parse_provider_capabilities
@@ -29,6 +32,7 @@ from app.agents.providers.litellm_chat import (
     _message_chunk_token,
 )
 from app.agents.providers.litellm_stream_types import (
+    _as_dict,
     _ResponsesToolCall,
     _StreamPartState,
 )
@@ -41,6 +45,7 @@ from app.agents.providers.openai_response_history import (
     _responses_usage_metadata,
     _without_server_state,
 )
+from app.agents.providers.request_parameters import merge_request_parameters
 from app.agents.providers.wire_finalize import (
     finalize_responses_body,
     finalize_responses_wire,
@@ -88,11 +93,22 @@ DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS = 45.0
 class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     """LiteLLM Responses API 包装层，保留加密 reasoning 和标准 content blocks。"""
 
+    _uses_http_handler: ClassVar[bool] = True
     responses_include: ClassVar[list[str]] = ["reasoning.encrypted_content"]
     responses_store: bool = False
     reasoning_items_summary_replay: bool = False
     reasoning_items_encrypted_replay: bool = False
     image_input_replay: bool = False
+
+    @property
+    def _default_params(self) -> dict[str, Any]:
+        """Responses 不继承 Chat 的 n/max_tokens 等参数别名和默认值。"""
+        return {
+            "model": self.model_name or self.model,
+            "timeout": self.request_timeout,
+            "custom_llm_provider": self.custom_llm_provider,
+            **self.model_kwargs,
+        }
 
     def _history_messages(
         self,
@@ -101,11 +117,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         deadline: float | None = None,
     ) -> list[BaseMessage]:
         normalized_messages = _project_tool_history(messages, deadline=deadline)
-        target_capabilities = {"reasoning_items"}
-        if self.reasoning_items_summary_replay:
-            target_capabilities.add("reasoning_summary")
-        if self.reasoning_items_encrypted_replay:
-            target_capabilities.add("encrypted_reasoning_replay")
+        target_capabilities = responses_wire_profile(self).replay_capabilities()
         prepared: list[BaseMessage] = []
         for message in normalized_messages:
             if deadline is not None and time.monotonic() >= deadline:
@@ -129,7 +141,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
 
             projection = project_ai_message_content(
                 message.content,
-                target_provider=self.provider_id,
+                target_source=self.model_source,
                 target_capabilities=target_capabilities,
                 response_metadata=message.response_metadata,
             )
@@ -230,7 +242,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         payload = responses_send_params(self, kwargs=kwargs)
         payload.update({
-            "stream": True,
+            "stream": self.streaming,
             "include": list(self.responses_include),
             "store": self.responses_store,
         })
@@ -360,6 +372,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 "model_provider": "litellm",
                 "custom_llm_provider": self.custom_llm_provider,
                 "provider_id": self.provider_id,
+                "model_source": self.model_source.to_dict() if self.model_source is not None else None,
             }
             chunk = ChatGenerationChunk(
                 message=AIMessageChunk(
@@ -532,14 +545,20 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             generation_chunk,
         )
 
-    def _stream(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: CallbackManagerForLLMRun | None = None,
-        **kwargs: Any,
-    ) -> Iterator[ChatGenerationChunk]:
-        payload = self._responses_payload(messages, stop, kwargs)
+    def _complete_response(self, response: object, schema: Any) -> ChatResult:
+        """完整响应复用官方消息／工具／usage 转换，再进入原 canonical 归一化。"""
+        body = _as_dict(response)
+        if body.get("status") not in {"completed", "incomplete"}:
+            raise ValueError(f"Responses 完整响应缺少有效终态: {body.get('status')!r}")
+        # 采用 OpenAI 客户端自身的响应解码，避免在 LiteLLM 解码后追加更严的重校验。
+        # TODO: OpenAI 提供公共响应解码 API 后替换这个 SDK 私有入口。
+        parsed = construct_type_unchecked(value=body, type_=Response)
+        # TODO: langchain-openai 提供公共完整响应转换 API 后替换私有 helper。
+        result = _construct_lc_result_from_responses_api(parsed, schema=schema, output_version="responses/v1")
+        record_upstream_response(body)
+        return self._canonicalize_chat_result(result)
+
+    def _record_responses_request(self, payload: dict[str, Any], *, asynchronous: bool) -> None:
         binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         validate_sealed_assembly_dispatch(
             invocation_purpose=self.invocation_purpose,
@@ -548,14 +567,70 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         )
         prepare_model_request()
         record_upstream_request(
-            request=payload,
-            model=self.model,
-            provider=self.custom_llm_provider,
-            api_base=self.api_base,
-            call_type="responses",
+            request=payload, model=self.model, provider=self.custom_llm_provider,
+            api_base=self.api_base, call_type="aresponses" if asynchronous else "responses",
             dispatch_ref=binding.reference if binding is not None else None,
             resource_refs=binding.resource_refs if binding is not None else (),
         )
+        client = self._provider_http_client(is_async=asynchronous)
+        if client is not None:
+            payload["client"] = client
+        if self.invocation_purpose == "model_test":
+            payload["max_retries"] = payload["num_retries"] = 0
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None, stream: bool | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if stream is not None and stream != self.streaming:
+            raise ValueError("stream 不能改写已配置的 api_mode.streaming")
+        if self.streaming:
+            return super()._generate(messages, stop=stop, run_manager=run_manager, stream=stream, **kwargs)
+        payload = self._responses_payload(messages, stop, kwargs)
+        self._record_responses_request(payload, asynchronous=False)
+        try:
+            response = litellm.responses(**payload)
+            return self._complete_response(response, kwargs.get("response_format"))
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            record_upstream_error(error)
+            raise
+
+    async def _agenerate(
+        self, messages: list[BaseMessage], stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None, stream: bool | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if stream is not None and stream != self.streaming:
+            raise ValueError("stream 不能改写已配置的 api_mode.streaming")
+        if self.streaming:
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, stream=stream, **kwargs)
+        payload = self._responses_payload(messages, stop, kwargs)
+        self._record_responses_request(payload, asynchronous=True)
+        try:
+            response = await self._await_nonstream_response(litellm.aresponses(**payload))
+            result = self._complete_response(response, kwargs.get("response_format"))
+        except ScopeCancelledError:
+            raise
+        except Exception as error:
+            mark_provider_failure(error)
+            record_upstream_error(error)
+            raise
+        await self._publish_nonstream_result(result, run_manager)
+        return result
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        payload = self._responses_payload(messages, stop, kwargs)
+        self._record_responses_request(payload, asynchronous=False)
         try:
             stream = litellm.responses(**payload)
         except ScopeCancelledError:
@@ -674,28 +749,13 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             ) from error
         provider_id = self.provider_id or self.custom_llm_provider or "<unknown>"
-        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         logger.info(
             "Responses provider stream open begin: provider=%s model=%s",
             provider_id,
             self.model,
         )
-        validate_sealed_assembly_dispatch(
-            invocation_purpose=self.invocation_purpose,
-            profile=responses_wire_profile(self),
-            wire_request=wire_request_params(self, raw_payload),
-        )
-        prepare_model_request()
+        self._record_responses_request(raw_payload, asynchronous=True)
         open_timeout = asyncio.timeout(DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS)
-        record_upstream_request(
-            request=raw_payload,
-            model=self.model,
-            provider=self.custom_llm_provider,
-            api_base=self.api_base,
-            call_type="aresponses",
-            dispatch_ref=binding.reference if binding is not None else None,
-            resource_refs=binding.resource_refs if binding is not None else (),
-        )
         try:
             async with open_timeout:
                 stream = await litellm.aresponses(**raw_payload)
@@ -834,17 +894,26 @@ def build_openai_responses_model(
         raise ValueError(
             "build_openai_responses_model 只接受 api_mode.protocol='responses'"
         )
-    request_parameters: dict[str, Any] = {}
-    for name in ("temperature", "top_p", "max_output_tokens"):
-        if name in runtime_config:
-            request_parameters[name] = runtime_config[name]
-    request_parameters.update(request_options.get("overrides") or {})
+    if api_mode.streaming and not litellm.utils.supports_native_streaming(
+        model=provider["model"], custom_llm_provider=provider["custom_llm_provider"],
+    ):
+        # 显式选择流式就必须发送流式；SDK 对公共目录未知的模型会擅自改成完整响应再伪造事件。
+        # TODO: LiteLLM 提供逐调用禁用 fake stream 的选项后，替换这项 SDK 内存注册。
+        prefix = provider["custom_llm_provider"] + "/"
+        litellm.register_model({prefix + provider["model"].removeprefix(prefix): {
+            "litellm_provider": provider["custom_llm_provider"], "supports_native_streaming": True,
+        }})
+    request_parameters = merge_request_parameters(
+        request_options.get("parameters", {}),
+        {key: runtime_config[key] for key in ("temperature", "top_p", "max_output_tokens") if key in runtime_config},
+        protocol=api_mode.protocol,
+    )
     if provider["custom_llm_provider"] == "chatgpt":
         if prompt_cache_key is not None:
             request_parameters["litellm_session_id"] = prompt_cache_key
     elif api_mode.request_features.prompt_cache_key:
         request_parameters["prompt_cache_key"] = (
-            prompt_cache_key or f"boxteam:{provider['id']}"
+            prompt_cache_key or f"boxteam:{provider['provider_id']}:{provider['model_id']}"
         )
 
     responses_include = (
@@ -860,10 +929,11 @@ def build_openai_responses_model(
         api_base=provider.get("endpoint"),
         extra_headers=request_options.get("default_headers") or None,
         custom_llm_provider=provider["custom_llm_provider"],
-        max_retries=3,
-        streaming=True,
+        max_retries=0 if invocation_purpose == "model_test" else 3,
+        streaming=api_mode.streaming,
+        disable_streaming=not api_mode.streaming,
         model_kwargs=request_parameters,
-        provider_id=provider.get("id"),
+        provider_id=provider.get("provider_id"),
         responses_include=responses_include,
         reasoning_items_summary_replay=api_mode.supports_reasoning.reasoning_items_summary,
         reasoning_items_encrypted_replay=api_mode.supports_reasoning.reasoning_items_encrypted_content,

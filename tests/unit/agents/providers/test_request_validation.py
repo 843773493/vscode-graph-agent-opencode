@@ -25,7 +25,7 @@ def test_final_system_scope_rejects_historical_or_nonlocal_r02_scope(root, proto
     )
     with pytest.raises(ValueError, match="real-path-not-allowed: R02"):
         if protocol == "chat_completions":
-            finalize_chat_wire(messages=[{"role": "system", "content": content}], tools=None, params={})
+            finalize_chat_wire(custom_llm_provider="openai", messages=[{"role": "system", "content": content}], tools=None, params={})
         else:
             finalize_responses_wire(
                 input_items=[{"role": "developer", "content": [{"type": "input_text", "text": content}]}],
@@ -38,7 +38,7 @@ def test_user_text_and_http_routes_keep_their_original_bytes():
     user = "- workspace 根目录（exec_command 未提供 workdir 时的 cwd）：`/user/example`"
     system = "访问 /api/v1/workspace；这是 HTTP route，并非 R02 的工作区配置。"
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    assert finalize_chat_wire(messages=messages, tools=None, params={})["messages"] == messages
+    assert finalize_chat_wire(custom_llm_provider="openai", messages=messages, tools=None, params={})["messages"] == messages
     inputs = [{"role": message["role"], "content": [{"type": "input_text", "text": message["content"]}]} for message in messages]
     assert finalize_responses_wire(input_items=inputs, tools=None, params={}, include=(), store=False)["input"] == inputs
 
@@ -52,10 +52,10 @@ def test_r02_software_scope_ignores_description_and_remains_frozen(scope):
     }).decode()
     messages = [{"role": "system", "content": content}]
     if scope == ".":
-        assert finalize_chat_wire(messages=messages, tools=None, params={})["messages"] == messages
+        assert finalize_chat_wire(custom_llm_provider="openai", messages=messages, tools=None, params={})["messages"] == messages
     else:
         with pytest.raises(ValueError, match="real-path-not-allowed: R02"):
-            finalize_chat_wire(messages=messages, tools=None, params={})
+            finalize_chat_wire(custom_llm_provider="openai", messages=messages, tools=None, params={})
 
 
 @pytest.mark.parametrize("root", [".", "/home/example/project", r"C:\Users\example\project"])
@@ -74,7 +74,7 @@ def test_source_envelope_preserves_r02_scope_validation(root, protocol):
 
     def finalize():
         if protocol == "chat_completions":
-            return finalize_chat_wire(messages=[{"role": "system", "content": content}], tools=None, params={})
+            return finalize_chat_wire(custom_llm_provider="openai", messages=[{"role": "system", "content": content}], tools=None, params={})
         return finalize_responses_wire(
             input_items=[{"role": "developer", "content": [{"type": "input_text", "text": content}]}],
             tools=None, params={}, include=(), store=False,

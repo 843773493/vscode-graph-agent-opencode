@@ -1,13 +1,12 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import type { GatewayConfigSourceDocumentDTO, GatewayConfigSourceEditRequest, GatewayConfigSourcePreflightDTO, GatewayConfigSourcesDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest, ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { GatewayRequestTarget, GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
 import { watchPluginConfigurationSchemas } from '../../../web/src/api/pluginConfigurationSchemas.js';
 import { gateway } from '../agentApi.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
-export type SourceTarget = Readonly<{ gateway_id: string; gateway_connection_id?: string; workspace_id?: string }>;
 export type SourceDocument = GatewayConfigSourceDocumentDTO | ConfigSourceDocumentDTO;
 export type SourceIntent = GatewayConfigSourceEditRequest | ConfigSourceEditRequest;
 export type SourceBaseline = Pick<SourceIntent, 'base_file_digest' | 'base_layer_revision' | 'base_layer_digest' | 'expected_active_revision' | 'expected_active_digest'>;
@@ -19,8 +18,8 @@ export function sourceBaseline(document: SourceDocument): SourceBaseline {
 
 /** 表单与 JSONC 共用原配置 owner；这里只选择传输，不合并配置或判定生效。 */
 export class ConfigurationSourceOwner {
-  readonly target: SourceTarget;
-  constructor(target: SourceTarget) {
+  readonly target: GatewayRequestTarget;
+  constructor(target: GatewayRequestTarget) {
     this.target = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id,
       workspace_id: target.workspace_id };
   }
@@ -67,8 +66,9 @@ export class ConfigurationSourceOwner {
     return { gateway_id: this.target.gateway_id, ...(this.target.workspace_id ? { workspace_id: this.target.workspace_id } : {}),
       source_key: sourceKey, jsonc, ...baseline, idempotency_key: crypto.randomUUID() };
   }
-  async preflight(intent: SourceIntent, signal?: AbortSignal) {
-    if (this.target.workspace_id) return preflightConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal);
+  async preflight(intent: SourceIntent, signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+    if (this.target.workspace_id) return preflightConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal, modelRef);
+    if (modelRef) throw new Error(t('configuration.entities.workspaceRequired'));
     const result = await this.request<GatewayConfigSourcePreflightDTO>(this.path(intent.source_key, '/preflight'), { method: 'POST', body: JSON.stringify(intent), signal });
     if (!result.document) throw new Error(t('settings.source.preflightDocumentMissing'));
     this.document(result.document, intent.source_key);

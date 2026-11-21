@@ -76,11 +76,33 @@ test('任务已写入但回执丢失时只向原owner对账，不重放或伪报
   expect(result.notices.some(message => message.includes('已确认'))).toBe(false);
   expect(result.notices.at(-1)).toBe('pending-closed');
 });
-for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity', 'gateway-returned']) test(`${mode}在未接受步骤零写入`, async () => {
+for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity', 'gateway-returned', 'gateway-returned-cancel']) test(`${mode}在未接受步骤零写入`, async () => {
   const result = await exercise(mode); expect(writes(result)).toEqual([]);
   if (mode === 'owner-cancel') expect(result.requests).toEqual([]);
   if (mode === 'identity') expect(result.errors).toEqual(['Error: 访问凭据已改变，请重新查找任务']);
-  if (mode === 'gateway-returned') expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新查找任务']);
+  if (mode.startsWith('gateway-returned')) {
+    expect(result.providerDisposedOnHide).toBe(true);
+    expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新查找任务']);
+    expect(result.shows).toEqual([]);
+  }
+});
+for (const mode of ['scope-gateway-returned', 'scope-gateway-returned-cancel']) test(`${mode}在原Provider隐藏释放后不重开旧范围`, async () => {
+  const result = await exercise(mode);
+  expect(result.providerDisposedOnHide).toBe(true);
+  expect(result.requests).toEqual([]); expect(writes(result)).toEqual([]); expect(result.shows).toEqual([]);
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新查找任务']);
+});
+for (const mode of ['scope-select', 'scope-cancel']) test(`${mode}正常隐藏后仍可返回原列表且不写入`, async () => {
+  const result = await exercise(mode);
+  expect(result.providerDisposedOnHide).toBe(true); expect(result.errors).toEqual([]);
+  expect(writes(result)).toEqual([]); expect(result.shows).toHaveLength(1);
+  expect(result.shows[0].options.providerOptions.searchOwners).toHaveLength(mode === 'scope-select' ? 1 : 2);
+});
+test('action-select在原Provider隐藏释放后仍可执行一次明确动作', async () => {
+  const result = await exercise('action-select');
+  expect(result.providerDisposedOnHide).toBe(true); expect(result.errors).toEqual([]);
+  expect(writes(result)).toHaveLength(1); expect(result.shows).toEqual([]);
+  expect(writes(result)[0].owner).toBe(`gateway_${'b'.repeat(32)}`);
 });
 for (const mode of ['accepted-close', 'accepted-terminate-close']) test(`${mode}关闭浮层和切换A/B不撤销、改投或重放已受理动作`, async () => {
   const result = await exercise(mode); expect(result.result).toBe(true);

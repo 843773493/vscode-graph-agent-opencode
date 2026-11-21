@@ -31,13 +31,16 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
 )
 from tests.unit.services.business.session_service_test_support import (
+    BACKUP_MODEL,
+    PRIMARY_MODEL,
     SessionServiceConfigStub,
     prepare_session_test_workspace,
 )
@@ -52,7 +55,7 @@ def test_config_stub_preserves_explicit_empty_configuration():
     config_service = SessionServiceConfigStub({})
 
     with pytest.raises(ValueError, match="agent default 不存在"):
-        config_service.resolve_agent_provider_id(None)
+        config_service.resolve_agent_model(None)
 
 
 class TestSessionService:
@@ -96,6 +99,7 @@ class TestSessionService:
                 # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
                 self.catalog = SessionCatalogService(session_service=self.service)
                 yield
+                asyncio.run(self.trace_event_store.close())
                 self.path_resolver.catalog_store.close()
         finally:
             context.close()
@@ -145,7 +149,7 @@ class TestSessionService:
         assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
         assert session.current_agent_id
-        assert session.current_provider_id == "primary"
+        assert session.current_model == PRIMARY_MODEL
         assert session.created_at is not None
         assert session.updated_at == session.created_at
 
@@ -164,7 +168,7 @@ class TestSessionService:
         assert set(data) == {"session_id", "workspace_id", "created_at"}
         node = self.path_resolver.catalog_store.get_node(session.session_id)
         assert node.current_agent_id == session.current_agent_id
-        assert node.current_provider_id == "primary"
+        assert node.current_model_json == PRIMARY_MODEL.canonical_json()
         assert not self.saver._storage.storage.root(
             session.session_id, thread_id=node.main_thread_id,
         ).exists(), "创建Session不得在execution admission之前物化rollout"
@@ -190,34 +194,16 @@ class TestSessionService:
         assert resolved.is_relative_to(get_sessions_dir())
 
     @pytest.mark.asyncio
-    async def test_update_session_provider_is_persisted(self):
+    async def test_update_session_model_is_persisted(self):
         config = {
-            "llm": {
-                "providers": [
-                    {
-                        "id": "primary",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-primary",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                    {
-                        "id": "backup",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-backup",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                ]
-            },
             "default_agent": "default",
             "agents": {
                 "default": {
                     "name": "Default Agent",
                     "instructions": {"system_prompt": "hello"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 }
             },
@@ -235,10 +221,10 @@ class TestSessionService:
 
         updated = await service.update(
             created.session_id,
-            SessionUpdateRequest(provider_id="backup"),
+            SessionUpdateRequest(model=BACKUP_MODEL),
         )
 
-        assert updated.current_provider_id == "backup"
+        assert updated.current_model == BACKUP_MODEL
         restarted_service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
@@ -248,53 +234,35 @@ class TestSessionService:
 
         )
         restored = await restarted_service.get(created.session_id)
-        assert restored.current_provider_id == "backup"
+        assert restored.current_model == BACKUP_MODEL
         persisted = self.path_resolver.catalog_store.get_node(created.session_id)
-        assert persisted.current_provider_id == "backup"
+        assert persisted.current_model_json == BACKUP_MODEL.canonical_json()
 
-        with pytest.raises(ValueError, match="不允许使用 provider"):
+        with pytest.raises(ValueError, match="不允许使用模型"):
             await service.update(
                 created.session_id,
-                SessionUpdateRequest(provider_id="unknown"),
+                SessionUpdateRequest(model={"provider_id": "team", "model_id": "unknown"}),
             )
 
     @pytest.mark.asyncio
     async def test_workspace_defaults_only_affect_new_sessions(self):
         config = {
-            "llm": {
-                "providers": [
-                    {
-                        "id": "primary",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-primary",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                    {
-                        "id": "backup",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-backup",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                ]
-            },
             "default_agent": "default",
             "agents": {
                 "default": {
                     "name": "Default Agent",
                     "instructions": {"system_prompt": "hello"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 },
                 "coder": {
                     "name": "Coder",
                     "instructions": {"system_prompt": "code"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 },
             },
@@ -311,16 +279,16 @@ class TestSessionService:
         existing = await service.create(SessionCreateRequest(title="Existing"))
 
         config_service.set_workspace_default_agent("coder")
-        config_service.set_workspace_default_provider("coder", "backup")
+        config_service.set_workspace_default_model("coder", BACKUP_MODEL)
         created_after_change = await service.create(
             SessionCreateRequest(title="Created later")
         )
 
         assert existing.current_agent_id == "default"
-        assert existing.current_provider_id == "primary"
-        assert (await service.get(existing.session_id)).current_provider_id == "primary"
+        assert existing.current_model == PRIMARY_MODEL
+        assert (await service.get(existing.session_id)).current_model == PRIMARY_MODEL
         assert created_after_change.current_agent_id == "coder"
-        assert created_after_change.current_provider_id == "backup"
+        assert created_after_change.current_model == BACKUP_MODEL
 
     @pytest.mark.asyncio
     async def test_create_default_session_title_source(self):
@@ -331,10 +299,10 @@ class TestSessionService:
 
     @pytest.mark.asyncio
     async def test_create_session_with_specified_agent(self):
-        request = SessionCreateRequest(title="Agent Session", agent_id="deep_agent")
+        request = SessionCreateRequest(title="Agent Session", agent_id="coder")
         session = await self.service.create(request)
 
-        assert session.current_agent_id == "default"
+        assert session.current_agent_id == "coder"
 
     @pytest.mark.asyncio
     async def test_public_create_rejects_internal_session_kind(self):
@@ -351,9 +319,9 @@ class TestSessionService:
     async def test_update_session_can_switch_agent(self):
         created = await self.service.create(SessionCreateRequest(title="Switch Agent Session"))
 
-        updated = await self.service.update(created.session_id, SessionUpdateRequest(agent_id="deep_agent"))
+        updated = await self.service.update(created.session_id, SessionUpdateRequest(agent_id="coder"))
 
-        assert updated.current_agent_id == "deep_agent"
+        assert updated.current_agent_id == "coder"
 
     @pytest.mark.asyncio
     async def test_get_session(self):
@@ -591,7 +559,14 @@ class TestSessionService:
         created = await self.service.create(SessionCreateRequest(title="Trace Session"))
         await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
             event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
-            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+            payload=JobStartedPayload(
+                session_id=created.session_id,
+                thread_id=created.thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    created.session_id, created.thread_id, "job_1",
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
 
         trace_event = {
@@ -649,7 +624,14 @@ class TestSessionService:
         created = await self.service.create(SessionCreateRequest(title="Stream Trace Session"))
         await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
             event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
-            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+            payload=JobStartedPayload(
+                session_id=created.session_id,
+                thread_id=created.thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    created.session_id, created.thread_id, "job_1",
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
 
         first_event = {
@@ -701,61 +683,6 @@ class TestSessionService:
         assert second.content == "正在调用 search_files"
         assert second.skill_names == []
         assert second_cursor.startswith("ts2.")
-
-    @pytest.mark.asyncio
-    async def test_trace_event_mapper_maps_tool_events(self):
-        from app.services.mapping.trace_event_mapper import TraceEventMapper
-
-        mapper = TraceEventMapper()
-
-        event = mapper.map_one(
-            {
-                "event_id": "evt_tool",
-                "job_id": "job_1",
-                "step_id": "step_1",
-                "timestamp": "2024-03-09T12:00:00+00:00",
-                "type": "tool_call_end",
-                "payload": {"tool_name": "search_files"},
-            },
-            session_id="ses_1",
-            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
-        )
-
-        assert event is not None
-        assert event.type == "tool_call_end"
-        assert event.phase == "tool"
-        assert event.title == "工具返回"
-        assert event.content == "工具 search_files 已返回结果"
-        assert event.tool_name == "search_files"
-        assert event.status == "completed"
-
-    @pytest.mark.asyncio
-    async def test_trace_event_mapper_maps_tool_skill_names(self):
-        from app.services.mapping.trace_event_mapper import TraceEventMapper
-
-        mapper = TraceEventMapper()
-
-        event = mapper.map_one(
-            {
-                "event_id": "evt_tool_skill",
-                "job_id": "job_1",
-                "step_id": "step_1",
-                "timestamp": "2024-03-09T12:00:00+00:00",
-                "type": "tool_call_start",
-                "payload": {
-                    "tool_name": "test_tool_2",
-                    "args": {},
-                    "skill_names": ["test-tool-2"],
-                },
-            },
-            session_id="ses_1",
-            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
-        )
-
-        assert event is not None
-        assert event.type == "tool_call_start"
-        assert event.tool_name == "test_tool_2"
-        assert event.skill_names == ["test-tool-2"]
 
     @pytest.mark.asyncio
     async def test_delete_cleans_all_files(self):
@@ -835,7 +762,7 @@ class TestSessionListReadAmplification:
             # provider 解析（与外部环境变量无关）。
             session_ids = [
                 await workspace.create_session(
-                    f"读放大-{index:02d}", current_provider_id="primary"
+                    f"读放大-{index:02d}", current_model_json=PRIMARY_MODEL.canonical_json()
                 )
                 for index in range(population)
             ]

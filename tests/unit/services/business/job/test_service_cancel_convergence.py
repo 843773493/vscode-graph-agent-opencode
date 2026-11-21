@@ -316,6 +316,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(job_se
         message_created_at=datetime.now(UTC).isoformat(),
         thread_id=job_fixture_thread_id(session_id),
     )
+    queue = await service._bus.subscribe(first.job_id, subscriber_kind="test_cancel")
     await executor.started.wait()
     second = await service.start_job(
         session_id,
@@ -355,7 +356,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(job_se
         f"FIFO 队首未被唤醒: {service._jobs[second.job_id].status.value}"
     )
     await _wait_slot_cleared(service, session_id)
-    events = await service._bus.list_events(first.job_id)
+    events = [queue.get_nowait() for _ in range(queue.qsize())]
     assert [event.type for event in events].count("job_cancelled") == 1
 
 
@@ -428,10 +429,11 @@ async def test_cancel_active_without_live_task_releases_slot(job_service_factory
     else:
         with pytest.raises(OSError, match="injected task start"):
             await start()
+    queue = await service._bus.subscribe(identity.job_id, subscriber_kind="test_cancel")
     result = await service.control(identity.job_id, JobControlRequest(action=ControlAction.cancel))
     assert result.status == service._jobs[identity.job_id].status == JobStatus.cancelled
     assert service._jobs[identity.job_id].ended_at is not None
     assert (session_id, job_fixture_thread_id(session_id)) not in service._thread_current_job
     assert executor.ran == 0
-    events = await service._bus.list_events(identity.job_id)
+    events = [queue.get_nowait() for _ in range(queue.qsize())]
     assert [event.type for event in events].count("job_cancelled") == 1

@@ -6,12 +6,12 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.api.deps import (
-    get_request_id,
     get_workspace_file_watch_service,
     get_workspace_service,
     verify_local_token,
@@ -26,6 +26,7 @@ from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
 from app.core.failures import failure_detail, report_failure
 from app.core.resource_uri import parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
@@ -62,6 +63,7 @@ from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_files.events import file_events
@@ -146,11 +148,19 @@ async def stream_workspace_file_events(
     *,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
 ):
-    source = await asyncio.to_thread(open_workspace_file_sse, payload, watch_service, workspace_service)
+    try:
+        cursor = payload.after_event_id
+        if cursor is None:
+            cursor = await asyncio.to_thread(workspace_service.file_operations.store.latest_event_id)
+            payload = payload.model_copy(update={"after_event_id": cursor})
+        source = await asyncio.to_thread(open_workspace_file_sse, payload, watch_service, workspace_service)
+    except (OSError, RuntimeError) as error:
+        detail = report_failure(error, detail=failure_detail(error, stage="workspace-files-open", label="文件订阅失败"))
+        raise HTTPException(500, detail=detail) from error
     return StreamingResponse(
         source,
         media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
+        headers={**SSE_NO_CACHE_HEADERS, "X-Workspace-File-Cursor": str(cursor)},
     )
 
 
@@ -178,46 +188,54 @@ def open_workspace_file_sse(
     except (NotADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
 
-    async def generate():
-        async with aclosing(
-            stream_sse_with_heartbeat(
-                file_events(workspace_service.file_operations, watch_service, roots, payload.after_event_id, references),
-                heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
-                close_source_on_exit=True,
-            )
-        ) as stream:
-            async for batch in stream:
-                if isinstance(batch, str):
-                    yield batch
-                    continue
-                if batch.error is not None:
-                    data = json.dumps(
-                        sse_error_to_json(sse_error_to_proto(batch.error)),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    yield f"event: error\ndata: {data}\n\n"
-                    return
-                data = json.dumps(
-                    file_change_batch_to_json(
-                        file_change_batch_to_proto(
-                            {
-                                "overflow": batch.overflow,
-                                "directories": [item.model_dump() for item in batch.directories],
-                                "event_id": batch.event_id,
-                                "invalidated_roots": list(batch.invalidated_roots),
-                                "snapshots": [item.model_dump() for item in batch.snapshots],
-                                "changes": [
-                                    {"kind": change.kind, "path": change.path}
-                                    for change in batch.changes
-                                ],
-                            }
-                        )
-                    ),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+    def encode_changes(batch: WorkspaceFileChangeBatch) -> str:
+        data = json.dumps(
+            file_change_batch_to_json(
+                file_change_batch_to_proto(
+                    {
+                        "overflow": batch.overflow,
+                        "directories": [item.model_dump() for item in batch.directories],
+                        "event_id": batch.event_id,
+                        "invalidated_roots": list(batch.invalidated_roots),
+                        "snapshots": [item.model_dump() for item in batch.snapshots],
+                        "changes": [
+                            {"kind": change.kind, "path": change.path}
+                            for change in batch.changes
+                        ],
+                    }
                 )
-                yield f"event: changes\ndata: {data}\n\n"
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return f"event: changes\ndata: {data}\n\n"
+
+    async def generate():
+        try:
+            async with aclosing(
+                stream_sse_with_heartbeat(
+                    file_events(workspace_service.file_operations, watch_service, roots, payload.after_event_id, references),
+                    heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                    close_source_on_exit=True,
+                )
+            ) as stream:
+                async for batch in stream:
+                    if isinstance(batch, str):
+                        yield batch
+                        continue
+                    if batch.error is not None:
+                        data = json.dumps(
+                            sse_error_to_json(sse_error_to_proto(batch.error)),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        yield f"event: error\ndata: {data}\n\n"
+                        return
+                    yield await run_sync_shielded(encode_changes, batch)
+        except (OSError, RuntimeError) as error:
+            message = report_failure(error, detail=failure_detail(error, stage="workspace-files-stream", label="文件订阅失败"))
+            data = json.dumps(sse_error_to_json(sse_error_to_proto(message)), ensure_ascii=False)
+            yield f"event: error\ndata: {data}\n\n"
 
     return generate()
 

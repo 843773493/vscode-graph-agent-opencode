@@ -192,6 +192,7 @@ function appState(): AppState {
     pendingConversations: new Map([
       [SESSION_CACHE_KEY, [pendingConversation()]],
     ]),
+    pendingQueueVersions: new Map(),
     activeJobIdsBySession: new Map([
       [SESSION_CACHE_KEY, ACTIVE_JOB_ID],
     ]),
@@ -211,8 +212,11 @@ function appState(): AppState {
     lastCompactResult: null,
     currentGoal: null,
     currentGoalSessionId: null,
+    currentGoalControlRevision: 0,
+    currentGoalSyncVersion: 0,
     goalLoading: false,
     goalError: null,
+    sessionExecutionSyncError: null,
   };
 }
 

@@ -9,8 +9,14 @@ import logging
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime
+from functools import partial
 from typing import cast
 
+from boxteam_plugin_sdk.request_context import (
+    require_current_request_id,
+    reset_current_request_id,
+    set_current_request_id,
+)
 from pydantic import ValidationError
 
 from app.core.key_lock_pool import KeyLockPool
@@ -23,11 +29,8 @@ from app.core.session_control_store import (
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.trace_middleware import (
     require_current_gateway_id,
-    require_current_request_id,
     reset_current_gateway_id,
-    reset_current_request_id,
     set_current_gateway_id,
-    set_current_request_id,
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.communication import (
@@ -52,7 +55,7 @@ from app.services.business.communication.wait import (
     WaitSelector,
     WaitUntil,
 )
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.business.session_service import SessionService
@@ -100,7 +103,7 @@ class SessionCommunicationService:
 
     def _ledger(self, session_id: str, store: SessionControlStore) -> CommunicationLedgerService:
         return CommunicationLedgerService(
-            session_id=session_id, store=store, write_admission=self._sessions.session_write_admission,
+            session_id=session_id, store=store, write_admission=partial(self._sessions.session_write_admission, new_operation=True),
             lease_settlement=self._sessions.session_lease_settlement,
         )
 

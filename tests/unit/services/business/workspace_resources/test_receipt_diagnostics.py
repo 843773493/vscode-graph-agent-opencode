@@ -70,8 +70,8 @@ async def test_cold_receipt_rejection_preserves_error_and_unpublished_state(
         "unregistered": "/private/unregistered-receipt", "duplicate": rid,
     }[invalid]
 
-    async def invalid_listing() -> list[dict[str, object]]:
-        items = await listing()
+    async def invalid_listing(**query) -> list[dict[str, object]]:
+        items = await listing(**query)
         if invalid == "duplicate":
             return items + [dict(items[0])]
         if invalid == "unregistered":

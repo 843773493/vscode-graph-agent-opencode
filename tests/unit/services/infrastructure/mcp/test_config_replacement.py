@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 
 import anyio
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.tools import BaseTool, StructuredTool
 
-from app.core.lifecycle import LifetimeScope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.schemas.gateway.service_plugin import PluginBinding

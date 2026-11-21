@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { streamWorkspaceFileEvents } from "../../api";
@@ -12,7 +14,7 @@ const ROOT = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
 function installStreamBackend(respond: (init: RequestInit | undefined) => Response): string[] {
   const requests: string[] = [];
   installSessionApiFetchMock(({ path, method, init }) => {
-    expect(path).toBe("/api/v1/workspace/observations/stream");
+    expect(path).toBe("/api/v1/workspace/files/events");
     const headers = new Headers(init?.headers);
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
@@ -24,20 +26,14 @@ function installStreamBackend(respond: (init: RequestInit | undefined) => Respon
 
 function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
   const encoder = new TextEncoder();
-  const subscription = (JSON.parse(String(init?.body)) as { subscriptions: [{ subscription_id: string; files_after?: number }] }).subscriptions[0];
-  const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
-    subscription_id: subscription.subscription_id, state,
-    ...(frame === undefined ? { cursor: String(subscription.files_after ?? 0) } : { frame }),
-  })}\n\n`);
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(envelope("connected"));
-      for (const chunk of chunks) controller.enqueue(envelope("frame", chunk));
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
       controller.close();
     },
   }), {
     status: 200,
-    headers: { "content-type": "text/event-stream" },
+    headers: { "content-type": "text/event-stream", "X-Workspace-File-Cursor": String(JSON.parse(String(init?.body)).after_event_id ?? 0) },
   });
 }
 
@@ -68,10 +64,8 @@ describe("工作区文件监听 SSE 客户端", () => {
       },
     });
 
-    expect(JSON.parse(String(streamRequest?.body)).subscriptions).toEqual([{
-      subscription_id: expect.any(String), kind: "workspace_files", paths: [`${ROOT}/shortcut`],
-    }]);
-    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
+    expect(JSON.parse(String(streamRequest?.body))).toEqual({ paths: [`${ROOT}/shortcut`] });
+    expect(requests).toEqual(["POST /api/v1/workspace/files/events"]);
     expect(connected).toBe(true);
     expect(batches).toEqual([{
       overflow: false, directories: [], event_id: 7, invalidated_roots: [], snapshots: [],
@@ -88,7 +82,7 @@ describe("工作区文件监听 SSE 客户端", () => {
     });
 
     await expect(streamWorkspaceFileEvents(port, [], { workspaceId: WORKSPACE_KEY })).rejects.toThrow("watch failed");
-    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
+    expect(requests).toEqual(["POST /api/v1/workspace/files/events"]);
   });
 
   test("发送durable cursor且保留非空配对目录快照", async () => {
@@ -106,10 +100,8 @@ describe("工作区文件监听 SSE 客户端", () => {
     await streamWorkspaceFileEvents(48_103, [`${ROOT}/src`], {
       workspaceId: WORKSPACE_KEY, afterEventId: 30, onBatch: (value) => batches.push(value),
     });
-    expect(JSON.parse(String(init?.body)).subscriptions).toEqual([{
-      subscription_id: expect.any(String), kind: "workspace_files", paths: [`${ROOT}/src`], files_after: 30,
-    }]);
-    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
+    expect(JSON.parse(String(init?.body))).toEqual({ paths: [`${ROOT}/src`], after_event_id: 30 });
+    expect(requests).toEqual(["POST /api/v1/workspace/files/events"]);
     expect(batches).toEqual([batch]);
   });
 });

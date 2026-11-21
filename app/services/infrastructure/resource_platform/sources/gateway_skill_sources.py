@@ -12,15 +12,15 @@ from contextvars import Context
 from dataclasses import dataclass, field
 
 import httpx
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.request_context import require_current_request_id
 from pydantic import ValidationError
 
-from app.core.lifecycle import LifetimeScope
 from app.core.resource_uri import (
     ParsedResourceUri,
     parse_resource_uri,
     skill_display_uri,
 )
-from app.core.trace_middleware import require_current_request_id
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillSourcesDTO,

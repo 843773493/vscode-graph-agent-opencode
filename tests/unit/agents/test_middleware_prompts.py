@@ -11,8 +11,8 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.instruction_producers import runtime_instruction_producers
+from app.agents.middleware_assembly import build_deep_agent_middleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
@@ -26,7 +26,7 @@ from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.agents.structured_prompt_validation_middleware import (
@@ -289,16 +289,18 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
 
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-    from app.agents import agent_factory
+    from app.runtime import provider_model
+    from app.runtime.agent_runtime import prepare_agent_model
 
     config_service = MagicMock()
     config_service.get_revision.return_value = "config:runtime-identity"
     config_service.get_agent_runtime_config.return_value = {
         "system_prompt": "base prompt",
         "runtime_identity_description": "测试身份说明",
-        "providers": [
+        "models": [
             {
-                "id": "backup_3",
+                "provider_id": "backup_3",
+                "model_id": "gpt-5.6-luna",
                 "model": "gpt-5.6-luna",
                 "api_mode": {
                     "protocol": "chat_completions",
@@ -308,7 +310,8 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
                 },
             },
             {
-                "id": "backup_4",
+                "provider_id": "backup_4",
+                "model_id": "gpt-5.6-luna",
                 "model": "gpt-5.6-luna",
                 "api_mode": {
                     "protocol": "chat_completions",
@@ -320,21 +323,21 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
         ],
     }
     monkeypatch.setattr(
-        agent_factory,
+        provider_model,
         "build_model_from_provider",
-        lambda provider, runtime_config, prompt_cache_key=None: FakeListChatModel(
+        lambda provider, runtime_config, prompt_cache_key=None, gateway_id=None: FakeListChatModel(
             responses=["ok"]
         ),
     )
 
-    runtime = agent_factory.build_runtime_for_agent(
+    model_setup = prepare_agent_model(
         "default",
         config_service,
     )
 
     import json
 
-    identity = next(item for item in runtime["instruction_producers"] if item.producer_id == "R02")
+    identity = next(item for item in model_setup.instruction_producers if item.producer_id == "R02")
     facts = json.loads(identity.content)["runtime_facts"]
     assert facts["workspace_root"] == "."
     assert facts["configured_candidates"][0] == {"provider_id": "backup_3", "model_id": "gpt-5.6-luna"}

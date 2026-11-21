@@ -8,9 +8,10 @@ import logging
 from collections.abc import Mapping
 
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.abstractions.job_executor import JobRuntimeStateProtocol
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.services.business.job.service import JobService
 from tests.integration.backend.sessions.test_persistent_tasks import (

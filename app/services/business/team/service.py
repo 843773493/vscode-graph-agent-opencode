@@ -3,19 +3,22 @@ from __future__ import annotations
 import json
 import logging
 
+from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     OwnerThreadCreationFactoryProtocol,
-    SessionReaderProtocol,
     SessionSubagentProtocol,
 )
 from app.abstractions.team import TeamFanoutProtocol, TeamStoreProtocol
 from app.core.session_control_store.collaboration_fanout import (
     CollaborationFanoutRecord,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.team import (
     TeamBoardDTO,
+    TeamBoardSummaryDTO,
     TeamListDTO,
     TeamMemberOperationDTO,
+    TeamMemberSummaryDTO,
     TeamTaskOperationDTO,
     TeamTaskPhase,
     TeamTaskStatus,
@@ -53,8 +56,32 @@ class TeamCoordinationService:
         self._factory.validate_owner_thread(requester_session_id, requester_thread_id)
         return self._boards.list_for_member(requester_session_id, requester_thread_id)
 
+    async def list_summaries(self, *, requester_session_id: str, requester_thread_id: str) -> list[TeamBoardSummaryDTO]:
+        return await run_sync_shielded(self._list_summaries, requester_session_id, requester_thread_id)
+
+    def _list_summaries(self, session_id: str, thread_id: str) -> list[TeamBoardSummaryDTO]:
+        self._factory.validate_owner_thread(session_id, thread_id)
+        with self._factory.for_owner_session(session_id) as owner, owner.control_store.read_transaction():
+            boards = {}
+            for raw in owner.control_store.collaboration_board_summaries():
+                board = TeamBoardSummaryDTO.model_validate_json(raw)
+                boards[board.team_id] = board
+            for board in boards.values():
+                if board.session_id != session_id:
+                    raise RuntimeError("团队列表包含其它 Session 的 board")
+                board.members.append(TeamMemberSummaryDTO(thread_id=board.coordinator_thread_id, role="coordinator", work_mode="write"))
+            if boards:
+                for member in owner.control_store.list_collaboration_member_summaries(coordinator_session_id=session_id):
+                    if member["state"] == "registering" or member["team_id"] not in boards:
+                        continue
+                    board = boards[member["team_id"]]
+                    if member["coordinator_thread_id"] != board.coordinator_thread_id:
+                        raise RuntimeError("团队成员的冻结协调线程不一致")
+                    board.members.append(TeamMemberSummaryDTO(thread_id=member["child_thread_id"], role=member["role"], work_mode=member["work_mode"]))
+        return [board for board in boards.values() if any(member.thread_id == thread_id for member in board.members)]
+
     async def get_board(self, *, requester_session_id: str, requester_thread_id: str, team_id: str) -> TeamBoardDTO:
-        return self._boards.get_for_member(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
+        return await run_sync_shielded(self._boards.get_for_member, session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
 
     async def create_member(self, *, requester_session_id: str, requester_thread_id: str,
                             requester_agent_id: str, requester_job_id: str, requester_tool_call_id: str,

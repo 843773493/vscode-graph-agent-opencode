@@ -13,7 +13,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

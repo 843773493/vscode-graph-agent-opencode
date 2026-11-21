@@ -43,14 +43,24 @@ test("只读取目标原行，Unicode 码点高亮且切换位置即时隐藏旧
 });
 
 test("失效引用明确报错并释放旧原文，不回读日志 tail", async () => {
+  const target: GatewayDiagnosticLogLocateRequest = {
+    scope: { source: "managed_process", workspace_ids: ["workspace-a", "workspace-b"] },
+    reference: { ...request().reference!, gateway_id: "gateway_fault_owner" },
+  };
   installGatewayFetch(({ path }) => {
     expect(path).toBe("/api/gateway/diagnostics/locate");
-    return Response.json({ detail: { owner: "runtime_log", code: "stale_runtime_log_reference", reason: "record_changed", message: "原行已改写" } }, { status: 409 });
+    return Response.json({ detail: { owner: "runtime_log", code: "stale_runtime_log_reference", reason: "record_changed", message: "原行已改写" } }, { status: 409, headers: { "X-Request-ID": "req_stale_location" } });
   });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticLogLocation apiPort={8011} request={request()} workspaces={[]} onClose={() => {}} />); });
+  act(() => { renderer = create(<GatewayDiagnosticLogLocation apiPort={8011} request={target} workspaces={[]} onClose={() => {}} />); });
   await flush();
-  expect(JSON.stringify(renderer.root.findByProps({ role: "alert" }).children)).toContain("原行已改写");
+  const error = JSON.stringify(renderer.root.findByProps({ role: "alert" }).children);
+  expect(error).toContain("原行已改写");
+  expect(error).toContain("request_id=req_stale_location");
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered).toContain("gateway_fault_owner");
+  expect(rendered).toContain("gateway-log");
+  expect(rendered).toContain("workspace-a, workspace-b");
   expect(renderer.root.findAllByType("pre")).toHaveLength(0);
   act(() => renderer.unmount());
 });

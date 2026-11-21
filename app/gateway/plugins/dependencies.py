@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import platform
 import subprocess
 import sys
+import tarfile
 import tomllib
+import zipfile
 from email.parser import Parser
 from functools import cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -176,6 +180,47 @@ def _node_requirements(manifest: dict[str, object]) -> set[str]:
     return requirements
 
 
+def _sdk_archive(root: Path, value: str, *, suffix: str) -> Path:
+    relative = PurePosixPath(value)
+    if (relative.is_absolute() or PureWindowsPath(value).drive or "\\" in value
+            or ".." in relative.parts or len(relative.parts) != 4
+            or relative.parts[:2] != ("vendor", "sdk") or not value.endswith(suffix)):
+        raise ValueError("SDK 依赖必须指向 vendor/sdk/<sha256>/ 下的包内归档")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("SDK 归档路径不能包含符号链接")
+    if not current.is_file():
+        raise ValueError(f"SDK 归档不存在: {value}")
+    if hashlib.sha256(current.read_bytes()).hexdigest() != relative.parts[2]:
+        raise ValueError(f"SDK 归档摘要不符: {value}")
+    return current
+
+
+def _sdk_wheel(root: Path, package: dict[str, object], sources: dict[str, object]) -> tuple[str, str]:
+    source = package.get("source", {})
+    value = source.get("path") if isinstance(source, dict) else None
+    if package.get("name") != "boxteam-plugin-sdk" or not isinstance(value, str):
+        raise ValueError("Python 插件本地依赖仅允许 SDK wheel")
+    if sources.get("boxteam-plugin-sdk") != {"path": value}:
+        raise ValueError("SDK wheel 声明与 uv.lock 来源不一致")
+    archive = _sdk_archive(root, value, suffix=".whl")
+    wheels = package.get("wheels")
+    digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    if not isinstance(wheels, list) or len(wheels) != 1 or wheels[0].get("hash") != digest or wheels[0].get("filename") != archive.name:
+        raise ValueError("SDK wheel 的 uv 原生摘要或文件名不一致")
+    with zipfile.ZipFile(archive) as wheel:
+        files = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+        if len(files) != 1:
+            raise ValueError("SDK wheel 必须包含唯一 METADATA")
+        metadata = Parser().parsestr(wheel.read(files[0]).decode("utf-8"))
+    name, version = metadata.get("Name"), metadata.get("Version")
+    if canonicalize_name(name or "") != "boxteam-plugin-sdk" or version != package.get("version"):
+        raise ValueError("SDK wheel 名称或版本与锁不一致")
+    return value, str(version)
+
+
 def _validate_python_lock(project_file: Path, lock_file: Path) -> list[Requirement]:
     project = tomllib.loads(project_file.read_text(encoding="utf-8"))
     project_config = project.get("project")
@@ -186,11 +231,16 @@ def _validate_python_lock(project_file: Path, lock_file: Path) -> list[Requireme
     lock = tomllib.loads(lock_file.read_text(encoding="utf-8"))
     if lock.get("version") != 1 or not isinstance(lock.get("package"), list):
         raise ValueError("Python 插件仅支持标准 uv.lock v1")
+    sources = project.get("tool", {}).get("uv", {}).get("sources", {})
+    sdk_source = None
     for package in lock["package"]:
         if not isinstance(package, dict):
             raise TypeError("Python 插件 uv.lock package 条目格式无效")
         source = package.get("source", {})
         if source == {"virtual": "."}:
+            continue
+        if isinstance(source, dict) and "path" in source:
+            sdk_source = _sdk_wheel(project_file.parent, package, sources)
             continue
         registry = source.get("registry") if isinstance(source, dict) else None
         if not isinstance(registry, str):
@@ -212,7 +262,16 @@ def _validate_python_lock(project_file: Path, lock_file: Path) -> list[Requireme
         raise ValueError("Python 插件 uv.lock 缺少根项目记录")
     metadata = project_package.get("metadata", {})
     locked_requirements = metadata.get("requires-dist", []) if isinstance(metadata, dict) else []
-    locked = [Requirement(_locked_requirement(item)) for item in locked_requirements]
+    locked = []
+    for item in locked_requirements:
+        if isinstance(item, dict) and "path" in item:
+            if sdk_source is None or canonicalize_name(item.get("name", "")) != "boxteam-plugin-sdk" or item["path"] != sdk_source[0]:
+                raise ValueError("uv 根 SDK 来源不一致")
+            declared_sdk = next((requirement for requirement in active if canonicalize_name(requirement.name) == "boxteam-plugin-sdk"), None)
+            if declared_sdk is None or not declared_sdk.specifier.contains(sdk_source[1], prereleases=True):
+                raise ValueError("SDK wheel 版本不满足项目声明")
+            item = {**item, "specifier": str(declared_sdk.specifier)}
+        locked.append(Requirement(_locked_requirement(item)))
     key = lambda requirement: (canonicalize_name(requirement.name), str(requirement.specifier),
         tuple(sorted(requirement.extras)), str(requirement.marker or ""))
     if sorted(map(key, active)) != sorted(map(key, locked)):
@@ -252,6 +311,34 @@ def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[t
         raise TypeError("Bun 锁文件 packages 必须是对象")
     packages_by_reference: dict[str, set[tuple[str, str]]] = {}
     for key, package in packages.items():
+        if isinstance(package, list) and len(package) == 3 and isinstance(package[0], str):
+            name, separator, value = package[0].rpartition("@")
+            declared = manifest.get("dependencies", {}).get("@boxteam/plugin-sdk")
+            if name != "@boxteam/plugin-sdk" or not separator or declared != f"file:{value}":
+                raise ValueError("Node 本地依赖仅允许声明的 SDK 归档")
+            archive = _sdk_archive(manifest_path.parent, value, suffix=".tgz")
+            integrity = "sha512-" + base64.b64encode(hashlib.sha512(archive.read_bytes()).digest()).decode("ascii")
+            if package[2] != integrity:
+                raise ValueError("SDK tarball Bun integrity 不一致")
+            with tarfile.open(archive) as bundle:
+                member = bundle.extractfile("package/package.json")
+                if member is None:
+                    raise ValueError("SDK tarball 缺少 package.json")
+                sdk_manifest = json.load(member)
+            version = sdk_manifest.get("version")
+            archive_name = Path(value).name
+            archive_version = archive_name.removeprefix("boxteam-plugin-sdk-").removesuffix(".tgz")
+            metadata = package[1]
+            if not isinstance(metadata, dict) or any(metadata.get(field, {}) != sdk_manifest.get(field, {})
+                    for field in ("dependencies", "optionalDependencies", "peerDependencies")):
+                raise ValueError("SDK tarball 依赖 metadata 与 Bun 锁不一致")
+            if (sdk_manifest.get("name") != name or not isinstance(version, str) or not version
+                    or not archive_version or version != archive_version):
+                raise ValueError("SDK tarball 名称或版本不符")
+            package_identity = (name, version)
+            packages_by_reference.setdefault(key, set()).add(package_identity)
+            packages_by_reference.setdefault(name, set()).add(package_identity)
+            continue
         if not isinstance(package, list) or len(package) != 4 or not isinstance(package[0], str):
             raise ValueError("Bun 锁文件只允许带完整性摘要的 registry 依赖")
         name, separator, version = package[0].rpartition("@")

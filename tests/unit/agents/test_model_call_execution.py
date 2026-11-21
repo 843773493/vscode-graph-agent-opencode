@@ -10,7 +10,13 @@ from uuid import UUID
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langgraph.types import Command
 
 from app.agents import model_call_execution
@@ -26,7 +32,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 @pytest.fixture

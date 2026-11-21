@@ -11,10 +11,6 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import (
-    build_model_from_provider,
-    build_runtime_for_agent,
-)
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _StreamPartState,
@@ -34,10 +30,13 @@ from app.agents.upstream_request_trace import (
     record_upstream_response,
 )
 from app.core.failures import is_provider_failure
-from app.services.orchestration.agent_stream_helpers import (
-    is_tracked_chat_model_event,
+from app.runtime.agent_runtime import prepare_agent_model
+from app.runtime.provider_model import build_model_from_provider
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+from app.services.orchestration.event_stream.model_events import (
+    is_chat_model_run_name,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 def _provider(api_mode: str) -> dict[str, object]:
@@ -65,10 +64,12 @@ def _provider(api_mode: str) -> dict[str, object]:
             "supports_reasoning": {"reasoning_content": True},
         }
     return {
-        "id": "provider-test",
+        "provider_id": "provider-test",
+        "model_id": "general",
         "endpoint": "https://example.com/v1",
         "model": "test-model",
         "api_key": "test-key",
+        "credential_source": "env:PROVIDER_TEST_KEY",
         "custom_llm_provider": "openai",
         "api_mode": structured_api_mode,
     }
@@ -229,9 +230,7 @@ def test_chat_completions_mode_forwards_stable_prompt_cache_key():
     )
 
     assert isinstance(model, BoxteamLiteLLMChatModel)
-    assert model._client_params["extra_body"] == {
-        "prompt_cache_key": "session-chat-cache"
-    }
+    assert model._client_params["prompt_cache_key"] == "session-chat-cache"
 
 
 def test_chat_completions_mode_omits_cache_key_without_capability():
@@ -271,7 +270,8 @@ def test_chat_completions_thinking_blocks_configures_model_projection():
 
 def test_anthropic_messages_mode_uses_litellm_chat_model():
     provider = {
-        "id": "anthropic-test",
+        "provider_id": "anthropic-test",
+        "model_id": "general",
         "endpoint": "https://example.com/anthropic",
         "model": "claude-test",
         "api_key": "test-key",
@@ -295,19 +295,18 @@ def test_anthropic_messages_mode_uses_litellm_chat_model():
     assert model.thinking_blocks_replay is True
 
 
-def test_anthropic_history_projects_direct_content_to_thinking_blocks():
+def test_anthropic_history_projects_direct_content_to_thinking_blocks(workspace_scope):
     from langchain_core.messages import AIMessage
 
     from app.agents.providers.output_normalization import build_ai_message_content
 
-    model = BoxteamLiteLLMChatModel(
-        model="claude-test",
-        api_key="test-key",
-        api_base="https://example.com/anthropic",
-        custom_llm_provider="anthropic",
-        provider_id="anthropic-test",
-        thinking_blocks_replay=True,
-    )
+    provider = _provider("chat_completions")
+    provider.update(model="claude-test", endpoint="https://example.com/anthropic",
+                    custom_llm_provider="anthropic", provider_id="anthropic-test")
+    provider["api_mode"] = {"protocol": "anthropic_messages", "model_info": {"supports_reasoning": True},
+                            "supports_reasoning": {"thinking_blocks": {"thinking": True, "redacted_thinking": False}}}
+    model = build_model_from_provider(provider, {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    assert model.model_source is not None
     message = AIMessage(
         content=build_ai_message_content(
             "最终回答",
@@ -317,7 +316,7 @@ def test_anthropic_history_projects_direct_content_to_thinking_blocks():
                 {"type": "redacted_thinking", "data": "sealed"},
             ],
         ),
-        response_metadata={"provider_id": "anthropic-test"},
+        response_metadata={"provider_id": "anthropic-test", "model_source": model.model_source.to_dict()},
     )
 
     projected = model._convert_messages_to_dicts([message])[0]
@@ -328,7 +327,7 @@ def test_anthropic_history_projects_direct_content_to_thinking_blocks():
     ]
 
 
-def test_anthropic_history_drops_reasoning_for_unsupported_target():
+def test_anthropic_history_keeps_public_thinking_text_without_replaying_private_blocks():
     from langchain_core.messages import AIMessage
 
     model = BoxteamLiteLLMChatModel(
@@ -360,7 +359,8 @@ def test_anthropic_history_drops_reasoning_for_unsupported_target():
 
     projected = model._convert_messages_to_dicts([message])[0]
 
-    assert projected["content"] == [{"type": "text", "text": "可见回答"}]
+    assert projected["content"] == [{"type": "text", "text": "思考"}, {"type": "text", "text": "可见回答"}]
+    assert "thinking_blocks" not in projected and "sealed" not in str(projected)
     assert projected["tool_calls"] == [
         {
             "type": "function",
@@ -381,7 +381,7 @@ def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
     )
     assert isinstance(model, BoxteamOpenAIResponsesModel)
     assert isinstance(model, BoxteamLiteLLMChatModel)
-    assert is_tracked_chat_model_event(type(model).__name__)
+    assert is_chat_model_run_name(type(model).__name__)
     assert model.responses_store is False
     assert model.responses_include == ["reasoning.encrypted_content"]
     assert model._client_params["prompt_cache_key"] == "session-123"
@@ -401,7 +401,8 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         lambda _: False,
     )
     provider = {
-        "id": "backup_4",
+        "provider_id": "backup_4",
+        "model_id": "general",
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "chatgpt",
@@ -431,65 +432,70 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
     assert payload["litellm_session_id"] == "ses_chatgpt_cache_affinity"
 
 
-def test_runtime_skips_invalid_fallback_without_blocking_selected_provider(
+def test_runtime_skips_invalid_fallback_without_blocking_selected_model(
     monkeypatch,
 ):
     primary_model = MagicMock(spec=BaseChatModel)
     providers = [_provider("responses"), _provider("responses")]
-    providers[0]["id"] = "selected"
-    providers[1]["id"] = "broken-fallback"
+    providers[0]["model_id"] = "selected"
+    providers[1]["model_id"] = "broken-fallback"
+    selected = ModelReferenceDTO(provider_id="provider-test", model_id="selected")
 
     class ConfigServiceStub:
         def get_revision(self):
             return "config:runtime-fallback"
 
-        def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
-            assert preferred_provider_id == "selected"
-            return {"providers": providers, "system_prompt": "test", "runtime_identity_description": ""}
+        def get_agent_runtime_config(self, _agent_id, *, preferred_model=None):
+            assert preferred_model == selected
+            return {"models": providers, "system_prompt": "test", "runtime_identity_description": ""}
 
-    def build(provider, _runtime, *, prompt_cache_key=None):
+    def build(provider, _runtime, *, prompt_cache_key=None, gateway_id=None):
         assert prompt_cache_key is None
-        if provider["id"] == "broken-fallback":
+        assert gateway_id is None
+        if provider["model_id"] == "broken-fallback":
             raise ValueError("fallback 配置损坏")
         return primary_model
 
-    monkeypatch.setattr("app.agents.agent_factory.build_model_from_provider", build)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", build)
 
-    runtime = build_runtime_for_agent(
+    model_setup = prepare_agent_model(
         "default",
         config_service=ConfigServiceStub(),
-        preferred_provider_id="selected",
+        preferred_model=selected,
     )
 
-    assert runtime["model"] is primary_model
-    assert runtime["model_routing"]._candidates[0].provider_id == "selected"
-    assert len(runtime["model_routing"]._candidates) == 1
+    assert model_setup.model is primary_model
+    candidate = model_setup.routing_middleware._candidates[0]
+    assert (candidate.provider_id, candidate.model_id) == (selected.provider_id, selected.model_id)
+    assert len(model_setup.routing_middleware._candidates) == 1
 
 
-def test_runtime_reports_invalid_selected_provider(monkeypatch):
+def test_runtime_reports_invalid_selected_model(monkeypatch):
     providers = [_provider("responses")]
-    providers[0]["id"] = "broken-selected"
+    providers[0]["model_id"] = "broken-selected"
+    selected = ModelReferenceDTO(provider_id="provider-test", model_id="broken-selected")
 
     class ConfigServiceStub:
         def get_revision(self):
             return "config:runtime-fallback"
 
-        def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
-            return {"providers": providers, "system_prompt": "test", "runtime_identity_description": ""}
+        def get_agent_runtime_config(self, _agent_id, *, preferred_model=None):
+            assert preferred_model == selected
+            return {"models": providers, "system_prompt": "test", "runtime_identity_description": ""}
 
     monkeypatch.setattr(
-        "app.agents.agent_factory.build_model_from_provider",
+        "app.runtime.provider_model.build_model_from_provider",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("配置损坏")),
     )
 
     with pytest.raises(
         RuntimeError,
-        match="当前选择的模型配置不可用.*broken-selected.*配置损坏",
+        match="当前选择的模型配置不可用.*provider_id=provider-test, model_id=broken-selected.*配置损坏",
     ):
-        build_runtime_for_agent(
+        prepare_agent_model(
             "default",
             config_service=ConfigServiceStub(),
-            preferred_provider_id="broken-selected",
+            preferred_model=selected,
         )
 
 
@@ -501,10 +507,21 @@ def test_chatgpt_provider_rejects_missing_oauth_config():
         build_model_from_provider(provider, {})
 
 
-def test_responses_history_replays_encrypted_reasoning_without_server_id():
+def test_chatgpt_nonstream_is_rejected_before_loading_oauth_credentials(monkeypatch):
+    provider = _provider("responses")
+    provider.update(custom_llm_provider="chatgpt", auth={"type": "oauth", "method": "chatgpt"})
+    provider["api_mode"]["streaming"] = False
+    monkeypatch.setattr("app.runtime.chatgpt_auth.ensure_chatgpt_oauth_ready",
+                        lambda *_args: pytest.fail("非流式拒绝不应加载 OAuth 凭据"))
+    with pytest.raises(ValueError, match="不能以聚合流代替非流式"):
+        build_model_from_provider(provider, {})
+
+
+def test_responses_history_replays_encrypted_reasoning_without_server_id(workspace_scope):
     from langchain_core.messages import AIMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    assert model.model_source is not None
     message = AIMessage(
         content=[
             {
@@ -516,7 +533,7 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
                 "summary": [],
             }
         ],
-        response_metadata={"provider_id": "provider-test"},
+        response_metadata={"provider_id": "provider-test", "model_source": model.model_source.to_dict()},
     )
     payload = model._responses_payload([message], None, {})
     assert payload["input"] == [
@@ -528,10 +545,11 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
     ]
 
 
-def test_responses_attachment_history_drops_reasoning_output_content():
+def test_responses_attachment_history_drops_reasoning_output_content(workspace_scope):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    assert model.model_source is not None
     payload = model._responses_payload(
         [
             HumanMessage(content="先处理上一条请求"),
@@ -549,7 +567,7 @@ def test_responses_attachment_history_drops_reasoning_output_content():
                     },
                     {"type": "text", "text": "上一条请求已完成"},
                 ],
-                response_metadata={"provider_id": "provider-test"},
+                response_metadata={"provider_id": "provider-test", "model_source": model.model_source.to_dict()},
             ),
             HumanMessage(
                 content=[
@@ -673,35 +691,22 @@ def test_responses_history_drops_encrypted_reasoning_from_another_provider():
     assert any(item.get("type") == "message" for item in payload["input"])
 
 
-def test_responses_native_projection_skips_reasoning_items_and_keeps_text():
+@pytest.mark.parametrize("text", [None, "上一轮工具调用已完成"])
+def test_responses_native_summary_projects_reasoning_before_encoding_message_text(text):
     from app.services.infrastructure.rollout_context.provider.native_request import (
-        _text_blocks,
+        _summary_message_inputs,
     )
 
-    # 这个回归用例锁定实际会话中出现的 assistant structured_content 形状：
-    # reasoning_items 是 provider 扩展，普通 text 才是 Responses message content。
-    reasoning_and_text = [
-        {
-            "type": "reasoning_items",
-            "reasoning_items": [{"type": "reasoning", "summary": []}],
-        },
-        {"type": "text", "text": "上一轮工具调用已完成"},
-    ]
-    assert _text_blocks(reasoning_and_text, role="assistant") == [{
-        "type": "output_text",
-        "text": "上一轮工具调用已完成",
-    }]
-
-
-def test_responses_native_projection_drops_reasoning_only_assistant_content():
-    from app.services.infrastructure.rollout_context.provider.native_request import (
-        _text_blocks,
-    )
-
-    assert _text_blocks(
-        [{"type": "reasoning_items", "reasoning_items": [{"type": "reasoning"}]}],
-        role="assistant",
-    ) == []
+    content = [{"type": "reasoning_items", "reasoning_items": [{"type": "reasoning", "summary": []}]}]
+    if text is not None:
+        content.append({"type": "text", "text": text})
+    # 私有块先经过共享投影，纯文本编码器只接收该投影的结果。
+    inputs, losses = _summary_message_inputs({
+        "message": {"type": "ai", "data": {"content": content}},
+        "item_ids": [], "retry_source_item_ids": [],
+    }, target_source=None, target_capabilities=frozenset({"reasoning_items"}))
+    assert inputs == ([] if text is None else [{"role": "assistant", "content": [{"type": "output_text", "text": text}]}])
+    assert losses == []
 
 
 def test_responses_native_projection_rejects_unknown_system_block():
@@ -883,6 +888,12 @@ def test_responses_history_drops_late_tool_result_after_job_boundary():
 def test_responses_history_isolates_previous_tool_transactions_and_internal_reminder():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+    from app.prompting import internal_message_factory
+
+    reminder = internal_message_factory.build(
+        kind="checkpoint_reminder", control="用户主动取消旧任务。请停止当前输出。",
+    )
+
     stale_call_id = "call_QWLcaGAtSpzygm4gaup0JyJS"
     model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
@@ -901,12 +912,8 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
             ),
             ToolMessage(content="旧工具结果", tool_call_id=stale_call_id),
             HumanMessage(
-                content=(
-                    "<system_reminder>\n"
-                    "用户主动取消旧任务。请停止当前输出。\n"
-                    "</system_reminder>"
-                ),
-                response_metadata={"internal": True},
+                content=reminder.content,
+                response_metadata=reminder.metadata,
             ),
             HumanMessage(content="当前任务只读取 project.godot"),
         ],
@@ -921,6 +928,20 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
         item.get("content") == "当前任务只读取 project.godot"
         for item in payload["input"]
     )
+
+
+def test_responses_payload_preserves_user_literal_tag_and_tool_retry():
+    from langchain_core.messages import HumanMessage
+
+    from app.prompting import internal_message_factory
+
+    user = "<system_reminder>请解释这个标签</system_reminder>"
+    retry = internal_message_factory.build(kind="tool_test_retry", control="继续调用测试工具。")
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    payload = model._responses_payload([
+        HumanMessage(content=user), HumanMessage(content=retry.content, response_metadata=retry.metadata),
+    ], None, {})
+    assert [item["content"] for item in payload["input"]] == [user, retry.content]
 
 
 def test_responses_history_recovers_from_persisted_orphan_tool_result():
@@ -1004,10 +1025,11 @@ def test_responses_history_replays_image_tool_result_as_portable_text_pair():
     )
 
 
-def test_responses_payload_converts_image_and_replays_encrypted_reasoning():
+def test_responses_payload_converts_image_and_replays_encrypted_reasoning(workspace_scope):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    assert model.model_source is not None
     history = [
         HumanMessage(
             content=[
@@ -1027,7 +1049,7 @@ def test_responses_payload_converts_image_and_replays_encrypted_reasoning():
                 },
                 {"type": "text", "text": "图片中有测试图案"},
             ],
-            response_metadata={"provider_id": "provider-test"},
+            response_metadata={"provider_id": "provider-test", "model_source": model.model_source.to_dict()},
         ),
     ]
 

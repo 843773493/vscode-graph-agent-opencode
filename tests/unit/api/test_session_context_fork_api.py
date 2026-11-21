@@ -16,7 +16,7 @@ from app.api.sessions import (
     transfer_session_fork,
 )
 from app.core.resource_uri import thread_resource_uri
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionForkCreationKind,
@@ -29,7 +29,7 @@ from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
     workspace_session_inventory_uri,

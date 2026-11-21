@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Self, TextIO
+from uuid import UUID
 
 import pytest
 
@@ -49,11 +50,11 @@ def test_invalid_identity_preserves_file_and_retry_uses_repaired_value(
         damaged = str(identity_path).encode() + b"\xff"
     identity_path.write_bytes(damaged)
 
-    def reject_generation(_: int) -> str:
+    def reject_generation(_: str) -> str:
         raise AssertionError("损坏身份不得生成替代ID")
 
     with monkeypatch.context() as patch:
-        patch.setattr(credentials_module.secrets, "token_hex", reject_generation)
+        patch.setattr(credentials_module, "create_prefixed_id", reject_generation)
         with pytest.raises(ValueError) as caught:
             load_proxy_gateway_id()
     stage = "decode" if damage in {"json", "utf8"} else "validate"
@@ -213,6 +214,8 @@ def test_successful_identity_creation_is_stable_and_exclusive(identity_path: Pat
     first = load_or_create_gateway_id(identity_path)
     original = identity_path.read_bytes()
     assert first.startswith("gateway_") and len(first) == 40
+    assert UUID(hex=first.removeprefix("gateway_")).version == 7
+    assert load_or_create_gateway_id(identity_path) == first
     assert load_proxy_gateway_id() == first
     assert identity_path.read_bytes() == original == (json.dumps({"gateway_id": first}) + "\n").encode()
     if os.name != "nt":

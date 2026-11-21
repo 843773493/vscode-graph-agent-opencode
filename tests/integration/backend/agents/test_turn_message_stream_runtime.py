@@ -21,13 +21,13 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityCapabilities,
     ActivityHandlerRegistry,
     ActivityRuntime,
     DefaultActivityHandler,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -494,7 +494,7 @@ async def test_activity_projection_failure_keeps_native_location_in_diagnostics(
         assert "private-activity" not in json.dumps(event)
         if error_type is PermissionError:
             assert "errno=13" in detail_error
-        assert (await subscription.get()).event == event
+        assert await subscription.get() == event
     await store.unsubscribe(subscription)
     assert len([record for record in caplog.records if record.exc_info and record.exc_info[1] is error]) == 3
 

@@ -9,9 +9,12 @@
 ```text
 app/runtime/
 ├── Agent 装配与调度
-│   ├── agent_runtime.py       依赖提供协议、Agent runtime 与工具定义装配
-│   └── session_orchestrator.py 用户消息创建与执行调度入口
+│   ├── agent_runtime.py       模型准备与执行依赖注入
+│   ├── graph_factory.py       注册表到 Agent 装配器的 SDK 懒加载边界
+│   ├── context_compaction.py   按需装配显式上下文压缩预览
+│   └── tool_test_tools.py      按需装配工具能力测试所需工具
 ├── 模型 Provider 运行时
+│   ├── provider_model.py      本地配置校验与按需模型构造
 │   ├── litellm_runtime.py     SDK 懒加载、模型目录缓存与后台刷新
 │   ├── model_stream.py        显式配置的模型流传输装配
 │   ├── provider_errors.py    Provider 错误分类，使用时才加载 SDK 类型
@@ -42,6 +45,7 @@ app/runtime/
 
 # 不可修改内容
 
+- 插件通用命令、日志和诊断由 `boxteam_plugin_sdk.commands`／`logging`／`observation` 提供；不在产品目录恢复副本、转发入口或协议别名。完整扩展 API 不属于这些公共运行库。
 - 不在本目录实现业务规则或会话状态计算；这些属于 `app/services/`，本目录只做装配与编排转发。
 - 不在本目录重复定义服务实例的创建与生命周期管理：服务与基础设施实例由 `app/container.py` 装配，本目录只消费依赖提供协议传入的对象。
 - 不通过文件位置向上推导仓库根目录；需要全局目录时使用 `app.core.path_utils` 提供的路径函数。
@@ -55,7 +59,7 @@ app/runtime/
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
 - Windows文件系统的pywin32依赖只在`windows_fs.py`函数执行时加载；目录句柄与ACL错误保留公共文件系统的OSError子类及Windows错误码，不回退到外部权限命令或吞掉查询失败。
 - `native_file_stat.py`只补 Python 标准库未暴露的 Linux 创建时间；ctypes 在调用时加载，statx 错误保留原 errno，明确沿固定 libuv 的已核实传统 stat 分支，不构造另一套文件 I/O 层。
-- 日志的 Windows 文件身份由 `file_identity` 从实际描述符读取原生卷序列号与文件索引；Python 日志生产者和消费者统一经 `app.runtime.log_file_identity` 使用该表示，与 Node 的 bigint fstat 一致，不混用 Python 64位卷标和 Node 路径 stat 的 device。
+- 日志的文件身份由 `boxteam_plugin_sdk.logging` 从实际描述符读取；Windows 使用原生卷序列号与文件索引，POSIX 使用描述符身份，与 Node 的 bigint fstat 表示一致。
 - `windows_process.py` 只适配通用子进程边界的长驻 Process／管道：原线程挂入 Job 前保持 suspended，失败须终止并等待原进程、释放原句柄；不承担原生命令监督器的期限／内存预算或 MCP 业务。pywin32 仅在方法执行时加载。
 - `windows_ipc.py` 仅适配当前用户受保护ACL、拒绝远程客户端的单实例字节管道；asyncio持有原句柄和流控，不增加线程、TCP回退或RPC编码。CPython私有IOCP接点限定本模块并明确标记升级复验；取消须覆盖首次调度前并等待listener结清。
 - 失败必须显式抛出包含上下文的异常，禁止静默降级。
@@ -68,3 +72,7 @@ app/runtime/
 命令保护由持久任务脚本检查、测试matrix及Windows开发目标按平台复用；Windows原生库只在Windows入口加载，不在测试支持目录保留副本。
 
 - `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；lifespan 可交付 listener-ready 启动回调与关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。
+
+- `agent_runtime.py::assemble_agent` 统一读取配置、注入依赖并选择冻结 selector，`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。`AgentAssemblyMode` 区分 `execution` 的执行图与 `tool_catalog` 的工具注册列表；`preload_agent_dependencies` 只预加载固定依赖，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
+- `agent_runtime.py::prepare_agent_model` 只准备模型候选、路由和指令来源，返回具名字段的 `AgentModelSetup`，供 Agent 构建与压缩预览共用；它不创建 Thread、工具或图。模型实现与路由依赖在该函数内加载，不能为读取声明导入 SDK。
+- 工具管理目录的纯转换归 `services/mapping/tool_catalog.py::tools_to_catalog_definitions`；runtime 只负责装配，不导出目录 DTO。

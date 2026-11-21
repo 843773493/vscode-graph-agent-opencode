@@ -10,20 +10,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from langchain_core.messages import ToolMessage
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
-from app.agents.tools.custom_invocation import (
+from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     sealed_extension_catalog_binding_resolver,
 )
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
@@ -31,16 +31,18 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
+from app.services.infrastructure.mcp.catalog_publication import (
     McpCatalogResourcePublisher,
-    extension_dispatch_from_activation,
 )
-from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    extension_schema_hash,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_extension_dispatch,
+    restore_frozen_tool_catalog,
+)
 from app.services.infrastructure.mcp.invocation import McpResourceUse
-from app.services.infrastructure.mcp.tool_definitions import (
-    tool_catalog_from_activation,
-)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -48,14 +50,14 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径的 Saver fixture
-)
 from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
 from tests.support.mcp.http_endpoint import sdk_http_session_factory
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 
 @dataclass
@@ -338,29 +340,28 @@ async def test_search_frozen_full_definition_then_execute_real_bridge(
             frozen = activation["activation_snapshot"]
 
             def catalog(owner):
-                return tool_catalog_from_activation(
+                return restore_frozen_tool_catalog(
                     frozen, lambda snapshot, binding: owner.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread)),
                 )
 
             resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
             store = ToolOutputStore(workspace_root=case.workspace_root)
 
-            async def materialize(definition, entry):
-                return store.materialize(
-                    session_id=session, tool_name="search_tools", tool_call_id="search-stdio",
-                    text=canonical_json_bytes(entry).decode(),
-                    output_key=f"search-stdio:{definition.provenance.resource_id}:{definition.provenance.revision}",
-                )
-
+            invocation_context = ToolInvocationContext()
             search = create_search_tools_tool(
                 catalog_resolver=lambda: catalog(saver),
                 policy_resolver=lambda frozen_catalog: {
                     definition.metadata.tool_id: resolver.resolve(definition.metadata) for definition in frozen_catalog.definitions
                 },
-                definition_writer=materialize, response_byte_limit=store.inline_byte_limit,
+                tool_output_store=store, session_id=session,
+                invocation_context=invocation_context, response_byte_limit=store.inline_byte_limit,
             )
-            found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
-                                         "args": {"query": "probe"}})
+            token = invocation_context.set_tool_call_id("search-stdio")
+            try:
+                found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
+                                             "args": {"query": "probe"}})
+            finally:
+                invocation_context.reset_tool_call_id(token)
             assert isinstance(found, ToolMessage) and found.tool_call_id == "search-stdio"
             assert isinstance(found.content, str)
             entry, = json.loads(found.content)["results"]
@@ -376,7 +377,7 @@ async def test_search_frozen_full_definition_then_execute_real_bridge(
             assert entry["effective_policy"]["model_visible"] is False
             assert case.received() == []
             parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
-            dispatch = extension_dispatch_from_activation(
+            dispatch = restore_frozen_extension_dispatch(
                 snapshot=frozen, binding=parent, model_call_id=activation["model_call_id"],
                 payload=saver.read_resource_activation_payload(frozen, parent, storage_owner=(session, thread)),
             )

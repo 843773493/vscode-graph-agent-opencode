@@ -18,12 +18,11 @@ import AgentSessionsContextMenus, {
   type SessionContextMenu,
   type WorkspaceContextMenu,
 } from '../../agentSessions/AgentSessionsContextMenus';
-import AgentSessionsFilterMenu from '../../agentSessions/AgentSessionsFilterMenu';
 import AgentSessionsSessionTree from '../../agentSessions/AgentSessionsSessionTree';
 import { useAgentSessionsTreeState } from '../../agentSessions/useAgentSessionsTreeState';
 import WorkspaceRenameDialog from '../../workspace/WorkspaceRenameDialog';
+import WorkspaceDetailsDialog, { type WorkspaceDetailsTarget } from '../../workspace/WorkspaceDetailsDialog';
 import WorkspaceAddDialog from '../../workspace/WorkspaceAddDialog';
-import AnchoredOverlay from '../../overlays/AnchoredOverlay';
 import WarmActionDialog from '../../overlays/WarmActionDialog';
 import type {
   SessionCatalogOutboxRuntime,
@@ -34,10 +33,8 @@ import {
   buildTimeSections,
   buildWorkspaceSections,
   sortSessions,
-  type SessionFilterMode,
-  type SessionGroupingMode,
-  type SessionSortMode,
 } from '../../agentSessions/agentSessionsUtils';
+import type { SessionResourceExplorerActions } from '../../agentSessions/SessionResourceExplorer';
 import { errorMessage, isErrorReported } from "../../../utils/errorMessage";
 import type { CatalogRevealRequest } from '../../../hooks/sessionResourceExplorer/useCatalogReveal';
 
@@ -45,12 +42,21 @@ const SessionResourceExplorer = React.lazy(
   () => import('../../agentSessions/SessionResourceExplorer'),
 );
 
+/** 导航只公布操作，标题栏与右键菜单由原生 Workbench 承载。 */
+export interface SessionNavigationActions extends SessionResourceExplorerActions {
+  createSession: () => Promise<void>;
+  search: () => void;
+  addWorkspace: () => void;
+}
+
 interface AgentSessionsPanelProps {
+  onActionsChange: (actions?: SessionNavigationActions) => void;
   catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   sessions: Session[];
   currentSessionId: string;
   currentSessionWorkspaceId: string | null;
+  selectedSessionKey: string | null;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, currentTitle: string, workspaceId: string) => void;
   onDeleteSession: (sessionId: string, currentTitle: string, workspaceId: string) => void;
@@ -82,6 +88,11 @@ interface AgentSessionsPanelProps {
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
   onAddWorkspace: (payload: AddManagedGatewayWorkspaceRequest) => Promise<void>;
   onOpenGatewayControl: () => void;
+  workspaceDetails: WorkspaceDetailsTarget | null;
+  onCloseWorkspaceDetails: () => void;
+  onOpenWorkspaceDetails: (workspaceKey: string) => Promise<void>;
+  onOpenWorkspaceSettings: (workspace: GatewayWorkspace, connectionId?: string) => Promise<void>;
+  onOpenWorkspaceLogs: (workspace: GatewayWorkspace, connectionId?: string) => Promise<void>;
   onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
   onStopWorkspace: (workspaceId: string) => Promise<void>;
@@ -112,7 +123,6 @@ interface AgentSessionsPanelProps {
     deletedCurrentSession: boolean,
   ) => Promise<void>;
   onInvalidateSessionCatalog: (workspaceId: string) => void;
-  catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
@@ -127,11 +137,13 @@ interface AgentSessionsPanelProps {
 }
 
 export default function AgentSessionsPanel({
+  onActionsChange,
   catalogReveal,
   apiPort,
   sessions,
   currentSessionId,
   currentSessionWorkspaceId,
+  selectedSessionKey,
   onSelectSession,
   onRenameSession,
   onDeleteSession,
@@ -153,6 +165,11 @@ export default function AgentSessionsPanel({
   onRemoveWorkspace,
   onAddWorkspace,
   onOpenGatewayControl,
+  workspaceDetails,
+  onCloseWorkspaceDetails,
+  onOpenWorkspaceDetails,
+  onOpenWorkspaceSettings,
+  onOpenWorkspaceLogs,
   onReconnectWorkspace,
   onStartWorkspace,
   onStopWorkspace,
@@ -170,7 +187,6 @@ export default function AgentSessionsPanel({
   onCreateSessionFolder,
   onSessionFolderDeleted,
   onInvalidateSessionCatalog,
-  catalogSyncKeys,
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
@@ -195,10 +211,10 @@ export default function AgentSessionsPanel({
     new Set(),
   );
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (catalogReveal) { setSearchOpen(false); setSearchQuery(''); }
   }, [catalogReveal]);
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMode = preferences.filterMode;
   const sortMode = preferences.sortMode;
   const groupingMode = preferences.groupingMode;
@@ -216,7 +232,22 @@ export default function AgentSessionsPanel({
     preferences,
     onPreferencesChange,
   });
-  const filterButtonRef = useRef<HTMLButtonElement | null>(null);
+  const treeActions = useRef<SessionResourceExplorerActions>();
+  useEffect(() => {
+    const tree = (): SessionResourceExplorerActions => {
+      if (!treeActions.current) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+      return treeActions.current;
+    };
+    onActionsChange({
+      createSession: () => onCreateSession(),
+      search: () => { setSearchOpen(true); searchInput.current?.focus(); },
+      addWorkspace: () => setWorkspaceAddOpen(true),
+      newWorkspaceFolder: () => { setSearchOpen(false); setSearchQuery(''); tree().newWorkspaceFolder(); },
+      refresh: () => tree().refresh(),
+      collapseAll: () => tree().collapseAll(),
+    });
+    return () => onActionsChange();
+  }, [onActionsChange, onCreateSession]);
   const handleStartWorkspace = async (workspaceId: string) => {
     setStartingWorkspaceIds((previous) => new Set(previous).add(workspaceId));
     try {
@@ -302,7 +333,6 @@ export default function AgentSessionsPanel({
     if (!isOpen) {
       setContextMenu(null);
       setWorkspaceContextMenu(null);
-      setFilterMenuOpen(false);
     }
   }, [isOpen]);
 
@@ -336,25 +366,8 @@ export default function AgentSessionsPanel({
       y,
     });
   };
-  const applyFilterMode = (mode: SessionFilterMode, label: string) => {
-    onPreferencesChange(() => ({ filter_mode: mode }));
-    setFilterMenuOpen(false);
-    onStatusChange(t('navigation.filter.applied', label));
-  };
-  const applySortMode = (mode: SessionSortMode, label: string) => {
-    onPreferencesChange(() => ({ sort_mode: mode }));
-    setFilterMenuOpen(false);
-    onStatusChange(t('navigation.filter.sorted', label));
-  };
-  const applyGroupingMode = (mode: SessionGroupingMode, label: string) => {
-    onPreferencesChange(() => ({ grouping_mode: mode }));
-    setFilterMenuOpen(false);
-    onStatusChange(t('navigation.filter.grouped', label));
-  };
   const toggleWorkspaceGroupCapping = (capped: boolean) => {
     onPreferencesChange(() => ({ workspace_group_capped: capped }));
-    setFilterMenuOpen(false);
-    onStatusChange(capped ? t('navigation.filter.recentWorkspaceSessions') : t('navigation.filter.allWorkspaceSessions'));
   };
   const toggleSessionSection = (sectionId: string) => {
     onPreferencesChange((current) => ({
@@ -362,13 +375,6 @@ export default function AgentSessionsPanel({
         toggleUiSettingId(current.collapsed_section_ids, sectionId),
       ),
     }));
-  };
-  const collapseAllSessionSections = () => {
-    onPreferencesChange(() => ({
-      collapsed_section_ids: sessionSections.map((section) => section.id),
-    }));
-    setFilterMenuOpen(false);
-    onStatusChange(t('navigation.filter.allCollapsed'));
   };
   return (
     <aside
@@ -378,109 +384,21 @@ export default function AgentSessionsPanel({
       data-bt-surface="chrome"
     >
       <div className="agent-sessions-panel-shell">
-        <header className="panel-header agent-sessions-panel-header">
-          <span className="panel-title">{t('navigation.sessions.title')}</span>
-          <section className="sessions-sidebar-actions" aria-label={t('navigation.sessions.actions')}>
-            <button
-              type="button"
-              className="new-session-pill"
-              onClick={() => {
-                void onCreateSession().catch((error: unknown) => {
-                  if (isErrorReported(error)) return;
-                  const message = errorMessage(error);
-                  onError(t('navigation.sessions.createError', message));
-                });
-              }}
-              title={t('navigation.sessions.new')}
-            >
-              <span>{t('navigation.sessions.newShort')}</span>
-              <kbd>Ctrl+N</kbd>
-            </button>
-            <button
-              ref={filterButtonRef}
-              type="button"
-              className={`sidebar-icon-button${filterMenuOpen ? ' active' : ''}`}
-              title={t('navigation.filter.sessions')}
-              aria-label={t('navigation.filter.sessions')}
-              aria-haspopup="menu"
-              aria-expanded={filterMenuOpen}
-              onClick={() => setFilterMenuOpen((open) => !open)}
-            >
-              <span className="codicon codicon-filter" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={`sidebar-icon-button${searchOpen ? ' active' : ''}`}
-              title={t('navigation.search.sessions')}
-              aria-label={t('navigation.search.sessions')}
-              aria-pressed={searchOpen}
-              onClick={() => {
-                setSearchOpen((open) => {
-                  const nextOpen = !open;
-                  if (!nextOpen) {
-                    setSearchQuery('');
-                  }
-                  return nextOpen;
-                });
-              }}
-            >
-              <span className="codicon codicon-search" aria-hidden="true" />
-            </button>
-            <AnchoredOverlay
-              open={filterMenuOpen}
-              anchorRef={filterButtonRef}
-              placement="bottom-end"
-              onClose={() => setFilterMenuOpen(false)}
-            >
-              <AgentSessionsFilterMenu
-                filterMode={filterMode}
-                sortMode={sortMode}
-                groupingMode={groupingMode}
-                workspaceGroupCapped={workspaceGroupCapped}
-                onApplyFilterMode={applyFilterMode}
-                onApplySortMode={applySortMode}
-                onApplyGroupingMode={applyGroupingMode}
-                onToggleWorkspaceGroupCapping={toggleWorkspaceGroupCapping}
-                onCollapseAllSessionSections={collapseAllSessionSections}
-              />
-            </AnchoredOverlay>
-          </section>
-        </header>
-
         <div className="panel-body agent-sessions-panel-body">
           {searchOpen ? (
             <label className="sessions-search-box">
-              <span>{t('navigation.search.findSessions')}</span>
               <input
+                ref={searchInput}
                 autoFocus
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={t('navigation.search.placeholder')}
+                aria-label={t('navigation.search.findSessions')}
+                onKeyDown={event => { if (event.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); } }}
               />
             </label>
           ) : null}
-          <section className="agent-sessions-sidebar-groups" aria-label={t('navigation.sessions.navigation')}>
-            <button
-              type="button"
-              className="agent-sessions-nav-row"
-              aria-disabled="true"
-              title={t('navigation.sessions.pinnedUnavailable')}
-              onClick={() => onStatusChange(t('navigation.sessions.pinnedUnavailable'))}
-            >
-              <span className="codicon codicon-pinned agent-sessions-nav-icon" aria-hidden="true" />
-              <span>{t('navigation.sessions.pinned')}</span>
-              <span className="agent-sessions-nav-unavailable">{t('navigation.sessions.unavailable')}</span>
-            </button>
-            <button type="button" className="agent-sessions-nav-row" onClick={() => applyFilterMode('all', t('navigation.sessions.chats'))}>
-              <span className="codicon codicon-comment-discussion agent-sessions-nav-icon" aria-hidden="true" />
-              <span>{t('navigation.sessions.chats')}</span>
-            </button>
-            {gatewayWorkspaces.length === 0 && matchingSessionCount === 0 ? (
-              <div className="agent-sessions-no-chats">{t('navigation.sessions.noChats')}</div>
-            ) : null}
-          </section>
-
           {gatewayWorkspacesStale && gatewayWorkspaces.length > 0 ? (
             // 刷新失败时保留旧列表仅作过渡展示，必须显式告知「这份结构可能已过期」，
             // 不能让用户把陈旧的工作区结构当成当前权威数据。
@@ -493,12 +411,14 @@ export default function AgentSessionsPanel({
           {gatewayWorkspaces.length > 0 ? (
             <React.Suspense fallback={null}>
               <SessionResourceExplorer
+                onActionsChange={actions => { treeActions.current = actions; }}
                 catalogReveal={catalogReveal}
                 apiPort={apiPort}
                 workspaces={gatewayWorkspaces}
                 activeWorkspaceId={activeGatewayWorkspaceId}
                 currentSessionId={currentSessionId}
                 currentSessionWorkspaceId={currentSessionWorkspaceId}
+                selectedSessionKey={selectedSessionKey}
                 searchOpen={searchOpen}
                 searchQuery={searchQuery}
                 workspaceSwitching={workspaceSwitching}
@@ -509,7 +429,6 @@ export default function AgentSessionsPanel({
                 onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
                 onCreateSessionInFolder={onCreateSessionInFolder}
                 onSessionFolderDeleted={onSessionFolderDeleted}
-                catalogSyncKeys={catalogSyncKeys}
                 catalogRefreshVersions={catalogRefreshVersions}
                 sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
                 sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
@@ -653,6 +572,7 @@ export default function AgentSessionsPanel({
             setRenamingWorkspace(workspace);
           }}
           onCopyWorkspaceInformation={onCopyWorkspaceInformation}
+          onOpenWorkspaceDetails={onOpenWorkspaceDetails}
           onRemoveWorkspace={onRemoveWorkspace}
           onStartWorkspace={handleStartWorkspace}
           onStopWorkspace={onStopWorkspace}
@@ -665,6 +585,10 @@ export default function AgentSessionsPanel({
           onClose={() => setRenamingWorkspace(null)}
           onSubmit={onRenameWorkspace}
         />
+        {workspaceDetails ? <WorkspaceDetailsDialog key={workspaceDetails.workspaceKey} target={workspaceDetails}
+          workspaces={gatewayWorkspaces} onClose={onCloseWorkspaceDetails} onOpen={onActivateWorkspace}
+          onRename={setRenamingWorkspace} onRemove={onRemoveWorkspace}
+          onOpenSettings={onOpenWorkspaceSettings} onOpenLogs={onOpenWorkspaceLogs} /> : null}
         <WorkspaceAddDialog
           open={workspaceAddOpen}
           apiPort={apiPort}
@@ -675,7 +599,7 @@ export default function AgentSessionsPanel({
         />
         <WarmActionDialog
           open={sessionFolderDialog !== null}
-          title={sessionFolderDialog?.parentNodeId ? t('navigation.folder.newChild') : t('navigation.folder.newSessionFolder')}
+          title={t('navigation.folder.newSessionFolder')}
           description={sessionFolderDialog
             ? t('navigation.folder.createLocation', sessionFolderDialog.locationName)
             : undefined}

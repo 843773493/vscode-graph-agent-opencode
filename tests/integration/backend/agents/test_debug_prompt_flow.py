@@ -26,7 +26,10 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
@@ -233,27 +236,26 @@ def scripted_gateway_process(
     config_path = Path(integration_workspace_config_path)
     config = _json_object(commentjson.loads(config_path.read_text(encoding="utf-8")))
     llm = _json_object(config["llm"])
-    providers = _json_array(llm["providers"])
-    llm["providers"] = [
-        *providers,
-        {
-            "id": "debug-e2e",
+    providers = _json_object(llm["providers"])
+    providers["debug-e2e"] = {
+        "defaults": {
             "endpoint": endpoint,
-            "model": "debug-e2e-model",
-            "api_key": "debug-e2e-key",
+            "api_key": "",
             "custom_llm_provider": "openai",
             "api_mode": {
                 "protocol": "chat_completions",
                 "model_info": scripted_model_info,
                 "supports_reasoning": {"reasoning_content": True},
             },
-        }
-    ]
+        },
+        "models": {"default": {"model": "debug-e2e-model"}},
+    }
     agents = _json_object(config["agents"])
     default_agent = _json_object(agents["default"])
-    model = _json_object(default_agent["model"])
-    model["primary_provider"] = "debug-e2e"
-    model["fallback_providers"] = []
+    default_agent["model"] = {
+        "primary": {"provider_id": "debug-e2e", "model_id": "default"},
+        "fallbacks": [],
+    }
     workspace_root = Path(integration_workspace_root_path)
     runtime = _json_object(config.setdefault("runtime", {}))
     debug = _json_object(runtime.setdefault("debug", {}))
@@ -510,13 +512,13 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     _plan_debug_calls(state, session_id, main_thread_id)
     message_response = await scripted_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {
                 "mode": "single_agent", "agent_id": "default",
                 "max_steps": 20, "timeout_seconds": 240,
             },
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]

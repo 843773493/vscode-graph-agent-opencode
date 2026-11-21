@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
+from boxteam_plugin_sdk.logging import RuntimeLoggingService
+from boxteam_plugin_sdk.observation import RuntimeObservationStatus
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -15,8 +17,6 @@ from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceI
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.service_plugin import PluginInstanceView
 from app.schemas.gateway.workspaces import GatewayConnectionKind, GatewayWorkspaceStatus
-from app.schemas.runtime_logging import RuntimeLoggingService
-from app.schemas.runtime_observation import RuntimeObservationStatus
 
 GatewayDiagnosticStatus = Literal["ready", "degraded", "offline"]
 
@@ -108,6 +108,8 @@ class GatewayDiagnosticsDTO(BaseModel):
     processes: list[GatewayDiagnosticProcessDTO] = Field(default_factory=list)
     observation: RuntimeObservationStatus | None = None
     plugin_observations: list[PluginRuntimeObservationDTO] = Field(default_factory=list)
+    control_directory: str | None = Field(default=None, description="目标机器的控制面数据展示位置，不作资源定位")
+    log_directory: str | None = Field(default=None, description="目标机器的产品日志展示位置，不作资源定位")
 
 
 class GatewayDiagnosticLogQueryScopeDTO(BaseModel):

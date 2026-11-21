@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TextIO
 
-from app.core.shielded_cleanup import run_cleanup_shielded
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+
 from app.gateway.runtime.process_groups import (
     ProcessStartMarker,
     _capture_posix_group_leader_start_marker,

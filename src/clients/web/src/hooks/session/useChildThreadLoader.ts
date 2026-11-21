@@ -38,7 +38,7 @@ export function useChildThreadLoader({
   apiPort: number;
   workspaceId: string | null;
   sessionId: string | null;
-  /** 右侧侧边栏对应标签可见时才加载与轮询。 */
+  /** 会话的 Thread 标签可见时才加载；隐藏后停止轮询。 */
   enabled: boolean;
 }): ChildThreadSnapshot & {
   refresh: (options?: { silent?: boolean }) => Promise<void>;

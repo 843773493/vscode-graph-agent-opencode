@@ -1,188 +1,192 @@
+"""持久 Trace 事件到公开 TraceEventDTO 的纯转换。"""
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from app.schemas.internal_v2.trace import TraceEventDTO
 
+_DISPLAYED_TRACE_EVENT_TYPES: frozenset[str] = frozenset({
+    "agent_start",
+    "agent_step",
+    "llm_request",
+    "model_failed",
+    "tool_call_start",
+    "tool_call_end",
+    "agent_end",
+    "error",
+    "message_created",
+    "job_created",
+    "job_started",
+    "job_completed",
+    "job_cancelled",
+    "job_failed",
+    "status_change",
+    "text_start",
+    "text_delta",
+    "text_end",
+    "session_interrupted",
+    "goal_updated",
+    "goal_cleared",
+})
 
-class TraceEventMapper:
-    _SUPPORTED_TYPES: ClassVar[frozenset[str]] = frozenset({
-        "agent_start",
-        "agent_step",
-        "llm_request",
-        "model_failed",
-        "tool_call_start",
-        "tool_call_end",
-        "agent_end",
-        "error",
-        "message_created",
-        "job_created",
-        "job_started",
-        "job_completed",
-        "job_cancelled",
-        "job_failed",
-        "status_change",
-        "text_start",
-        "text_delta",
-        "text_end",
-        "session_interrupted",
-        "goal_updated",
-        "goal_cleared",
-    })
 
-    def map_one(
-        self, trace_event: dict[str, Any], session_id: str = "", *, thread_id: str
-    ) -> TraceEventDTO | None:
-        event_type = trace_event.get("type")
-        if event_type not in self._SUPPORTED_TYPES:
-            return None
+def trace_event_to_dto(
+    trace_event: dict[str, Any], session_id: str = "", *, thread_id: str
+) -> TraceEventDTO | None:
+    event_type = trace_event.get("type")
+    if event_type not in _DISPLAYED_TRACE_EVENT_TYPES:
+        return None
 
-        payload = trace_event.get("payload")
-        if not isinstance(payload, dict):
-            raise TypeError(
-                f"Trace 事件 payload 必须是 dict: event_type={event_type}"
-            )
-
-        if not session_id:
-            raise ValueError("Trace 映射缺少存储范围 session_id")
-        if payload.get("session_id") not in {None, session_id}:
-            raise ValueError("Trace 事件的 Session 与存储归属不一致")
-        if payload.get("thread_id") not in {None, thread_id}:
-            raise ValueError("Trace 事件的 Thread 与持久归属不一致")
-        event_id = trace_event.get("event_id")
-        if not isinstance(event_id, str) or not event_id:
-            raise ValueError(f"Trace 事件缺少 event_id: event_type={event_type}")
-        job_id = trace_event.get("job_id")
-        if not isinstance(job_id, str) or not job_id:
-            raise ValueError(
-                f"Trace 事件缺少 job_id: event_id={event_id} event_type={event_type}"
-            )
-        step_id = trace_event.get("step_id")
-        timestamp = self._parse_timestamp(
-            trace_event.get("timestamp"), event_id=event_id
+    payload = trace_event.get("payload")
+    if not isinstance(payload, dict):
+        raise TypeError(
+            f"Trace 事件 payload 必须是 dict: event_type={event_type}"
         )
 
-        phase, title, content, status, tool_name = self._build_view_model(event_type, payload)
-        skill_names = self._skill_names(payload)
-
-        return TraceEventDTO(
-            event_id=event_id,
-            part_id=trace_event.get("part_id"),
-            session_id=session_id,
-            thread_id=thread_id,
-            job_id=job_id,
-            type=event_type,
-            phase=phase,
-            title=title,
-            content=content,
-            status=status,
-            tool_name=tool_name,
-            skill_names=skill_names,
-            step_id=step_id,
-            timestamp=timestamp,
-            raw=trace_event,
+    if not session_id:
+        raise ValueError("Trace 映射缺少存储范围 session_id")
+    if payload.get("session_id") not in {None, session_id}:
+        raise ValueError("Trace 事件的 Session 与存储归属不一致")
+    if payload.get("thread_id") not in {None, thread_id}:
+        raise ValueError("Trace 事件的 Thread 与持久归属不一致")
+    event_id = trace_event.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        raise ValueError(f"Trace 事件缺少 event_id: event_type={event_type}")
+    job_id = trace_event.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError(
+            f"Trace 事件缺少 job_id: event_id={event_id} event_type={event_type}"
         )
+    step_id = trace_event.get("step_id")
+    timestamp = _parse_timestamp(
+        trace_event.get("timestamp"), event_id=event_id
+    )
 
-    def _skill_names(self, payload: dict[str, Any]) -> list[str]:
-        value = payload.get("skill_names")
-        if not isinstance(value, list):
-            return []
-        return [item for item in value if isinstance(item, str)]
+    phase, title, content, status, tool_name = _trace_display_fields(event_type, payload)
+    skill_names = _skill_names(payload)
 
-    def _build_view_model(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str, str, str | None, str | None]:
-        if event_type == "message_created":
-            return "message", "用户消息已创建", payload.get("content") or "用户消息已记录", "completed", None
-        if event_type == "job_created":
-            return "job", "任务已创建", payload.get("message") or "任务已创建，准备执行", "running", None
-        if event_type == "job_started":
-            return "job", "任务已开始", payload.get("message") or "任务已开始执行", "running", None
-        if event_type == "job_completed":
-            return "job", "任务已完成", payload.get("result") or "任务已成功完成", "completed", None
-        if event_type == "job_cancelled":
-            return "job", "任务已取消", payload.get("message") or "任务已取消", "failed", None
-        if event_type == "job_failed":
-            return "job", "任务失败", payload.get("error") or "任务执行失败", "failed", None
-        if event_type == "status_change":
-            status = payload.get("status") or "状态变更"
-            reason = payload.get("reason") or ""
-            return "status", str(status), str(reason or "状态已更新"), "running", None
-        if event_type == "goal_updated":
-            goal = payload.get("goal") or {}
-            return "goal", "Goal 已更新", str(goal.get("objective") or "Goal 状态已更新"), str(goal.get("status") or "active"), None
-        if event_type == "goal_cleared":
-            return "goal", "Goal 已清除", "当前会话 Goal 已清除", "completed", None
-        if event_type == "agent_start":
-            return "agent", "开始执行", payload.get("message") or "agent 启动，准备处理用户请求", "running", None
-        if event_type == "agent_step":
-            phase = payload.get("phase") or "执行步骤"
-            return "agent", f"步骤：{phase}", payload.get("message") or f"agent 正在执行 {phase}", "running", None
-        if event_type == "llm_request":
-            model = payload.get("model") or "未知模型"
-            return "llm", "模型请求", f"正在请求模型：{model}", "running", None
-        if event_type == "model_failed":
-            model = payload.get("model") or "未知模型"
-            provider_id = payload.get("provider_id") or "未知 provider"
-            error_type = payload.get("error_type") or "ModelError"
-            error = payload.get("error") or "模型调用失败"
+    return TraceEventDTO(
+        event_id=event_id,
+        part_id=trace_event.get("part_id"),
+        session_id=session_id,
+        thread_id=thread_id,
+        job_id=job_id,
+        type=event_type,
+        phase=phase,
+        title=title,
+        content=content,
+        status=status,
+        tool_name=tool_name,
+        skill_names=skill_names,
+        step_id=step_id,
+        timestamp=timestamp,
+        raw=trace_event,
+    )
+
+
+def _skill_names(payload: dict[str, Any]) -> list[str]:
+    value = payload.get("skill_names")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _trace_display_fields(event_type: str, payload: dict[str, Any]) -> tuple[str, str, str, str | None, str | None]:
+    if event_type == "message_created":
+        return "message", "用户消息已创建", payload.get("content") or "用户消息已记录", "completed", None
+    if event_type == "job_created":
+        return "job", "任务已创建", payload.get("message") or "任务已创建，准备执行", "running", None
+    if event_type == "job_started":
+        return "job", "任务已开始", payload.get("message") or "任务已开始执行", "running", None
+    if event_type == "job_completed":
+        return "job", "任务已完成", payload.get("result") or "任务已成功完成", "completed", None
+    if event_type == "job_cancelled":
+        return "job", "任务已取消", payload.get("message") or "任务已取消", "failed", None
+    if event_type == "job_failed":
+        return "job", "任务失败", payload.get("error") or "任务执行失败", "failed", None
+    if event_type == "status_change":
+        status = payload.get("status") or "状态变更"
+        reason = payload.get("reason") or ""
+        return "status", str(status), str(reason or "状态已更新"), "running", None
+    if event_type == "goal_updated":
+        goal = payload.get("goal") or {}
+        return "goal", "Goal 已更新", str(goal.get("objective") or "Goal 状态已更新"), str(goal.get("status") or "active"), None
+    if event_type == "goal_cleared":
+        return "goal", "Goal 已清除", "当前会话 Goal 已清除", "completed", None
+    if event_type == "agent_start":
+        return "agent", "开始执行", payload.get("message") or "agent 启动，准备处理用户请求", "running", None
+    if event_type == "agent_step":
+        phase = payload.get("phase") or "执行步骤"
+        return "agent", f"步骤：{phase}", payload.get("message") or f"agent 正在执行 {phase}", "running", None
+    if event_type == "llm_request":
+        model = payload.get("model") or "未知模型"
+        return "llm", "模型请求", f"正在请求模型：{model}", "running", None
+    if event_type == "model_failed":
+        model = payload.get("model") or "未知模型"
+        provider_id = payload.get("provider_id") or "未知 provider"
+        error_type = payload.get("error_type") or "ModelError"
+        error = payload.get("error") or "模型调用失败"
+        return (
+            "llm",
+            "模型调用失败",
+            f"{provider_id}/{model}：{error_type}: {error}",
+            "failed",
+            None,
+        )
+    if event_type == "tool_call_start":
+        tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
+        return "tool", "调用工具", f"正在调用 {tool_name}", "running", tool_name
+    if event_type == "tool_call_end":
+        tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
+        if payload.get("status") == "error" or payload.get("failed") is True:
+            content = payload.get("result") or f"工具 {tool_name} 执行失败"
+            return "tool", "工具失败", str(content), "failed", tool_name
+        return "tool", "工具返回", f"工具 {tool_name} 已返回结果", "completed", tool_name
+    if event_type == "agent_end":
+        return "agent", "执行结束", payload.get("final_text") or "agent 已完成本轮处理", "completed", None
+    if event_type == "text_start":
+        return "text", "文本开始", payload.get("text") or "助手文本开始生成", "running", None
+    if event_type == "text_delta":
+        return "text", "文本流", payload.get("text") or "助手正在流式输出", "running", None
+    if event_type == "text_end":
+        return "text", "文本结束", payload.get("text") or "助手文本生成结束", "completed", None
+    if event_type == "session_interrupted":
+        phase = payload.get("phase") or "text"
+        tool_name = payload.get("tool_name")
+        if payload.get("code") == "execution_lost" or phase == "process_exit":
             return (
-                "llm",
-                "模型调用失败",
-                f"{provider_id}/{model}：{error_type}: {error}",
+                "session",
+                "执行丢失",
+                payload.get("message")
+                or "工作区后端重启，无法安全续接原 AgentLoop 执行",
                 "failed",
-                None,
+                tool_name,
             )
-        if event_type == "tool_call_start":
-            tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
-            return "tool", "调用工具", f"正在调用 {tool_name}", "running", tool_name
-        if event_type == "tool_call_end":
-            tool_name = payload.get("tool_name") or payload.get("name") or "未知工具"
-            if payload.get("status") == "error" or payload.get("failed") is True:
-                content = payload.get("result") or f"工具 {tool_name} 执行失败"
-                return "tool", "工具失败", str(content), "failed", tool_name
-            return "tool", "工具返回", f"工具 {tool_name} 已返回结果", "completed", tool_name
-        if event_type == "agent_end":
-            return "agent", "执行结束", payload.get("final_text") or "agent 已完成本轮处理", "completed", None
-        if event_type == "text_start":
-            return "text", "文本开始", payload.get("text") or "助手文本开始生成", "running", None
-        if event_type == "text_delta":
-            return "text", "文本流", payload.get("text") or "助手正在流式输出", "running", None
-        if event_type == "text_end":
-            return "text", "文本结束", payload.get("text") or "助手文本生成结束", "completed", None
-        if event_type == "session_interrupted":
-            phase = payload.get("phase") or "text"
-            tool_name = payload.get("tool_name")
-            if payload.get("code") == "execution_lost" or phase == "process_exit":
-                return (
-                    "session",
-                    "执行丢失",
-                    payload.get("message")
-                    or "工作区后端重启，无法安全续接原 AgentLoop 执行",
-                    "failed",
-                    tool_name,
-                )
-            if tool_name:
-                message = f"会话已打断（{phase} 阶段，工具：{tool_name}）"
-            else:
-                message = f"会话已打断（{phase} 阶段）"
-            return "session", "会话已打断", message, "completed", tool_name
-        error_text = payload.get("error") or "执行失败"
-        return "error", "执行失败", error_text, "failed", None
-
-    def _parse_timestamp(self, value: Any, *, event_id: str) -> datetime:
-        if isinstance(value, datetime):
-            parsed = value
-        elif isinstance(value, str):
-            try:
-                parsed = datetime.fromisoformat(value)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Trace 事件 timestamp 格式错误: event_id={event_id} value={value!r}"
-                ) from exc
+        if tool_name:
+            message = f"会话已打断（{phase} 阶段，工具：{tool_name}）"
         else:
-            raise TypeError(
-                f"Trace 事件缺少 timestamp: event_id={event_id} value={value!r}"
-            )
-        if parsed.tzinfo is None:
-            raise ValueError(f"Trace 事件 timestamp 必须包含时区: event_id={event_id}")
-        return parsed
+            message = f"会话已打断（{phase} 阶段）"
+        return "session", "会话已打断", message, "completed", tool_name
+    error_text = payload.get("error") or "执行失败"
+    return "error", "执行失败", error_text, "failed", None
+
+
+def _parse_timestamp(value: Any, *, event_id: str) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Trace 事件 timestamp 格式错误: event_id={event_id} value={value!r}"
+            ) from exc
+    else:
+        raise TypeError(
+            f"Trace 事件缺少 timestamp: event_id={event_id} value={value!r}"
+        )
+    if parsed.tzinfo is None:
+        raise ValueError(f"Trace 事件 timestamp 必须包含时区: event_id={event_id}")
+    return parsed

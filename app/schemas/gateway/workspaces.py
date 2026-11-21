@@ -25,6 +25,24 @@ GatewayRuntimeAction = Literal[
 ]
 
 
+class WorkspaceIdentityMappingDTO(BaseModel):
+    legacy_workspace_id: str
+    gateway_id: str
+    workspace_id: str
+
+
+class WorkspaceIdentityRecoveryDTO(BaseModel):
+    format_version: Literal[1]
+    migration_id: str
+    registry_gateway_id: str
+    mappings: list[WorkspaceIdentityMappingDTO]
+
+
+class GatewayClientRecoveryDTO(BaseModel):
+    gateway_id: str
+    workspace_identity: WorkspaceIdentityRecoveryDTO | None = None
+
+
 class GatewayServiceStatusDTO(BaseModel):
     status: GatewayServiceStatus
     health_path: str

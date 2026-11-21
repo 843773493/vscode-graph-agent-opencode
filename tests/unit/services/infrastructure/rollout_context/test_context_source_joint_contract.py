@@ -15,8 +15,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
-from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
     EpochReason,

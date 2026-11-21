@@ -1,10 +1,10 @@
 import { create, toJson } from "@bufbuild/protobuf";
 import {
   TerminalClientMessageSchema,
-} from "../../protocol/generated/boxteam/terminal/v1/terminal_input_pb.js";
+} from "@boxteam/plugin-sdk/generated/boxteam/terminal/v1/terminal_input_pb.js";
 import {
   TerminalServerMessageSchema,
-} from "../../protocol/generated/boxteam/terminal/v1/terminal_output_pb.js";
+} from "@boxteam/plugin-sdk/generated/boxteam/terminal/v1/terminal_output_pb.js";
 
 function assertPlainObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

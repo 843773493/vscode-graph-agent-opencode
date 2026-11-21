@@ -30,14 +30,14 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
-    skill_tracking_client as skill_tracking_client,  # noqa: PLC0414
+    skill_untrack_client as skill_untrack_client,  # noqa: PLC0414
 )
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["main", "child"])
 @pytest.mark.parametrize("cancelled", [False, True], ids=["completed", "cancelled"])
 async def test_skill_untrack_lease_precedes_topology_release_and_delete(
-    runtime_case: RuntimeCase, skill_tracking_client: httpx.AsyncClient,
+    runtime_case: RuntimeCase, skill_untrack_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch, child: bool, cancelled: bool,
 ) -> None:
     case = runtime_case
@@ -95,7 +95,7 @@ async def test_skill_untrack_lease_precedes_topology_release_and_delete(
         monkeypatch.setattr(_CrossProcessFileLock, "__aexit__", pause_after_topology)
         monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe_delete)
         try:
-            control_task = asyncio.create_task(skill_tracking_client.post(
+            control_task = asyncio.create_task(skill_untrack_client.post(
                 f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack", json={"name": name},
             ))
             await asyncio.wait_for(released.wait(), 3)

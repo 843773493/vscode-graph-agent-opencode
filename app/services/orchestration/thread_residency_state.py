@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.core.thread_residency_contracts import ResidencyBlocker
 
 RuntimeValue_co = TypeVar("RuntimeValue_co", covariant=True)

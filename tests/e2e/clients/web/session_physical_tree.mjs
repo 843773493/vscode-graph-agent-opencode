@@ -83,10 +83,9 @@ async function loadForkThreadHistory(sessionId, threadId) {
 }
 
 async function expandRow(row) {
-  const chevron = row.locator(".session-resource-chevron");
-  await chevron.waitFor({ state: "visible", timeout: 10_000 });
-  const label = await chevron.getAttribute("aria-label");
-  if (label?.startsWith("展开")) await chevron.click();
+  const toggle = row.locator(".session-resource-expand-toggle");
+  await toggle.waitFor({ state: "visible", timeout: 10_000 });
+  if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
 }
 
 async function dragInside(source, target) {
@@ -184,28 +183,28 @@ try {
   const childRow = page.locator(`[data-testid$="-${fixture.childSessionId}"]`);
   const folderRow = page.locator(`[data-testid$="-${fixture.folderId}"]`);
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   await childRow.waitFor({ state: "visible", timeout: 15_000 });
   await folderRow.waitFor({ state: "visible", timeout: 15_000 });
-  const parentWorkspaceRow = page.locator(
-    `[data-testid="workspace-node-${fixture.parentWorkspaceId}"]`,
+  const parentWorkspaceRow = page.getByTestId(
+    `workspace-node-${JSON.stringify([fixture.gatewayId, fixture.parentWorkspaceId])}`,
   );
-  const childWorkspaceRow = page.locator(
-    `[data-testid="workspace-node-${fixture.childWorkspaceId}"]`,
+  const childWorkspaceRow = page.getByTestId(
+    `workspace-node-${JSON.stringify([fixture.gatewayId, fixture.childWorkspaceId])}`,
   );
   await parentWorkspaceRow.waitFor({ state: "visible" });
   await childWorkspaceRow.waitFor({ state: "visible" });
-  const parentWorkspaceChevron = parentWorkspaceRow.locator(".session-resource-chevron");
-  if ((await parentWorkspaceChevron.getAttribute("aria-label"))?.startsWith("折叠")) {
-    await parentWorkspaceChevron.click();
+  const parentWorkspaceToggle = parentWorkspaceRow.locator(".session-resource-expand-toggle");
+  if (await parentWorkspaceToggle.getAttribute("aria-expanded") === "true") {
+    await parentWorkspaceToggle.click();
   }
   await parentRow.waitFor({ state: "hidden" });
   const navigationRootDropTarget = page.locator(
     '[data-testid="workspace-navigation-root-drop-target"]',
   );
   workspaceRootUsesContextMenu = await navigationRootDropTarget.evaluate(
-    (node) => node.tagName !== "BUTTON" && node.getAttribute("role") === "heading",
+    (node) => node.tagName !== "BUTTON" && node.getAttribute("role") === "tree",
   );
 
   async function createWorkspaceFolder(name) {
@@ -271,7 +270,7 @@ try {
   workspaceFolderReturnedToRoot = returnedWorkspaceFolderPadding === workspaceFolderOnePadding;
 
   await workspaceFolderOneRow.click({ button: "right" });
-  for (const label of ["新建子文件夹", "重命名", "复制文件夹 ID", "删除文件夹"]) {
+  for (const label of ["新建工作区文件夹", "重命名", "复制文件夹 ID", "删除文件夹"]) {
     await page.getByRole("menuitem", { name: label, exact: true }).waitFor({ state: "visible" });
   }
   await page.getByRole("menuitem", { name: "重命名", exact: true }).click();
@@ -368,7 +367,7 @@ try {
 
   await parentRow.click({ button: "right" });
   const bloodlineTextPresent = await page.getByText(/血缘/).count() > 0;
-  await page.getByRole("menuitem", { name: "新建子文件夹", exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("menuitem", { name: "新建会话文件夹", exact: true }).waitFor({ state: "visible" });
   await page.keyboard.press("Escape");
 
   const parentMainAction = parentRow.locator("button.session-resource-main-action");
@@ -430,7 +429,7 @@ try {
   await folderRow.click({ button: "right" });
   for (const label of [
     "新建会话",
-    "新建子文件夹",
+    "新建会话文件夹",
     "复制文件夹 ID",
     "将剪贴板会话移动到此处",
     "移动到剪贴板文件夹",
@@ -453,7 +452,7 @@ try {
   await childRow.dragTo(folderRow);
   const moveResponse = await moveResponsePromise;
   await requireCatalogCommit(moveResponse, moveIntent);
-  await parentRow.locator(".session-resource-chevron").waitFor({ state: "detached" });
+  await parentRow.locator(".session-resource-expand-toggle").waitFor({ state: "detached" });
   phantomSessionEmptyStatePresent = await parentRow
     .locator("xpath=..")
     .getByText("空文件夹", { exact: true })

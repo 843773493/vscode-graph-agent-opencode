@@ -30,7 +30,11 @@ app/prompting/
 - 标签必须使用可读的语义名称，不使用抽象优先级缩写。
 - 动态文本和 JSON 必须按注册 codec 编码。
 - 标签只表达结构和来源约定，真实消息优先级仍由 LangChain role 决定。
+- 控制通知使用 `system_reminder`；CSM 来源使用独立的 `context_sources` 根标签，二者共用注册表、Factory 编码和 section 校验。`source_defined` 表示沿用各来源资格，不将正文提升为控制指令。
+- CSM 来源由 typed frame metadata 标识后校验；不得仅因普通用户正文含相同标签而将其认作内部消息。
 - 未注册 kind、非法嵌套和 metadata/content 不一致必须快速失败。
+- 已知内部入口必须调用严格校验，不得因缺少 schema metadata 跳过；混合消息列表仅按 typed metadata 识别结构消息，不按正文标签猜身份。
+- 新压缩续接使用 `compaction_summary` kind 和不可信 `summary` section；canonical annotation 保存结构标记，恢复不得重写旧封存正文。
 
 # 典型用途示例
 
@@ -55,7 +59,13 @@ prepared = internal_message_factory.build(
     metadata={"source": "send_message_to_session"},
 )
 
-await session_orchestrator.create_and_run_internal(target_session_id, prepared)
+await session_orchestrator.submit_runtime_event(
+    target_session_id,
+    prepared,
+    thread_id=await session_orchestrator.resolve_main_thread(target_session_id),
+    source_id=communication_id,
+    idempotency_key=communication_id,
+)
 ```
 
 Factory 会根据注册表自动生成类似以下结构，并写入 schema version、kind 和 internal metadata：

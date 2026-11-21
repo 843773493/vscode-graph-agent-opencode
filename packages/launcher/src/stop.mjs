@@ -71,6 +71,7 @@ export async function requestLauncherStop({ boxteamHome, targetLock }) {
 
 export async function stopLauncher({
   boxteamHome,
+  expectedToken,
   readLockImpl = readLauncherLock,
   removeLockImpl = removeLauncherLock,
   isAliveImpl = processIsAlive,
@@ -84,6 +85,9 @@ export async function stopLauncher({
 } = {}) {
   const targetLock = readLockImpl(boxteamHome);
   if (targetLock === null) return Object.freeze({ status: "not-running" });
+  if (expectedToken !== undefined && targetLock.value.token !== expectedToken) {
+    throw new Error("升级预检后 Launcher 已被其它实例替换，保留当前实例");
+  }
 
   const pid = validateLauncherPid(targetLock);
   if (!isAliveImpl(pid)) {

@@ -30,14 +30,14 @@ const record = index => ({
 
 /** 运行真实 Provider、Command 与 API；仅宿主 Picker／Editor／Dialog 和 HTTP 响应为装具。 */
 export async function automationContract(mode) {
-  const before = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
+  const before = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), hides = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], errors = [], choices = [], opened = [], notices = [], confirmations = [], shows = [];
   const emptyOwnerCommand = ['command-owner-gateway-returned', 'command-owner-identity'].includes(mode);
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${index}`, status: 'ready' }));
   const initial = { ...before, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets,
     activeId: mode === 'owner-cancel' || emptyOwnerCommand ? null : gatewayWorkspaceKey(owners[0]) };
   workspaceContext.publish(initial);
-  let records = owners.map((_, index) => record(index)), releaseList, releaseWrite, releaseChoice, releaseRead, workspacesCalls = 0, aborted = false;
+  let records = owners.map((_, index) => record(index)), releaseList, releaseWrite, releaseChoice, releaseRead, workspacesCalls = 0, aborted = false, providerDisposedOnHide = false;
   if (mode === 'resume') records[0].lifecycle = 'paused';
   if (mode === 'unsupported-edit') records[0].configuration.trigger.version = '999';
   const success = data => Response.json({ code: 0, request_id: 'task-contract', data }, { headers: { 'X-Request-ID': 'task-contract' } });
@@ -88,8 +88,10 @@ export async function automationContract(mode) {
   const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }) }, async pick(items, options) {
     choices.push({ items: items.map(item => ({ label: item.label, action: item.action })), title: options.title });
     if (mode === 'owner-cancel' || mode === 'action-cancel') return undefined;
+    if (mode.startsWith('scope-')) return new Promise(resolve => { releaseChoice = () => resolve(mode.endsWith('cancel') ? undefined : [items[0]]); });
     if (emptyOwnerCommand && items[0]?.owner) return new Promise(resolve => { releaseChoice = () => resolve(items[0]); });
-    if (mode === 'identity' || mode === 'gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'pause')); });
+    if (mode === 'identity' || mode.startsWith('gateway-returned')) return new Promise(resolve => { releaseChoice = () => resolve(mode.endsWith('cancel') ? undefined : items.find(item => item.action === 'pause')); });
+    if (mode === 'action-select') return items.find(item => item.action === 'pause');
     return items[0];
   } };
   const origin = new ThreadInput({ ...owners[1], workspaceKey: gatewayWorkspaceKey(owners[1]), sessionId: 'session', threadId: 'thread', title: '发起Thread' });
@@ -111,9 +113,15 @@ export async function automationContract(mode) {
   } };
   const picker = { value: 'automation Needle', items: [], activeItems: [], selectedItems: [], buttons: [],
     keyMods: { alt: false, ctrlCmd: false }, onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
-    onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
+    onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, onDidHide: hides.event,
+    hide() { this.hidden = true; hides.fire(); } };
   const provider = new AutomationQuickAccess(quick, commands, notifications);
   const lifetime = provider.provide(picker, cancellation.token, { searchOwners: owners });
+  // 原 QuickAccessController 在 onDidHide 同步取消未选择的查询并释放 Provider。
+  const releaseHide = Event.once(picker.onDidHide)(() => {
+    if (!picker.selectedItems.length) cancellation.cancel();
+    lifetime.dispose(); providerDisposedOnHide = true;
+  });
   const until = async predicate => {
     for (let n = 0; n < 200; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
     throw new Error('任务合同未收敛');
@@ -139,9 +147,18 @@ export async function automationContract(mode) {
     requests.length = 0;
     if (mode === 'browse') {
       picker.activeItems = [picker.items[1]]; cancellation.cancel();
-    } else if (mode === 'identity' || mode === 'gateway-returned' || mode === 'action-cancel') {
+    } else if (mode.startsWith('scope-')) {
+      buttons.fire(picker.buttons[0]);
+      await until(() => releaseChoice);
+      if (mode.startsWith('scope-gateway-returned')) {
+        workspaceContext.publish({ ...initial, gatewayId: owners[1].gatewayId });
+        workspaceContext.publish(initial);
+      }
+      releaseChoice();
+      await until(() => errors.length || shows.length);
+    } else if (mode === 'identity' || mode.startsWith('gateway-returned') || mode === 'action-cancel' || mode === 'action-select') {
       picker.selectedItems = [picker.items[1]]; accepts.fire({ inBackground: false });
-      if (mode === 'identity' || mode === 'gateway-returned') {
+      if (mode === 'identity' || mode.startsWith('gateway-returned')) {
         await until(() => releaseChoice);
         if (mode === 'identity') invalidateGatewayToken(0);
         else {
@@ -150,7 +167,7 @@ export async function automationContract(mode) {
         }
         releaseChoice();
       }
-      await until(() => errors.length || shows.length);
+      await until(() => errors.length || shows.length || notices.includes('pending-closed'));
     } else {
       const action = ['pause', 'resume', 'check', 'checkOnly', 'details', 'history', 'edit'].includes(mode) ? mode
         : mode.startsWith('terminate') || mode === 'accepted-terminate-close' ? 'terminate' : 'pause';
@@ -184,11 +201,11 @@ export async function automationContract(mode) {
       }
       result = await operation;
     }
-    return { requests, errors, choices, opened, notices, confirmations, shows, rows, result, aborted, records,
+    return { requests, errors, choices, opened, notices, confirmations, shows, rows, result, aborted, records, providerDisposedOnHide,
       goalActions: availableTaskActions({ ...record(0), application_type: 'goal', configuration: null,
         goal: { session_id: 'session', objective: 'Goal' } }) };
   } finally {
-    lifetime.dispose(); cancellation.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
+    lifetime.dispose(); releaseHide.dispose(); cancellation.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose(); hides.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(before);
   }
 }

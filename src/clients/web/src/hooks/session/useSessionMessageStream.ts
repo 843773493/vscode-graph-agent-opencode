@@ -1,3 +1,4 @@
+import { RealtimeConnectionExhaustedError } from "../../api/stream/realtime";
 import { useEffect, useRef } from "react";
 import {
   registerWorkspaceObservation,
@@ -5,7 +6,6 @@ import {
 } from "../workspace/workspaceObservationLifecycle";
 import {
   getSessionMessageStreamSnapshot,
-  MessageStreamConnectionError,
   MessageStreamCursorGoneError,
   streamSessionMessageEvents,
 } from "../../api/stream/sessionMessageStream";
@@ -39,6 +39,7 @@ export function useSessionMessageStream({
   workspaceId,
   sessionCacheKey,
   setState,
+  reloadNonce = 0,
 }: {
   apiPort: number | null;
   sessionId: string | null;
@@ -47,6 +48,7 @@ export function useSessionMessageStream({
   workspaceId: string | null;
   sessionCacheKey: string | null;
   setState: SetAppState;
+  reloadNonce?: number;
 }) {
   const observationState = useWorkspaceObservationState(workspaceId);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -283,6 +285,10 @@ export function useSessionMessageStream({
           notifyTerminal();
         } catch (error) {
           if (controller.signal.aborted) return;
+          if (error instanceof RealtimeConnectionExhaustedError) {
+            updateState(current => ({ ...current, connectionStatus: "retry_exhausted", protocolError: error.message }));
+            return;
+          }
           if (error instanceof MessageStreamCursorGoneError) {
             // 游标失效说明服务端保留窗口已裁掉 after_seq：先用权威快照补齐本地镜像，
             // 再落回下方与普通重连同一口径的有界退避。这里绝不能直接 continue，
@@ -308,7 +314,6 @@ export function useSessionMessageStream({
           } else if (
             isTransientNetworkError(error)
             || error instanceof HttpRequestError
-            || error instanceof MessageStreamConnectionError
           ) {
             // 连接失败统一走持续重连：runGatewayRequest 对非 2xx（含 404
             // “流尚未就绪”）先抛 HttpRequestError，本地服务重连窗口抛 TypeError；
@@ -358,7 +363,7 @@ export function useSessionMessageStream({
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };
-  }, [apiPort, sessionId, threadId, turnId, workspaceId, sessionCacheKey, observationState, setState]);
+  }, [apiPort, sessionId, threadId, turnId, workspaceId, sessionCacheKey, observationState, setState, reloadNonce]);
 }
 
 type TerminalStreamStatus = Extract<

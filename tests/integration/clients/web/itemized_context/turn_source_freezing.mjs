@@ -127,9 +127,9 @@ async function contextItems(view, assemblyRef) {
   throw new Error("冻结上下文分页未收敛");
 }
 
-async function loadInspectionPages(inspector, buttonName, loadingText) {
+async function loadInspectionPages(inspector, buttonName) {
   for (let count = 0; count < 100; count += 1) {
-    await expect(inspector.getByRole("status").filter({ hasText: loadingText })).toHaveCount(0);
+    await expect(inspector).toHaveAttribute('aria-busy', 'false');
     assert.equal(await inspector.getByRole("alert").count(), 0, await inspector.innerText());
     const next = inspector.getByRole("button", { name: buttonName, exact: true });
     if (!await next.count()) return;
@@ -176,12 +176,9 @@ try {
   await api("/api/gateway/health");
   assert.deepEqual((await api("/api/gateway/workspaces")).active_workspace, { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId });
   assert.equal((await api("/api/v1/workspace")).workspace_id, owner.workspaceId);
-  // 本场景从初始编辑器恢复结束后开始；不把Welcome的异步打开与目标会话混为一次导航。
-  // TODO：product-006中目标Session/main-thread请求均为200，但目标Tab未出现且仍显示Welcome；初始化导航时序原因待前端owner核实。
-  const welcome = page.getByRole("tab", { name: "Welcome, preview", exact: true });
-  await expect(welcome).toBeVisible();
-  await welcome.getByRole("button", { name: "Close (Ctrl+W)", exact: true }).click();
-  await expect(welcome).toHaveCount(0);
+  // 目录初始化后沿原命令结清初始编辑器，不依赖欢迎页的语言和预览标签文案。
+  await expect(page.locator(`.native-session-navigation button[data-session-id="${owner.sessionId}"]`)).toBeVisible();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeAllEditors'));
   let thread = await selectThread(page, owner, 0);
   assert.equal(await readFile(agentsFile, "utf8"), versions[0]);
   phase("tool-loop-source-update");
@@ -250,6 +247,22 @@ try {
   facts.assemblies = await assemblies();
   assert.equal(facts.assemblies.length, interactions.length);
   assert.deepEqual(facts.assemblies.filter(entry => facts.firstAssemblies.some(old => old.assemblyId === entry.assemblyId)), facts.firstAssemblies);
+  const contextMarkers = async () => {
+    const history = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
+      direction: 'tail', turns: 20, include: ['metadata'],
+    });
+    assert.equal(history.has_before, false);
+    const markers = history.items.flatMap(turn => turn.response_parts.filter(part => part.kind === 'context_notice'));
+    assert(markers.every(marker => !marker.context_cursor));
+    return markers;
+  };
+  const readMarker = async marker => (await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/items/inspect`, {
+    operation: 'content', content_ref: marker.context_content_ref,
+  })).contents;
+  facts.markers = await contextMarkers();
+  assert(facts.markers.some(marker => marker.context_source_id === 'agents:workspace'));
+  if (mixedSkill) assert(facts.markers.some(marker => marker.context_source_id?.startsWith('skill:')));
+  const markerContents = await Promise.all(facts.markers.map(readMarker));
   phase("cold-inspection");
   await writeFile(agentsFile, mixedSkill?.currentAgents ?? versions[2]);
   if (mixedSkill) await unlink(mixedSkill.path);
@@ -264,6 +277,9 @@ try {
   assert.notEqual(facts.restart.backend_generation, registered.backend_generation);
   facts.coldAssemblies = await assemblies();
   assert.deepEqual(facts.coldAssemblies, facts.assemblies);
+  facts.coldMarkers = await contextMarkers();
+  assert.deepEqual(facts.coldMarkers, facts.markers);
+  assert.deepEqual(await Promise.all(facts.coldMarkers.map(readMarker)), markerContents);
   await openWorkbench(page, baseUrl);
   thread = await selectThread(page, owner, 0);
   await expect(thread.getByText(firstReply, { exact: true })).toBeVisible();
@@ -276,7 +292,7 @@ try {
   const choices = inspector.getByLabel("选择冻结 assembly");
   // 首次挂载会异步读取目录，选项到达后才能判断是否还有后续页。
   await expect(choices.locator("option")).not.toHaveCount(1);
-  await loadInspectionPages(inspector, "加载更早请求", "正在读取封存请求");
+  await loadInspectionPages(inspector, "加载更早请求");
   await expect(choices.locator("option")).toHaveCount(facts.assemblies.length + 1);
   for (const assembly of facts.assemblies) {
     phase(`inspect-${assembly.assemblyId}`);
@@ -284,7 +300,7 @@ try {
     const projection = inspector.locator(`.context-projection[data-assembly-id="${assembly.assemblyId}"]`);
     await expect.poll(async () => await projection.locator(".context-inspection-items > li").count()
       + await projection.getByRole("button", { name: "加载下一页上下文", exact: true }).count()).toBeGreaterThan(0);
-    await loadInspectionPages(inspector, "加载下一页上下文", "正在读取冻结上下文");
+    await loadInspectionPages(inspector, "加载下一页上下文");
     const details = projection.locator(".context-selection-entry details");
     await expect(details).toHaveCount(assembly.selection.length);
     for (const detail of await details.all()) await detail.locator("summary").click();

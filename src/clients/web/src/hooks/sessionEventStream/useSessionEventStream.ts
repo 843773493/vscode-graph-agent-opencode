@@ -1,3 +1,4 @@
+import { RealtimeConnectionExhaustedError } from "../../api/stream/realtime";
 import {
   useCallback,
   useEffect,
@@ -8,7 +9,8 @@ import {
   streamSessionEvents,
   TraceCursorGoneError,
 } from "../../api/stream/sessionTraceStream";
-import { isTransientNetworkError } from "../../api/http";
+import { HttpRequestError, isTransientNetworkError } from "../../api/http";
+import { SseProtocolError } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { isJobTerminalTraceType } from "../../state/traceEvents";
 import type { SessionStreamEvent } from "../../types/backend";
@@ -47,6 +49,7 @@ export function useSessionEventStream({
   timelineReady,
   initialEventCursor,
   refreshTurnHistory,
+  confirmSessionState,
   loadTerminalJobTurn,
   setState,
 }: {
@@ -60,6 +63,7 @@ export function useSessionEventStream({
   timelineReady: boolean;
   initialEventCursor: string | null;
   refreshTurnHistory: () => void;
+  confirmSessionState?: (afterSubscription: boolean) => Promise<void>;
   loadTerminalJobTurn: (jobId: string) => Promise<void>;
   setState: SetAppState;
 }) {
@@ -209,6 +213,7 @@ export function useSessionEventStream({
               cursorGoneRecoveryRef.current.count = 0;
             },
             onConnected: (routeRevision) => {
+              void confirmSessionState?.(true);
               const previousRevision = routeRevisionRef.current;
               routeRevisionRef.current = routeRevision;
               if (previousRevision !== routeRevision) {
@@ -231,7 +236,12 @@ export function useSessionEventStream({
           if (controller.signal.aborted) {
             return;
           }
+          if (error instanceof RealtimeConnectionExhaustedError) {
+            setState(previous => ({ ...previous, status: error.message }));
+            return;
+          }
           if (error instanceof TraceCursorGoneError) {
+            void confirmSessionState?.(true);
             // 410 恢复不能像普通重连那样只靠局部计数：它会触发 Turn bootstrap
             // 重载并用 refreshTurnHistory 重建本 effect，局部计数每次都会被清零。
             // 因此这里累加 ref 计数并给出可见终态，杜绝「上游持续 410」的无上限风暴。
@@ -251,6 +261,13 @@ export function useSessionEventStream({
               status: "事件游标已失效，正在重新加载有界 Turn bootstrap",
             }));
             refreshTurnHistory();
+            return;
+          } else if (error instanceof SseProtocolError
+            || (error instanceof HttpRequestError && error.status >= 400 && error.status < 500)) {
+            setState((previous) => ({ ...previous,
+              status: `事件流未确认，已停止自动重连: ${errorMessage(error)}`,
+              sessionExecutionSyncError: errorMessage(error),
+            }));
             return;
           } else {
             const message = isTransientNetworkError(error)
@@ -311,6 +328,7 @@ export function useSessionEventStream({
     initialEventCursor,
     loadTerminalJobTurn,
     refreshTurnHistory,
+    confirmSessionState,
     sessionCacheKey,
     sessionId,
     threadId,

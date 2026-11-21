@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
@@ -12,14 +14,9 @@ import {
 
 function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
   const encoder = new TextEncoder();
-  const subscriptionId = JSON.parse(String(init?.body)).subscriptions[0].subscription_id as string;
-  const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
-    subscription_id: subscriptionId, state, ...(frame === undefined ? {} : { frame }),
-  })}\n\n`);
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(envelope("connected"));
-      for (const chunk of chunks) controller.enqueue(envelope("frame", chunk));
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
       controller.close();
     },
   }), {
@@ -92,7 +89,7 @@ describe("Workspace 会话活动 API", () => {
       },
     });
     expect(received).toEqual([8]);
-    expect(JSON.parse(String(request?.body)).subscriptions[0].activity_after).toBe(7);
+    expect(request?.method).toBe("GET");
   });
 
   test("游标失效直接暴露给调用方", async () => {
@@ -114,11 +111,7 @@ describe("Workspace 会话活动流空闲超时", () => {
     const port = 48_204;
     let streamCancelled = false;
     installSessionApiFetchMock(({ init }) => new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(`event: observation\ndata: ${JSON.stringify({
-            subscription_id: JSON.parse(String(init?.body)).subscriptions[0].subscription_id, state: "connected",
-          })}\n\n`));
-        },
+        start() {},
         cancel() {
           streamCancelled = true;
         },

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from contextlib import aclosing
+from datetime import UTC, datetime
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
-    get_request_id,
     get_session_catalog_service,
     get_session_generation_service,
     get_workspace_search_service,
@@ -16,6 +19,11 @@ from app.api.errors import (
     client_error_message,
     not_found_http_error,
     state_conflict_http_error,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
+    stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
 from app.core.failures import report_failure
@@ -34,6 +42,8 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogExportDTO,
     SessionCatalogPageDTO,
     SessionCatalogSearchResultsDTO,
+    SessionCatalogSyncDTO,
+    SessionCatalogVersionDTO,
     SessionGenerationCapabilitiesDTO,
 )
 from app.schemas.internal_v2.session_navigation.models import (
@@ -52,6 +62,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
 )
+from app.schemas.internal_v2.sse import sse_responses
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation.catalog_query import CatalogCursorError
@@ -164,15 +175,18 @@ async def get_session_catalog_operation_status(
     response_model=APIResponse[NavigationSnapshotDTO],
 )
 async def get_session_catalog_snapshot(
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     """revision-pinned catalog snapshot：同一只读事务返回 revision 与事件水位。"""
     try:
-        result = service.navigation_snapshot()
+        result = service.navigation_snapshot(minimum_catalog_revision=minimum_catalog_revision)
     except NavigationQueueOwnerError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except RuntimeError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -255,6 +269,21 @@ async def preview_session_generation(
     return APIResponse(data=result, request_id=request_id)
 
 
+def _catalog_sync(service: SessionCatalogService) -> SessionCatalogSyncDTO:
+    return SessionCatalogSyncDTO(
+        gateway_id=require_current_gateway_id("Session catalog read"), workspace_id=service.workspace_id,
+        source="authoritative", stale=False, authoritative_confirmed_at=datetime.now(UTC),
+    )
+
+
+@router.get("/session-catalog/version", response_model=APIResponse[SessionCatalogVersionDTO])
+async def get_session_catalog_version(
+    request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+):
+    return APIResponse(data=service.version(), request_id=request_id)
+
+
 @router.get(
     "/session-catalog/children",
     response_model=APIResponse[SessionCatalogPageDTO],
@@ -263,6 +292,7 @@ async def list_session_catalog_children(
     parent_node_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
@@ -271,6 +301,7 @@ async def list_session_catalog_children(
             parent_node_id=parent_node_id,
             limit=limit,
             cursor=cursor,
+            minimum_catalog_revision=minimum_catalog_revision,
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
@@ -280,6 +311,7 @@ async def list_session_catalog_children(
         raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -290,6 +322,7 @@ async def list_session_catalog_children(
 async def list_session_catalog_roots(
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
@@ -298,6 +331,7 @@ async def list_session_catalog_roots(
             parent_node_id=None,
             limit=limit,
             cursor=cursor,
+            minimum_catalog_revision=minimum_catalog_revision,
         )
     except CatalogCursorError as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
@@ -305,6 +339,7 @@ async def list_session_catalog_roots(
         raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -314,13 +349,15 @@ async def list_session_catalog_roots(
 )
 async def refresh_session_catalog(
     _: str = Depends(verify_local_token),
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.refresh()
+        result = await service.refresh(minimum_catalog_revision=minimum_catalog_revision)
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -330,15 +367,17 @@ async def refresh_session_catalog(
 )
 async def get_session_catalog_breadcrumb(
     node_id: str,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.breadcrumb(node_id)
+        result = await service.breadcrumb(node_id, minimum_catalog_revision=minimum_catalog_revision)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -348,13 +387,15 @@ async def get_session_catalog_breadcrumb(
 )
 async def export_session_catalog(
     node_id: Annotated[list[CanonicalSessionId] | None, Query()] = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.export_index(node_ids=node_id)
+        result = await service.export_index(node_ids=node_id, minimum_catalog_revision=minimum_catalog_revision)
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -384,3 +425,28 @@ async def search_session_catalog(
     except (TypeError, ValueError, RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/session-catalog/snapshot/events", response_class=StreamingResponse, responses=sse_responses("目录快照变更", {"session_navigation": NavigationSnapshotDTO}))
+async def session_catalog_snapshot_events(
+    _: Annotated[str, Depends(verify_local_token)],
+    service: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+):
+    return StreamingResponse(_stream_navigation_changes(service), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+async def _stream_navigation_changes(service: SessionCatalogService):
+    confirmed = None
+    async with aclosing(stream_sse_with_heartbeat(
+        service.operations.changes(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+        close_source_on_exit=True,
+    )) as changes:
+        async for snapshot in changes:
+            heartbeat = isinstance(snapshot, str)
+            if heartbeat:
+                yield snapshot
+                # 复用原心跳确认权威标量；通知丢失或配置投影变化也使已加载范围失效。
+            snapshot = service.navigation_snapshot()
+            if not heartbeat or snapshot != confirmed:
+                confirmed = snapshot
+                yield f"event: session_navigation\ndata: {snapshot.model_dump_json()}\n\n"

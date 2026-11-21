@@ -6,8 +6,9 @@ from hashlib import sha256
 import pytest
 from langchain_core.messages import AIMessage
 
+from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.provider_history import public_message_record
-from app.services.mapping.message_content import MessageContentProjectionMixin
+from app.services.mapping.message_content import extract_message_content
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def native_message() -> AIMessage:
 
 def test_agent_record_keeps_native_layout_and_independent_content(native_message):
     original = deepcopy(native_message.content)
-    record = MessageContentProjectionMixin._message_to_agent_state_record(native_message)
+    record = message_to_agent_state_record(native_message)
     assert record["content"] == original
     assert record["response_metadata"] == {**native_message.response_metadata, "phase": "final_answer"}
     native_message.content.clear()
@@ -41,7 +42,7 @@ def test_agent_record_keeps_native_layout_and_independent_content(native_message
 
 
 def test_lightweight_display_reads_nested_reasoning_without_protected_body(native_message):
-    extracted = MessageContentProjectionMixin._extract_content(native_message)
+    extracted = extract_message_content(native_message)
     assert extracted == {
         "content": "回答", "reasoning_id": None,
         "content_blocks": [
@@ -52,7 +53,7 @@ def test_lightweight_display_reads_nested_reasoning_without_protected_body(nativ
 
 
 def test_public_record_hides_only_recovery_payload_and_does_not_mutate_source(native_message):
-    record = MessageContentProjectionMixin._message_to_agent_state_record(native_message)
+    record = message_to_agent_state_record(native_message)
     original = deepcopy(record)
     public = public_message_record(record)
     expected = deepcopy(original)

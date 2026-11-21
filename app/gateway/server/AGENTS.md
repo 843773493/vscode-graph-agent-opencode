@@ -22,3 +22,6 @@
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
 - 受管 HTTP 进程统一使用 `app.runtime.http_server`；Gateway lifespan 可交付 listener-ready 启动回调及 `before_http_shutdown` 钩子，分别用于开放恢复与关闭前结清受理中的工作区操作，不再维护 Gateway 专用 runner。
+
+- `realtime.py` 是页面常驻业务事件唯一 WebSocket 入口，控制帧动态订阅原 ASGI/HTTP owner；不实现业务事件、第二事件总线或工作区存储。各订阅独立字节额度与取消，不能因慢日志阻塞其它订阅；租约和迭代器关闭复用原代理生命周期。
+- 取消只请求原订阅 task 结束，不在控制帧循环中同步等待慢清理；task 完成后回收登记（含尚未开始就被取消的 task），连接关闭统一等待全部未结清 task，不遗失清理责任。

@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from app.core.atomic_fs import native_io_path
+from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     ForkRetentionClaim,
     SessionCatalogStore,
@@ -132,7 +131,7 @@ class ForkMetadataMixin:
             if not existing:
                 cursor = connection.execute(
                     "INSERT INTO retention_refs(retention_id, reference_kind, reference_id, target_view_id, target_message_sequence, owner_session_id, expires_at, status, created_at) VALUES (?, 'fork', ?, ?, NULL, ?, NULL, 'active', ?)",
-                    (uuid4().hex, fork_id, source_view_id, owner_session_id, _now()),
+                    (create_uuid_hex(), fork_id, source_view_id, owner_session_id, _now()),
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError(f"fork retention 未写入: {fork_id}")

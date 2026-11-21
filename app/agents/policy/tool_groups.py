@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.agents.policy.custom_tool_spec import ParsedCustomToolSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,3 +93,16 @@ def catalog_group_for_tool(tool_name: str) -> ToolGroupDefinition:
     if tool_name in AGENT_COLLABORATION_TOOL_NAMES:
         return AGENT_COLLABORATION_TOOL_GROUP
     return DEFAULT_TOOL_GROUP
+
+
+def catalog_group_for_custom_tool(spec: ParsedCustomToolSpec) -> ToolGroupDefinition:
+    """声明的扩展工具沿用具名业务分组，其余按工厂模块归组。"""
+    group = catalog_group_for_tool(spec.name)
+    if group != DEFAULT_TOOL_GROUP:
+        return group
+    module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
+    return ToolGroupDefinition(
+        group_id=f"extension:{module_name}",
+        group_name=f"扩展工具 · {module_name}",
+        kind="extension",
+    )

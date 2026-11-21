@@ -18,13 +18,20 @@ from uuid import uuid4
 
 import httpx
 import psutil
+from boxteam_plugin_sdk.commands import (
+    PluginCommandRegistration,
+    PluginCommandRegistrationsDTO,
+    PluginShutdownDTO,
+)
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
+from boxteam_plugin_sdk.observation import RuntimeObservationStatus
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.core.config_sources import config_revision
 from app.core.env import get_project_root
 from app.core.file_permissions import restrict_private_path_access
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.plugins.dependencies import validate_runtime_target
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.plugins.sources import plugin_sources
@@ -45,18 +52,14 @@ from app.runtime.windows_fs import native_process_path
 from app.schemas.gateway.diagnostics import PluginRuntimeObservationDTO
 from app.schemas.gateway.plugin_commands import (
     PluginCommandPublication,
-    PluginCommandRegistration,
-    PluginCommandRegistrationsDTO,
     PluginCommandSnapshotDTO,
 )
 from app.schemas.gateway.service_plugin import (
     PluginBinding,
     PluginInstanceStatus,
     PluginInstanceView,
-    PluginShutdownDTO,
     ServicePluginManifest,
 )
-from app.schemas.runtime_observation import RuntimeObservationStatus
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
     requires_private_delivery,

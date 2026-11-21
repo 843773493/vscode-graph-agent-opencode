@@ -6,6 +6,7 @@ import logging
 import os
 from urllib.parse import quote
 
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
 from app.abstractions.browser_resources import (
@@ -15,7 +16,6 @@ from app.abstractions.browser_resources import (
 )
 from app.abstractions.workspace_resources import ResourceTransportGrantRejected
 from app.core.failures import mark_public_failure
-from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto

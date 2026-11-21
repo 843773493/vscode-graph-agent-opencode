@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.sse import read_sse_events_until
 from tests.support.trace import get_trace_payload
@@ -67,7 +68,7 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
 
         message_response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {
                     "content": "直接调用 test_tool 工具，然后只回答工具返回内容。不要执行多余操作，不要回答多余文本",
                 },
@@ -75,7 +76,7 @@ async def test_deepagent_trace_stream(client: httpx.AsyncClient, is_debug: bool)
                     "mode": "single_agent",
                     "agent_id": "default",
                 },
-            },
+            }),
         )
         assert message_response.status_code == 200
         job_id = message_response.json()["data"]["job_id"]

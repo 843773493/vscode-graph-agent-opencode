@@ -10,10 +10,14 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from typing import Literal
+
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 
 from app.abstractions.workspace_resources import (
+    ResourceChanges,
     ResourceKind,
-    ResourceSessionReader,
+    ResourceSessionAccess,
     ResourceSnapshot,
     ResourceThreadResolver,
     ResourceTransport,
@@ -23,7 +27,7 @@ from app.abstractions.workspace_resources import (
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.business.workspace_resources.creation import cancel_pending_creation
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,
@@ -45,6 +49,12 @@ from app.services.business.workspace_resources.records import (
     ThreadRef,
 )
 from app.services.business.workspace_resources.recovery import ResourceRecovery
+from app.services.infrastructure.events.event_channel_service import (
+    EventChannel,
+    EventChannelService,
+    EventChannelSpec,
+    channel_name,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
     ResourceLease,
@@ -69,7 +79,7 @@ class WorkspaceResourceOwner:
         *,
         workspace_root: Path,
         workspace_id: str,
-        sessions: ResourceSessionReader,
+        sessions: ResourceSessionAccess,
         threads: ResourceThreadResolver,
         transport: ResourceTransport,
         leases: ExternalResourceLeaseLedger,
@@ -86,8 +96,11 @@ class WorkspaceResourceOwner:
         self._leases = leases
         self._clock = clock
         self._thread_release_fence = thread_release_fence
+        self._observations: EventChannel[frozenset[str]] = EventChannelService().ensure_channel(EventChannelSpec(
+            name=channel_name("workspace.resources", self.kind), overflow_policy="gap", max_queue_size=64, history_size=0,
+        ))
         self._store = ResourceRecordStore(
-            workspace_root=workspace_root, workspace_id=workspace_id, kind=self.kind
+            workspace_root=workspace_root, workspace_id=workspace_id, kind=self.kind, on_changed=self.notify_changed,
         )
         self._resource_locks = {resource_id: asyncio.Lock() for resource_id in self._store.ids()}
         self._recovery = ResourceRecovery(self)
@@ -95,6 +108,23 @@ class WorkspaceResourceOwner:
         self.deletion_holder = OperationHolderGate(
             workspace_root / ".boxteam" / "sessions", namespace="workspace_resources",
         )
+
+    def notify_changed(self, resource_ids: ResourceChanges = None) -> None:
+        # EventChannel 的 None 专用于 gap；空集在本通道表示整个范围失效。
+        self._observations.publish(resource_ids or frozenset())
+
+    async def changes(self) -> AsyncIterator[ResourceChanges]:
+        subscription = self._observations.subscribe(label=f"workspace-{self.kind}")
+        try:
+            # 先订阅再触发首次读取；建连/重连期间发生的变化不会丢失。
+            yield None
+            while True:
+                changes = (await subscription.next(), *subscription.pending())
+                yield None if any(item.gap or not item.event for item in changes) else frozenset(
+                    resource_id for item in changes if item.event is not None for resource_id in item.event
+                )
+        finally:
+            self._observations.unsubscribe(subscription)
 
     @asynccontextmanager
     async def admit_thread(
@@ -110,7 +140,7 @@ class WorkspaceResourceOwner:
                 async with budget:
                     # 锁序与删除一致：先holder，后Session；禁止网络等待长期持Session独占锁。
                     await lifetime.enter_async_context(self.deletion_holder.lock_for(session_id, exclusive=False))
-                    async with self._sessions.session_write_admission(session_id):
+                    async with self._sessions.session_write_admission(session_id, new_operation=True):
                         session = await self._sessions.get(session_id)
                         if session.workspace_id != self.workspace_id:
                             raise ValueError("外部资源 来源 Session 不属于当前工作区")
@@ -142,6 +172,10 @@ class WorkspaceResourceOwner:
             for record in self._store.all()
         )
 
+    async def _list_runtime_resources(self, resource_ids: frozenset[str] | None = None) -> list[ResourceSnapshot]:
+        # Browser 仍读取原清单；Terminal 按传输能力覆盖为指定资源的摘要查询。
+        return await self._transport.list_resources()
+
     async def list_resources(
         self,
         *,
@@ -150,6 +184,7 @@ class WorkspaceResourceOwner:
         retention_scope: RetentionScope | None = None,
         source_session_id: str | None = None,
         source_thread_id: str | None = None,
+        resource_ids: frozenset[str] | None = None,
     ) -> list[ResourceSnapshot]:
         # 一次领域列表的恢复、清单和各资源锁共同消耗入口预算。
         # TODO(5.4)：同步存储与不合作取消仍须由原执行owner核实收敛。
@@ -172,14 +207,17 @@ class WorkspaceResourceOwner:
                         ))
                     )
 
-                records = tuple(record for record in self._store.all() if matches(record))
+                candidates = self._store.all() if resource_ids is None else (
+                    record for resource_id in resource_ids if (record := self._store.get(resource_id)) is not None
+                )
+                records = tuple(record for record in candidates if matches(record))
                 # 冷恢复仍核实完整外部清单；没有匹配的权威资源时，无需再次查询外设。
                 if not records:
                     return []
                 await self.recover(record.resource_id for record in records)
                 # 一次清单请求不占任何资源锁；合并观察时只持有当前小批次的锁。
                 records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
-                observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                observed = index_resources(await self._list_runtime_resources(resource_ids), self.workspace_id, self._store.ids(), self.kind)
                 result: list[ResourceSnapshot] = []
                 async def publish(batch: list[OwnedResourceRecord]) -> None:
                     # 两个 owner 按原顺序持久化；取消等待本批结算，不在解锁后补账。
@@ -233,7 +271,7 @@ class WorkspaceResourceOwner:
                 await self.recover((resource_id,))
                 async with self._resource_lock(resource_id):
                     record = self._require_owned_resource_record(resource_id)
-                    observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                    observed = index_resources(await self._list_runtime_resources(frozenset({resource_id})), self.workspace_id, self._store.ids(), self.kind)
                     runtime = observed.get(resource_id)
                     # Terminal 清单只含摘要；保留清单缺失语义，正文仅向所选资源读取。
                     if runtime is not None and self.kind == "terminal" and include_output:
@@ -599,14 +637,19 @@ class WorkspaceResourceOwner:
             operation_id=f"unload:{generation}",
         )
 
-    async def cleanup_session(self, session_id: str) -> int:
-        """由关闭准入后的 Session 删除 drain 调用，不重新进入其生命周期 gate。"""
+    async def cleanup_session(
+        self, session_id: str, *,
+        action: Literal["release", "stop", "delete"] = "release",
+        thread_id: str | None = None,
+    ) -> int:
+        """准入关闭后按策略停止或释放资源，不重入调用方的 Session gate。"""
         if not self._store.ids():
             return 0
         return await self._release_refs(
-            lambda ref: ref.session_id == session_id,
-            holder_id=f"session-delete:{session_id}",
-            operation_id=f"delete:{session_id}",
+            lambda ref: ref.session_id == session_id and (thread_id is None or ref.thread_id == thread_id),
+            holder_id=f"session-{action}:{session_id}",
+            operation_id=f"{action}:{session_id}:{thread_id or 'all'}",
+            action=action,
         )
 
     async def _release_refs(
@@ -615,6 +658,7 @@ class WorkspaceResourceOwner:
         *,
         holder_id: str,
         operation_id: str,
+        action: Literal["release", "stop", "delete"] = "release",
     ) -> int:
         locked: dict[str, asyncio.Lock] = {}
         tasks: list[asyncio.Task[None]] = []
@@ -625,9 +669,11 @@ class WorkspaceResourceOwner:
                 if record.status == "deleted":
                     return
                 async with self._management_lease(record, None, holder_id, operation_id) as lease_id:
-                    if record.retention_scope == "thread":
-                        record.thread_associations = []
-                        await self._stop_or_delete(record, delete=True, lease_id=lease_id)
+                    if action != "release" or record.retention_scope == "thread":
+                        delete = action == "delete" or (action == "release" and record.retention_scope == "thread")
+                        if delete:
+                            record.thread_associations = []
+                        await self._stop_or_delete(record, delete=delete, lease_id=lease_id)
                     else:
                         async with resource_operation_dispatch(self, record, lease_id, operation=None):
                             await self._advance_revision(record)
@@ -672,6 +718,8 @@ class WorkspaceResourceOwner:
                 # 从全量preflight到任务接管之间不让出事件循环，避免新lease插入。
                 for record in affected:
                     self._verified(record)
+                    if action == "delete" and any(not matches(ref) for ref in record.thread_associations):
+                        raise ResourceConflict(f"资源仍被其它 Thread 关联，不能随当前目标删除: {record.resource_id}")
                     if any(
                         lease.holder_session_id is None
                         or matches(ThreadRef(lease.holder_session_id, lease.holder_thread_id))

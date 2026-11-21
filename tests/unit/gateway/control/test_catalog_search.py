@@ -28,6 +28,9 @@ from app.gateway.registry import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
+)
 
 OWNER = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_" + "a" * 32, workspace_id="00000000-0000-4000-8000-000000000001")
 
@@ -58,7 +61,10 @@ async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_s
 
     def receive(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={"data": {"revision": "revision-one", "catalog_revision": 1, "items": []}})
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"data": {"workspace_id": OWNER.workspace_id, "catalog_revision": 1, "projection_revision": "config-one"}})
+        return httpx.Response(200, json={"data": {"revision": catalog_projection_revision(1, "config-one"), "catalog_revision": 1, "items": [], "complete": True,
+            "sync": {"gateway_id": remote_gateway_id, "workspace_id": OWNER.workspace_id, "source": "authoritative", "stale": False}}})
 
     try:
         async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as client:
@@ -66,8 +72,9 @@ async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_s
                 registry=registry, http_client=client, cache_dir=tmp_path / "indexes", gateway_id=OWNER.gateway_id,
             )
             await service._sync_all()
-            request, = requests
-            assert str(request.url) == "http://remote.test/api/v1/session-catalog/export"
+            assert [request.url.path for request in requests] == ["/api/v1/session-catalog/version", "/api/v1/session-catalog/export"]
+            assert requests[1].url.params["minimum_catalog_revision"] == "1"
+            request = requests[0]
             assert request.headers[TARGET_GATEWAY_ID_HEADER] == remote_gateway_id
             assert request.headers["X-BoxTeam-Gateway-Id"] == OWNER.gateway_id
             assert request.headers["X-BoxTeam-Workspace-Id"] == OWNER.workspace_id
@@ -119,7 +126,7 @@ def catalog_snapshot() -> _CatalogSnapshot:
         created_at=datetime.fromisoformat("2026-10-21T00:30:00+08:00"),
     )
     return _CatalogSnapshot(
-        owner=OWNER, catalog_revision=7, revision="revision-one",
+        owner=OWNER, catalog_revision=7, revision=catalog_projection_revision(7, "config-one"),
         updated_at=datetime.now(UTC),
         nodes_by_id={node.node_id: node for node in (folder, session)},
     )
@@ -197,7 +204,7 @@ def test_catalog_search_limits_matches_after_stable_name_sort(
         ),
     ]
     snapshot = _CatalogSnapshot(
-        owner=OWNER, catalog_revision=7, revision="revision-one",
+        owner=OWNER, catalog_revision=7, revision=catalog_projection_revision(7, "config-one"),
         updated_at=datetime.now(UTC),
         nodes_by_id={node.node_id: node for node in nodes},
     )
@@ -262,6 +269,7 @@ async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapsho
     catalog_snapshot: _CatalogSnapshot,
 ) -> None:
     target = replace(_offline_target(), backend_url="http://workspace.invalid")
+    catalog_service._registry.upsert(target)
     catalog_service._save_snapshot(catalog_snapshot)
     catalog_service._snapshots[OWNER] = catalog_snapshot
     path = catalog_service._cache_path(OWNER)
@@ -271,12 +279,11 @@ async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapsho
     ]
     locator = "2026/10/20/private-backend-session"
     nodes[1]["storage_relative_path"] = locator
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(
-            200,
-            json={"data": {"revision": "bad-revision", "catalog_revision": 7, "items": nodes}},
-        )
-    )
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"data": {"workspace_id": OWNER.workspace_id, "catalog_revision": 8, "projection_revision": "config-one"}})
+        return httpx.Response(200, json={"data": {"revision": "bad-revision", "catalog_revision": 8, "items": nodes}})
+    transport = httpx.MockTransport(respond)
     async with httpx.AsyncClient(transport=transport) as client:
         catalog_service._http_client = client
         with pytest.raises(ValidationError) as caught:
@@ -335,23 +342,6 @@ async def test_catalog_sync_skips_local_workspace_without_backend_url(
 def test_missing_mirror_does_not_sync(catalog_service: GatewaySessionCatalogSearchService) -> None:
     with pytest.raises(LookupError, match="没有可用目录镜像"):
         catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
-
-
-def test_catalog_sync_lock_pool_is_bounded_and_stable(catalog_service: GatewaySessionCatalogSearchService) -> None:
-    """目录同步锁池必须恒定有界，且同一完整工作区 owner 恒得同一把锁。
-
-    若退回按完整 owner 键的 dict，删除工作区后键永不回收，进程内存随历史
-    工作区无界增长；分片锁池则保证「同 id 同锁」的互斥红线且池大小恒定。
-    """
-
-    workspace_key = (OWNER.gateway_id, OWNER.workspace_id)
-    assert catalog_service._sync_lock_for(workspace_key) is catalog_service._sync_lock_for(workspace_key)
-    distinct = {
-        id(catalog_service._sync_lock_for((OWNER.gateway_id, f"00000000-0000-4000-8000-{index:012x}")))
-        for index in range(5000)
-    }
-    assert len(distinct) <= 64
-    assert len(catalog_service._sync_locks) <= 64
 
 
 @pytest.mark.asyncio
@@ -436,10 +426,13 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
             if failure == "http":
                 return httpx.Response(503, extensions={"reason_phrase": native_path.encode()})
             if failure == "validation":
-                return httpx.Response(200, json={"data": {"revision": "bad", "catalog_revision": 7, "items": [
-                    {**nodes[0], "node_revision": native_path},
-                ]}})
-        return httpx.Response(200, json={"data": {"revision": catalog_snapshot.revision, "catalog_revision": 7, "items": nodes}})
+                return httpx.Response(200, json={"data": {"workspace_id": target.workspace_id, "catalog_revision": native_path, "projection_revision": "config-one"}})
+        revision = 8 if failed and failure == "cache" and request.url.host == "failed.test" else 7
+        workspace_id = target.workspace_id if request.url.host == "failed.test" else healthy.workspace_id
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"data": {"workspace_id": workspace_id, "catalog_revision": revision, "projection_revision": "config-one"}})
+        return httpx.Response(200, json={"data": {"revision": catalog_projection_revision(revision, "config-one"), "catalog_revision": revision, "items": nodes,
+            "complete": True, "sync": {"gateway_id": OWNER.gateway_id, "workspace_id": workspace_id, "source": "authoritative", "stale": False}}})
 
     original_write = catalog_search.atomic_write_json
 
@@ -475,10 +468,10 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
         assert diagnostic.exc_info is not None
         original = diagnostic.exc_info[1]
         assert original is not None
-        failed_request, = [request for request in calls if request.url.host == "failed.test"]
-        assert failed_request.headers["X-Request-ID"] in diagnostic.getMessage()
+        failed_requests = [request for request in calls if request.url.host == "failed.test"]
+        assert all(request.headers["X-Request-ID"] in diagnostic.getMessage() for request in failed_requests)
         expected_owners = {"failed.test": target.workspace_id, "healthy.test": healthy.workspace_id}
-        assert len(calls) == 2 and {request.url.host for request in calls} == set(expected_owners)
+        assert len(calls) == (3 if failure == "cache" else 2) and {request.url.host for request in calls} == set(expected_owners)
         assert all(request.headers["X-BoxTeam-Workspace-Id"] == expected_owners[request.url.host] for request in calls)
         if failure == "transport":
             assert original is native_error
@@ -498,3 +491,94 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
         await catalog_service._sync_all()
         assert catalog_service._workspace_errors == {}
         assert catalog_service._snapshots[OWNER].owner == OWNER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_authoritative_access_rejection_removes_memory_and_restart_mirror(
+    catalog_service: GatewaySessionCatalogSearchService,
+    catalog_snapshot: _CatalogSnapshot,
+    status: int,
+) -> None:
+    target = replace(_offline_target(), backend_url="http://workspace.test")
+    catalog_service._registry.upsert(target)
+    catalog_service._snapshots[OWNER] = catalog_snapshot
+    catalog_service._confirmed_at[OWNER] = datetime.now(UTC)
+    catalog_service._save_snapshot(catalog_snapshot)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status))) as client:
+        catalog_service._http_client = client
+        with pytest.raises(httpx.HTTPStatusError) as caught:
+            await catalog_service._sync_workspace(target, request_id="req_rejected")
+    assert caught.value.response.status_code == status
+    assert OWNER not in catalog_service._snapshots
+    assert OWNER not in catalog_service._confirmed_at
+    assert catalog_service._load_snapshot(OWNER) is None
+    assert f"status={status}" in catalog_service._workspace_errors[target.key]
+
+
+@pytest.mark.asyncio
+async def test_warm_browse_and_periodic_sync_share_version_read_without_export_or_disk(
+    catalog_service, catalog_snapshot, monkeypatch,
+):
+    import asyncio
+    target = replace(_offline_target(), backend_url="http://workspace.test")
+    catalog_service._registry.upsert(target)
+    catalog_service._snapshots[OWNER] = catalog_snapshot
+    entered, release = asyncio.Event(), asyncio.Event()
+    requests = []
+    async def respond(request):
+        requests.append(request)
+        assert request.url.path.endswith("/version")
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={"data": {"workspace_id": OWNER.workspace_id, "catalog_revision": 7, "projection_revision": "config-one"}})
+    def no_write(snapshot):
+        raise AssertionError("未变目录不应落盘")
+    monkeypatch.setattr(catalog_service, "_save_snapshot", no_write)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        catalog_service._http_client = client
+        pending = asyncio.create_task(catalog_service._sync_workspace(target, request_id="req_periodic"))
+        await entered.wait()
+        joined = asyncio.create_task(catalog_service._sync_workspace(target, request_id="req_request"))
+        for index in range(20):
+            page = catalog_service.browse_mirror(target, path=["session-catalog", "children"], query=httpx.QueryParams(), request_id=f"req_browse_{index}")
+            assert page.catalog_revision == 7 and page.sync.stale and page.sync.source == "gateway_mirror"
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        release.set()
+        assert await joined is catalog_snapshot
+    assert len(requests) == 1
+    assert catalog_service._snapshots[OWNER] is catalog_snapshot
+    assert OWNER in catalog_service._confirmed_at
+
+
+@pytest.mark.asyncio
+async def test_mirror_103_cannot_confirm_105_or_absence_and_revoked_owner(catalog_service, catalog_snapshot):
+    import asyncio
+    target = replace(_offline_target(), backend_url="http://workspace.test")
+    catalog_service._registry.upsert(target)
+    catalog_service._snapshots[OWNER] = replace(catalog_snapshot, catalog_revision=103)
+    hold = asyncio.Event()
+    async def respond(request):
+        await hold.wait()
+        return httpx.Response(503)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        catalog_service._http_client = client
+        for path, query in (
+            (["session-catalog", "children"], {"minimum_catalog_revision": "105"}),
+            (["session-catalog", "breadcrumb", "new-parent"], {"minimum_catalog_revision": "105"}),
+            (["session-catalog", "export"], {"node_id": "new-parent", "minimum_catalog_revision": "105"}),
+            (["session-catalog", "export"], {"node_id": "new-parent"}),
+        ):
+            assert catalog_service.browse_mirror(target, path=path, query=httpx.QueryParams(query), request_id="req_105") is None
+        # catalog 数字不变时，权威配置 token 也不能被旧镜像冒充确认。
+        assert catalog_service.browse_mirror(target, path=["session-catalog", "children"], query=httpx.QueryParams(),
+            request_id="req_projection", known_revision="new-config-projection") is None
+        catalog_service._registry.remove(target.key)
+        with pytest.raises(RuntimeError, match="登记归属已改变"):
+            catalog_service.browse_mirror(target, path=["session-catalog", "children"], query=httpx.QueryParams(), request_id="req_revoked")
+        assert OWNER not in catalog_service._snapshots
+        for task in tuple(catalog_service._in_flight.values()):
+            task.cancel()
+        await asyncio.gather(*catalog_service._in_flight.values(), return_exceptions=True)

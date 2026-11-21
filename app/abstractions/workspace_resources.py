@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 RetentionScope = Literal["thread", "workspace"]
 ResourceKind = Literal["terminal", "browser"]
 ResourceSnapshot = dict[str, object]
+# None 表示首次读取、重连或通知缺口，需要重读当前范围；集合只使指定资源失效。
+ResourceChanges = frozenset[str] | None
 
 
 class ResourceAssociationMissing(ValueError):
@@ -32,11 +34,15 @@ class ResourceTransportGrantRejected(RuntimeError):
         super().__init__(message)
 
 
-class ResourceSessionReader(Protocol):
+class ResourceSessionAccess(Protocol):
+    """资源 owner 核定 Session 归属及取得写准入所需的能力。"""
+
     @property
     def workspace_id(self) -> str: ...
 
-    def session_write_admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
+    def session_write_admission(
+        self, session_id: str, *, new_operation: bool = False,
+    ) -> AbstractAsyncContextManager[None]: ...
 
     async def get(self, session_id: str) -> SessionDTO: ...
 

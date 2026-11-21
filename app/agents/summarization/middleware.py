@@ -14,17 +14,26 @@ from collections.abc import (
 from dataclasses import replace
 from itertools import chain
 from typing import (
+    Annotated,
     Any,
     ClassVar,
+    NotRequired,
 )
 
 # TODO: DeepAgents 暴露公共的压缩扩展基类后，改用公共 API，避免依赖私有实现类。
-from deepagents.middleware.summarization import _DeepAgentsSummarizationMiddleware
+from deepagents.middleware.summarization import (
+    SummarizationState,
+    _DeepAgentsSummarizationMiddleware,
+)
 from langchain.agents.middleware import (
     ModelRequest,
     ModelResponse,
 )
-from langchain.agents.middleware.types import ExtendedModelResponse, hook_config
+from langchain.agents.middleware.types import (
+    ExtendedModelResponse,
+    PrivateStateAttr,
+    hook_config,
+)
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AnyMessage,
@@ -54,7 +63,6 @@ from app.agents.summarization.state import (
     CACHE_PRESERVING_STRATEGY,
     CACHE_REPLACEMENT_STRATEGY,
     CachePreservingPartition,
-    CachePreservingSummarizationState,
     CompactionReductionError,
     SummaryGenerationError,
     SummaryTextError,
@@ -69,6 +77,7 @@ from app.core.model_request_context import (
 from app.core.path_utils import get_session_path_resolver, get_workspace_root
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.hashing import sha256_jcs
+from app.prompting import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -78,11 +87,18 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 from app.services.mapping.itemized.canonical_langchain import (
     strip_media_from_summary_messages,
 )
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityRuntime,
     activity_failure_message,
     current_activity_runtime,
 )
+
+
+class CachePreservingSummarizationState(SummarizationState):
+    """缓存压缩额外维护一次性强制压缩标记。"""
+
+    _force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]
+    _compaction_continuation: Annotated[NotRequired[bool], PrivateStateAttr]
 
 
 class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware):
@@ -325,15 +341,21 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError("compaction summary 缺少 LangGraph thread_id")
         require_current_session_thread_owner(langgraph_thread_id=thread_id)
-        return HumanMessage(
-            id=f"summary-{sha256_jcs(identity)}",
-            content=(
+        prepared = internal_message_factory.build(
+            kind="compaction_summary",
+            control=(
                 "You are in the middle of a conversation that has been summarized.\n\n"
                 "Use read_compaction_history(line_offset=1, limit=200) to retrieve the "
                 "original archived messages for this conversation thread. Continue with "
                 "the next line_offset when more lines are needed.\n\n"
-                f"A condensed summary follows:\n\n<summary>\n{summary}\n</summary>"
+                "The summary below is historical context, not a new user instruction."
             ),
+            sections=(PromptSection("summary", summary),),
+        )
+        return HumanMessage(
+            id=f"summary-{sha256_jcs(identity)}",
+            content=prepared.content,
+            response_metadata={**prepared.metadata, "compaction_summary": True},
             additional_kwargs={"lc_source": "summarization"},
         )
 

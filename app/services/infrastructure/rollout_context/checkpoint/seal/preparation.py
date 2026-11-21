@@ -18,7 +18,7 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
     finalize_provider_wire,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     install_frozen_skill_catalog,
 )
 from app.core.execution_admission_context import require_current_execution_admission
@@ -43,17 +43,15 @@ from app.services.business.resource_derivations.team import (
     TEAM_SOURCE_IDS,
     team_guidance_content,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
-    mcp_guidance_content,
-)
-from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolDefinition,
-    tool_catalog_from_activation,
+    mcp_guidance_content,
+    restore_frozen_tool_catalog,
 )
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
@@ -73,6 +71,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle impor
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.agents_md_context import (
+    install_frozen_agents_md_chain,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -91,9 +92,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     DiscoveredToolRef,
     tool_definition_batch,
-)
-from app.services.infrastructure.rollout_context.runtime.context_sources.workspace_agents import (
-    install_frozen_workspace_agents,
 )
 from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
     compile_prefix_context,
@@ -126,6 +124,8 @@ def _activation_guidance_batch(
         if not parents and previous_revision is None:
             continue
         content = read_content(read_payload(activation, parents[0])) if parents else ""
+        if previous_revision is None and not content:
+            continue
         revision = parents[0].revision if parents else sha256_jcs({"content": ""})
         sources.append(ContextSourceSnapshot(
             descriptor=ContextSourceDescriptor(source_id=source_id, source_kind=source_kind, name=name,
@@ -237,6 +237,7 @@ def prepare_registered_context(
             projection = owner.project_context_plan_for_dispatch(
                 session_id, thread_id, snapshot.as_sealed_plan(),
                 target_format=target_format, checkpoint_ns=checkpoint_ns,
+                wire_profile=wire_profile,
             )
         else:
             # 成功 SQL 行仅沿本次 prepare 传给 seal writer 重读，不跨请求保存。
@@ -305,7 +306,7 @@ def prepare_registered_context(
                     checkpoint_ns=checkpoint_ns,
                 )
 
-            install_frozen_workspace_agents(
+            install_frozen_agents_md_chain(
                 context_source_manager, activation_snapshot,
                 lambda frozen, binding: owner.read_resource_activation_payload(
                     frozen, binding, checkpoint_ns=checkpoint_ns,
@@ -385,7 +386,7 @@ def prepare_registered_context(
                                 raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
                             activations[activation_id] = original
                         definitions = {
-                            activation_id: {value.metadata.tool_id: value for value in tool_catalog_from_activation(
+                            activation_id: {value.metadata.tool_id: value for value in restore_frozen_tool_catalog(
                                 original, read_payload, tool_ids=frozenset(requested[activation_id]),
                             ).definitions}
                             for activation_id, original in activations.items()
@@ -403,7 +404,7 @@ def prepare_registered_context(
                                      if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
                     automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
                     batch = tool_definition_batch(
-                        batch, catalog_supplier=lambda tool_ids: tool_catalog_from_activation(
+                        batch, catalog_supplier=lambda tool_ids: restore_frozen_tool_catalog(
                             activation_snapshot, read_payload, tool_ids=tool_ids,
                         ), current_items=items, retained_items=retained_items,
                         previous=previous, retained_assembly=retained if retained is not None else previous,

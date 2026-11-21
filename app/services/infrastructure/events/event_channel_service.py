@@ -38,6 +38,7 @@ from app.core.identifier import create_prefixed_id
 EventT = TypeVar("EventT")
 
 JOB_EVENTS_CHANNEL_KIND: Final[str] = "job.events"
+SESSION_TRACE_CHANNEL_KIND: Final[str] = "session.trace"
 RESOURCE_OBSERVE_CHANNEL_KIND: Final[str] = "resource.observe"
 RESOURCE_STATE_CHANNEL_KIND: Final[str] = "resource.state"
 CONFIG_LIFECYCLE_CHANNEL_KIND: Final[str] = "config.lifecycle"
@@ -50,12 +51,15 @@ TASK_LIFECYCLE_CHANNEL_KIND: Final[str] = "task.lifecycle"
 CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
     {
         JOB_EVENTS_CHANNEL_KIND,
+        SESSION_TRACE_CHANNEL_KIND,
         RESOURCE_OBSERVE_CHANNEL_KIND,
         RESOURCE_STATE_CHANNEL_KIND,
         CONFIG_LIFECYCLE_CHANNEL_KIND,
         CONTEXT_SOURCE_CHANNEL_KIND,
         MCP_CATALOG_CHANNEL_KIND,
         TASK_LIFECYCLE_CHANNEL_KIND,
+        "user.questions",
+        "workspace.resources",
     }
 )
 
@@ -187,7 +191,7 @@ class _ChannelSubscriber(Generic[EventT]):
         *,
         subscription_id: str,
         label: str,
-        queue: asyncio.Queue[ChannelDelivery[EventT]] | None,
+        queue: asyncio.Queue[ChannelDelivery[EventT] | None] | None,
         sink: ChannelEventSink[EventT] | None,
     ) -> None:
         self.subscription_id = subscription_id
@@ -229,26 +233,31 @@ class EventChannelSubscription(Generic[EventT]):
     def mark_released(self) -> None:
         self._released = True
 
-    async def next(self) -> ChannelDelivery[EventT]:
-        """等待下一条投递；溢出错误优先于剩余排队投递。"""
+    def check_overflow(self) -> None:
+        """补读历史等不消费队列的阶段，也必须立即暴露订阅溢出。"""
         error = self._subscriber.overflow_error
         if error is not None:
             raise error
+
+    async def next(self) -> ChannelDelivery[EventT]:
+        """等待下一条投递；溢出错误优先于剩余排队投递。"""
+        self.check_overflow()
         assert self._subscriber.queue is not None
         delivery = await self._subscriber.queue.get()
+        self.check_overflow()
+        assert delivery is not None
         self._after_consume(delivery)
         return delivery
 
     def pending(self) -> tuple[ChannelDelivery[EventT], ...]:
         """排空当前已排队的投递，供无 await 边界的同步消费点使用。"""
-        error = self._subscriber.overflow_error
-        if error is not None:
-            raise error
+        self.check_overflow()
         assert self._subscriber.queue is not None
         queue = self._subscriber.queue
         pending_deliveries: list[ChannelDelivery[EventT]] = []
         while not queue.empty():
             delivery = queue.get_nowait()
+            assert delivery is not None
             self._after_consume(delivery)
             pending_deliveries.append(delivery)
         return tuple(pending_deliveries)
@@ -552,6 +561,11 @@ class EventChannel(Generic[EventT]):
                 f"label={subscriber.label} max_queue_size={subscriber.queue.maxsize} "
                 f"event_sequence={sequence}"
             )
+            # 溢出后消费只会报错，立即释放已无法交付的正文；历史补读由持久层负责。
+            while not subscriber.queue.empty():
+                subscriber.queue.get_nowait()
+            # 唤醒已在 queue.get() 等待的消费者，由 check_overflow 抛出原错误。
+            subscriber.queue.put_nowait(None)
             return (
                 ChannelPublishReceipt(
                     subscription_id=subscriber.subscription_id,
@@ -622,6 +636,14 @@ class EventChannelService:
         parse_channel_name(name)
         return self._channels.get(name)
 
+    def remove_channel_if_unused(self, name: str) -> bool:
+        """由通道 owner 显式释放无人订阅的通道；其它通道不自动回收。"""
+        channel = self.find_channel(name)
+        if channel is None or channel.subscriber_ids:
+            return False
+        del self._channels[name]
+        return True
+
 
 __all__ = [
     "CHANNEL_KINDS",
@@ -631,6 +653,7 @@ __all__ = [
     "MCP_CATALOG_CHANNEL_KIND",
     "RESOURCE_OBSERVE_CHANNEL_KIND",
     "RESOURCE_STATE_CHANNEL_KIND",
+    "SESSION_TRACE_CHANNEL_KIND",
     "TASK_LIFECYCLE_CHANNEL_KIND",
     "ChannelDelivery",
     "ChannelEventSink",

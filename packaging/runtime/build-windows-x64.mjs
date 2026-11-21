@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { parse as parseJsonc } from "jsonc-parser";
 import crossSpawn from "cross-spawn";
 import { extract as extractTar } from "tar";
 import { createZipArchive, extractZipArchive } from "./archives/zip.mjs";
@@ -31,7 +32,7 @@ import {
   downloadPinnedWindowsPython,
   downloadPinnedWindowsNode,
 } from "./pinned-archive-download.mjs";
-import { copyApplicationSources } from "./application-sources.mjs";
+import { copyApplicationSources, writeApplicationNodeManifest } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
@@ -105,10 +106,7 @@ function precompilePythonBytecode(pythonExecutable, applicationRoot) {
 }
 
 function installNodeDependencies(applicationRoot, nodeExecutable) {
-  cpSync(
-    path.join(projectRoot, "packaging", "runtime", "node-package.json"),
-    path.join(applicationRoot, "package.json"),
-  );
+  writeApplicationNodeManifest(projectRoot, applicationRoot);
   const installArguments = ["install", "--production", "--exact", "--ignore-scripts"];
   if (crossBuild) {
     // 这里只准备目标依赖；完整插件原生制品仍由 packer 校验，不能用 Linux 构建代替。
@@ -122,7 +120,7 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
     },
   });
   if (!crossBuild) {
-    run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+    run(nodeExecutable, ["--input-type=module", "--eval", "await import('@boxteam/plugin-sdk/runtime');"], {
       cwd: applicationRoot,
     });
   }
@@ -216,6 +214,7 @@ function writeRuntimeMetadata({
   chromiumExecutableRelative,
   distribution = "npm",
 }) {
+  const plugin = parseJsonc(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
   const manifest = {
     schema_version: 1,
     distribution,
@@ -230,6 +229,8 @@ function writeRuntimeMetadata({
       workspace_schema: "application/configs/workspace_schema.jsonc",
     },
     skill_resources: "application/resources/skills",
+    bundled_plugins: [{ package_id: plugin.package_id, package_version: plugin.version,
+      archive: "application/resources/plugins/developer-tools.zip" }],
     web_assets: "web",
     chromium_executable:
       chromiumExecutableRelative ?? path.relative(runtimeRoot, chromiumExecutable),

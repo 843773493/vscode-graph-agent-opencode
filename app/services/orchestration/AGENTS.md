@@ -6,6 +6,9 @@
 
 ```text
 orchestration/
+├── background_work/                     精确 Thread 后台工具任务、持久邮箱与恢复；不管理工作区自动化定义
+├── session_messages.py                  SessionMessageOrchestrator：用户消息准入、幂等接收、Job 派发与内部消息投递
+├── execution_queue.py                    ExecutionQueueService：聚合 rollout 队列、领取与启动持有权、待处理投影；不另存队列
 ├── job_execution_service.py             Job 状态转换、标题触发、step 调用及完成事件；失败归 JobService 结算
 ├── agent_execution_service.py           Agent/runtime 组装与复用；把单次执行交给 StepRunner
 ├── execution_step/                       单次 Agent step 的控制循环、重试、终态与端口接线
@@ -19,12 +22,11 @@ orchestration/
 │   ├── reader.py                          事件读取、超时和取消处理
 │   ├── processor.py                       按事件驱动运行时状态与现有写入端口
 │   └── model_events.py / tool_events.py   模型用量和工具展示数据
-├── message_stream_runtime.py             将消息流状态组合到单一 writer/runtime
-├── stream_block_assembler.py             流式 block 组装
-├── tool_call_registry.py                 工具调用与结果的关联、去重和等待
-├── activity_runtime.py                   活动处理器注册和工具活动发布
-├── terminal_finalization.py              消息流终态和中断事实收口
-├── trace_observer.py                     消息流 trace 观察接线
+├── message_stream/                       消息流运行时；模型 block、工具调用、活动和终态收口
+│   ├── runtime.py                        MessageStreamRuntime 状态与端口装配
+│   ├── block_assembly.py / tool_calls.py  provider block 组装与工具调用、结果关联
+│   ├── activities.py / finalization.py    活动发布与消息流终态（不管理终端进程）
+│   └── trace_observer.py                 规范化 block 到 Trace 诊断事件的投影
 ├── initial_execution_binding_worker.py   持久初始执行 intent 的 claim/bind 消费
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
 ├── owner_thread_creation_factory.py      按操作作用域装配 Thread 创建依赖并显式关闭控制连接
@@ -34,9 +36,10 @@ orchestration/
 ├── thread_residency_state.py               驻留状态、runtime slot、lease 和快照的数据形状
 ├── session_subagent_service.py            Session subagent 委派
 ├── session_title_service.py               首条用户消息的标题生成与规范化
+├── session_turn_replay_service.py         按 Message/Turn 定位、回退上下文并重新派发
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
-├── workspace_observation.py               工作区观察流接线
-├── agent_stream_helpers.py                 Agent 流事件与工具结果的纯转换
+├── workspace_runtime_lifecycle.py         工作区执行启动恢复、Job 准入排空和强制中断
+├── session_stop.py                        interrupt/stop/删除的统一资源排空，数据删除仍归原 owner
 ├── communication/                         Session 间 Inbox admission 与冷观察
 ├── resource_activation/                    Execution/ModelCall 资源快照冻结
 └── team/                                   团队 fanout、恢复与 team_state 发布
@@ -61,8 +64,14 @@ orchestration/
 ## 规范
 
 - 以流程控制为中心，不承担数据持久化职责。
+- 会话停止在 Job owner 关闭准入期间结算执行，再按原 holder→Session gate 顺序排空资源；每次冻结一份 `runtime.session_stop` 策略。普通停止完成后允许显式新操作，旧队列保留或丢弃；删除前必要排空不可由配置禁用，资源未核实停止时禁止继续数据删除。
+- `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
+- `AgentExecutionService.list_tool_definitions` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。
 - 失败必须立即暴露，不能默认继续。
+- `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。
 - 工具参数流只在累计正文可能以 JSON 对象结束时调用标准 JSON 解析器；不完整、格式无效或非对象的输入仍保留 raw 和未完成标记，不能提前触发工具执行。
 - Terminal完成监控的关闭每次最多观察原任务30秒；到期保留句柄和关闭准入，重入不再次取消原扫描或重启监控。正常轮询中的可重试错误在关闭阶段须交回原异常，不能消耗后返回成功。原结果交回Workspace后才继续后续依赖，不能把观察到期当作扫描已停止或整个shutdown已有硬期限。
+- Terminal完成监控以插件状态SSE驱动，保留变化资源ID并只查询所选摘要；初始／重连和每60秒沿原owner完整对账孤儿期限及漏通知，连续局部事件不能推迟周期对账。心跳和PTY输出不触发扫描；插件流断开按5秒重连，不重放管理动作；一个工作区只由原监控持有一条插件状态流。
 - Agent驻留服务由唯一关闭任务等待原扫描及tracker排空，每次调用最多观察30秒；观察取消或到期保留原任务和关闭准入，扫描结算前不清句柄或缓存。关闭期原错不按周期重试消耗，迟到失败先交回观察者，再允许显式重试剩余关闭；不能重启扫描或另建资源事实源。
+- Agent驻留周期扫描由本服务向 SDK `start_maintenance` 注册，原维护 scope 持有并排空；保留启动等待首次检查、60秒周期及空执行上下文。SDK 返回的原任务仅供故障观察和排空，维护任务退出不得作为 Job 准入条件；owner 关闭和 runtime 自身准入仍须核实。不读取 scope 私有任务集合，不另建定时循环或移入 Workspace 通用任务列表。

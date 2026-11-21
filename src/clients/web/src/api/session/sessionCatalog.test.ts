@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getSessionCatalogBreadcrumb,
+  getSessionCatalogExport,
   listSessionCatalogChildren,
   refreshSessionCatalog,
 } from "./sessionCatalog";
@@ -11,13 +12,69 @@ import {
 
 function catalogPage(items: unknown[]): Response {
   return Response.json({
-    data: { revision: "catalog", parent_node_id: null, items, cursor: null, total: items.length },
+    data: { revision: "catalog", catalog_revision: 3, parent_node_id: null, items, cursor: null, total: items.length,
+      sync: { ...workspaceTarget, source: "authoritative", stale: false } },
     request_id: "req-catalog",
   });
 }
 
 afterEach(() => {
   unwrapSessionApiFetch();
+});
+
+describe("会话目录写后读取范围", () => {
+  const node = { node_id: "folder-a", kind: "folder", name: "目录", has_children: false };
+  const base = { revision: "r105", catalog_revision: 105, sync: { ...workspaceTarget, source: "authoritative", stale: false } };
+
+  test("children／refresh／breadcrumb／指定节点逐跳携带105下限和精确范围", async () => {
+    const paths: string[] = [];
+    installSessionApiFetchMock(({ url, path, init }) => {
+      const query = new URL(url).searchParams;
+      expect(query.get("minimum_catalog_revision")).toBe("105");
+      expect(new Headers(init?.headers).get("X-BoxTeam-Catalog-Revision")).toBe("known-projection");
+      paths.push(path);
+      if (path.endsWith("/export")) {
+        expect(query.getAll("node_id")).toEqual(["folder-a"]);
+        return Response.json({ data: { ...base, items: [node], node_ids: [node.node_id], complete: false }, request_id: "req-scope" });
+      }
+      if (path.includes("/breadcrumb/")) return Response.json({ data: { ...base, items: [node], node_id: node.node_id }, request_id: "req-scope" });
+      return Response.json({ data: { ...base, parent_node_id: path.endsWith("/refresh") ? null : node.node_id,
+        items: [], total: 0, cursor: null }, request_id: "req-scope" });
+    });
+    const options = { minimumCatalogRevision: 105, knownRevision: "known-projection" };
+    await listSessionCatalogChildren(48_410, workspaceTarget, node.node_id, null, options);
+    await refreshSessionCatalog(48_410, workspaceTarget, options);
+    await getSessionCatalogBreadcrumb(48_410, workspaceTarget, node.node_id, options);
+    await getSessionCatalogExport(48_410, workspaceTarget, { ...options, nodeIds: [node.node_id] });
+    expect(paths).toHaveLength(4);
+  });
+
+  test("数字相同的旧投影镜像不能替代已知配置，权威更新仍可直接推进", async () => {
+    let source = "gateway_mirror";
+    installSessionApiFetchMock(() => Response.json({ data: {
+      ...base, parent_node_id: null, items: [], total: 0, cursor: null,
+      sync: { ...base.sync, source },
+    }, request_id: "req-projection" }));
+    const options = { minimumCatalogRevision: 105, knownRevision: "new-config" };
+    await expect(listSessionCatalogChildren(48_412, workspaceTarget, null, null, options)).rejects.toThrow("镜像尚未确认已知投影版本");
+    source = "authoritative";
+    expect((await listSessionCatalogChildren(48_412, workspaceTarget, null, null, options)).revision).toBe("r105");
+  });
+
+  for (const failure of ["版本103", "其它Gateway", "其它父节点", "其它目标", "其它导出范围"] as const) {
+    test(`${failure}不能确认105`, async () => {
+      installSessionApiFetchMock(() => Response.json({ request_id: "req-scope", data: {
+        ...base, items: [], total: 0, cursor: null, parent_node_id: failure === "其它父节点" ? "folder-b" : node.node_id,
+        node_id: "folder-b", node_ids: ["folder-b"], complete: false,
+        ...(failure === "版本103" ? { catalog_revision: 103 } : {}),
+        ...(failure === "其它Gateway" ? { sync: { ...base.sync, gateway_id: "other" } } : {}),
+      } }));
+      const read = failure === "其它目标" ? getSessionCatalogBreadcrumb(48_411, workspaceTarget, node.node_id, { minimumCatalogRevision: 105 })
+        : failure === "其它导出范围" ? getSessionCatalogExport(48_411, workspaceTarget, { minimumCatalogRevision: 105, nodeIds: [node.node_id] })
+        : listSessionCatalogChildren(48_411, workspaceTarget, node.node_id, null, { minimumCatalogRevision: 105 });
+      await expect(read).rejects.toThrow(failure === "版本103" ? "103 < 105" : failure === "其它Gateway" ? "归属不一致" : failure === "其它导出范围" ? "范围不一致" : "作用域不一致");
+    });
+  }
 });
 
 const workspaceTarget = {

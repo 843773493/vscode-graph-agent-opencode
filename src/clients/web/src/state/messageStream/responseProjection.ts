@@ -166,6 +166,7 @@ export function messageStreamToResponseParts(
           source: {
             message_sequence: 0,
             content_block_index: block.block_index,
+            model_call_id: block.model_call_id ?? undefined,
           },
           text,
           carrier_type: block.carrier_type,

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Literal, TypedDict
 from urllib.parse import parse_qs, urlparse
 
-from app.core.lifecycle import LifetimeScope
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
+
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.mcp import (
     McpAuthorizationDTO,

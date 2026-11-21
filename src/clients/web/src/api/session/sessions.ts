@@ -1,5 +1,6 @@
 import type {
   APIResponse,
+  ModelReference,
   ChildThreadList,
   ChildThreadSummary,
   CursorPage,
@@ -66,7 +67,6 @@ function parseChildThreadList(value: unknown): ChildThreadList {
       || !Number.isInteger(board.version)
       || !Array.isArray(board.members)
       || !Array.isArray(board.tasks)
-      || !Array.isArray(board.recent_events)
     ) {
       throw new Error(`团队协议项 ${index} 缺少权威面板字段或会话不匹配`);
     }
@@ -249,13 +249,13 @@ export function updateSessionAgent(
   return updateSession(port, sessionId, { agent_id: agentId }, workspaceId);
 }
 
-export function updateSessionProvider(
+export function updateSessionModel(
   port: number,
   sessionId: string,
-  providerId: string,
+  model: ModelReference,
   workspaceId?: string | null,
 ): Promise<Session> {
-  return updateSession(port, sessionId, { provider_id: providerId }, workspaceId);
+  return updateSession(port, sessionId, { model }, workspaceId);
 }
 
 export async function compactSessionContext(

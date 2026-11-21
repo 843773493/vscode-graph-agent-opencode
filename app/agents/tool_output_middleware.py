@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 
 from langchain.agents.middleware import AgentMiddleware
@@ -28,7 +29,17 @@ class ToolOutputMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], ToolMessage | Command[object]],
     ) -> ToolMessage | Command[object]:
         result = handler(request)
-        return self._bound_result(request, result)
+        if isinstance(result, Command) or not isinstance(result, ToolMessage):
+            return result
+        if tool_output_status(result) == "error":
+            return result
+        tool_name, tool_call_id = _tool_identity(request)
+        return self._store.limit_message(
+            session_id=self._session_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            message=result,
+        )
 
     async def awrap_tool_call(
         self,
@@ -44,24 +55,8 @@ class ToolOutputMiddleware(AgentMiddleware):
         if tool_output_status(result) == "error":
             return result
         tool_name, tool_call_id = _tool_identity(request)
-        return await self._store.abound(
-            session_id=self._session_id,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            message=result,
-        )
-
-    def _bound_result(
-        self,
-        request: ToolCallRequest,
-        result: ToolMessage | Command[object],
-    ) -> ToolMessage | Command[object]:
-        if isinstance(result, Command) or not isinstance(result, ToolMessage):
-            return result
-        if tool_output_status(result) == "error":
-            return result
-        tool_name, tool_call_id = _tool_identity(request)
-        return self._store.bound(
+        return await asyncio.to_thread(
+            self._store.limit_message,
             session_id=self._session_id,
             tool_name=tool_name,
             tool_call_id=tool_call_id,

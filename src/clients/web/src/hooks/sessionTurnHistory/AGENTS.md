@@ -20,6 +20,7 @@
 - bootstrap、detail 和 page 保持独立副作用边界。
 - 状态变换复用 `state/session/turnTimeline.ts` 的纯函数。
 - 请求失败必须写入业务状态或继续抛出，不得静默吞掉。
+- 子线程对话的自动轮询复用历史接口 `include=metadata` 检查整个 Thread 的 source view/revision 与 projection epoch；版本变化后再读取正文。首次打开、显式刷新和错误恢复仍完整加载，不另建版本缓存或历史接口。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。
 
 模板示例；在整理 `AGENTS.md` 时请保留此行。

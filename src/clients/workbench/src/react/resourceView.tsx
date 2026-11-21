@@ -34,12 +34,12 @@ import type { WebUiLayoutSettings } from '../../../web/src/types/backend.js';
 import type { ResourceAction, ResourceThreadRef } from '../../../web/src/api/workspaceResources.js';
 
 type Runtime = ReturnType<typeof useThreadSessionRuntime>;
-const resourceTab: Record<ThreadInput['resourceTab'], WorkspaceAuxiliaryTab> = { files: 'files', changes: 'changes', tasks: 'goal', connections: 'resources', debug: 'debug' };
+const resourceTab: Record<ThreadInput['resourceTab'], WorkspaceAuxiliaryTab> = { files: 'files', changes: 'changes', tasks: 'goal', connections: 'resources', threads: 'threads', debug: 'debug' };
 function reportResourceStatus(message: string): void { console.info('会话资源：', message); }
 
 /** 文件树、变更审阅和资源操作均使用旧前端完整组件。 */
-export function ResourceView({ input, runtime, editors, commands, active, attachment, ratio, onUpdate, onFileOpenMenu, reportRequest, onForkThread, onError }: {
-  input: ThreadInput; runtime: Runtime; editors: IEditorService; commands: ICommandService; active: boolean; attachment: AttachmentRef | null; ratio: number; onUpdate: () => void;
+export function ResourceView({ input, runtime, editors, groupId, commands, active, attachment, ratio, onUpdate, onFileOpenMenu, reportRequest, onForkThread, onError }: {
+  input: ThreadInput; runtime: Runtime; editors: IEditorService; groupId: number; commands: ICommandService; active: boolean; attachment: AttachmentRef | null; ratio: number; onUpdate: () => void;
   onFileOpenMenu: FileOpenMenuHandler;
   reportRequest: InternalDisplayProvenance | null;
   onForkThread: (threadId: string, point: ChildThreadForkPoint) => void;
@@ -48,7 +48,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
   const owner = input.owner;
   const { state, content } = runtime;
   const tab = resourceTab[input.resourceTab];
-  const [order, setOrder] = useState<WorkspaceAuxiliaryTab[]>(['files', 'changes', 'goal', 'debug', 'resources']);
+  const [order, setOrder] = useState<WorkspaceAuxiliaryTab[]>(['files', 'changes', 'goal', 'debug', 'resources', 'threads']);
   const [search, setSearch] = useState(false);
   const [collapse, setCollapse] = useState(0);
   const [fileTreeSettingsVersion, setFileTreeSettingsVersion] = useState(0);
@@ -65,9 +65,10 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
   const filePreviewVisible = tab === 'files' && filePreview.visible;
   const debug = useNodeDebugController({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
     threadId: owner.threadId, enabled: visible && tab === 'debug', onStatusChange: reportResourceStatus });
-  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId, enabled: visible && tab === 'resources' });
+  const threadsVisible = visible && tab === 'threads';
+  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId, enabled: threadsVisible });
   const childConversation = useChildThreadConversation({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
-    threads: children.threads, enabled: visible && tab === 'resources' });
+    threads: children.threads, enabled: threadsVisible });
   const { selectThreadForOwner } = childConversation;
   useEffect(() => {
     if (!reportRequest) return;
@@ -98,16 +99,19 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
         resource: { resource_id: id, owner_revision: revision }, thread: target });
     } finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
   };
-  const openDebugThread = (threadId: string) => {
-    void editors.openEditor(new ThreadInput({ ...owner, threadId, title: threadId }), {
-      pinned: true, viewState: { resourcesVisible: true, resourceTab: 'debug' },
-    }).catch((cause: unknown) => onError(t('thread.resources.openDebugFailed', String(cause))));
+  const openThread = (threadId: string, title: string, debug = false) => {
+    void editors.openEditor(new ThreadInput({ ...owner, threadId, title }), {
+      pinned: true, ...(debug ? { viewState: { resourcesVisible: true, resourceTab: 'debug' } } : {}),
+    }, groupId).catch((cause: unknown) => onError(String(cause)));
   };
   return <div className="native-thread-resources" hidden={!input.resourcesVisible} style={{ flexGrow: ratio }}>
     <WorkspaceEditorHeader auxiliaryTab={tab} tabOrder={order} onReorderAuxiliaryTabs={setOrder} onSelectAuxiliaryTab={value => {
       input.resourceTab = value === 'goal' ? 'tasks' : value === 'resources' ? 'connections' : value;
       onUpdate();
     }} />
+    {filePreviewVisible ? <button type="button" className="native-file-tree-back" onClick={() => filePreview.setVisible(false)}>
+      <span className="codicon codicon-arrow-left" aria-hidden="true" />{t('workspace.preview.backToTree')}
+    </button> : null}
     <div className={`workspace-editor-body${filePreviewVisible ? ' has-shared-preview' : ''}`}>
     {filePreviewVisible ? <WorkspaceFilePreviewArea context="files" visible flexRatio={1} apiPort={0}
       workspaceId={owner.workspaceKey} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
@@ -117,7 +121,10 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       markdownSourceVisible={markdownSource} onMarkdownSourceChange={setMarkdownSource}
       onBeginEdit={filePreview.beginWorkspaceFileEdit} onDraftChange={filePreview.setDraftContent}
       onCancelEdit={() => void filePreview.cancelWorkspaceFileEdit()} onSaveEdit={filePreview.saveWorkspaceFileEdit}
-      onOpenWorkspacePath={filePreview.openWorkspaceFilePath}
+      onOpenWorkspacePath={async (path, fragment) => {
+        if (fragment) setMarkdownSource(false);
+        await filePreview.openWorkspaceFilePath(path, fragment);
+      }}
       onClose={() => { if (filePreview.activePath) void filePreview.closeWorkspaceFilePreview(filePreview.activePath); }} /> : null}
     <WorkspaceAuxiliaryPanel visible={input.resourcesVisible} flexRatio={1} tab={tab} apiPort={0} workspaceId={owner.workspaceKey}
       workspaceFileTreeReady={visible} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
@@ -146,14 +153,20 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       debugPanel={<NodeDebugWorkbench apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId}
         threadId={owner.threadId} mainThreadId={state.currentSession?.thread_id ?? null} activeFilePath={null}
         nodeDebugController={debug} sessions={state.currentSession ? [state.currentSession] : []} compact
-        onSelectThread={openDebugThread}
+        onSelectThread={threadId => openThread(threadId, threadId, true)}
         onOpenWorkspacePath={async path => {
           const file = await revealWorkspaceFileEntry(0, path, owner.workspaceKey);
           const root = resourceFileRootUri(file.path);
           if (!root) throw new Error(t('thread.resources.debugRootMissing'));
           await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root) });
         }} onStatusChange={reportResourceStatus} />}
-      resourcePanel={<><ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
+      threadPanel={<ChildThreadPanel {...children} sessionId={owner.sessionId}
+        mainThreadId={state.currentSession?.thread_id ?? null} activeThreadId={owner.threadId}
+        conversation={childConversation} onRefresh={() => { void children.refresh(); }}
+        onOpenMainThread={() => { if (state.currentSession?.thread_id) openThread(state.currentSession.thread_id, state.currentSession.title); }}
+        onOpenThread={child => openThread(child.thread_id, child.title ?? child.thread_id)}
+        onForkFromThread={onForkThread} />}
+      resourcePanel={<ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
         loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.workspaceKey} mainThread={thread}
         activePreviewPath={preview?.path ?? null} onRefresh={() => void content.refreshSessionResources(owner.sessionId)}
         onControl={(kind, id, action) => (kind === 'terminal' || kind === 'browser') && action === 'cancel'
@@ -167,15 +180,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
           const result = await content.refreshSessionResources(owner.sessionId, { force: true });
           if (result !== 'loaded') throw new Error(t('thread.resources.connectionRefreshIncomplete'));
           openRuntime(created.kind, created.resourceId);
-        }} />
-        <ChildThreadPanel {...children} sessionId={owner.sessionId} ownerLabel={state.currentSession?.title ?? owner.title}
-          mainThreadId={state.currentSession?.thread_id ?? null} activeThreadId={owner.threadId}
-          onRefresh={() => { void children.refresh(); }} conversation={childConversation}
-          onForkFromThread={onForkThread}
-          onOpenThread={child => { void editors.openEditor(new ThreadInput({ ...owner, threadId: child.thread_id,
-            title: child.title ?? child.thread_id }), { pinned: true }).catch((cause: unknown) => onError(t('thread.resources.openChildFailed', String(cause)))); }}
-          onSelectThread={openDebugThread} />
-      </>} />
+        }} />} />
     </div>
   </div>;
 }

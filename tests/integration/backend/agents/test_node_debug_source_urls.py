@@ -42,16 +42,27 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
         "url"
     ] = f"http://127.0.0.1:{ports.port(1)}"
     # 本场景不调用模型；显式提供配置依赖，避免借用宿主凭据。
-    source["llm"]["providers"] = [{
-        "id": "primary", "endpoint": "http://127.0.0.1:1/v1", "model": "unused-debug-model",
-        "api_key": "unused-debug-test-key", "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions",
-            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-            "supports_reasoning": {"reasoning_content": False}},
-    }]
+    source["llm"]["providers"] = {
+        "primary": {
+            "defaults": {
+                "endpoint": "http://127.0.0.1:1/v1",
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": "unused-debug-model"}},
+        }
+    }
     for agent in source["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'primary', 'model_id': 'default'}, 'fallbacks': []}
     config_path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     root = Path(integration_workspace_root_path)

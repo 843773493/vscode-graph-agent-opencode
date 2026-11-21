@@ -17,6 +17,7 @@ import psutil
 import pytest
 
 from app.schemas.gateway.service_plugin import PluginSlotStatusDTO
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.plugin_package import (
     expect_plugin_install_failure,
@@ -28,7 +29,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.workspaces import install_test_workspace_config
+from tests.support.workspaces import (
+    clear_test_provider_api_keys,
+    install_test_workspace_config,
+)
 
 PYTHON_PLUGIN = '''
 import asyncio, json, os, sys
@@ -37,9 +41,9 @@ sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
-from app.core.logging_config import configure_application_logging
+from boxteam_plugin_sdk.logging import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
-from app.runtime.plugin_commands import plugin_command_router
+from boxteam_plugin_sdk.commands import plugin_command_router
 configure_application_logging(service='lifecycle-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
@@ -72,11 +76,8 @@ asyncio.run(server.serve())
 
 NODE_PLUGIN = '''
 import http from 'node:http';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-const source = name => pathToFileURL(path.join(process.env.BOXTEAM_PROJECT_ROOT, 'src/shared', name)).href;
-const { createPluginRuntimeManagement } = await import(source('serverPluginRuntime.mjs'));
-const { createRuntimeLogger } = await import(source('serverRuntimeLogging.mjs'));
+const { createPluginRuntimeManagement } = await import('@boxteam/plugin-sdk/runtime');
+const { createRuntimeLogger } = await import('@boxteam/plugin-sdk/logging');
 const logger = createRuntimeLogger('lifecycle-probe');
 const readJson = async request => { let body=''; for await(const chunk of request) body+=chunk; return body ? JSON.parse(body) : {}; };
 const management = createPluginRuntimeManagement({ service:'lifecycle-probe', logger, readJson,
@@ -95,6 +96,24 @@ server.listen(management.port,'127.0.0.1');
 '''
 
 
+def _prepare_probe_home(home: Path) -> None:
+    install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd())
+    config_path = home / "config/gateway.jsonc"
+    config = commentjson.loads(config_path.read_text())
+    # 本装具只安装受控测试包，不继承未安装的产品默认插件。
+    config.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
+    config_path.write_text(json.dumps(config))
+
+
+def _write_node_dependencies(archive: zipfile.ZipFile, prepared_root: Path) -> None:
+    for name in ("package.json", "bun.lock"):
+        archive.write(prepared_root / name, name)
+    for directory in ("node_modules", "vendor"):
+        for file in sorted((prepared_root / directory).rglob("*")):
+            if file.is_file():
+                archive.write(file, file.relative_to(prepared_root).as_posix())
+
+
 @pytest.fixture
 def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int
 ) -> Iterator[tuple[httpx.Client, TestRunContext]]:
@@ -103,13 +122,13 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "plugin-lifecycle-unused-key"
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config), encoding="utf-8")
+    home = context.boxteam_home_for_node(request.node.nodeid)
+    _prepare_probe_home(home)
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
         port=unused_tcp_port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
+        boxteam_home=home, artifacts_dir=context.artifacts_dir)
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
@@ -120,6 +139,7 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
 
 def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
     plugin_gateway: tuple[httpx.Client, TestRunContext],
+    prepared_developer_tools_package: Path,
     request: pytest.FixtureRequest,
 ) -> None:
     client, context = plugin_gateway
@@ -189,6 +209,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
                  "requires": [{"extension_point": "configuration", "version": 1}],
                  "contributes": {"configuration": {"type": "object", "properties": {}}}}]}
         with zipfile.ZipFile(path, "w") as archive:
+            _write_node_dependencies(archive, prepared_developer_tools_package)
             archive.writestr("plugin.jsonc", json.dumps(manifest))
             archive.writestr("nested/custom/entry.py", PYTHON_PLUGIN.replace(
                 "'version': identity['package_version'], 'cwd': os.getcwd(),",
@@ -325,8 +346,30 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert echo(switched["python"]).status_code == 409
         assert states()["python"]["binding"]["enabled"] is False
         assert skill_versions() == {"node": "2.0.0"}, "关闭插件须撤销新说明准入"
-        before_failure = bind(entries("2.0.0"))["python"]
         install("3.0.0", "bad-ready")
+        source_path = "/api/gateway/config/sources/gateway_mutable_override"
+        original_document = exchange("GET", source_path).raise_for_status().json()["data"]
+        original_source = commentjson.loads(original_document["jsonc"])
+        selected_entries = json.loads(json.dumps(original_source["plugins"]["runtime"]["entries"]))
+        for entry in selected_entries:
+            if entry["plugin_id"] == "python":
+                entry["package_version"] = "3.0.0"
+        selected_update = bind(selected_entries)
+        assert selected_update["python"]["binding"] == {**disabled["python"]["binding"], "package_version": "3.0.0"}
+        assert selected_update["python"]["state"] == "stopped", "禁用绑定更新版本不能启动实例"
+        assert selected_update["node"]["instance"] == disabled["node"]["instance"], "未选绑定不能重启或换版"
+        updated_source = commentjson.loads(exchange("GET", source_path).raise_for_status().json()["data"]["jsonc"])
+        expected_source = json.loads(json.dumps(original_source))
+        expected_source["plugins"]["runtime"]["entries"] = selected_entries
+        assert updated_source == expected_source, "所选版本更新必须保留参数、作用域及新工作区默认项"
+        stale = exchange("PUT", source_path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+            "jsonc": original_document["jsonc"], "base_file_digest": original_document["file_digest"],
+            "base_layer_revision": original_document["layer_revision"], "base_layer_digest": original_document["layer_digest"],
+            "expected_active_revision": original_document["active_revision"], "expected_active_digest": original_document["active_digest"],
+            "idempotency_key": "maintenance-stale-binding-update"})
+        assert stale.status_code == 409, stale.text
+        assert states()["python"]["binding"]["package_version"] == "3.0.0"
+        before_failure = bind(entries("2.0.0"))["python"]
         failed = bind(entries("3.0.0"))
         assert failed["python"]["state"] == "failed"
         assert failed["python"]["binding"]["enabled"] is True
@@ -389,6 +432,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
 @pytest.mark.parametrize("runtime_change", ["missing", "different-version", "missing-package"])
 def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindings(
     request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int,
+    prepared_developer_tools_package: Path,
     shared_package: bool, runtime_change: str,
 ) -> None:
     if runtime_change == "missing-package" and shared_package:
@@ -421,12 +465,11 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
     home = context.boxteam_home_for_node(request.node.nodeid)
+    _prepare_probe_home(home)
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "cold-runtime-unused-key"
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config), encoding="utf-8")
     gateway = None
     bindings = [{"package_id": "cold.tools" if shared_package else f"cold.{runtime}", "package_version": "1.0.0",
@@ -475,6 +518,8 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                         "contributes": {"services": [{"service_id": "echo", "service_type": "terminal",
                             "protocol": "http"}]}} for runtime in runtimes]}
                 with zipfile.ZipFile(archive_path, "w") as archive:
+                    if "node" in runtimes:
+                        _write_node_dependencies(archive, prepared_developer_tools_package)
                     archive.writestr("plugin.jsonc", json.dumps(manifest))
                     if "node" in runtimes:
                         archive.writestr("entry.mjs", NODE_PLUGIN)

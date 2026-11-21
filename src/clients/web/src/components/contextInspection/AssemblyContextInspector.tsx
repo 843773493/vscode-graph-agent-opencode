@@ -108,7 +108,7 @@ function ProjectionItem({ item }: { item: ContextItem }) {
 
 export default function AssemblyContextInspector(owner: InspectionOwner) {
   const inspection = useContextInspection(owner);
-  return <section className="context-inspector" aria-label={t("inspection.context.aria")} data-owner-session-id={owner.session?.session_id ?? ""}>
+  return <section className="context-inspector panel-feedback-host" aria-busy={inspection.catalogLoading || inspection.projectionLoading} aria-label={t("inspection.context.aria")} data-owner-session-id={owner.session?.session_id ?? ""}>
     <p>{t("inspection.context.hint")}</p>
     <div className="context-inspector-controls">
       <label>{t("inspection.context.request")} <select aria-label={t("inspection.context.select")} value={inspection.assemblyRef}
@@ -123,11 +123,15 @@ export default function AssemblyContextInspector(owner: InspectionOwner) {
           {textField(item.data, "assembly_id")} · history {String(objectField(item.data).history_view_revision)}
         </option>)}
       </select></label>
-      <button type="button" disabled={inspection.catalogLoading} onClick={() => void inspection.loadCatalog(true)}>{t("inspection.context.refresh")}</button>
+      <button type="button" disabled={inspection.catalogLoading} onClick={() => void inspection.loadCatalog(true)}><span className={`codicon codicon-refresh${inspection.catalogLoading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />{t("inspection.context.refresh")}</button>
       {inspection.catalog.hasMore ? <button type="button" disabled={inspection.catalogLoading} onClick={() => void inspection.loadCatalog()}>{t("inspection.context.older")}</button> : null}
     </div>
-    {inspection.catalogLoading ? <p role="status">{t("inspection.context.loadingCatalog")}</p> : null}
-    {inspection.catalogError ? <p role="alert">{t("inspection.context.catalogFailed", inspection.catalogError)}</p> : null}
+
+    <div className="panel-feedback">
+      {inspection.catalogError ? <p role="alert">{t("inspection.context.catalogFailed", inspection.catalogError)}</p> : null}
+      {inspection.projectionError ? <div role="alert"><p>{t("inspection.context.failed", inspection.projectionError)}</p>
+        <button type="button" onClick={() => void inspection.loadProjection(inspection.selectedAssembly, true)}>{t("inspection.context.retry")}</button></div> : null}
+    </div>
     {!inspection.catalogLoading && !inspection.catalogError && !inspection.catalog.items.length ? <p>{t("inspection.context.empty")}</p> : null}
     {inspection.assemblyRef ? <div className="context-projection" data-assembly-id={inspection.assemblyId}>
       <p>{t(inspection.projection.hasMore ? "inspection.context.loadedMore" : "inspection.context.loaded", formatNumber(inspection.projection.items.length))}</p>
@@ -135,9 +139,7 @@ export default function AssemblyContextInspector(owner: InspectionOwner) {
         {inspection.projection.items.map((item, index) => <ProjectionItem key={`${inspection.assemblyRef}:${index}`} item={item} />)}
       </ol>
       {inspection.projection.fragment ? <p>{t("inspection.context.fragment")}</p> : null}
-      {inspection.projectionLoading ? <p role="status">{t("inspection.context.loading")}</p> : null}
-      {inspection.projectionError ? <div role="alert"><p>{t("inspection.context.failed", inspection.projectionError)}</p>
-        <button type="button" onClick={() => void inspection.loadProjection(inspection.selectedAssembly, true)}>{t("inspection.context.retry")}</button></div> : null}
+
       {inspection.projection.hasMore ? <button type="button" disabled={inspection.projectionLoading} onClick={() => void inspection.loadProjection(inspection.selectedAssembly)}>{t("inspection.context.next")}</button> : null}
     </div> : null}
   </section>;

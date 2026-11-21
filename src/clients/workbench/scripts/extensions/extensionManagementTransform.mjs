@@ -207,10 +207,43 @@ export function transformExtensionManagement(root, path, source, replaceOnce) {
   if (path === join(root, 'upstream/src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts')) {
     const changes = new Map(userMethods.map(name => [name, '']));
     changes.set('scanUserExtensions', '\n  async scanCustomBuiltinExtensions(options?: ScanOptions): Promise<IScannedExtension[]> { return this.readCustomBuiltinExtensions(options); }');
+    // 内置资源只来自产品提供的 URI，彻底撤下 Gallery 查询、迁移和派生缓存更新。
+    for (const name of ['getCustomBuiltinExtensionsFromGallery', 'getCustomBuiltinExtensionsFromCache',
+      '_migrateExtensionsStoragePromise', 'migrateExtensionsStorage', '_updateCustomBuiltinExtensionsCachePromise',
+      'updateCustomBuiltinExtensionsCache', 'resolveBuiltinExtensionGalleryResources', 'resolveBuiltinGalleryExtensions',
+      'resolveDependenciesAndPackedExtensions', 'getExtensionsWithDependenciesAndPackedExtensions',
+      'toWebExtensionFromGallery', 'toWebExtensionFromExtensionGalleryResource', 'getPackageNLSResourceMapFromResources',
+      'readCustomBuiltinExtensionsCache', 'writeCustomBuiltinExtensionsCache', 'customBuiltinExtensionsCacheResource', 'listExtensionResources',
+      'checkAdditionalBuiltinExtensions', '_customBuiltinExtensionsInfoPromise']) changes.set(name, '');
+    changes.set('readCustomBuiltinExtensions', `
+  private readCustomBuiltinExtensions(scanOptions?: ScanOptions): Promise<IScannedExtension[]> {
+    return this.getCustomBuiltinExtensionsFromLocations(scanOptions);
+  }`);
+    changes.set('readCustomBuiltinExtensionsInfoFromEnv', `
+  private async readCustomBuiltinExtensionsInfoFromEnv(): Promise<{ extensionLocations: URI[] }> {
+    const extensionLocations: URI[] = [];
+    for (const extension of this.environmentService.options?.additionalBuiltinExtensions ?? []) {
+      if (!isUriComponents(extension)) throw new Error('Builtin extensions must use product resource URIs');
+      extensionLocations.push(URI.revive(extension));
+    }
+    return { extensionLocations };
+  }`);
+    changes.set('updateCaches', `
+  private async updateCaches(): Promise<void> { await this.updateSystemExtensionsCache(); }`);
     let contents = replaceMembers(path, source, 'WebExtensionsScannerService', changes);
+    contents = replaceOnce(contents, "\t\t\tthis.customBuiltinExtensionsCacheResource = joinPath(environmentService.userRoamingDataHome, 'customBuiltinExtensionsCache.json');\n", '');
+    const parsedTypes = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true);
+    for (const node of [...parsedTypes.statements].reverse()) {
+      if ((ts.isTypeAliasDeclaration(node) || ts.isFunctionDeclaration(node)) && ['GalleryExtensionInfo', 'ExtensionInfo', 'isGalleryExtensionInfo'].includes(node.name?.text)) {
+        contents = contents.slice(0, node.getFullStart()) + contents.slice(node.end);
+      }
+    }
     for (const line of [
       "import { IUserDataProfilesService } from '../../../../platform/userDataProfile/common/userDataProfile.js';\n",
       "import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';\n",
+      '\t\t@IExtensionGalleryService private readonly galleryService: IExtensionGalleryService,\n',
+      '\t\t@IExtensionStorageService private readonly extensionStorageService: IExtensionStorageService,\n',
+      '\t\t@IStorageService private readonly storageService: IStorageService,\n',
       '\t\t@IUserDataProfilesService private readonly userDataProfilesService: IUserDataProfilesService,\n',
       '\t\t@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,\n',
     ]) contents = replaceOnce(contents, line, '');

@@ -1,6 +1,6 @@
 # 目录用途
 
-工作区附件目录的唯一存储链路。`catalog.py` 只读写 schema 5；`ingest.py` 编排独立上传目录的事务发布；`store.py` 和 `working_copies.py` 负责原件、预览、文件与 Shell 准入、初始基线、释放及按需重建；`recovery.py` 按原消息接受事实结算 pin、对账运行时代次及释放关联。`fork_store.py`、`fork_claims.py` 和 `fork_import.py` 共同完成目录冻结、精确 alias、保活与目标发布。`directory_schema.py` 原子转换已知 schema 4，`migration/` 只提供显式 schema 3 离线迁移。
+工作区附件目录的唯一存储链路。`catalog.py` 只读写 schema 5；`ingest.py` 编排独立上传目录的事务发布；`store.py` 和 `working_copies.py` 负责原件、预览、文件与 Shell 准入、初始基线、释放及按需重建；`recovery.py` 按原消息接受事实结算 pin、对账运行时代次及释放关联。`fork_store.py`、`fork_claims.py` 和 `fork_import.py` 共同完成目录冻结、精确 alias、保活与目标发布。`directory_schema.py` 定义和核验现行结构，已知 schema 4 的原子转换归 `migrations/v4_sqlite_to_v5_sqlite.py`，`migration/` 保留显式 schema 3 的跨资源离线维护流程。
 
 # 可修改内容
 
@@ -19,6 +19,7 @@
 # 规范
 
 - 新目录固定包含 `original/`、`preview/`、`derived/`。原件不可变，派生区复用原文件 owner；新文件写入字节前使用公共跨平台私有权限原语。冻结 capture 不设置 live 原件的只读权限。
+- 浏览器附件先经精确 Thread 的原始字节预上传，再在消息提交中传 URI。`uploads.py` 复用 ingest/pin，`draft_` 是未发送上传的稳定身份，不是已接受消息；上传本身不得写入 canonical。传输中使用 OS delete-on-close 临时句柄；完整接收才发布。未发送附件保留 24 小时，启动和既有每小时清理任务收敛，显式移除立即处理；迟到删除不影响已接受消息。仅废弃预上传可墓碑化并清理无其它引用的可靠版本，不改变已发送附件的保留/重建合同，不扫描未知文件。
 - URI grammar、child 编解码和目标校验唯一定义在公共资源 URI owner；原生路径在目标机器解释，不回退到另一个目标。
 - 上传顺序为 topology shared → Session gate 内冻结 pin → 原 holder 内写 staging/durable → 短 gate 内复核 pin/fence/thread → 同 catalog 事务发布目录、版本、关联与 ingest。失败只清理本 intent；writer 未退出不得释放 holder。
 - 运行时关联包含 tracker 实例与 generation。冷上传、fork 和 queued 输入由原持久事实保活；旧代解绑不得移除新代关联。最后关联解除后只记录原目录的待处理事实；无占用时检查完整初始基线，有修改保留原位和处理结果，无修改且原件可靠时释放可重建工作副本，不再计算统一期限或运行周期 GC。旧明确保留承诺继续保护。

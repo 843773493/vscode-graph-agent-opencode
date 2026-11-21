@@ -2,39 +2,43 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from boxteam.gateway.v2 import (
+    plugin_commands_pb2,
+    secrets_pb2,
+    service_plugin_pb2,
+)
+from boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
+from boxteam.search.v1 import public_pb2 as search_public_pb2
+from boxteam.workspace.message.v1 import message_stream_pb2
+from boxteam.workspace.v2 import (
+    file_events_pb2,
+    public_pb2,
+    skill_sources_pb2,
+    trace_pb2,
+)
+from boxteam_plugin_sdk.commands import (
+    PluginCommandCancelDTO,
+    PluginCommandContribution,
+    PluginCommandEventDTO,
+    PluginCommandRegistration,
+    PluginCommandRegistrationsDTO,
+    PluginInstanceStatus,
+    PluginServiceContribution,
+    PluginShutdownDTO,
+)
 from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.generated.boxteam.gateway.v2 import (
-    plugin_commands_pb2,
-    service_plugin_pb2,
-)
-from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
-from app.protocol.generated.boxteam.gateway.v2 import (
-    skill_sources_pb2 as gateway_skill_sources_pb2,
-)
-from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
-from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
-from app.protocol.generated.boxteam.workspace.v2 import (
-    file_events_pb2,
-    job_pb2,
-    public_pb2,
-    session_interaction_pb2,
-    session_stream_pb2,
-    skill_sources_pb2,
-    trace_pb2,
-)
 from app.protocol.schema import assert_public_schema
 from app.schemas.gateway.plugin_commands import (
     PluginCommandCallRequest,
-    PluginCommandCancelDTO,
     PluginCommandCancelRequest,
-    PluginCommandEventDTO,
     PluginCommandInstanceRequest,
     PluginCommandPublication,
-    PluginCommandRegistration,
-    PluginCommandRegistrationsDTO,
     PluginCommandSnapshotDTO,
     PluginContributionTarget,
 )
@@ -57,21 +61,17 @@ from app.schemas.gateway.plugin_private_inputs import (
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     PluginBinding,
-    PluginCommandContribution,
     PluginConfigurationSchemaDTO,
     PluginConfigurationSchemasDTO,
     PluginConfigurationSchemasRequest,
     PluginContributions,
     PluginDebuggerContribution,
     PluginExtensionRequirement,
-    PluginInstanceStatus,
     PluginInstanceView,
     PluginKeybindingContribution,
     PluginMenuContribution,
     PluginPackageManifest,
     PluginRuntimeStatusDTO,
-    PluginServiceContribution,
-    PluginShutdownDTO,
     PluginSkillContribution,
     PluginSlotStatusDTO,
     PluginTarget,
@@ -105,8 +105,10 @@ MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, str] = {
 HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     name: f"{public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
-        "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
+        "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultModelUpdateRequest",
+        "PendingRequestReorderRequest", "UserQuestionDTO", "UserQuestionSummaryDTO", "UserQuestionPageDTO",
         "ResourceNavigationRequest", "ResourceNavigationResultDTO",
+        "ThreadItemInspectionRequest", "ThreadItemInspectionDTO",
         "WorkspaceDTO", "WorkspaceContextDTO", "WorkspaceIndexStatusDTO", "WorkspaceIndexRebuildDTO",
         "WorkspaceFileRootsDTO", "WorkspaceFileReferencesRequest", "WorkspaceFileReferencesDTO",
         "WorkspaceFileWatchRequest", "WorkspaceFileListDTO", "WorkspaceFileContentDTO",
@@ -124,13 +126,16 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "WorkspaceResourceCommandRequest", "ResourceTransportGrantDTO",
         "SessionResourceListDTO", "SessionResourceControlRequest", "SessionResourceControlResultDTO",
         "JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
-        "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO",
+        "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearRequest",
+        "SessionGoalSnapshotDTO", "SessionGoalOperationResultDTO",
+        "MessageRunRequest", "MessageRunAccepted", "MessageSubmissionResultDTO",
         "SessionForkRequest", "SessionForkSourcePointDTO", "SessionForkResultDTO",
         "SessionForkTransferRequest", "SessionForkTransferResultDTO",
         "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
         "SessionThreadSearchResultsDTO",
         "SessionCatalogPageDTO", "SessionCatalogBreadcrumbDTO",
         "SessionCatalogSearchResultsDTO", "SessionCatalogExportDTO",
+        "SessionCatalogVersionDTO", "NavigationSnapshotDTO", "SessionCatalogSyncDTO",
         "WorkspaceSearchCapabilitiesDTO", "WorkspaceSearchRequest", "WorkspaceSearchResultDTO",
         "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO", "ThreadAttachmentListDTO", "TurnToolResultDTO", "ThreadToolResultListDTO",
         "TurnMessageSearchRequest", "TurnMessageSearchResultsDTO",
@@ -154,6 +159,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
         "ConfigSourceEditRequest", "ConfigSourceDocumentDTO", "ConfigSourcePreflightDTO", "ConfigEventDTO",
+        "LlmDiscoverRequest", "LlmDiscoverResultDTO",
+        "LlmTestRequest", "LlmTestStartDTO", "LlmTestDeltaDTO", "LlmTestResultDTO",
     )
 } | {
     name: f"{skill_sources_pb2.DESCRIPTOR.package}.{name}"
@@ -171,8 +178,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "CreateFederationManagedWorkspaceRequest",
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
         "PortForwardListDTO", "CreatePortForwardRequest",
-        "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
-        "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+        "PortForwardHostsDTO",
+        "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO", "GatewayClientRecoveryDTO",
         "GatewayDiagnosticLogQueryRequest", "GatewayDiagnosticLogQueryResultDTO",
         "GatewayDiagnosticLogLocateRequest", "GatewayDiagnosticLogLocationDTO",
         "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
@@ -191,6 +198,12 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
+
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{secrets_pb2.DESCRIPTOR.package}.{name}" for name in (
+        "SecretMetadataDTO", "GatewaySecretsDTO", "GatewaySecretDTO", "CreateSecretRequest", "UpdateSecretRequest",
+    )
+}
 
 # 插件合同从独立 proto 文件生成；Pydantic 只保留业务校验，不重复维护跨语言字段结构。
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
@@ -224,29 +237,23 @@ HTTP_JSON_DESCRIPTORS = dict(HTTP_JSON_DESCRIPTORS) | {
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "UserQuestionSummaryDTO": public_pb2.DESCRIPTOR.message_types_by_name["UserQuestionSummaryDTO"],
     "PluginCommandSnapshotDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandSnapshotDTO"],
     "PluginRuntimeStatusDTO": service_plugin_pb2.DESCRIPTOR.message_types_by_name["PluginRuntimeStatusDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
+    "WorkspaceResourceChangesDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceResourceChangesDTO"],
+    "NavigationSnapshotDTO": public_pb2.DESCRIPTOR.message_types_by_name["NavigationSnapshotDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
     "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],
     "SseErrorDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["SseError"],
-    "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
     "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
     "PersistentTaskChangedDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskChangedDTO"],
-    # Session SSE 的信封经具名 adapter 转换，以下 payload 本身仍与 proto 同形。
-    "JobProgressDTO": job_pb2.DESCRIPTOR.message_types_by_name["JobProgress"],
-    "JobStepProgressDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["JobStepProgress"],
-    "MessageObservationDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["MessageObservation"],
-    "SessionErrorPayloadDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["SessionError"],
-    "TraceObservedPayloadDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["TraceObserved"],
 }
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
     "PluginCommandEventDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandEventDTO"],
-    # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
-    "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }
 
 

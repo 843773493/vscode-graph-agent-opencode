@@ -14,7 +14,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.delta i
     _revision,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
-    ContextSourceDelta,
     ContextSourceDescriptor,
     ContextSourceTrackingStateConflict,
     PendingSourceObservation,
@@ -136,8 +135,8 @@ def _skill_descriptor(binding: SkillCatalogBinding) -> ContextSourceDescriptor:
 class SkillCatalogMixin:
         _sources: dict[str, SourceState]
         _source_ids_by_kind_and_name: dict[tuple[str, str], str]
-        _queue_delta: Callable[[SourceState], None]
-        _pending: dict[str, ContextSourceDelta]
+        _queue_source: Callable[[SourceState], None]
+        _pending: dict[str, None]
         _pending_observations: dict[str, PendingSourceObservation]
         _published_source_revisions: dict[str, PublishedContextSourceRevision]
 
@@ -394,7 +393,7 @@ class SkillCatalogMixin:
             if already_visible:
                 self._pending.pop(candidate.source_id, None)
             else:
-                self._queue_delta(candidate)
+                self._queue_source(candidate)
             self._published_source_revisions[candidate.source_id] = PublishedContextSourceRevision(
                 candidate.source_id, binding.activation_revision, binding.body,
             )
@@ -435,7 +434,7 @@ class SkillCatalogMixin:
                 state.bind_descriptor(_skill_descriptor(binding))
                 state.latest_content = binding.body
                 state.pending_kind = "activation"
-                self._queue_delta(state)
+                self._queue_source(state)
 
 
 

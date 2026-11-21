@@ -22,8 +22,6 @@ from app.schemas.gateway.directory import GatewayDirectoryListDTO
 from app.schemas.gateway.lifecycle import GatewayRuntimeBlockerDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
 from app.schemas.gateway.port_forwarding import (
-    ChangePortForwardLabelRequest,
-    ChangePortForwardLocalPortRequest,
     CreatePortForwardRequest,
 )
 from app.schemas.gateway.workspaces import (
@@ -152,38 +150,24 @@ def test_gateway_ssh_schema_follows_actual_connection_routes(gateway_openapi: Js
 
 def test_gateway_port_forward_schema_follows_control_routes_and_keeps_business_rules(gateway_openapi: JsonSchemaValue) -> None:
     original = deepcopy(gateway_openapi)
-    components = gateway_openapi["components"]["schemas"]
-    base = "/api/gateway/workspaces/{workspace_id}/port-forwards"
-    for suffix, method in (("", "get"), ("", "post"), ("/{forward_id}", "delete"),
-                           ("/{forward_id}/reconnect", "post"), ("/{forward_id}/local-port", "patch"),
-                           ("/{forward_id}/label", "patch")):
-        operation = gateway_openapi["paths"][base + suffix][method]
-        response = operation["responses"]["200"]["content"]["application/json"]["schema"]
-        envelope = components[response["$ref"].rsplit("/", 1)[1]]
-        assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/PortForwardListDTO")
-    for suffix, method, model in (("", "post", "CreatePortForwardRequest"),
-                                  ("/{forward_id}/local-port", "patch", "ChangePortForwardLocalPortRequest"),
-                                  ("/{forward_id}/label", "patch", "ChangePortForwardLabelRequest")):
-        body = gateway_openapi["paths"][base + suffix][method]["requestBody"]["content"]["application/json"]["schema"]
-        assert body["$ref"].endswith("/" + model)
-    assert {"PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest",
-            "ChangePortForwardLabelRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    base = "/api/gateway/port-forwards"
+    for suffix, method in (("", "get"), ("", "post"), ("/hosts", "get"),
+                           ("/{forward_id}", "delete"), ("/{forward_id}", "put"),
+                           ("/{forward_id}/start", "post"), ("/{forward_id}/stop", "post")):
+        assert gateway_openapi["paths"][base + suffix][method]["responses"]["200"]
+    assert not any("/workspaces/" in path and "port-forwards" in path for path in gateway_openapi["paths"])
     openapi.assert_gateway_http_schemas(gateway_openapi)
     assert gateway_openapi == original
-    request = CreatePortForwardRequest(remote_port=1, label="  预览  ")
-    assert request.protocol == "http" and request.local_port is None and request.label == "预览"
-    assert ChangePortForwardLabelRequest().label is None
-    for model, invalid in (
-        (CreatePortForwardRequest, {"remote_port": 0}),
-        (CreatePortForwardRequest, {"remote_port": 80, "protocol": "file"}),
-        (CreatePortForwardRequest, {"remote_port": 80, "unexpected": True}),
-        (ChangePortForwardLocalPortRequest, {"local_port": 65536}),
-        (ChangePortForwardLabelRequest, {"label": "x" * 121}),
+    valid = {"listener": {"host_id": "local", "port": 8080}, "destination": {"host_id": "ssh-config:server", "port": 3000}}
+    request = CreatePortForwardRequest.model_validate({**valid, "label": "  预览  "})
+    assert request.protocol == "tcp" and request.enabled and request.label == "预览"
+    for invalid in (
+        {**valid, "listener": {"host_id": "local", "port": 0}},
+        {**valid, "protocol": "file"}, {**valid, "unexpected": True},
+        {**valid, "label": "x" * 121}, {**valid, "listener": {"host_id": "local", "address": "hostname", "port": 8080}},
     ):
         with pytest.raises(ValidationError):
-            model.model_validate(invalid)
-
-
+            CreatePortForwardRequest.model_validate(invalid)
 
 
 def test_gateway_diagnostic_schema_follows_management_routes_and_keeps_business_rules(gateway_openapi: JsonSchemaValue) -> None:
@@ -267,7 +251,7 @@ def test_gateway_runtime_blocker_follows_lifecycle_routes_and_keeps_business_val
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
     "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
-    "PortForwardListDTO", "CreatePortForwardRequest", "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
+    "PortForwardListDTO", "CreatePortForwardRequest", "PortForwardHostsDTO",
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
     "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
 ])
@@ -295,11 +279,9 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("SshConnectionOptionDTO", "port", {"type": "string"}),
     ("AddRemoteGatewayRequest", "private_key_path", {"type": "integer"}),
     ("PortForwardListDTO", "items", {"type": "object"}),
-    ("PortForwardDTO", "remote_port", {"type": "string"}),
-    ("PortForwardDTO", "local_host", {"type": "integer"}),
-    ("CreatePortForwardRequest", "remote_port", {"type": "string"}),
-    ("ChangePortForwardLocalPortRequest", "local_port", {"type": "string"}),
-    ("ChangePortForwardLabelRequest", "label", {"type": "integer"}),
+    ("PortForwardDTO", "listener", {"type": "string"}),
+    ("PortForwardEndpoint", "port", {"type": "string"}),
+    ("CreatePortForwardRequest", "destination", {"type": "string"}),
     ("GatewayHealthDTO", "process_id", {"type": "string"}),
     ("DevelopmentRuntimeRestartDTO", "delay_ms", {"type": "string"}),
     ("GatewayDiagnosticsDTO", "logs", {"type": "object"}),
@@ -336,7 +318,7 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
     "SshConnectionOptionListDTO", "SshConnectionOptionDTO", "AddRemoteGatewayRequest",
     "PortForwardListDTO", "PortForwardDTO", "CreatePortForwardRequest",
-    "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
+    "PortForwardHostsDTO",
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
     "GatewayDiagnosticLogDTO", "GatewayDiagnosticWorkspaceDTO", "GatewayDiagnosticProcessDTO",
     "GatewayDiagnosticLoggingStateDTO", "GatewayDiagnosticLogSinkDTO",

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import secrets
 import socket
 from datetime import timedelta
 from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlsplit
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, HttpUrl
 
+from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.schemas.internal_v2.common import APIResponse
@@ -139,7 +139,7 @@ async def create_device_connection(
     device_name = payload.device_name.strip()
     if not device_name:
         raise HTTPException(status_code=422, detail="外部设备名称不能为空")
-    connection_id = f"device_{secrets.token_hex(12)}"
+    connection_id = create_prefixed_id("device")
     credential = _credential_store().issue(
         connection_id=connection_id,
         peer_gateway_id=f"{DEVICE_PEER_PREFIX}{device_name}",

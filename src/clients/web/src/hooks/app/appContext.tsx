@@ -3,11 +3,13 @@ import React, { createContext, useContext } from "react";
 import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import type {
   AddManagedGatewayWorkspaceRequest,
-  AddSshGatewayWorkspaceRequest,
+  AddRemoteGatewayConnectionRequest,
   GatewayRuntimeRestartResult,
   GatewayRuntimeGroupRequest,
   AttachmentRef,
+  Agent,
   MessageReplayRequest,
+  ModelReference,
   DeliveryPolicy,
   SessionResourceAction,
   SessionResourceKind,
@@ -85,14 +87,15 @@ export interface AppContextType {
   ) => Promise<SessionGoal>;
   clearGoal: (
     target?: { sessionId: string; threadId: string; workspaceId: string | null },
+    expectedControlRevision?: number,
   ) => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
-  switchModel: (providerId: string) => Promise<void>;
-  refreshAgents: (workspaceId: string) => Promise<void>;
+  switchModel: (model: ModelReference) => Promise<void>;
+  refreshAgents: (workspaceId: string) => Promise<Agent[]>;
   setWorkspaceDefaultAgent: (agentId: string) => Promise<void>;
-  setWorkspaceDefaultProvider: (
+  setWorkspaceDefaultModel: (
     agentId: string,
-    providerId: string,
+    model: ModelReference,
   ) => Promise<void>;
   interruptSession: () => Promise<void>;
   selectSession: (sessionId: string) => void;
@@ -169,8 +172,8 @@ export interface AppContextType {
   addManagedGatewayWorkspace: (
     payload: AddManagedGatewayWorkspaceRequest,
   ) => Promise<void>;
-  addSshGatewayWorkspace: (
-    payload: AddSshGatewayWorkspaceRequest,
+  addRemoteGatewayConnection: (
+    payload: AddRemoteGatewayConnectionRequest,
   ) => Promise<void>;
   removeGatewayWorkspace: (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest, force?: boolean) => Promise<void>;
   renameGatewayWorkspace: (workspaceId: string, name: string) => Promise<string>;
@@ -208,6 +211,7 @@ type ComposerContextActions = Pick<
   AppContextType,
   | "setStatus"
   | "sendMessage"
+  | "refreshTurnHistory"
   | "compactSession"
   | "refreshGoal"
   | "updateGoal"
@@ -217,7 +221,7 @@ type ComposerContextActions = Pick<
   | "switchModel"
   | "refreshAgents"
   | "setWorkspaceDefaultAgent"
-  | "setWorkspaceDefaultProvider"
+  | "setWorkspaceDefaultModel"
   | "switchContentView"
   | "createSession"
   | "renameSession"

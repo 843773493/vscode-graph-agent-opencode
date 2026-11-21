@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -47,8 +47,8 @@ function deferred() {
 }
 
 function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void> = async () => {}, mountOnScroll = true,
-  messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } },
-  historyLoaders: { hasOlderMessages?: boolean; hasNewerMessages?: boolean; loadOlderMessages?: () => Promise<void>; loadNewerMessages?: () => Promise<void> } = {}) {
+  messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string; chatItemId?: string; responseSources?: string }; animate: HTMLElement["animate"]; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number }; closest?: () => HTMLElement | null },
+  historyLoaders: { hasOlderMessages?: boolean; hasNewerMessages?: boolean; loadOlderMessages?: () => Promise<void>; loadNewerMessages?: () => Promise<void>; loadLatestMessages?: () => Promise<void> } = {}) {
   let items = initial;
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
@@ -61,6 +61,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   const scrolls: Array<{ index: number | "LAST"; align?: string; behavior?: string; offset?: number }> = [];
   const positions: Array<{ turn_anchor: string | null; scroll_offset: number; follow_latest: boolean }> = [];
   const statuses: string[] = [];
+  const turnAnimation = mock(() => ({} as Animation));
   let resize!: () => void;
   const windowListeners = new Map<string, (event: { type: string; button: number; buttons: number; clientX: number; clientY: number; target: Scroller }) => void>();
   class Scroller {
@@ -70,6 +71,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
     parentElement: Scroller | null = null;
     onwheel: unknown;
     ontouchstart: (() => void) | null = null;
+    onkeydown: ((event: { key: string; defaultPrevented: boolean }) => void) | null = null;
     onscroll: (() => void) | null = null;
     listeners = new Map<string, Set<(event: { deltaY: number }) => void>>();
     get scrollHeight() { return items.reduce((sum, item) => sum + (heights.get(item.key) ?? 150), 0); }
@@ -83,7 +85,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
     querySelectorAll() {
       const itemIndex = items.findIndex((item) => item.key === this.mountedId);
       if (itemIndex < 0) return [];
-      return [{ dataset: { turnId: this.mountedId }, querySelectorAll: () => messageTarget ? [messageTarget] : [], getBoundingClientRect: () => {
+      return [{ dataset: { turnId: this.mountedId }, animate: turnAnimation, querySelectorAll: () => messageTarget ? [messageTarget] : [], getBoundingClientRect: () => {
         const top = items.slice(0, itemIndex).reduce((sum, item) => sum + (heights.get(item.key) ?? 150), 0) - this.scrollTop;
         return { top, bottom: top + (heights.get(items[itemIndex].key) ?? 150) };
       } }];
@@ -110,6 +112,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   function Harness() {
     current = useTurnVirtualScroller({
       items, scopeKey, onLoadAroundTurn: loader, onLoadNewerMessages: historyLoaders.loadNewerMessages ?? (async () => {}),
+      onLoadLatestMessages: historyLoaders.loadLatestMessages ?? (async () => {}),
       onLoadOlderMessages: historyLoaders.loadOlderMessages ?? (async () => {}),
       hasNewerMessages: historyLoaders.hasNewerMessages ?? false, hasOlderMessages: historyLoaders.hasOlderMessages ?? false,
       loadingNewerMessages: false, loadingOlderMessages: false,
@@ -134,9 +137,13 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   const flush = () => {
     act(() => { const queued = [...frames.values()]; frames.clear(); for (const callback of queued) callback(16); });
   };
-  const settle = () => { flush(); act(() => current.scheduleAnchorAlignment()); flush(); };
+  const settle = () => {
+    flush(); act(() => current.scheduleAnchorAlignment()); flush();
+    // 模拟 Virtuoso 在滚动／布局完成后发布的实际到底状态。
+    act(() => current.handleAtBottomChange(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 4));
+  };
   return {
-    state: () => current, viewport: () => viewport!, scroller, scrolls, positions, statuses, heights, settle, flush,
+    state: () => current, viewport: () => viewport!, scroller, scrolls, positions, statuses, heights, settle, flush, turnAnimation,
     update(nextItems = items, nextScopeKey = scopeKey) {
       items = nextItems; scopeKey = nextScopeKey;
       act(() => mounted!.update(React.createElement(Harness)));
@@ -146,6 +153,19 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
       act(() => mounted!.update(React.createElement(Harness)));
     },
     resize: () => { act(() => resize()); settle(); },
+    toggleTurn(id: string) {
+      scroller.mountedId = id;
+      const heading = Object.assign(new Scroller(), {
+        isConnected: true,
+        closest: (selector: string) => selector === "button[aria-expanded], summary" ? heading : scroller.querySelectorAll()[0],
+        getBoundingClientRect: () => {
+          const bounds = scroller.querySelectorAll()[0].getBoundingClientRect();
+          return { ...scroller.getBoundingClientRect(), top: bounds.top + 20, bottom: bounds.top + 44 };
+        },
+      });
+      act(() => current.handleTranscriptClickCapture({ target: heading } as unknown as React.MouseEvent<HTMLElement>));
+      return heading;
+    },
     scrollbarDown: () => dispatchScrollbarEvent("pointerdown", scroller, 1),
     scrollbarUp: () => dispatchScrollbarEvent("pointerup", scroller, 0),
     scrollbarMouseDown: () => dispatchScrollbarEvent("mousedown", scroller, 1),
@@ -157,12 +177,100 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
         if (input) for (const listener of [...scroller.listeners.get(input) ?? []]) listener({ deltaY: -10 });
         scroller.scrollTop = top;
         scroller.onscroll?.();
+        current.handleAtBottomChange(scroller.scrollHeight - scroller.clientHeight - top <= 4);
       });
     },
   };
 }
 
 describe("Turn 虚拟列表滚动跟随", () => {
+  test.each(["latest", "history"])("%s 下手动展开和折叠保持标题，详情补读不触发追尾，用户滚动可解除锚定", (mode) => {
+    const h = navigationHarness([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3)]);
+    h.settle();
+    if (mode === "history") h.userScroll(100, "wheel");
+    const targetId = mode === "latest" ? "turn-3" : "turn-2";
+    const top = h.scroller.scrollTop;
+    const heading = h.toggleTurn(targetId);
+    const headingTop = heading.getBoundingClientRect().top;
+    expect(h.state().viewportAnchored).toBe(true);
+    expect(h.state().followOutput(true)).toBe(false);
+    h.scrolls.length = 0;
+    const expanded = turn(targetId, mode === "latest" ? 3 : 2);
+    expanded.conversation.turnRevision = 2;
+    h.heights.set(targetId, 350);
+    h.update([turn("turn-1", 1), mode === "history" ? expanded : turn("turn-2", 2), mode === "latest" ? expanded : turn("turn-3", 3)]);
+    // 模拟虚拟列表高度测量的补偿，锚点应还原标题，而不是保持底部。
+    h.scroller.scrollTop += 80;
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(top + 80);
+    act(() => h.state().handleListHeightChanged());
+    h.settle();
+    expect(heading.getBoundingClientRect().top).toBe(headingTop);
+    expect(h.scroller.scrollTop).toBe(top);
+    expect(h.scrolls).toEqual([]);
+    expect(h.state().navigation).toBeNull();
+    h.toggleTurn(targetId);
+    h.heights.set(targetId, 150);
+    h.resize();
+    act(() => h.state().handleListHeightChanged());
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(top);
+    h.userScroll(40, "wheel");
+    expect(h.state().viewportAnchored).toBe(false);
+    h.scroller.mountedId = "turn-3";
+    h.update([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3), turn("turn-4", 4)]);
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(40);
+    act(() => h.state().scrollToLatest());
+    h.settle();
+    expect(h.state().followOutput(true)).toBe("auto");
+  });
+
+  test("消息不足一屏时，上滚、触摸和位置恢复不会显示最新消息跳转", () => {
+    const h = navigationHarness([turn("only-turn", 1)]);
+    h.settle();
+    h.userScroll(0, "wheel");
+    expect(h.state().showJumpToLatest).toBe(false);
+    act(() => h.scroller.ontouchstart?.());
+    expect(h.state().showJumpToLatest).toBe(false);
+    h.restore({ turn_anchor: "only-turn", scroll_offset: 0, follow_latest: false });
+    h.settle();
+    expect(h.state().showJumpToLatest).toBe(false);
+  });
+
+  test("历史顶部需要跳转，窗口变高使全部消息可见后隐藏跳转且不取消阅读锚点", () => {
+    const h = navigationHarness([turn("first", 1), turn("last", 2)]);
+    h.settle();
+    act(() => h.state().navigateToTurn("first"));
+    h.settle();
+    expect(h.state().showJumpToLatest).toBe(true);
+    h.scroller.clientHeight = 600;
+    h.resize();
+    expect(h.state().showJumpToLatest).toBe(false);
+    expect(h.state().followOutput(true)).toBe(false);
+  });
+
+  test("当前页到底但仍有未加载的新消息时保留跳转", () => {
+    const h = navigationHarness([turn("older-page", 1)], undefined, true, undefined, { hasNewerMessages: true });
+    h.settle();
+    expect(h.state().showJumpToLatest).toBe(true);
+    h.userScroll(100, "wheel");
+    act(() => h.state().handleAtBottomChange(true));
+    expect(h.state().followOutput(true)).toBe(false);
+  });
+
+  test("历史窗口返回最新时读取 tail，不能把窗口末尾当成最新消息", async () => {
+    let loaded = 0;
+    const h = navigationHarness([turn("older", 2)], undefined, true, undefined, {
+      hasNewerMessages: true, loadLatestMessages: async () => { loaded += 1; },
+    });
+    h.settle();
+    await act(async () => h.state().scrollToLatest());
+    expect(loaded).toBe(1);
+    h.update([turn("latest", 128)]);
+    expect(h.scrolls.at(-1)).toMatchObject({ index: "LAST", align: "end" });
+  });
+
   test("一次上滚只加载一批，前插布局回调不能继续读取历史", async () => {
     let loaded = 0;
     const h = navigationHarness([turn("latest", 2)], undefined, true, undefined, {
@@ -180,10 +288,61 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(loaded).toBe(2);
   });
 
+  test("around 定位在窗口底部时，新的下滚手势能加载一批并保持阅读位置", async () => {
+    let loaded = 0;
+    const h = navigationHarness([turn("first", 1), turn("last", 2)], undefined, true, undefined, {
+      hasNewerMessages: true, loadNewerMessages: async () => { loaded += 1; },
+    });
+    h.settle();
+    act(() => h.state().navigateToTurn("last"));
+    h.settle();
+    act(() => h.state().handleEndReached());
+    expect(loaded).toBe(0);
+    await act(async () => {
+      for (const listener of h.scroller.listeners.get("wheel") ?? []) listener({ deltaY: 10 });
+      await Promise.resolve();
+    });
+    expect(loaded).toBe(1);
+    expect(h.state().followOutput(true)).toBe(false);
+    h.update([turn("first", 1), turn("last", 2), turn("newer", 3)]);
+    act(() => h.state().handleEndReached());
+    expect(loaded).toBe(1);
+  });
+
   test("无滚动视口的空历史没有可保存位置", () => {
     const h = navigationHarness([]);
     act(() => h.state().bindScroller(null));
     expect(h.viewport().capture()).toBeUndefined();
+  });
+
+  test.each(["wheel", "keydown", "touchstart", "live-wheel"] as const)("前插与迟到高度测量保留可见Turn，后续%s释放保位", async input => {
+    const initial = [turn("visible", 3), turn("next", 4), turn("last", 5)];
+    if (input === "live-wheel") initial[0] = { ...initial[0], conversation: {
+      ...initial[0].conversation, displayMode: "live", pending: true, status: "running",
+    } };
+    const h = navigationHarness(initial, undefined, true, undefined, { hasOlderMessages: true });
+    h.settle();
+    h.userScroll(0, "wheel");
+    // startReached 先发布，Virtuoso 在同一次滚动提交中再换成顶部 DOM。
+    act(() => h.state().handleStartReached());
+    h.scroller.mountedId = "visible";
+    await act(async () => { await Promise.resolve(); });
+    h.update([turn("first", 1), turn("second", 2), ...initial]);
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(300);
+    // 模拟 Virtuoso 在首次补偿之后又调整估算尺寸，不能使原锚点再次漂移。
+    h.scroller.scrollTop = 77;
+    h.heights.set("first", 180);
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(330);
+    expect(h.state().navigation).toBeNull();
+    expect(h.positions).toEqual([{ turn_anchor: "visible", scroll_offset: 0, follow_latest: false }]);
+    if (input === "keydown") act(() => h.scroller.onkeydown?.({ key: "PageDown", defaultPrevented: false }));
+    if (input === "touchstart") act(() => h.scroller.ontouchstart?.());
+    h.userScroll(100, input === "wheel" || input === "live-wheel" ? "wheel" : undefined);
+    h.heights.set("first", 220);
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(100);
   });
   test("大纲预览和取消恢复只修改本视口，接受才发布真实定位状态", () => {
     const h = navigationHarness([turn('first', 1), turn('second', 2), turn('last', 3)]);
@@ -224,6 +383,17 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(turnFollowOutput(true, true)).toBe("auto");
     expect(turnFollowOutput(false, true)).toBe(false);
     expect(turnFollowOutput(true, false)).toBe(false);
+    const h = navigationHarness([turn("first", 1), turn("last", 2)]);
+    h.settle();
+    h.scrolls.length = 0;
+    h.heights.set("last", 250);
+    act(() => h.state().handleListHeightChanged());
+    expect(h.scrolls.at(-1)?.index).toBe("LAST");
+    h.userScroll(0, "wheel");
+    h.scrolls.length = 0;
+    h.heights.set("last", 300);
+    act(() => h.state().handleListHeightChanged());
+    expect(h.scrolls).toEqual([]);
   });
 
   test("已排队的自动跟随帧在用户上滚后失效", () => {
@@ -280,8 +450,9 @@ describe("正式轮次定位与位置恢复", () => {
     const reference = { category: "tool_result" as const, item_id: "result-a", content_hash: "v1", start_codepoint: 1, end_codepoint: 2 };
     const message: TurnMessageLocationDTO = { turn_id: "turn-2", role: "tool", content: "正文", reference };
     const revealed: ScrollIntoViewOptions[] = [];
+    const animate = mock<HTMLElement["animate"]>(() => ({} as Animation));
     let markTop = 10_000;
-    const marker = { dataset: { messageItemId: "result-a" },
+    const marker = { dataset: { messageItemId: "result-a" }, animate,
       scrollIntoView(options: ScrollIntoViewOptions) { revealed.push(options); markTop = 180; },
       getBoundingClientRect: () => ({ top: markTop - harness.scroller.scrollTop, bottom: markTop - harness.scroller.scrollTop + 20 }) };
     const harness = navigationHarness([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3)], async () => message, true, marker);
@@ -292,22 +463,53 @@ describe("正式轮次定位与位置恢复", () => {
     expect(harness.scroller.scrollTop).toBe(180);
     expect(harness.state().navigation?.phase).toBe("located");
     expect(harness.state().locatedMessage).toEqual(message);
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate.mock.calls[0][1]).toEqual({ duration: 1800 });
+    expect(harness.turnAnimation).not.toHaveBeenCalled();
+    harness.resize();
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(harness.state().locatedMessage).toEqual(message);
+    await act(async () => harness.state().navigateToTurn("turn-2", 0, false, reference));
+    harness.settle(); harness.settle();
+    expect(animate).toHaveBeenCalledTimes(2);
   });
 
   test("工具元数据接受后沿原around定位ToolRow，不伪造正文范围", async () => {
     const tool: TurnToolResultDTO = { item_id: "result-meta", turn_id: "turn-2", tool_call_id: "model:tool-call:one", tool_name: "read_file", status: "completed" };
     let request: unknown[] = [];
-    const marker = { dataset: { toolResultItemId: tool.item_id }, scrollIntoView() {},
+    const animate = mock<HTMLElement["animate"]>(() => ({} as Animation));
+    const marker = { dataset: { toolResultItemId: tool.item_id }, animate, scrollIntoView() {},
       getBoundingClientRect: () => ({ top: 180 - harness.scroller.scrollTop, bottom: 200 - harness.scroller.scrollTop }) };
     const harness = navigationHarness([turn("turn-1", 1), turn("turn-2", 2)], async (...args) => { request = args; return tool; }, true, marker);
     await act(async () => harness.state().navigateToTurn(tool.turn_id, 0, false, undefined, tool));
     harness.settle(); harness.settle();
-    expect(request).toEqual([tool.turn_id, expect.any(AbortSignal), undefined, tool.item_id]);
+    expect(request).toEqual([tool.turn_id, expect.any(AbortSignal), undefined, tool.item_id, undefined]);
     expect(harness.state().locatedTool).toEqual(tool);
     expect(harness.state().locatedMessage).toBeUndefined();
     expect(harness.state().navigation?.phase).toBe("located");
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(harness.turnAnimation).not.toHaveBeenCalled();
     act(() => harness.state().cancelMessageNavigation());
     expect(harness.state().locatedTool).toBeUndefined();
+  });
+
+  test("Item URI只强调原来源卡片，切换Thread后释放定位状态", async () => {
+    const item = { item_id: "item-model:block:one", turn_id: "turn-2", semantic_kind: "reasoning", content_hash: "v1", byte_length: 20 };
+    const animate = mock<HTMLElement["animate"]>(() => ({} as Animation));
+    const marker = { dataset: { responseSources: JSON.stringify([{ source: { item_id: item.item_id } }]) }, animate,
+      closest: () => null, scrollIntoView() {},
+      getBoundingClientRect: () => ({ top: 180 - harness.scroller.scrollTop, bottom: 200 - harness.scroller.scrollTop }) };
+    const requested: string[] = [];
+    const harness = navigationHarness([turn("turn-1", 1), turn("turn-2", 2)], async id => { requested.push(id); }, true, marker);
+    await act(async () => harness.state().navigateToTurn(item.turn_id, 0, false, undefined, undefined, item));
+    harness.settle(); harness.settle();
+    expect(requested).toEqual(["turn-2"]);
+    expect(harness.state().locatedItem).toEqual(item);
+    expect(harness.state().navigation?.phase).toBe("located");
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(harness.turnAnimation).not.toHaveBeenCalled();
+    harness.update(undefined, "workspace/session/other-thread");
+    expect(harness.state().locatedItem).toBeUndefined();
   });
 
   test.each(["pointerdown", "mousedown", "pointermove", "mousemove"] as const)(
@@ -335,7 +537,7 @@ describe("正式轮次定位与位置恢复", () => {
     harness.scrolls.length = 0;
     harness.scrollbarDown();
     act(() => harness.state().handleAtBottomChange(true));
-    act(() => { harness.scroller.scrollTop = 40; harness.scroller.onscroll?.(); });
+    harness.userScroll(40);
     harness.scrollbarUp();
     expect(harness.state().followOutput(true)).toBe(false);
     expect(harness.state().showJumpToLatest).toBe(true);
@@ -428,9 +630,16 @@ describe("正式轮次定位与位置恢复", () => {
     harness.settle();
     expect(harness.scrolls[harness.scrolls.length - 1]?.index).toBe("LAST");
     harness.restore({ turn_anchor: "turn-2", scroll_offset: 20, follow_latest: false });
+    expect(harness.state().navigation).toBeNull();
     harness.settle();
     expect(harness.scroller.scrollTop).toBe(170);
-    expect(harness.state().navigation?.phase).toBe("located");
+    expect(harness.state().navigation).toBeNull();
+    expect(harness.turnAnimation).not.toHaveBeenCalled();
+    expect(harness.positions.at(-1)).toEqual({ turn_anchor: "turn-2", scroll_offset: 20, follow_latest: false });
+    harness.heights.set("turn-1", 250);
+    harness.resize();
+    expect(harness.scroller.scrollTop).toBe(270);
+    expect(harness.state().navigation).toBeNull();
     act(() => harness.state().scrollToLatest());
     harness.restore({ turn_anchor: "turn-1", scroll_offset: 0, follow_latest: false });
     harness.settle();

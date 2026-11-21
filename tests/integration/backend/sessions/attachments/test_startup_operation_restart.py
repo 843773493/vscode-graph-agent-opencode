@@ -35,7 +35,7 @@ from tests.integration.workspace_services.terminal.test_terminal_startup_cleanup
     wait_observed,
     workload,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux PTY与Backend硬退出；不代替Windows")
 
@@ -72,10 +72,10 @@ async def test_startup_unknown_survives_backend_loss_until_management_proof(
     case, control = communication_case, startup_fault_environment
     session = await create_session(case.client, "启动未知占用跨Backend恢复")
     await case.plan(session, [{"content": "原件已接受"}])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "保存原件", "attachments": [upload(b"startup-recovery-original").model_dump(mode="json")]},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     response = await case.client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})

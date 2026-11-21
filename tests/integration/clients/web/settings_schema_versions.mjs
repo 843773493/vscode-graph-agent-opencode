@@ -81,7 +81,7 @@ try {
     await pick(target.name); await pick('workspace_root_mutable_override'); await opening;
     await expect(pane(target)).toHaveCount(1);
     await expect(page.locator('.editor-group-container.active .settings-context-label')).toContainText(target.workspace_id);
-    await expect(pane(target).getByRole('tab', { name: new RegExp(target.name) })).toHaveCount(1);
+    await expect(pane(target).locator('.tabs-container').getByRole('tab', { name: new RegExp(target.name) })).toHaveCount(1);
   };
   const form = target => pane(target).locator('.settings-editor:visible');
   const field = (target, name) => form(target).locator(`[data-key="plugins.configuration.values.schema%2Eprobe.preference.${name}"]`);

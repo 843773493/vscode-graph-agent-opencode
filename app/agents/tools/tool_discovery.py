@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+import asyncio
+from collections.abc import Callable, Mapping
 from typing import Self
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
@@ -10,10 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.agents.tool_identity import TOOL_DISCOVERY_NAME
+from app.agents.tool_invocation_context import ToolInvocationContext
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
 )
@@ -25,7 +28,10 @@ from app.services.infrastructure.mcp.tool_search import (
 from app.services.infrastructure.rollout_context.activation.common import (
     ResourceActivationStoreError,
 )
-from app.services.infrastructure.tool_output_store import ToolOutputReference
+from app.services.infrastructure.tool_output_store import (
+    ToolOutputReference,
+    ToolOutputStore,
+)
 
 
 class SearchToolsInput(BaseModel):
@@ -49,9 +55,21 @@ class SearchToolsInput(BaseModel):
 def create_search_tools_tool(
     *, catalog_resolver: Callable[[], FrozenToolCatalog],
     policy_resolver: Callable[[FrozenToolCatalog], Mapping[str, ToolCapabilityPolicy]],
-    definition_writer: Callable[[FrozenToolDefinition, dict[str, object]], Awaitable[ToolOutputReference]],
+    tool_output_store: ToolOutputStore,
+    session_id: str,
+    invocation_context: ToolInvocationContext,
     response_byte_limit: int,
 ) -> BaseTool:
+    async def materialize_definition(
+        definition: FrozenToolDefinition, entry: dict[str, object],
+    ) -> ToolOutputReference:
+        call_id = invocation_context.require_tool_call_id()
+        return await asyncio.to_thread(
+            tool_output_store.materialize, session_id=session_id, tool_name=TOOL_DISCOVERY_NAME,
+            tool_call_id=call_id, text=canonical_json_bytes(entry).decode("utf-8"),
+            output_key=f"{call_id}:{definition.provenance.resource_id}:{definition.provenance.revision}",
+        )
+
     async def search_tools(
         query: str | None = None, tool_ids: list[str] | None = None,
         limit: int = 5, max_response_bytes: int = 32768, cursor: str | None = None,
@@ -61,7 +79,7 @@ def create_search_tools_tool(
             return await search_tool_catalog(
                 catalog, policy_resolver(catalog), query=query, tool_ids=tool_ids,
                 limit=limit, max_response_bytes=min(max_response_bytes, response_byte_limit), cursor=cursor,
-                materialize=definition_writer,
+                materialize=materialize_definition,
             )
         except (ExtensionCatalogBindingError, ResourceActivationStoreError, ToolSearchConflict, ToolSearchStorageError) as error:
             raise ToolException(str(error)) from error

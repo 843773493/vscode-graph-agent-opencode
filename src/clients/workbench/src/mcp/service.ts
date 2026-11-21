@@ -18,12 +18,13 @@ import { IWorkbenchLocalMcpServer } from '../../upstream/src/vs/workbench/servic
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import type { GatewayManagementDirectoryDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import { gateway } from '../agentApi.js';
+import { listGatewayManagementTargets } from '../../../web/src/gatewayApi.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { managementGateway, onDidChangeMcpManagementTarget } from '../managementTarget.js';
+import { managementGateway, managementWorkspace, onDidChangePanelManagementTarget } from '../managementTarget.js';
 import { WorkspaceMcpCatalog, mcpCatalogKey, pendingMcpOperation, type McpWorkspaceRequestTarget } from './catalog.js';
 import { WorkspaceMcpServer } from './server.js';
+import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
+import './mcp.css';
 
 export const unavailableWorkspaceMcpWrite = () => new Error(t('workbench.mcp.writeUnavailable'));
 const unavailable = unavailableWorkspaceMcpWrite;
@@ -47,6 +48,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   private visibleLists = 0;
   private readonly visibleDetails = new Map<WorkspaceMcpCatalog, number>();
   private readonly reportedErrors = new WeakMap<WorkspaceMcpCatalog, string>();
+  private readonly pluginRuntimes = new Map<string, NonNullable<WorkspaceMcpCatalog['pluginRuntime']> & { controller: AbortController }>();
   readonly enablementModel: IEnablementModel = {
     readEnabled: (key, reader) => this.servers.read(reader).find(server => server.id === key)?.enablement.read(reader) ?? ContributionEnablementState.DisabledWorkspace,
     readProfileEnabled: (key, reader) => Boolean(this.servers.read(reader).find(server => server.id === key)?.data?.enabled),
@@ -62,11 +64,12 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   ) {
     super();
     this._register(toDisposable(workspaceContext.subscribe(() => this.synchronizeTargets())));
-    this._register(onDidChangeMcpManagementTarget(() => this.synchronizeTargets()));
+    this._register(onDidChangePanelManagementTarget(() => this.synchronizeTargets()));
     this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
       for (const { catalog } of this.scopes.values()) catalog.dispose();
       this.authorizationController.abort(new Error(t('workbench.mcp.authorizationCredentialsExpired')));
       this.authorizationCatalog = undefined;
+      this.clearPluginRuntimes();
       this.scopes.clear(); this.selected.clear(); this.publish(); this.resets.fire();
     })));
     const timer = window.setInterval(() => {
@@ -79,7 +82,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
         }
       }
     }, 2000);
-    this._register(toDisposable(() => { window.clearInterval(timer); this.authorizationController.abort(); for (const { catalog } of this.scopes.values()) catalog.dispose(); }));
+    this._register(toDisposable(() => { window.clearInterval(timer); this.authorizationController.abort(); this.clearPluginRuntimes(); for (const { catalog } of this.scopes.values()) catalog.dispose(); }));
     this.synchronizeTargets();
     const authorizationWorkspace = new URLSearchParams(location.search).get('mcp_workspace');
     if (authorizationWorkspace) void this.openAuthorizationTarget(authorizationWorkspace).catch(error => this.notifications.error(error));
@@ -92,6 +95,35 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       && this.selected.size > 0
       && [...this.selected].every(catalog => Boolean(catalog.snapshot.catalog) && !catalog.snapshot.error);
   }
+  get catalogError(): string | undefined {
+    return workspaceContext.getSnapshot().error ?? this.selectionError?.message
+      ?? [...this.selected].map(catalog => catalog.snapshot.error).find(Boolean);
+  }
+
+  private clearPluginRuntimes(): void {
+    for (const runtime of this.pluginRuntimes.values()) runtime.controller.abort();
+    this.pluginRuntimes.clear();
+  }
+
+  /** 同一 Gateway 的可见目录共用原状态流；隐藏后释放，不为每个服务增加轮询。 */
+  private synchronizePluginRuntimes(): void {
+    const wanted = new Map<string, WorkspaceMcpCatalog>();
+    const keyOf = (catalog: WorkspaceMcpCatalog) => JSON.stringify([catalog.target.gateway_id, catalog.target.gateway_connection_id]);
+    for (const { catalog } of this.scopes.values()) {
+      if (((this.selected.has(catalog) && this.visibleLists > 0) || this.visibleDetails.has(catalog))
+        && catalog.snapshot.catalog?.data.some(server => server.service)) wanted.set(keyOf(catalog), catalog);
+    }
+    for (const [key, runtime] of this.pluginRuntimes) if (!wanted.has(key)) { runtime.controller.abort(); this.pluginRuntimes.delete(key); }
+    for (const [key, catalog] of wanted) {
+      if (this.pluginRuntimes.has(key)) continue;
+      const runtime: NonNullable<WorkspaceMcpCatalog['pluginRuntime']> & { controller: AbortController } = { controller: new AbortController() };
+      this.pluginRuntimes.set(key, runtime);
+      void watchPluginRuntimeStatus({ gateway_id: catalog.target.gateway_id, gateway_connection_id: catalog.target.gateway_connection_id }, runtime.controller.signal,
+        snapshot => { if (!runtime.controller.signal.aborted) { runtime.snapshot = snapshot; runtime.error = undefined; this.publish(); } })
+        .catch(error => { if (!runtime.controller.signal.aborted) { runtime.error = error instanceof Error ? error.message : String(error); this.publish(); } });
+    }
+    for (const { catalog } of this.scopes.values()) catalog.pluginRuntime = this.pluginRuntimes.get(keyOf(catalog));
+  }
 
   private synchronizeTargets(): void {
     const snapshot = workspaceContext.getSnapshot();
@@ -102,6 +134,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
         this.authorizationCatalog = undefined;
       }
       for (const { catalog } of this.scopes.values()) catalog.dispose();
+      this.clearPluginRuntimes();
       this.scopes.clear(); this.selected.clear(); this.entryGatewayId = snapshot.gatewayId;
     }
     for (const [key, scope] of this.scopes) {
@@ -113,8 +146,8 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
         this.scopes.delete(key);
       }
     }
-    let target;
-    try { target = managementGateway('mcp'); }
+    let target, selectedWorkspace;
+    try { target = managementGateway('panel'); selectedWorkspace = managementWorkspace('panel', target); }
     catch (error) {
       this.selectionError = error instanceof Error ? error : new Error(String(error));
       this.selected.clear();
@@ -124,7 +157,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     }
     this.selectionError = undefined;
     const selected = new Set<WorkspaceMcpCatalog>();
-    for (const workspace of snapshot.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id)) {
+    for (const workspace of [selectedWorkspace]) {
       const route = { gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
         backend_id: workspace.backend_id, gateway_connection_id: target.gateway_connection_id };
       const key = mcpCatalogKey(route);
@@ -155,7 +188,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     const explicit = new URLSearchParams(location.search).get('gateway_connection_id') ?? undefined;
     let connection: string | undefined;
     if (workspace.gateway_id !== snapshot.gatewayId) {
-      const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal });
+      const directory = await listGatewayManagementTargets(0, signal);
       signal.throwIfAborted();
       if (directory.local_gateway_id !== snapshot.gatewayId || workspaceContext.getSnapshot().gatewayId !== snapshot.gatewayId) throw new Error(t('workbench.mcp.authorizationOwnerChanged'));
       const matches = directory.items.filter(item => item.gateway_id === workspace.gateway_id
@@ -203,6 +236,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   }
 
   private publish(): void {
+    this.synchronizePluginRuntimes();
     const models: WorkspaceMcpServer[] = [];
     const changed: WorkspaceMcpServer[] = [];
     for (const scope of this.scopes.values()) {
@@ -231,6 +265,10 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
     if (!snapshot.gatewayId) throw new Error(t('workbench.mcp.gatewayNotReady'));
+    if (options?.refresh) {
+      for (const [key, runtime] of this.pluginRuntimes) if (runtime.error) { runtime.controller.abort(); this.pluginRuntimes.delete(key); }
+      this.synchronizePluginRuntimes();
+    }
     const catalogs = [...this.selected];
     await Promise.all(catalogs.map(catalog => catalog.refresh(options)));
     if (catalogs.length !== this.selected.size || catalogs.some(catalog => !this.selected.has(catalog))) throw new CancellationError();
@@ -258,19 +296,21 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
 
   private report(catalog: WorkspaceMcpCatalog, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    if (this.reportedErrors.get(catalog) !== message) this.notifications.error(message);
+    if (this.reportedErrors.get(catalog) !== message && !(this.selected.has(catalog) && this.visibleLists > 0) && !this.visibleDetails.has(catalog)) this.notifications.error(message);
     this.reportedErrors.set(catalog, message);
   }
 
   observe(catalog?: WorkspaceMcpCatalog): IDisposable {
     if (catalog) this.visibleDetails.set(catalog, (this.visibleDetails.get(catalog) ?? 0) + 1);
     else ++this.visibleLists;
+    this.synchronizePluginRuntimes();
     return toDisposable(() => {
       if (!catalog) --this.visibleLists;
       else {
         const count = this.visibleDetails.get(catalog)! - 1;
         if (count) this.visibleDetails.set(catalog, count); else this.visibleDetails.delete(catalog);
       }
+      this.synchronizePluginRuntimes();
     });
   }
 
@@ -297,14 +337,22 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   ) {
     if (!(service instanceof WorkspaceMcpService)) throw new Error(t('workbench.mcp.sharedOwnerRequired'));
     this.owner = service;
-    this.whenInitialLocalMcpServersLoaded = this.owner.queryLocal().then(() => {}, error => { notifications.error(error); });
+    this.whenInitialLocalMcpServersLoaded = this.owner.queryLocal().then(() => {}, error => { if (!this.owner.catalogError) notifications.error(error); });
   }
   get onChange() { return this.owner.onChange; }
   get onReset() { return this.owner.onReset; }
   get local(): readonly WorkspaceMcpServer[] { return this.owner.local; }
   get isLocalCatalogAvailable(): boolean { return this.owner.hasCurrentCatalog; }
+  get localCatalogError(): string | undefined { return this.owner.catalogError; }
   observe(): IDisposable { return this.owner.observe(); }
-  queryLocal(): Promise<WorkspaceMcpServer[]> { return this.owner.queryLocal(); }
+  async queryLocal(): Promise<WorkspaceMcpServer[]> {
+    try { return await this.owner.queryLocal(); }
+    catch (error) {
+      // 目录错误保留原文并由原列表展示；已有快照仍可查看、配置，不能伪装为空目录。
+      if (!this.owner.catalogError) throw error;
+      return this.owner.local;
+    }
+  }
   getEnabledLocalMcpServers(): IWorkbenchLocalMcpServer[] { throw unavailable(); }
   canInstall(_server: IWorkbenchMcpServer): MarkdownString { return new MarkdownString().appendText(t('workbench.mcp.installManagedByPlugins')); }
   async install(_server: IWorkbenchMcpServer): Promise<never> { throw unavailable(); }

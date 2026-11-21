@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
-    get_log_service,
-    get_request_id,
+    get_html_snapshot_store,
     get_runtime_service,
     verify_local_token,
 )
@@ -21,8 +22,13 @@ from app.schemas.internal_v2.runtime import (
     RuntimeStatusDTO,
     UiSnapshotResultDTO,
 )
-from app.services.infrastructure.log_service import LogService, LogSnapshotRecord
-from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.infrastructure.html_snapshot_store import (
+    HtmlSnapshotInput,
+    HtmlSnapshotStore,
+)
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 logger = logging.getLogger(__name__)
@@ -41,7 +47,7 @@ class UiSnapshotRequest(BaseModel):
 async def get_runtime_status(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     result = await runtime_service.status()
     return APIResponse(data=result, request_id=request_id)
@@ -55,7 +61,7 @@ async def get_runtime_status(
 async def begin_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.begin_drain()
@@ -73,7 +79,7 @@ async def begin_runtime_drain(
 async def cancel_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.cancel_drain()
@@ -91,7 +97,7 @@ async def cancel_runtime_drain(
 async def force_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.force_interrupt()
@@ -106,11 +112,11 @@ async def save_log_snapshot(
     payload: UiSnapshotRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    log_service: LogService = Depends(get_log_service),
+    html_snapshot_store: HtmlSnapshotStore = Depends(get_html_snapshot_store),
 ):
     try:
-        result = await log_service.write_html_snapshot(
-            LogSnapshotRecord(
+        result = await html_snapshot_store.write_html_snapshot(
+            HtmlSnapshotInput(
                 session_id=payload.session_id,
                 html=payload.html,
                 page_title=payload.page_title,
@@ -129,9 +135,9 @@ async def read_log_snapshot_html(
     snapshot_id: str,
     session_id: CanonicalSessionId | None = None,
     _: str = Depends(verify_local_token),
-    log_service: LogService = Depends(get_log_service),
+    html_snapshot_store: HtmlSnapshotStore = Depends(get_html_snapshot_store),
 ):
-    content = await _read_log_snapshot(log_service, snapshot_id, session_id, metadata=False)
+    content = await _read_snapshot_file(html_snapshot_store, snapshot_id, session_id, part="html")
     return Response(content, media_type="text/html", headers={
         "Content-Disposition": f'attachment; filename="{snapshot_id}.html"',
         "Content-Security-Policy": "sandbox; default-src 'none'",
@@ -143,17 +149,17 @@ async def read_log_snapshot_metadata(
     snapshot_id: str,
     session_id: CanonicalSessionId | None = None,
     _: str = Depends(verify_local_token),
-    log_service: LogService = Depends(get_log_service),
+    html_snapshot_store: HtmlSnapshotStore = Depends(get_html_snapshot_store),
 ):
-    content = await _read_log_snapshot(log_service, snapshot_id, session_id, metadata=True)
+    content = await _read_snapshot_file(html_snapshot_store, snapshot_id, session_id, part="metadata")
     return Response(content, media_type="application/json")
 
 
-async def _read_log_snapshot(
-    log_service: LogService, snapshot_id: str, session_id: str | None, *, metadata: bool,
+async def _read_snapshot_file(
+    html_snapshot_store: HtmlSnapshotStore, snapshot_id: str, session_id: str | None, *, part: Literal["html", "metadata"],
 ) -> str:
     try:
-        return await log_service.read_html_snapshot(snapshot_id, session_id=session_id, metadata=metadata)
+        return await html_snapshot_store.read_snapshot_file(snapshot_id, session_id=session_id, part=part)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:

@@ -12,6 +12,7 @@ from pathlib import Path
 from weakref import WeakKeyDictionary
 
 from app.core.resource_uri import file_uri_child, parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryKeyDTO,
     WorkspaceDirectoryRevisionDTO,
@@ -56,7 +57,7 @@ async def _observe_batch_once(
         if cached is not None and cached[0] is batch:
             cache.results.move_to_end(batch_identity)
             return cached[1]
-        directories = tuple(await asyncio.to_thread(owner.observe_directories, observed))
+        directories = tuple(await run_sync_shielded(owner.observe_directories, observed))
         cache.results[batch_identity] = (batch, directories)
         while len(cache.results) > 64:
             cache.results.popitem(last=False)
@@ -78,7 +79,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
         if root is None:
             raise ValueError("文件观察事件不属于公开订阅根")
         return file_uri_child(references[root], *path.relative_to(root).parts)
-    latest = owner.store.latest_event_id()
+    latest = await run_sync_shielded(owner.store.latest_event_id)
     cursor = latest if after_event_id is None else after_event_id
     if cursor > latest:
         raise RuntimeError(f"原文件事件序号超过当前 owner 的持久 high-water: after={cursor}, latest={latest}")
@@ -103,6 +104,26 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
     def is_private_staging_change(path: Path, roots: set[Path]) -> bool:
         return path in roots or any(parent in roots for parent in path.parents)
 
+    def read_event(after: int) -> WorkspaceFileChangeBatch | None:
+        # 一条交付后再读下一条，避免首条等待整批快照解析；原回执和路径校验仍在本次读取完成。
+        events = owner.store.events(after, limit=1)
+        if not events:
+            return None
+        event = events[0]
+        operation_id = event.get("operation_id")
+        if isinstance(operation_id, str):
+            remember_operation_staging_roots(operation_id)
+        directories = []
+        for value in event["directories"]:
+            revision = WorkspaceDirectoryRevisionDTO.model_validate(value)
+            path = owner.paths.native(revision.directory_key.path, materialize=False)
+            if subscription_root(path) is not None:
+                directories.append(revision)
+        keys = {value.directory_key for value in directories}
+        snapshots = tuple(snapshot for value in event["snapshots"]
+                          if (snapshot := WorkspaceFileListDTO.model_validate(value)).directory_key in keys) if keys else ()
+        return WorkspaceFileChangeBatch(directories=tuple(directories), event_id=event["event_id"], snapshots=snapshots)
+
     include_attachments = any(parse_resource_uri(uri).kind == "attachments" for uri in references.values())
     # 底层仍复用原工作区 watcher；只开放显式附件根，不能公布其它私有存储。
     async with aclosing(watcher.subscribe_roots(roots, include_internal_paths=include_attachments)) as source:
@@ -110,23 +131,13 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
         pending_batch: WorkspaceFileChangeBatch | None = None
         try:
             while True:
-                for event in owner.store.events(cursor):
-                    cursor = event["event_id"]
-                    operation_id = event.get("operation_id")
-                    if isinstance(operation_id, str):
-                        remember_operation_staging_roots(operation_id)
-                    directories = []
-                    for value in event["directories"]:
-                        revision = WorkspaceDirectoryRevisionDTO.model_validate(value)
-                        key = revision.directory_key
-                        path = await asyncio.to_thread(owner.paths.native, key.path, materialize=False)
-                        if subscription_root(path) is not None:
-                            directories.append(revision)
-                    if directories:
-                        keys = {value.directory_key for value in directories}
-                        snapshots = tuple(WorkspaceFileListDTO.model_validate(value) for value in event["snapshots"]
-                                          if WorkspaceFileListDTO.model_validate(value).directory_key in keys)
-                        yield WorkspaceFileChangeBatch(directories=tuple(directories), event_id=cursor, snapshots=snapshots)
+                for _ in range(200):
+                    event = await run_sync_shielded(read_event, cursor)
+                    if event is None:
+                        break
+                    cursor = event.event_id
+                    if event.directories:
+                        yield event
                 if pending_batch is None:
                     done, _pending = await asyncio.wait({next_batch}, timeout=0.2)
                     if not done:
@@ -143,7 +154,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                     return
                 changes = batch.changes
                 if not batch.overflow:
-                    private_roots = private_staging_roots()
+                    private_roots = await run_sync_shielded(private_staging_roots)
                     changes = tuple(
                         change for change in changes
                         if (not is_private_staging_change(Path(change.path), private_roots)
@@ -155,10 +166,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                 if not batch.overflow:
                     parents = {Path(change.path).parent for change in changes}
                     removed = {Path(change.path) for change in changes if change.kind == "delete"}
-                    for key, real in owner.observed_directories(parents, removed=removed):
-                        path = real
-                        if path in parents or any(path == value or path.is_relative_to(value) for value in removed):
-                            observed.append((key, path))
+                    observed = list(await run_sync_shielded(owner.observed_directories, parents, removed=removed))
                 directories = await _observe_batch_once(owner, batch, observed)
                 changes = tuple(WorkspaceFileChange(kind=change.kind, path=reference(Path(change.path))) for change in changes)
                 yield WorkspaceFileChangeBatch(changes=changes, overflow=batch.overflow,

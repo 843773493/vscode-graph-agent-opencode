@@ -42,6 +42,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    context_notice_metadata,
+)
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
@@ -49,6 +52,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
+from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 
@@ -146,6 +150,27 @@ def notice_case(request, session_bundle_factory, frozen_provider_wire, frozen_pr
     saver = RolloutCheckpointSaver(sessions)
     return NoticeCase(saver, session, saver._storage.storage.main_thread_id(session), sessions,
                       frozen_provider_wire, frozen_provider_activation)
+
+
+def test_internal_context_marker_has_execution_boundary_without_turn_root(notice_case):
+    case = notice_case
+    admission, _intent = case.internal("marker-boundary")
+    manager = ContextSourceManager(owner=ContextSourceOwnerKey(case.session, case.thread), control_state_port=case.saver)
+    manager.register(ContextSourceDescriptor(source_id="instruction:internal-marker", source_kind="agent_instructions",
+        name="内部执行指引", description="内部执行指引", internal_locator="instruction-producer://internal-marker",
+        root_placement="root_eligible"), tracking_status="tracked")
+    manager.observe("instruction:internal-marker", "内部执行当时的冻结规则", revision="internal:1")
+    snapshot = case.prepare(admission, "internal-marker-prepare", manager=manager)
+    case.saver.update_model_call_outcome(case.session, thread_id=case.thread,
+        model_call_id=snapshot.model_call_id, outcome="unknown", dispatch_state="dispatched")
+    with case.saver._storage.storage.read_connection(case.session, case.thread, "") as connection:
+        rows = context_notice_metadata(connection, snapshot.active_view_id, turn_ids=[],
+            execution_ids=[admission.execution_id])
+    assert len(rows) == 1
+    assert rows[0].turn_id is None
+    assert rows[0].anchor == "before_model_call"
+    assert rows[0].anchor_ordinal is not None
+    assert rows[0].item_id is None
 
 
 @pytest.fixture(params=["user_turn", "internal"])
@@ -350,7 +375,7 @@ def test_source_boundary_keeps_primary_reason_and_confirms_notice_in_same_seal(n
     if reason == "compaction":
         checkpoint["channel_values"]["_summarization_event"] = {
             "cutoff_index": 1, "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
-            "summary_message": HumanMessage(content="已完成的对话摘要", id="summary-notice-source"),
+            "summary_message": compaction_summary_message(content="已完成的对话摘要", id="summary-notice-source"),
         }
     checkpoint["channel_versions"] = {key: checkpoint["id"] for key in checkpoint["channel_values"]}
     with case.scope(user):

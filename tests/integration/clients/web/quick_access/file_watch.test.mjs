@@ -1,4 +1,6 @@
 import { afterAll, test, spyOn } from 'bun:test';
+import { useRealtimeSocket } from '../../../../harness/js/realtime-socket.ts';
+useRealtimeSocket();
 import { expect } from 'playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -20,7 +22,7 @@ const owner = workspaceId => ({ gatewayId: 'gateway-test', workspaceId });
 const rootUri = id => `boxteam://gateway-test/workspace/${id}/resources/files/root`;
 const uri = (id, name, root = rootUri(id)) => workspaceFileUri(owner(id), root + '/' + name, root);
 const encoder = new TextEncoder();
-const receipt = { boundary: '真实注册入口、Provider及观察者SSE解码；仅路由解析和HTTP响应为显式资产', checks: [] };
+const receipt = { boundary: '真实注册入口、Provider及共享WS内的领域SSE解码；仅路由解析和HTTP响应为显式资产', checks: [] };
 
 async function withTransport(callback) {
   const connections = [], handles = [], provider = fileProvider(), events = [], errors = [];
@@ -28,27 +30,23 @@ async function withTransport(callback) {
   handles.push(provider.onDidChangeFile(changes => events.push(changes.map(change => ({ uri: change.resource.toString(), type: change.type })))),
     provider.onDidWatchError(error => errors.push(error)));
   installSessionApiFetchMock(async ({ path, init }) => {
-    expect(path).toBe('/api/v1/workspace/observations/stream');
-    const connection = { subscriptions: JSON.parse(init.body).subscriptions,
+    expect(path).toBe('/api/v1/workspace/files/events');
+    const connection = { request: JSON.parse(init.body),
       owner: new Headers(init.headers).get('X-BoxTeam-Workspace-Id'), cancelled: false };
     connections.push(connection);
     return new Response(new ReadableStream({
       start(controller) { connection.controller = controller; },
       cancel() { connection.cancelled = true; },
-    }), { headers: { 'Content-Type': 'text/event-stream', 'X-Request-ID': `watch-${connections.length}` } });
+    }), { headers: { 'Content-Type': 'text/event-stream', 'X-Request-ID': `watch-${connections.length}`, 'X-Workspace-File-Cursor': '0' } });
   });
   const watch = resource => { const handle = provider.watch(resource, { recursive: false, excludes: [] }); handles.push(handle); return handle; };
-  const emit = (connection, subscription, value) => connection.controller.enqueue(encoder.encode(
-    `event: observation\ndata: ${JSON.stringify({ subscription_id: subscription.subscription_id, ...value })}\n\n`));
-  const connect = connection => { for (const subscription of connection.subscriptions) emit(connection, subscription, { state: 'connected', cursor: '0' }); };
   let cursor = 0;
-  const changes = (connection, subscription, items, overflow = false) => emit(connection, subscription, {
-    state: 'frame', frame: `event: changes\ndata: ${JSON.stringify({ event_id: ++cursor, overflow, changes: items,
-      directories: [], snapshots: [], invalidated_roots: [] })}\n\n`,
-  });
+  const changes = (connection, items, overflow = false) => connection.controller.enqueue(encoder.encode(
+    `event: changes\ndata: ${JSON.stringify({ event_id: ++cursor, overflow, changes: items,
+      directories: [], snapshots: [], invalidated_roots: [] })}\n\n`));
   let failure;
   try {
-    await callback({ connections, events, errors, watch, connect, changes });
+    await callback({ connections, events, errors, watch, changes });
     expect(errors).toEqual([]);
   } catch (error) { failure = error;
   } finally {
@@ -62,22 +60,21 @@ async function withTransport(callback) {
 }
 
 test('初次连接不报更新，真实删除／编辑仍转发，同根监听按引用共享', async () => {
-  await withTransport(async ({ connections, events, watch, connect, changes }) => {
+  await withTransport(async ({ connections, events, watch, changes }) => {
     const a = uri('A', 'a.txt'), b = uri('A', 'b.txt');
     const first = watch(a), second = watch(a); watch(b);
     await expect.poll(() => connections.length).toBe(1);
-    const connection = connections[0], subscription = connection.subscriptions[0];
-    expect(connection.subscriptions).toHaveLength(1);
-    connect(connection);
-    changes(connection, subscription, [{ kind: 'delete', path: rootUri('A') + '/a.txt' }]);
+    const connection = connections[0];
+    expect(connection.request.paths).toEqual([rootUri('A')]);
+    changes(connection, [{ kind: 'delete', path: rootUri('A') + '/a.txt' }]);
     await expect.poll(() => events.length).toBeGreaterThan(0);
     expect(events).toEqual([[{ uri: a.toString(), type: FileChangeType.DELETED }]]);
     first.dispose();
-    changes(connection, subscription, [{ kind: 'edit', path: rootUri('A') + '/a.txt' }]);
+    changes(connection, [{ kind: 'edit', path: rootUri('A') + '/a.txt' }]);
     await expect.poll(() => events.length).toBe(2);
     expect(events[1]).toEqual([{ uri: a.toString(), type: FileChangeType.UPDATED }]);
     second.dispose();
-    changes(connection, subscription, [{ kind: 'edit', path: rootUri('A') + '/b.txt' }]);
+    changes(connection, [{ kind: 'edit', path: rootUri('A') + '/b.txt' }]);
     await expect.poll(() => events.length).toBe(3);
     expect(events[2]).toEqual([{ uri: b.toString(), type: FileChangeType.UPDATED }]);
     expect(connections).toHaveLength(1);
@@ -85,35 +82,33 @@ test('初次连接不报更新，真实删除／编辑仍转发，同根监听�
   });
 });
 
-test('共享流重建只使已连接根重新核实，溢出保留失效且不污染其它owner', async () => {
-  await withTransport(async ({ connections, events, watch, connect, changes }) => {
+test('新增根不重建已有订阅，溢出保留失效且不污染其它owner', async () => {
+  await withTransport(async ({ connections, events, watch, changes }) => {
     const a = uri('A', 'a.txt'), b = uri('B', 'a.txt'), nestedRoot = rootUri('A') + '/nested';
     const nested = uri('A', 'b.txt', nestedRoot);
     watch(a);
     await expect.poll(() => connections.length).toBe(1);
-    connect(connections[0]);
-    changes(connections[0], connections[0].subscriptions[0], [{ kind: 'edit', path: rootUri('A') + '/a.txt' }]);
+    changes(connections[0], [{ kind: 'edit', path: rootUri('A') + '/a.txt' }]);
     await expect.poll(() => events.length).toBe(1);
     watch(b);
     await expect.poll(() => connections.length).toBe(2);
-    const independent = connections[1]; connect(independent);
-    changes(independent, independent.subscriptions[0], [{ kind: 'delete', path: rootUri('B') + '/a.txt' }]);
+    const independent = connections[1];
+    changes(independent, [{ kind: 'delete', path: rootUri('B') + '/a.txt' }]);
     await expect.poll(() => events.length).toBe(2);
     expect(events[1]).toEqual([{ uri: b.toString(), type: FileChangeType.DELETED }]);
     watch(nested);
     await expect.poll(() => connections.length).toBe(3);
-    expect(connections[0].cancelled).toBe(true); expect(independent.cancelled).toBe(false);
-    const rebuilt = connections[2]; connect(rebuilt);
-    const child = rebuilt.subscriptions.find(item => item.paths[0] === nestedRoot);
-    changes(rebuilt, child, [{ kind: 'delete', path: nestedRoot + '/b.txt' }]);
+    expect(connections[0].cancelled).toBe(false); expect(independent.cancelled).toBe(false);
+    const added = connections[2];
+    expect(added.request.paths).toEqual([nestedRoot]);
+    changes(added, [{ kind: 'delete', path: nestedRoot + '/b.txt' }]);
+    await expect.poll(() => events.length).toBe(3);
+    expect(events[2]).toEqual([{ uri: nested.toString(), type: FileChangeType.DELETED }]);
+    changes(connections[0], [], true);
     await expect.poll(() => events.length).toBe(4);
-    expect(events.slice(2)).toEqual([[{ uri: a.toString(), type: FileChangeType.UPDATED }],
-      [{ uri: nested.toString(), type: FileChangeType.DELETED }]]);
-    changes(rebuilt, rebuilt.subscriptions.find(item => item.paths[0] === rootUri('A')), [], true);
-    await expect.poll(() => events.length).toBe(5);
     expect(events.at(-1)).toEqual([{ uri: a.toString(), type: FileChangeType.UPDATED }]);
     expect(connections).toHaveLength(3);
-    receipt.checks.push('共享流重建/溢出保留失效；新根无伪更新；B独立连接保持');
+    receipt.checks.push('新增根不重建旧订阅；溢出保留失效；新根无伪更新；B订阅保持');
   });
 });
 
@@ -183,7 +178,7 @@ test('外部更新后的 stat 不读取正文或推进原保存 revision', async
   });
 });
 
-for (const phase of ['response', 'blob', 'bytes']) {
+for (const phase of ['response', 'body', 'eof']) {
   for (const change of ['gateway-roundtrip', 'credential', 'active-workspace', 'initial-gateway']) {
     test(`原文件${phase}等待期间${change}遵守身份且不接受迟到保存基线`, async () => {
       const previous = workspaceContext.getSnapshot(), provider = fileProvider(), resource = uri('A', 'same.txt');
@@ -195,17 +190,23 @@ for (const phase of ['response', 'blob', 'bytes']) {
         calls.push(path);
         if (path !== '/api/v1/workspace/files/raw') throw new Error(`读取出现额外请求：${path}`);
         readingSignal = init.signal;
-        const blob = new Blob([body]);
         if (body !== 'initial A') {
           const wait = async () => { entered.resolve(); await release.promise; };
           if (phase === 'response') await wait();
-          const arrayBuffer = blob.arrayBuffer.bind(blob);
-          if (phase === 'bytes') blob.arrayBuffer = async () => { await wait(); return arrayBuffer(); };
-          const response = new Response();
-          response.blob = async () => { if (phase === 'blob') await wait(); return blob; };
-          return response;
+          let sent = false;
+          // 原 Provider 已流式消费正文；分别阻塞响应头、首块和 EOF，不拦截废弃的 Blob 路径。
+          return new Response(new ReadableStream({ async pull(controller) {
+            if (!sent) {
+              if (phase === 'body') await wait();
+              sent = true;
+              controller.enqueue(encoder.encode(body));
+            } else {
+              if (phase === 'eof') await wait();
+              controller.close();
+            }
+          } }, { highWaterMark: 0 }));
         }
-        return new Response(blob);
+        return new Response(body);
       });
       try {
         expect(new TextDecoder().decode(await provider.readFile(resource))).toBe('initial A');
@@ -234,7 +235,7 @@ for (const phase of ['response', 'blob', 'bytes']) {
           expect(aborted).toBe(true);
         }
         expect(calls).toEqual(['/api/v1/workspace/files/raw', '/api/v1/workspace/files/raw']);
-        if (phase === 'bytes') {
+        if (phase === 'eof') {
           // 旧读取结清后，新代仍可读取；完成的信号不再保留身份订阅。
           expect(new TextDecoder().decode(await provider.readFile(resource))).toBe(body);
           expect(provider.revisionForBackup(resource)).toBe(hash(body));

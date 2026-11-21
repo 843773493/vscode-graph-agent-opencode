@@ -1,4 +1,4 @@
-"""User acceptance 冻结 notice 排除集；消费事实仅归属 assembly/epoch owner。"""
+"""首次消费时冻结 notice 排除集；消费事实仅归属 assembly/epoch owner。"""
 
 from __future__ import annotations
 
@@ -41,6 +41,20 @@ def acceptance_metadata(
     ) != (ingress_id, turn_id):
         raise RuntimeError("runtime-notice-acceptance-conflict: acceptance metadata identity 不一致")
     selection = metadata["runtime_notice_selection"]
+    if selection is not None:
+        validate_notice_selection(connection, selection)
+    commit = load_committed_idempotency_commit(
+        connection, commit_kind=CommitKind.ACCEPTANCE.value, subject_id=turn_id,
+        idempotency_key=acceptance_key, commit_mode="item_bearing", outcome=None,
+        metadata=metadata, item_count=1,
+    )
+    if commit is None:
+        raise RuntimeError("runtime-notice-acceptance-conflict: acceptance 未提交")
+    return metadata, commit.commit_id
+
+
+def validate_notice_selection(connection: sqlite3.Connection, selection: Mapping[str, object]) -> None:
+    """接收与首次领取共用同一冻结选集校验。"""
     if not isinstance(selection, Mapping) or set(selection) != {
         "owner_execution_id", "owner_admission_key", "source_branch_id", "source_view_id",
         "admission_commit_cut", "item_sequence_cut", "context_ordinal_cut", "notices", "selection_hash",
@@ -115,21 +129,13 @@ def acceptance_metadata(
             output_ordinals.append(output[0])
         if output_ordinals != sorted(output_ordinals):
             raise RuntimeError("runtime-notice-acceptance-conflict: private output 冻结顺序非法")
-    commit = load_committed_idempotency_commit(
-        connection, commit_kind=CommitKind.ACCEPTANCE.value, subject_id=turn_id,
-        idempotency_key=acceptance_key, commit_mode="item_bearing", outcome=None,
-        metadata=metadata, item_count=1,
-    )
-    if commit is None:
-        raise RuntimeError("runtime-notice-acceptance-conflict: acceptance 未提交")
-    return metadata, commit.commit_id
 
 
 def freeze_runtime_notice_selection(
     connection: sqlite3.Connection, *, storage, session_id: str, thread_id: str, checkpoint_ns: str,
     branch_id: str, execution_id: str, admission_key: str,
 ) -> dict[str, object]:
-    """在 acceptance 的 BEGIN IMMEDIATE 内、root append 前冻结 head internal。"""
+    """在首次消费的 BEGIN IMMEDIATE 内、root append 前冻结已执行的 internal。"""
     if not connection.in_transaction:
         raise RuntimeError("runtime-notice-freeze-transaction-required")
     view = connection.execute("SELECT head_view_id FROM branches WHERE branch_id=?", (branch_id,)).fetchone()
@@ -153,7 +159,8 @@ def freeze_runtime_notice_selection(
         "AND item.semantic_kind='runtime_notice' AND item.turn_scope='pending_next_turn' "
         "AND item.turn_id IS NULL AND execution.execution_origin='internal' "
         "AND commit_record.commit_kind='execution_admission' AND commit_record.status='committed' "
-        "AND commit_record.commit_id<=? ORDER BY member.context_ordinal",
+        "AND commit_record.commit_id<=? AND NOT EXISTS (SELECT 1 FROM execution_queue queued "
+        "WHERE queued.execution_id=execution.execution_id AND queued.dispatch_order IS NULL) ORDER BY member.context_ordinal",
         (view_id, commit_cut),
     ).fetchall()
     fields = ("notice_item_id", "execution_id", "admission_commit_id", "admission_payload_hash",
@@ -219,6 +226,17 @@ class RuntimeNoticeConsumptionMixin:
             raise RuntimeError("runtime-notice-acceptance-conflict: user execution 缺少 acceptance commit")
         metadata, commit_id = stored
         selection = metadata["runtime_notice_selection"]
+        queued = connection.execute(
+            "SELECT dispatch_order,notice_selection_json FROM execution_queue WHERE execution_id=?",
+            (row[2],),
+        ).fetchone()
+        if queued is not None:
+            if queued[0] is None or queued[1] is None:
+                raise RuntimeError("runtime-notice-dispatch-required: 用户消息尚未领取")
+            selection = json_mapping(queued[1], field="queue.notice_selection")
+            validate_notice_selection(connection, selection)
+        if selection is None:
+            raise RuntimeError("runtime-notice-selection-missing: 消费选集缺失")
         if (selection["owner_execution_id"], selection["owner_admission_key"]) != row[2:]:
             raise RuntimeError("runtime-notice-acceptance-conflict: 冻结 owner 与 initial execution 不一致")
         return RuntimeNoticeAcceptanceRef(commit_id, selection["selection_hash"]), selection

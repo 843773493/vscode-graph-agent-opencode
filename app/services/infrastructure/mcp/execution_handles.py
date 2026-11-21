@@ -9,11 +9,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 
-from app.core.lifecycle import LifetimeScope
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,

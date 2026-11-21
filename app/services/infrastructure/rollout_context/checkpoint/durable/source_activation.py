@@ -29,11 +29,11 @@ from app.services.business.resource_derivations.team import (
     TEAM_SOURCE_IDS,
     team_facet_payload,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
+    extension_schema_hash,
 )
-from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
 from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_control import (
     _SELECT_COLUMNS,
     _TABLE_NAME,
@@ -48,6 +48,18 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 )
 
 _GUIDANCE_SOURCE_IDS = frozenset((MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()))
+
+
+def _team_observation_hashes(session_id: str, thread_id: str, ledger_revision: int,
+                             event_hash: str, payload_json: str) -> str:
+    payload = json.loads(payload_json)
+    if (payload["session_id"], payload["ledger_revision"], payload["event_hash"]) != (session_id, ledger_revision, event_hash):
+        raise ValueError("team pending observation 的冻结 owner/revision/hash 不一致")
+    # 正文归原 fanout；recipient 只持久保存其真实语义 facet 的提交凭据。
+    return canonical_json_bytes({
+        facet: sha256_jcs(team_facet_payload(payload, thread_id=thread_id, facet=facet))
+        for facet in TEAM_FACETS
+    }).decode()
 
 
 def _latest_guidance_frames(
@@ -84,6 +96,12 @@ def _validate_activation_guidance(
     selected = frames.get(source_id)
     previous_selected = previous_frames.get(source_id)
     if not rows and previous_selected is None and selected is None:
+        return
+    # 首次空来源不发送通知；后续清空仍须保留精确撤销帧和 applied 回执。
+    if (selected is None and previous_selected is None and len(rows) == 1
+            and rows[0][1] == sha256_jcs({"content": ""}) and rows[0][2] == "available"):
+        if any(source.source_id == source_id for source in binding.source_revisions):
+            raise ItemSchemaError("context-source-seal-conflict: 空来源不得伪造 applied revision")
         return
     if selected is None:
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
@@ -179,7 +197,7 @@ def _validate_definition_sources(
             provenance = definition.provenance
             require_definition(provenance.activation_snapshot_id, provenance.resource_id, provenance.revision)
             if (definition.provenance.resource_id != discovered.resource_id
-                    or sha256_jcs(definition.payload()) != definition.provenance.revision
+                    or sha256_jcs(definition.resource_payload) != definition.provenance.revision
                     or extension_schema_hash(definition.input_schema) != definition.schema_hash):
                 raise ItemSchemaError("definition-source-conflict: 完整定义正文与冻结身份不一致")
         current[discovered.resource_id] = revision
@@ -203,36 +221,33 @@ class ContextSourceActivationMixin:
                                        event_hash: str, payload_json: str) -> None:
         """cold recipient 只提交 pending observation；不创建 admission、CSM 或 canonical item。"""
         self._context_source_rollout_owner(session_id, thread_id)
-        payload = json.loads(payload_json)
-        if (payload["session_id"], payload["ledger_revision"], payload["event_hash"]) != (session_id, ledger_revision, event_hash):
-            raise ValueError("team pending observation 的冻结 owner/revision/hash 不一致")
-        payload_json = canonical_json_bytes(payload).decode()
+        facet_hashes = _team_observation_hashes(session_id, thread_id, ledger_revision, event_hash, payload_json)
         if not self._context_source_control_index_ready(session_id, thread_id):
             self._storage.initialize(session_id, "", thread_id=thread_id, validate_jsonl_items=False)
         with self._context.executions._execution_input_transaction(session_id, thread_id) as connection:
-            row = connection.execute("SELECT event_hash,payload_json FROM team_source_observations "
+            row = connection.execute("SELECT event_hash,facet_hashes_json FROM team_source_observations "
                                      "WHERE session_id=? AND thread_id=? AND ledger_revision=?",
                                      (session_id, thread_id, ledger_revision)).fetchone()
             if row is not None:
-                if tuple(row) != (event_hash, payload_json):
+                if tuple(row) != (event_hash, facet_hashes):
                     raise RuntimeError("team pending observation 同 revision preimage 冲突")
                 return
             connection.execute("INSERT INTO team_source_observations VALUES (?,?,?,?,?)",
-                               (session_id, thread_id, ledger_revision, event_hash, payload_json))
+                               (session_id, thread_id, ledger_revision, event_hash, facet_hashes))
     def require_team_source_observation(self, session_id: str, thread_id: str, *, ledger_revision: int,
                                        event_hash: str, payload_json: str) -> None:
         """发布 ready 前按状态索引精确核持久提交，不重投已完成 recipient。"""
         with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
             self._storage._require_v2_runtime(connection)
-            row = connection.execute("SELECT event_hash,payload_json FROM team_source_observations "
+            row = connection.execute("SELECT event_hash,facet_hashes_json FROM team_source_observations "
                                      "WHERE session_id=? AND thread_id=? AND ledger_revision=?",
                                      (session_id, thread_id, ledger_revision)).fetchone()
-            if row is None or tuple(row) != (event_hash, canonical_json_bytes(json.loads(payload_json)).decode()):
+            if row is None or tuple(row) != (event_hash, _team_observation_hashes(session_id, thread_id, ledger_revision, event_hash, payload_json)):
                 raise RuntimeError("team-state-not-ready: recipient 持久 observation 与原 fanout 不一致")
     def validate_team_activation_observations(self, connection: sqlite3.Connection,
                                              snapshot: ResourceActivationSnapshotRef) -> None:
         """冻结向量与原 pending 状态索引核对；不读取当前 collaboration ledger。"""
-        ledgers: dict[int, dict[str, object]] = {}
+        facet_hashes: dict[int, dict[str, str]] = {}
         for binding in snapshot.bindings:
             if binding.resource_kind != "team_state":
                 continue
@@ -241,18 +256,16 @@ class ContextSourceActivationMixin:
             lineage = dict(binding.source_lineage_ref.sources)
             revision = int(lineage[TEAM_LEDGER_SOURCE_ID])
             if revision == 0:
-                payload = {"content": ""}
+                digest = sha256_jcs({"content": ""})
             else:
-                row = connection.execute("SELECT event_hash,payload_json FROM team_source_observations "
+                row = connection.execute("SELECT event_hash,facet_hashes_json FROM team_source_observations "
                                          "WHERE session_id=? AND thread_id=? AND ledger_revision=?",
                                          (snapshot.owner_session_id, snapshot.owner_thread_id, revision)).fetchone()
                 if row is None or row[0] != lineage[TEAM_EVENT_SOURCE_ID]:
                     raise ItemSchemaError("team-state-not-ready: required revision 尚未持久 reconcile")
-                # 同一事务中的冻结 observation 只解码一次；每个 facet 仍核对原 event。
-                if revision not in ledgers:
-                    ledgers[revision] = json.loads(str(row[1]))
-                payload = team_facet_payload(ledgers[revision], thread_id=snapshot.owner_thread_id, facet=binding.facet)
-            digest = sha256_jcs(payload)
+                if revision not in facet_hashes:
+                    facet_hashes[revision] = json.loads(str(row[1]))
+                digest = facet_hashes[revision][binding.facet]
             if binding.revision != digest or binding.content_hash != digest:
                 raise ItemSchemaError("team-state-snapshot-conflict: facet 与原 pending observation 不一致")
     def _apply_sealed_context_sources(

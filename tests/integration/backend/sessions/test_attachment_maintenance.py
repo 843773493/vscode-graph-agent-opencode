@@ -174,9 +174,9 @@ def maintenance_case(mounted_case: MountedCase) -> MountedCase:
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "maintenance-contract-unused-key"
-        provider.pop("auth", None)
+    for provider in config["llm"]["providers"].values():
+        provider["defaults"]["api_key"] = ""
+        provider["defaults"].pop("auth", None)
     for root in mounted_case.roots.values():
         (root / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n")
     return mounted_case

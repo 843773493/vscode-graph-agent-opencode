@@ -32,7 +32,7 @@
   margin: 0;
   padding: 14px 16px 2px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.55;
   white-space: pre-line;
 }
@@ -59,7 +59,7 @@
 .workspace-dialog-heading p {
   margin: 4px 0 0;
   color: var(--bt-text-subtle);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-dialog-icon-button {
@@ -78,9 +78,20 @@
 
 .workspace-dialog-grid {
   display: grid;
+  min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 16px;
+  font-size: var(--bt-font-size);
+}
+
+fieldset.workspace-dialog-grid {
+  margin: 0;
+  border: 0;
+}
+
+.workspace-dialog-grid + .workspace-dialog-grid {
+  padding-top: 0;
 }
 
 .workspace-dialog-grid label {
@@ -88,8 +99,8 @@
   min-width: 0;
   flex-direction: column;
   gap: 5px;
-  color: var(--bt-text-muted);
-  font-size: 12px;
+  color: var(--bt-text-primary);
+  font-size: var(--bt-font-size);
 }
 
 .workspace-dialog-grid input,
@@ -126,6 +137,19 @@
   grid-column: 1 / -1;
 }
 
+.workspace-details-dialog .workspace-dialog-grid > div {
+  min-width: 0;
+}
+
+.workspace-details-dialog dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-details-dialog .workspace-dialog-actions {
+  flex-wrap: wrap;
+}
+
 .workspace-dialog-error {
   margin: 0 16px;
   padding: 8px 10px;
@@ -133,7 +157,7 @@
   border-radius: var(--bt-radius-small);
   background: color-mix(in srgb, var(--bt-status-danger) 8%, var(--bt-surface-raised));
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-dialog-actions {
@@ -194,7 +218,7 @@
   width: min(640px, calc(100vw - 40px));
   max-height: min(640px, calc(100vh - 96px));
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--bt-panel-border);
   border-radius: 12px;
   background: var(--bt-menu-background);
@@ -243,7 +267,7 @@
   margin-top: 2px;
   overflow: hidden;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -275,7 +299,7 @@
   width: auto;
   gap: 5px;
   padding: 0 7px 0 5px;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .workspace-add-close-button {
@@ -328,8 +352,8 @@
 .workspace-add-path-hint {
   margin-left: 35px;
   color: var(--bt-text-subtle);
-  font-size: 10px;
-  line-height: 1.35;
+  font-size: var(--bt-font-size-small);
+  line-height: var(--bt-line-height-small);
 }
 
 .workspace-add-hidden-toggle {
@@ -339,7 +363,7 @@
   gap: 5px;
   color: var(--bt-text-muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   white-space: nowrap;
 }
 
@@ -377,7 +401,7 @@
   display: block;
   margin-top: 1px;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-add-header > input {
@@ -399,8 +423,8 @@
 
 .workspace-add-results {
   flex: 0 1 auto;
-  min-height: 150px;
-  max-height: min(340px, calc(100vh - 270px));
+  min-height: 0;
+  max-height: 340px;
   overflow: auto;
   padding: 7px;
 }
@@ -432,7 +456,7 @@
 .workspace-add-gateway-count {
   flex: 0 0 auto;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   white-space: nowrap;
 }
 
@@ -449,7 +473,7 @@
   padding: 10px 14px;
   border-top: 1px solid color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-add-connection-actions button {
@@ -509,7 +533,7 @@
 .workspace-add-directory-select strong {
   display: block;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -601,13 +625,13 @@
 }
 
 .workspace-add-row strong {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   font-weight: 550;
 }
 
 .workspace-add-row small {
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-add-row > .codicon:last-child {
@@ -629,7 +653,7 @@
 .workspace-add-error {
   padding: 14px 12px;
   color: var(--bt-text-subtle);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -648,7 +672,7 @@
   padding: 9px 14px;
   border-top: 1px solid color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
   color: var(--bt-text-subtle);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-add-actions {
@@ -672,14 +696,14 @@
 
 .workspace-add-selection-summary span {
   color: var(--bt-text-subtle);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-add-selection-summary strong {
   overflow: hidden;
   color: var(--bt-text-primary);
   font-family: var(--bt-font-family-mono);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -738,7 +762,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -789,7 +813,7 @@
 .session-changeset-row span:last-child {
   overflow: hidden;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -826,12 +850,12 @@
 
 .session-change-file-text span:first-child {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .session-change-file-text span:last-child {
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .session-change-review-button {
@@ -879,7 +903,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--bt-text-muted) 20%, transparent);
   background: color-mix(in srgb, var(--bt-status-warning) 12%, var(--bt-surface-background));
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-preview-truncation-notice button {

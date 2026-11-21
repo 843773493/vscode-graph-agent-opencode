@@ -1,11 +1,14 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import React from "react";
+import React, { useRef, useState } from "react";
+import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import type { DeliveryPolicy } from "../../types/backend";
 import { DELIVERY_POLICY_LABELS } from "../deliveryPolicyPresentation";
 
 export default function ComposerActionButtons({
   hasContent,
+  sendBlocked = false,
   showInterrupt,
+  stopPending = false,
   onClear,
   onInterrupt,
   onSend,
@@ -14,7 +17,9 @@ export default function ComposerActionButtons({
   defaultDeliveryPolicy,
 }: {
   hasContent: boolean;
+  sendBlocked?: boolean;
   showInterrupt: boolean;
+  stopPending?: boolean;
   onClear: () => void;
   onInterrupt: () => void;
   onSend: () => void;
@@ -22,27 +27,42 @@ export default function ComposerActionButtons({
   onToggleDefault: () => void;
   defaultDeliveryPolicy: DeliveryPolicy;
 }): React.ReactNode {
+  const moreRef = useRef<HTMLDivElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   return (
     <>
-      {hasContent && (
-        <button
-          id="clearInputButton"
-          type="button"
-          title={t("composer.actions.clear")}
-          className="composer-icon-button hover-only"
-          onClick={onClear}
-        >
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            <path
-              d="M3 3l10 10M13 3L3 13"
-              stroke="currentColor"
-              strokeWidth="1.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
-            />
-          </svg>
-        </button>
+      {(hasContent || showInterrupt) && (
+        <div ref={moreRef} className="composer-more-control">
+          <button type="button" className="composer-icon-button" aria-label={t('composer.actions.more')}
+            title={showInterrupt ? `${t('composer.actions.more')}\n${t('composer.actions.default', DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}` : t('composer.actions.more')}
+            aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>
+            <span className="codicon codicon-ellipsis" aria-hidden="true" />
+          </button>
+          <AnchoredOverlay open={moreOpen} anchorRef={moreRef} placement="top-end" onClose={() => setMoreOpen(false)}>
+            <div className="composer-view-menu" role="menu" onKeyDown={event => {
+              if (event.key === 'Escape') {
+                event.preventDefault(); event.stopPropagation(); setMoreOpen(false);
+                moreRef.current?.querySelector('button')?.focus();
+                return;
+              }
+              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+              event.preventDefault();
+              const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+              const index = items.findIndex(item => item.contains(event.target as Node));
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+                : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+              items[next]?.focus();
+            }}>
+              {hasContent ? <button id="clearInputButton" type="button" role="menuitem" className="composer-view-menu-item" autoFocus
+                onClick={() => { setMoreOpen(false); onClear(); }}>{t('composer.actions.clear')}</button> : null}
+              {showInterrupt ? <button type="button" role="menuitem" className="composer-view-menu-item" autoFocus={!hasContent}
+                title={t('composer.actions.changeDefault', DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
+                onClick={() => { setMoreOpen(false); onToggleDefault(); }}>
+                {t('composer.actions.default', DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
+              </button> : null}
+            </div>
+          </AnchoredOverlay>
+        </div>
       )}
       {showInterrupt && (
         <button
@@ -50,9 +70,12 @@ export default function ComposerActionButtons({
           type="button"
           className="composer-icon-button interrupt-button"
           onClick={onInterrupt}
-          title={t("composer.actions.interrupt")}
+          disabled={stopPending}
+          aria-busy={stopPending}
+          aria-label={t(stopPending ? "thread.status.requestingStop" : "composer.actions.interrupt")}
+          title={t(stopPending ? "thread.status.requestingStop" : "composer.actions.interrupt")}
         >
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          {stopPending ? <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" /> : <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
             <rect
               x="3"
               y="3"
@@ -61,7 +84,7 @@ export default function ComposerActionButtons({
               rx="2"
               fill="currentColor"
             />
-          </svg>
+          </svg>}
         </button>
       )}
       <button
@@ -69,7 +92,7 @@ export default function ComposerActionButtons({
         data-testid="composer-send"
         type="button"
         className="send-button"
-        disabled={!hasContent}
+        disabled={!hasContent || sendBlocked}
         onClick={onSend}
         title={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
         aria-label={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
@@ -82,7 +105,7 @@ export default function ComposerActionButtons({
         <button
           type="button"
           className="composer-icon-button queue-message-button"
-          disabled={!hasContent}
+          disabled={!hasContent || sendBlocked}
           onClick={onAlternate}
           title={t("composer.actions.alternate")}
           aria-label={t("composer.actions.alternate")}
@@ -91,17 +114,6 @@ export default function ComposerActionButtons({
             className="codicon codicon-list-ordered"
             aria-hidden="true"
           />
-        </button>
-      )}
-      {showInterrupt && (
-        <button
-          type="button"
-          className="composer-icon-button hover-only"
-          onClick={onToggleDefault}
-          title={t("composer.actions.default", DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
-          aria-label={t("composer.actions.changeDefault", DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
-        >
-          <span className="codicon codicon-settings-gear" aria-hidden="true" />
         </button>
       )}
     </>

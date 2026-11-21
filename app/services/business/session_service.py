@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager, closing
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import (
+    AsyncExitStack,
+    aclosing,
+    asynccontextmanager,
+    closing,
+    contextmanager,
+)
 from datetime import UTC, datetime
 from typing import ClassVar
-from uuid import uuid4
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
+from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
@@ -40,6 +46,7 @@ from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.common import CursorPage
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
     ChildThreadSummaryDTO,
@@ -51,17 +58,17 @@ from app.schemas.internal_v2.session import (
     TitleSource,
 )
 from app.schemas.internal_v2.trace import TraceEventDTO
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.infrastructure.turn_history.trace_cursor import (
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.infrastructure.session_trace.trace_cursor import (
     bind_trace_cursor,
     unbind_trace_cursor,
 )
-from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.mapping.trace_event_mapper import trace_event_to_dto
 
 
 class SessionService:
@@ -96,6 +103,17 @@ class SessionService:
     @property
     def workspace_id(self) -> str:
         return self._workspace_id
+
+    @property
+    def catalog_projection_revision(self) -> str:
+        """目录默认 Provider 投影沿用配置 owner 已发布的版本。"""
+        return self._config_service.get_revision()
+
+    @contextmanager
+    def catalog_projection(self) -> Iterator[str]:
+        """版本与默认 Provider 投影共用配置 owner 的现有发布屏障。"""
+        with self._config_service.publication_lock:
+            yield self.catalog_projection_revision
 
     def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
         self._change_listeners.append(listener)
@@ -176,10 +194,14 @@ class SessionService:
             yield node
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
-        """准入单会话短写，并让删除 drain 等待已准入写入完成。"""
+    async def session_write_admission(
+        self, session_id: str, *, new_operation: bool = False,
+    ) -> AsyncIterator[None]:
+        """短写核定生命周期；新操作还须检查停止准入，原操作结算继续放行。"""
         async with self._session_write_scope(session_id) as node:
             self._assert_session_node_active(node)
+            if new_operation and self._job_service is not None:
+                self._job_service.assert_session_control_open(session_id)
             yield
 
     @asynccontextmanager
@@ -358,16 +380,17 @@ class SessionService:
             thread_id=node.main_thread_id,
             kind=node.session_kind,
             current_agent_id=node.current_agent_id,
-            current_provider_id=node.current_provider_id,
+            current_model=(ModelReferenceDTO.model_validate_json(node.current_model_json)
+                           if node.current_model_json is not None else None),
             context_source_session_id=node.context_source_session_id,
             generation_origin=node.generation_origin,
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
         self._assert_workspace_binding(session)
-        if session.current_provider_id is None:
-            session.current_provider_id = (
-                self._config_service.resolve_agent_provider_id(session.current_agent_id)
+        if session.current_model is None:
+            session.current_model = (
+                self._config_service.resolve_agent_model(session.current_agent_id)
             )
         return session
 
@@ -432,6 +455,9 @@ class SessionService:
         旧 delegated child Session 链路已下线，不再读 manifest。
         """
         await self.get(session_id)
+        return await run_sync_shielded(self._list_child_threads, session_id)
+
+    def _list_child_threads(self, session_id: str) -> ChildThreadListDTO:
         control_database = (
             self._path_resolver.resolve_session_node(session_id)
             / "session-control.sqlite"
@@ -442,8 +468,8 @@ class SessionService:
         with closing(SessionControlStore(control_database)) as control, control.read_transaction():
             threads = control.list_child_thread_rows()
             members = {
-                member.child_thread_id: member
-                for member in control.list_collaboration_members(
+                member["child_thread_id"]: member
+                for member in control.list_collaboration_member_summaries(
                     coordinator_session_id=session_id
                 )
             }
@@ -455,9 +481,9 @@ class SessionService:
                 record.child_thread_id: record
                 for record in control.list_fork_thread_creations(state="published")
             }
+        self._path_resolver.resolve_thread_nodes(session_id, [thread.thread_id for thread in threads])
         items: list[ChildThreadSummaryDTO] = []
         for thread in threads:
-            self._path_resolver.resolve_thread_node(session_id, thread.thread_id)
             member = members.get(thread.thread_id)
             intent = intents.get(thread.thread_id)
             fork = forks.get(thread.thread_id)
@@ -466,25 +492,25 @@ class SessionService:
                     thread_id=thread.thread_id,
                     created_at=thread.created_at,
                     delegation_id=(
-                        member.delegation_id if member is not None else None
+                        member["delegation_id"] if member is not None else None
                     ),
-                    role=member.role if member is not None else None,
+                    role=member["role"] if member is not None else None,
                     subagent_type=(
-                        member.subagent_type if member is not None else None
+                        member["subagent_type"] if member is not None else None
                     ),
                     title=(
-                        member.title if member is not None else
+                        member["title"] if member is not None else
                         json.loads(fork.request_intent_json)["display_title"]
                         if fork is not None and fork.request_intent_json is not None else None
                     ),
-                    collaboration_state=(member.state if member is not None else None),
+                    collaboration_state=(member["state"] if member is not None else None),
                     admission_state=(intent.state if intent is not None else None),
                     report_execution_id=intent.execution_binding_id if intent is not None else None,
                     status=(
                         "running"
                         if intent is not None and intent.state == "bound"
                         else "failed"
-                        if member is not None and member.state == "cancelled"
+                        if member is not None and member["state"] == "cancelled"
                         else "idle" if fork is not None else "pending"
                     ),
                 )
@@ -650,7 +676,7 @@ class SessionService:
                 result = await self._creation_service.publish_prepared(existing)
                 return await self.get(result.session_id)
         else:
-            idempotency_key = f"session-{uuid4().hex}"
+            idempotency_key = f"session-{create_uuid_hex()}"
         record = await self._prepare_creation(
             idempotency_key=idempotency_key,
             title=title,
@@ -694,7 +720,7 @@ class SessionService:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
         resolved_agent_id = config_service.resolve_new_session_agent_id(agent_id)
-        resolved_provider_id = config_service.resolve_new_session_provider_id(
+        resolved_model = config_service.resolve_new_session_model(
             resolved_agent_id
         )
         await self._validate_parent_session(
@@ -741,7 +767,7 @@ class SessionService:
                     else None
                 ),
                 "current_agent_id": resolved_agent_id,
-                "current_provider_id": resolved_provider_id,
+                "current_model_json": resolved_model.canonical_json(),
                 "context_source_session_id": context_source_session_id,
             },
         )
@@ -776,7 +802,7 @@ class SessionService:
             title=record.display_name,
             title_source=record.title_source,
             current_agent_id=metadata["current_agent_id"],
-            current_provider_id=metadata["current_provider_id"],
+            current_model=ModelReferenceDTO.model_validate_json(metadata["current_model_json"]),
             parent_session_id=self._path_resolver.nearest_session_ancestor(
                 record.parent_node_id
             ),
@@ -792,7 +818,7 @@ class SessionService:
     async def update(
         self, session_id: str, session: SessionUpdateRequest
     ) -> SessionDTO:
-        """在 catalog 原事务内更新 Agent/Provider，返回完整权威投影。"""
+        """在 catalog 原事务内更新 Agent/ModelReference，返回完整权威投影。"""
         async with self.session_write_admission(session_id):
             existing = await self.get(session_id)
 
@@ -803,23 +829,18 @@ class SessionService:
 
             update_data = session.model_dump(exclude_unset=True)
             target_agent_id = update_data.get("agent_id", existing.current_agent_id)
-            requested_provider_id = update_data.get("provider_id")
-            if "agent_id" in update_data and "provider_id" not in update_data:
-                requested_provider_id = None
-            if "agent_id" in update_data or "provider_id" in update_data:
-                update_data["current_provider_id"] = (
-                    self._config_service.resolve_agent_provider_id(
+            selected_model_json = self._path_resolver.get_node(session_id).current_model_json
+            if "agent_id" in update_data or "model" in update_data:
+                selected_model_json = (
+                    self._config_service.resolve_agent_model(
                         target_agent_id,
-                        requested_provider_id,
+                        session.model,
                     )
-                )
+                ).canonical_json()
             self._path_resolver.catalog_store.update_session_configuration(
                 session_id,
                 current_agent_id=target_agent_id,
-                current_provider_id=update_data.get(
-                    "current_provider_id",
-                    self._path_resolver.get_node(session_id).current_provider_id,
-                ),
+                current_model_json=selected_model_json,
                 updated_at=datetime.now(UTC),
             )
             updated = await self.get(session_id)
@@ -875,19 +896,15 @@ class SessionService:
         if thread_id is not None:
             await self.resolve_thread(session_id, thread_id)
         storage_cursor = unbind_trace_cursor(cursor, session_id=session_id, thread_id=thread_id, kind="page")
-        page = self._trace_event_store.read_trace_page(
-            session_id,
-            cursor=storage_cursor,
-            limit=limit,
+        page = await run_sync_shielded(
+            self._trace_event_store.read_trace_page,
+            session_id, cursor=storage_cursor, limit=limit, thread_id=thread_id,
         )
-        mapper = TraceEventMapper()
         owners = await run_sync_shielded(self._trace_event_store.event_threads, session_id, page.events)
         items = []
         for event in page.events:
             owner = owners[event.event_id]
-            if thread_id is not None and owner != thread_id:
-                continue
-            dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
+            dto = trace_event_to_dto(event.model_dump(), session_id=session_id, thread_id=owner)
             if dto is not None:
                 items.append(dto)
         return CursorPage(
@@ -903,7 +920,7 @@ class SessionService:
         if thread_id is not None:
             await self.resolve_thread(session_id, thread_id)
         storage_cursor = unbind_trace_cursor(after_event_id, session_id=session_id, thread_id=thread_id, kind="stream")
-        self._trace_event_store.ensure_cursor(session_id, storage_cursor)
+        await run_sync_shielded(self._trace_event_store.ensure_cursor, session_id, storage_cursor)
 
     async def stream_trace_events(
         self, session_id: str, after_event_id: str | None = None, *, thread_id: str | None = None,
@@ -912,25 +929,22 @@ class SessionService:
         if thread_id is not None:
             await self.resolve_thread(session_id, thread_id)
         storage_cursor = unbind_trace_cursor(after_event_id, session_id=session_id, thread_id=thread_id, kind="stream")
-        mapper = TraceEventMapper()
         owners: dict[str, str] = {}
-        async for record in self._trace_event_store.stream_events(
-            session_id,
-            storage_cursor,
-        ):
-            event = record.event
-            owner = owners.get(event.job_id)
-            if owner is None:
-                resolved = await run_sync_shielded(self._trace_event_store.event_threads, session_id, [event])
-                owner = resolved[event.event_id]
-                if len(owners) >= 256:
-                    del owners[next(iter(owners))]
-                owners[event.job_id] = owner
-            explicit = getattr(event.payload, "thread_id", owner)
-            if explicit != owner:
-                raise RuntimeError(f"Trace Job 的 Thread 归属漂移: job_id={event.job_id}")
-            if thread_id is not None and owner != thread_id:
-                continue
-            dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
-            if dto is not None:
-                yield dto, bind_trace_cursor(record.cursor, session_id=session_id, thread_id=thread_id, kind="stream")
+        async with aclosing(self._trace_event_store.stream_events(
+            session_id, storage_cursor, thread_id=thread_id,
+        )) as records:
+            async for record in records:
+                event = record.event
+                owner = owners.get(event.job_id)
+                if owner is None:
+                    resolved = await run_sync_shielded(self._trace_event_store.event_threads, session_id, [event])
+                    owner = resolved[event.event_id]
+                    if len(owners) >= 256:
+                        del owners[next(iter(owners))]
+                    owners[event.job_id] = owner
+                explicit = getattr(event.payload, "thread_id", owner)
+                if explicit != owner:
+                    raise RuntimeError(f"Trace Job 的 Thread 归属漂移: job_id={event.job_id}")
+                dto = trace_event_to_dto(event.model_dump(), session_id=session_id, thread_id=owner)
+                if dto is not None:
+                    yield dto, bind_trace_cursor(record.cursor, session_id=session_id, thread_id=thread_id, kind="stream")

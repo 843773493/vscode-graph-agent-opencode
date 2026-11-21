@@ -4,6 +4,8 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as traceStream from "../../api/stream/sessionTraceStream";
 import { TraceCursorGoneError } from "../../api/stream/sessionTraceStream";
+import { HttpRequestError } from "../../api/http";
+import { SseProtocolError } from "../../sse/sseClient";
 import type { AppState } from "../../types/frontend";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "./sessionEventStreamPolicy";
 import { useSessionEventStream } from "./useSessionEventStream";
@@ -14,6 +16,8 @@ import type { Session, SessionStreamEvent } from "../../types/backend";
 import { useSessionLifecycleActions } from "../session/useSessionLifecycleActions";
 import { createSessionHookState } from "../../tests/fixtures/session/appState";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import * as pendingApi from "../../pendingRequestsApi";
+import { cloneMaps } from "../../state/appStateMaps";
 
 const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
 
@@ -23,6 +27,7 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
   const otherScope = `gateway_b::${sessionId}`;
   let current: AppState = { ...INITIAL_APP_STATE, currentSession: { session_id: sessionId } as AppState["currentSession"],
     currentSessionWorkspaceId: "gateway_a", eventQueuesBySession: new Map(), pendingConversations: new Map(),
+    pendingQueueVersions: new Map(),
     sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]), traceEvents: [] };
   const event = (payloadSession: string, name: string): SessionStreamEvent => ({
     event_id: `event_${payloadSession}`, session_id: sessionId, thread_id: "thr_00000000700070008000000000000001", job_id: "job_attachment", type: "message_created",
@@ -38,7 +43,44 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
   expect(current.sessionAttachmentSummaries.has(sessionId)).toBe(false);
 });
 
+test("Trace保留Goal诊断事件，但不能第二次写入统一任务的Goal镜像", () => {
+  const sessionId = "session-goal-trace";
+  const goal = { goal_id: "goal-one", session_id: sessionId, thread_id: "main", objective: "任务快照的目标", status: "paused" as const,
+    token_budget: null, tokens_used: 7, time_used_seconds: 2, revision: 1, control_revision: 1, sync_version: 3,
+    created_at: "2026-11-15T00:00:00Z", updated_at: "2026-11-15T00:00:00Z" };
+  let current: AppState = { ...INITIAL_APP_STATE, currentSession: { session_id: sessionId, thread_id: "main" } as AppState["currentSession"],
+    currentSessionWorkspaceId: "workspace", currentGoal: goal, currentGoalSyncVersion: 3, currentGoalControlRevision: 1 };
+  flushSessionStreamEventBatch([{ event_id: "trace-goal", session_id: sessionId, thread_id: "main", job_id: "job", type: "goal_cleared",
+    phase: "goal", title: "目标清空", content: "", timestamp: "2026-11-15T00:00:00Z",
+    raw: { payload: { session_id: sessionId, thread_id: "main", control_revision: 2, sync_version: 4 } },
+  }], { apiPort: 8111, sessionId, workspaceId: "workspace", sessionCacheKey: "workspace-session-main", threadId: "main",
+    setState: update => { current = typeof update === "function" ? update(current) : update; } });
+  expect(current.currentGoal).toBe(goal);
+  expect(current.currentGoalSyncVersion).toBe(3);
+  expect(current.traceEvents.some(event => event.type === "goal_cleared")).toBe(true);
+});
+
 const originalFetch = globalThis.fetch;
+
+test.each(["enqueued", "pending_policy_updated", "pending_order_updated", "boundary_turn_end"])("队列水位通知 %s 重读精确 Thread 快照", async reason => {
+  const sessionId = "ses_queue_events", threadId = "thr_queue_events", scope = "queue-events";
+  let current: AppState = { ...cloneMaps(INITIAL_APP_STATE), currentSessionWorkspaceId: "workspace",
+    currentSession: { session_id: sessionId, thread_id: threadId } as Session };
+  const snapshot = { session_id: sessionId, thread_id: threadId, active_job_id: null,
+    requests: [], snapshot_version: 12, thread_revision: 12 };
+  const read = spyOn(pendingApi, "listThreadPendingRequests").mockResolvedValue(snapshot);
+  try {
+    flushSessionStreamEventBatch([{ event_id: `evt_${reason}`, session_id: sessionId, thread_id: threadId, job_id: "job_active",
+      type: "status_change", phase: "queue", title: "队列更新", content: "", timestamp: "2026-11-17T00:00:00Z",
+      raw: { payload: { reason, status: "running", queue_snapshot_version: 12 } },
+    }], { apiPort: 8111, sessionId, threadId, workspaceId: "workspace", sessionCacheKey: scope,
+      setState: update => { current = typeof update === "function" ? update(current) : update; } });
+    await flush();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(8111, sessionId, "workspace", undefined, threadId);
+    expect(current.pendingQueueVersions.get(scope)?.get(threadId)).toBe(12);
+  } finally { read.mockRestore(); }
+});
 
 function workspaceRequestTarget(workspaceId: string) {
   const owner = workspaceOwnerFromKey(workspaceId);
@@ -85,6 +127,7 @@ async function flush(): Promise<void> {
 
 async function mountSessionStream(
   state: { value: AppState },
+  confirmSessionState?: (afterSubscription: boolean) => Promise<void>,
 ): Promise<ReactTestRenderer> {
   function Probe(): React.ReactNode {
     useSessionEventStream({
@@ -97,6 +140,7 @@ async function mountSessionStream(
       timelineReady: true,
       initialEventCursor: null,
       refreshTurnHistory: () => undefined,
+      confirmSessionState,
       loadTerminalJobTurn: async () => undefined,
       setState: (update) => {
         state.value = typeof update === "function"
@@ -262,6 +306,38 @@ describe("useSessionEventStream readiness", () => {
 });
 
 describe("useSessionEventStream 有界重连", () => {
+  test.each([
+    new HttpRequestError(401, "Unauthorized", "凭据已失效", "/stream", "request-auth"),
+    new HttpRequestError(403, "Forbidden", "禁止观察当前工作区", "/stream", "request-denied"),
+    new SseProtocolError("Trace 归属错误"),
+  ])("协议和鉴权失败不伪装成网络断开并停止重试: %s", async (error) => {
+    installWindow();
+    const streamSpy = spyOn(traceStream, "streamSessionEvents").mockRejectedValue(error);
+    const state = { value: initialAppState() };
+    const renderer = await mountSessionStream(state);
+    try {
+      for (let round = 0; round < 10; round += 1) await flush();
+      expect(streamSpy).toHaveBeenCalledTimes(1);
+      expect(state.value.status).toContain("未确认，已停止自动重连");
+      expect(state.value.sessionExecutionSyncError).toBe(error.message);
+    } finally { act(() => renderer.unmount()); streamSpy.mockRestore(); }
+  });
+
+  test("每次订阅建立及游标失效均要求重新确认当前权威快照", async () => {
+    installWindow();
+    const confirmations: boolean[] = [];
+    const streamSpy = spyOn(traceStream, "streamSessionEvents").mockImplementation(async (_port, _session, options) => {
+      options?.onConnected?.("route-new");
+      throw new TraceCursorGoneError("expired");
+    });
+    const state = { value: initialAppState() };
+    const renderer = await mountSessionStream(state, async (afterSubscription) => { confirmations.push(afterSubscription); });
+    try {
+      await flush();
+      expect(confirmations).toEqual([true, true]);
+    } finally { act(() => renderer.unmount()); streamSpy.mockRestore(); }
+  });
+
   test("连续建连失败到达上限后停止重连并给出可见终态", async () => {
     installWindow();
     const streamSpy = spyOn(traceStream, "streamSessionEvents")

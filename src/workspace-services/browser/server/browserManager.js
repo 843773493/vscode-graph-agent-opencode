@@ -2,7 +2,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
-import { setInterval } from "node:timers/promises";
+import { startMaintenance } from "@boxteam/plugin-sdk/maintenance";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { BrowserSession } from "./browserSession.js";
 import { DEFAULT_OPERATION_DRAIN_TIMEOUT_MS, drainBrowserExecutions } from "./browserRuntime.js";
@@ -10,7 +10,7 @@ import { BrowserStateStore } from "./browserStateStore.js";
 import { normalizeBrowserUrl, nowIso } from "./url.js";
 import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
 import { BrowserResourceGovernor } from "./resources/resourceGovernor.js";
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 import {
   DEFAULT_BROWSER_DEVICE_ORIENTATION,
   DEFAULT_BROWSER_DEVICE_PROFILE,
@@ -98,8 +98,7 @@ export class BrowserManager {
     this.stateWriteRequested = false;
     this.stateWritePromise = null;
     this.persistTimer = null;
-    this.artifactPruneTask = null;
-    this.artifactPruneAbort = null;
+    this.artifactMaintenance = null;
     this.createAdmissionTail = Promise.resolve();
     this.closingRequested = false;
     this.shutdownPromise = null;
@@ -124,23 +123,19 @@ export class BrowserManager {
   }
 
   startArtifactPrune() {
-    if (this.artifactPruneTask) return;
-    this.artifactPruneAbort = new AbortController();
-    this.artifactPruneTask = this.pruneArtifactsPeriodically(this.artifactPruneAbort.signal);
-    void this.artifactPruneTask.catch(error => logger.error("[browser-manager] 截图清理任务失败", {
-      workspace_id: this.workspaceId,
-    }, error));
-  }
-
-  async pruneArtifactsPeriodically(signal) {
-    await this.stateStore.pruneScreenshots();
-    try {
-      for await (const _ of setInterval(3_600_000, undefined, { signal, ref: false })) {
-        await this.stateStore.pruneScreenshots();
-      }
-    } catch (error) {
-      if (error.code !== "ABORT_ERR") throw error;
-    }
+    if (this.artifactMaintenance) return;
+    this.artifactMaintenance = startMaintenance({
+      identity: { workspace_id: this.workspaceId },
+      reportError: (taskId, identity, durationMs, error) => logger.error(
+        `[browser-manager] ${taskId} 截图清理失败`, { ...identity, duration_ms: durationMs }, error,
+      ),
+      tasks: [{
+        id: "screenshots",
+        interval_ms: 3_600_000,
+        run_immediately: true,
+        run: () => this.stateStore.pruneScreenshots(),
+      }],
+    });
   }
 
   stopResourceGovernor() {
@@ -573,7 +568,6 @@ export class BrowserManager {
   } = {}) {
     this.closingRequested = true;
     this.stopResourceGovernor();
-    this.artifactPruneAbort?.abort();
     for (const session of this.browsersById.values()) session.closingRequested = true;
     if (!this.shutdownPromise) {
       // 唯一执行覆盖全部阶段；观察到期不取消原任务，也不启动第二批检查点或关闭。
@@ -610,28 +604,32 @@ export class BrowserManager {
   }
 
   async drainShutdown(reason, operationDrainTimeoutMs) {
-    if (this.artifactPruneTask) {
+    const shutdownFailures = [];
+    if (this.artifactMaintenance) {
       this.shutdownStage = "artifacts";
       try {
-        await this.artifactPruneTask;
-      } finally {
-        this.artifactPruneTask = null;
-        this.artifactPruneAbort = null;
+        await this.artifactMaintenance.close();
+      } catch (error) {
+        shutdownFailures.push(error);
       }
+      this.artifactMaintenance = null;
     }
+    const withShutdownFailures = error => shutdownFailures.length === 0
+      ? error
+      : new AggregateError([...shutdownFailures, error], "Browser Manager关闭包含维护与资源错误", { cause: error });
     const drainDeadline = performance.now() + operationDrainTimeoutMs;
     this.shutdownStage = "creations";
     if (!await drainBrowserExecutions(this.pendingCreations, Math.max(0, drainDeadline - performance.now()))) {
       const error = new Error(`Browser 创建尚未结束，不能关闭共享运行时: workspace_id=${this.workspaceId}, pending=${this.pendingCreations.size}`);
       error.code = "browser_shutdown_creation_drain_timeout";
-      throw error;
+      throw withShutdownFailures(error);
     }
     const unverified = [...this.browsersById.values()].filter((session) => session.status === "created"
       || (session.status === "failed" && session.record.reconciliation_status !== "verified"));
     if (unverified.length > 0) {
       const error = new Error(`Browser 创建收尾尚未核实: ${unverified.map((session) => session.id).join(",")}`);
       error.code = "browser_shutdown_unverified_creation";
-      throw error;
+      throw withShutdownFailures(error);
     }
     const sessions = this.runningSessions();
     // 创建和交互共用本批单调预算；创建迟到完成也必须进入同一检查点链。
@@ -669,15 +667,26 @@ export class BrowserManager {
         `Browser Manager 关闭时有 ${checkpointFailures.length} 个浏览器无法生成检查点: ${checkpointFailures.map((item) => item.browserId).join(",")}`,
       ) : null;
     // 排空或失败收尾未核实完成时，原owner仍持有运行时，不能关闭共享池。
-    if (!canShutdownRuntime) throw failure;
-    this.shutdownStage = "runtime";
-    if (!this.runtimeShutdownComplete) {
-      await this.runtimePool.shutdown();
-      this.runtimeShutdownComplete = true;
+    if (!canShutdownRuntime) {
+      if (failure) throw withShutdownFailures(failure);
+      if (shutdownFailures.length === 1) throw shutdownFailures[0];
+      if (shutdownFailures.length > 1) throw new AggregateError(shutdownFailures, "Browser维护关闭失败");
+      throw new Error("Browser共享运行时仍有未核实资源，不能关闭");
     }
-    this.shutdownStage = "persist";
-    await this.persist();
-    if (failure) throw failure;
+    try {
+      this.shutdownStage = "runtime";
+      if (!this.runtimeShutdownComplete) {
+        await this.runtimePool.shutdown();
+        this.runtimeShutdownComplete = true;
+      }
+      this.shutdownStage = "persist";
+      await this.persist();
+    } catch (error) {
+      throw withShutdownFailures(error);
+    }
+    if (failure) throw withShutdownFailures(failure);
+    if (shutdownFailures.length === 1) throw shutdownFailures[0];
+    if (shutdownFailures.length > 1) throw new AggregateError(shutdownFailures, "Browser维护关闭失败");
     this.shutdownStage = "complete";
     // TODO：同步阻塞、原生调用强制终止与生产进程退出仍须单独核实。
   }

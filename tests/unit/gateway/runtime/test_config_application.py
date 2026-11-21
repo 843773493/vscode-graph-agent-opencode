@@ -14,9 +14,16 @@ from typing import cast
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.logging import (
+    RuntimeLoggingApply,
+    RuntimeLoggingService,
+    RuntimeLoggingSink,
+    RuntimeLoggingStatus,
+    configure_application_logging,
+    runtime_logging_state,
+)
 from fastapi import FastAPI
 
-from app.core.logging_config import configure_application_logging, runtime_logging_state
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
@@ -33,12 +40,6 @@ from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import _apply_gateway_runtime_config
 from app.schemas.gateway.service_plugin import PluginBinding
-from app.schemas.runtime_logging import (
-    RuntimeLoggingApply,
-    RuntimeLoggingService,
-    RuntimeLoggingSink,
-    RuntimeLoggingStatus,
-)
 from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,

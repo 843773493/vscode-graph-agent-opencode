@@ -8,6 +8,7 @@ import logging
 import secrets
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from threading import Event, get_ident
 from typing import BinaryIO
 
@@ -17,6 +18,7 @@ import pytest
 from app import main, workspace_lifecycle
 from app.core import sqlite_state
 from app.core.path_utils import workspace_context
+from app.schemas.internal_v2.message import MessageCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
@@ -33,6 +35,7 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414
 )
+from tests.support.message_service import accept_queued_message
 
 pytestmark = pytest.mark.usefixtures("maintenance_case")
 
@@ -221,22 +224,39 @@ async def test_activity_native_close_failure_retries_original_stage(
         await lifetime.__aexit__(None, None, None)
 
 
-async def test_failed_periodic_prune_is_reported_and_blocks_dependency_release(
+async def test_failed_periodic_prune_is_reported_and_recovers_independently(
     mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    wake = asyncio.Event()
-    ticked: set[asyncio.Task[object]] = set()
+    selected_workspace_id = next(reversed(mounted_case.roots))
+    scope_name = f"workspace-maintenance:{selected_workspace_id}"
+    activity_task_name = f"{scope_name}:maintenance:workspace-activity-prune"
+    attachment_task_name = f"{scope_name}:maintenance:workspace-draft-attachment-expire"
+    wake_events = {activity_task_name: asyncio.Event(), attachment_task_name: asyncio.Event()}
+    called = asyncio.Event()
+    reported = asyncio.Event()
+    recovered = asyncio.Event()
+    attachment_finished = asyncio.Event()
     original_sleep = asyncio.sleep
+    loop = asyncio.get_running_loop()
 
     async def sleep(seconds: float) -> None:
         task = asyncio.current_task()
-        if seconds == 3600 and task is not None and task not in ticked:
-            ticked.add(task)
+        wake = wake_events.get(task.get_name()) if task is not None else None
+        if seconds == 3600 and wake is not None:
             await wake.wait()
+            wake.clear()
         else:
             await original_sleep(seconds)
 
     monkeypatch.setattr(workspace_lifecycle.asyncio, "sleep", sleep)
+    original_log_error = workspace_lifecycle.logger.error
+
+    def observe_maintenance_error(*args, **kwargs) -> None:
+        original_log_error(*args, **kwargs)
+        if args and "Workspace周期维护失败" in args[0]:
+            reported.set()
+
+    monkeypatch.setattr(workspace_lifecycle.logger, "error", observe_maintenance_error)
     lifetime = main.lifespan(main.app)
     _main_lifespan_state = await lifetime.__aenter__()
     await _main_lifespan_state["after_http_startup"]()
@@ -246,50 +266,93 @@ async def test_failed_periodic_prune_is_reported_and_blocks_dependency_release(
         workspace = next(item for item in backend.workspaces if item.container is selected)
         owner = workspace._owner
         activity = selected.workspace_activity_service
+        task_id = "workspace-activity-prune"
+        assert workspace._maintenance_scope.name == scope_name
+        attachments = selected.attachment_blob_store
+        now = [datetime.now(UTC)]
+        attachments._clock = lambda: now[0]
         with workspace_context(selected.workspace_id, selected.workspace_root, session_catalog=selected.session_catalog):
             session = await selected.session_service.create(SessionCreateRequest(title="周期清理失败"))
+            thread_id = selected.session_service.path_resolver.main_thread_id(session.session_id)
+
+            async def upload(content: bytes):
+                async def chunks():
+                    yield content
+
+                return await attachments.upload_attachment(
+                    session.session_id, thread_id, name="maintenance.txt",
+                    content_type="text/plain", chunks=chunks(),
+                )
+
+            abandoned = await upload(b"abandoned draft")
+            accepted = await upload(b"accepted attachment")
+            message = await selected.message_service.create(
+                session.session_id,
+                MessageCreateRequest(content="保留已接受附件", attachments=[accepted]),
+            )
+            accept_queued_message(selected.message_service, message)
+        now[0] += timedelta(hours=25)
         record = await activity.append(
             event_id="periodic-prune-failure", session_id=session.session_id,
             status="completed", summary="原清理失败不丢失活动事实",
+            occurred_at=(datetime.now(UTC) - timedelta(days=40)).isoformat(),
         )
         failure = sqlite3.OperationalError("原DELETE执行失败")
         calls = 0
+        original_prune = activity.store.prune_activity
+        original_expire = attachments.expire_draft_uploads
+
+        async def expire_drafts(*, messages):
+            removed = await original_expire(messages=messages)
+            loop.call_soon_threadsafe(attachment_finished.set)
+            return removed
+
+        monkeypatch.setattr(attachments, "expire_draft_uploads", expire_drafts)
 
         def prune(*, retention_days: int) -> int:
             nonlocal calls
             assert retention_days == activity.retention_days
             calls += 1
-            raise failure
+            if calls == 1:
+                loop.call_soon_threadsafe(called.set)
+                raise failure
+            removed = original_prune(retention_days=retention_days)
+            loop.call_soon_threadsafe(recovered.set)
+            return removed
 
         monkeypatch.setattr(activity.store, "prune_activity", prune)
-        periodic = next(task for task in workspace._periodic_tasks
-                        if task.get_name() == f"workspace-activity-prune:{selected.workspace_id}")
+        periodic = next(task for task, label in workspace._maintenance_scope._tasks.items()
+                        if label == f"maintenance:{task_id}")
         with caplog.at_level(logging.ERROR, logger="app.workspace_lifecycle"):
-            wake.set()
-            with pytest.raises(sqlite3.OperationalError) as returned:
-                await asyncio.wait_for(asyncio.shield(periodic), 3)
-            assert returned.value is failure
-            with pytest.raises(BaseExceptionGroup) as closed:
-                await backend.close()
-            assert any(item.exc_info is not None and item.exc_info[1] is failure
-                       and periodic.get_name() in item.getMessage() for item in caplog.records)
-        periodic_errors, = closed.value.exceptions
-        assert isinstance(periodic_errors, BaseExceptionGroup)
-        assert periodic_errors.exceptions == (failure,)
-        assert calls == 1 and not workspace.closed and workspace._periodic_tasks == []
-        assert workspace.pending_close_stage == "navigation_operations.stop"
-        assert not activity.store._database._closed
+            wake_events[activity_task_name].set()
+            await asyncio.wait_for(called.wait(), 3)
+            await asyncio.wait_for(reported.wait(), 3)
+            assert any(
+                item.exc_info is not None
+                and item.exc_info[1] is failure
+                and f"workspace_id={selected.workspace_id}" in item.getMessage()
+                and f"task={task_id}" in item.getMessage()
+                for item in caplog.records
+            )
+        assert calls == 1 and not periodic.done()
+        assert activity.store.read_activity_page().records
         assert record in activity.store.read_activity_page().records
         assert main.app.state.workspace_container_registry is backend.registry
-        with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(
-            selected.workspace_root / ".boxteam/attachments", exclusive=True,
-        ):
-            pytest.fail("周期原错误尚未交回关闭调用方前不能释放依赖")
+        wake_events[attachment_task_name].set()
+        await asyncio.wait_for(attachment_finished.wait(), 3)
+        assert attachments.read(session.session_id, accepted.file_id).data == b"accepted attachment"
+        with pytest.raises(FileNotFoundError):
+            attachments.read(session.session_id, abandoned.file_id)
+        wake_events[activity_task_name].set()
+        await asyncio.wait_for(recovered.wait(), 3)
+        assert calls == 2 and not periodic.done()
+        assert record not in activity.store.read_activity_page().records
         await backend.close()
-        assert backend.closed and workspace._owner is owner and calls == 1
+        assert backend.closed and workspace._owner is owner and calls == 2
+        assert periodic.cancelled() and activity.store._database._closed
         cold = WorkspaceActivityService(workspace_root=selected.workspace_root)
         try:
-            assert record in cold.store.read_activity_page().records
+            assert record not in cold.store.read_activity_page().records
         finally:
             cold.close()
         with AttachmentMaintenanceLock(selected.workspace_root / ".boxteam/attachments", exclusive=True):

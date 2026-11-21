@@ -14,7 +14,9 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Literal
 
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from boxteam_plugin_sdk.request_context import get_current_request_id
+
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBindingSnapshotDTO,
     NodeDebugBreakpointRequest,

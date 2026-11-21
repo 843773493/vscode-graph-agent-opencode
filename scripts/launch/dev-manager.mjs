@@ -15,7 +15,7 @@ import { resolveDevelopmentLayout } from "./dev-environment.mjs";
 import { MANAGER_START_TIMEOUT_MS } from "./dev-readiness.mjs";
 import { terminateDetachedProcess } from "../../packages/launcher/src/detached-process.mjs";
 import { resolveServiceLogPath } from "../../packages/launcher/src/logging/service-log.mjs";
-import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
+import { loadRuntimeLogContract } from "@boxteam/plugin-sdk/logging";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../packages/launcher/src/gateway/supervisor.mjs";
 
 const MANAGER_STOP_GRACE_MS = GATEWAY_SHUTDOWN_TIMEOUT_MS + 20_000;
@@ -32,7 +32,7 @@ function createManagerLayout(environment = process.env, cwd = process.cwd(), arg
     runtimeRoot,
     readyFile: path.join(runtimeRoot, "detached-ready.json"),
     operationLockFile: path.join(runtimeRoot, "manager-operation.lock"),
-    logPath: resolveServiceLogPath(layout.boxteamHome, environment, loadRuntimeLogContract(layout.projectRoot)),
+    logPath: resolveServiceLogPath(layout.boxteamHome, environment, loadRuntimeLogContract()),
     frontendUrl: `http://127.0.0.1:${layout.ports.frontend}`,
     gatewayHealthUrl: `http://127.0.0.1:${layout.ports.gateway}/api/gateway/health`,
   };

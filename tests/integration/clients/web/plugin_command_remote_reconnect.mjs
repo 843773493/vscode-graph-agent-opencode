@@ -65,7 +65,7 @@ try {
 
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible();
   const health = await api('/api/gateway/health');
   expect(health.gateway_id).toBe(input.gatewayA);
   const workspaces = await api('/api/gateway/workspaces');
@@ -112,7 +112,7 @@ try {
   receipt.phase = 'open-connection-manager';
   await page.getByRole('button', { name: '添加工作区', exact: true }).click();
   await page.getByRole('button', { name: /连接新的远程主机/ }).click();
-  await expect(page.getByRole('dialog', { name: 'Gateway 控制中心' })).toBeVisible();
+  await expect(page.locator('.settings-editor:visible .settings-management-view')).toBeVisible();
   const reconnectButton = page.getByRole('button', { name: '重新连接', exact: true });
   await expect(reconnectButton).toBeVisible();
   await reconnectButton.click();

@@ -1,0 +1,67 @@
+## ADDED Requirements
+
+### Requirement: 受支持旧版本自动完成停写与可恢复升级
+
+软件启动或升级 SHALL 识别已有支持合同的旧版本，自动沿原生命周期停止写入、保留可恢复原件、由原 owner 迁移并校验，成功后恢复服务。已知且无需数据取舍的转换 MUST NOT 要求用户另行运行离线迁移命令。未知版本、歧义或需要数据取舍时 SHALL 保留原件并让用户决定；普通 I/O 或运行故障 SHALL 明确失败，不伪报完成。普通配置 loader 和业务请求 MUST NOT 兼容双读或偷偷执行结构迁移。
+
+SQLite 升级 SHALL 在锁内核版本，备份包含已提交 WAL；有序链及升级校验 MUST 在提交前完成，失败回滚且不开放写入。共享换代 MUST NOT 在旧实例仍运行时升级其存量旧结构。同版本再次启动 MUST 不重复备份、重写或执行全库校验。恢复 SHALL 沿原 journal 的冻结计划和方向，不能把显式回退自动反转成正向升级。
+
+#### Scenario: 已知旧配置正常启动
+- **WHEN** 软件识别无需取舍的受支持旧配置
+- **THEN** 自动停止原写入，备份、迁移、校验并启动当前服务，无需用户另跑迁移命令
+
+#### Scenario: 未知版本或取值冲突
+- **WHEN** 来源版本未知或迁移需要在冲突值之间取舍
+- **THEN** 保留原件并明确报告待决定事项，不猜测、不覆盖、不开放部分结果
+
+#### Scenario: 旧外观设置退役
+- **WHEN** 旧 Gateway 外观仍为原默认主题 warm 且无自定义主题
+- **THEN** 在保留原始备份后自动移除已退役字段；非默认值或自定义主题保留原件，并在停旧和首次写入前要求用户决定
+
+#### Scenario: 用户批准的空旧资源账本
+- **WHEN** 明确目标工作区存在精确空 records／leases 的旧 resources.json
+- **THEN** 原 owner 在 Workspace 停写锁内保留原字节备份后退休旧文件；非空或其他形状在首次写入前拒绝并要求用户决定，不新增完整 JSON 账本迁移或运行时双读
+
+#### Scenario: 迁移中断后再次启动
+- **WHEN** 原正向迁移只发布部分资产便中断
+- **THEN** 自动沿原冻结计划幂等续跑；已明确回退的记录继续保留该方向，不自动重新升级
+
+#### Scenario: SQLite 后续步骤失败
+- **WHEN** 已备份的有序升级链后续步骤或最终校验失败
+- **THEN** 本次链和版本登记全部回滚，备份仍可核验，服务不开放写入
+
+#### Scenario: 当前版本重复启动
+- **WHEN** 当前数据已处于目标结构
+- **THEN** 原正文及备份数量不变，启动不重复执行全库校验
+
+### Requirement: 持久化格式转换按业务域和两端版本命名
+
+新增持久化格式转换源码 MUST 位于 `<业务域 owner>/migrations/`；配置域 SHALL 沿用 `configs/migrations/<domain>/`。文件名 MUST 使用 `v<来源版本>_<来源格式>_to_v<目标版本>_<目标格式>.<实现语言后缀>`，明确两端版本和实际格式；格式名使用小写，版本中的点在 Python 模块名中以下划线表达。系统 MUST NOT 将目标固定为某种存储，也不因格式转换另建平行的 imports／recovery 目录或散落顶层模块。
+
+两端版本 SHALL 来自已明确登记的本域数据格式／结构合同，不混同软件发布版本或数据库 schema 版本；无版本旧数据 MUST 先核实来源和版本归属，不能为命名虚构版本。执行顺序 MUST 由原 owner 清单显式登记，不扫描文件名推导。既有有序 SQL 名称和已登记顺序 MUST 保持；只有实际数据库结构变化才提升 schema 版本，不为命名整理新增迁移、框架或版本映射账本。
+
+#### Scenario: 后续发布版换回先前格式
+- **WHEN** 某业务域先从 JSONL 合同 v1 迁到 SQLite 合同 v2，后续发布版决定采用 JSONL 合同 v3
+- **THEN** 两个转换分别命名为 `v1_jsonl_to_v2_sqlite.py` 和 `v2_sqlite_to_v3_jsonl.py`，位于该域 `migrations/`；第二步属于新的正向迁移，不复用 v1 或当成显式回退
+
+#### Scenario: 同格式升级与既有 SQL 共存
+- **WHEN** 某业务域新增 JSONL 合同 v3 到 v4 的转换，目录已有登记的 `001.sql`
+- **THEN** 新转换命名为 `v3_jsonl_to_v4_jsonl.py`，既有 SQL 不重命名、不重编号，执行仍由原 owner 显式登记
+
+#### Scenario: 格式未知且没有版本归属
+- **WHEN** 旧文件没有可核验的数据合同版本
+- **THEN** 保留原件并明确来源缺口，不擅自认定 v1，不因存在通用命名约定就自动纳入支持或创建转换文件
+
+### Requirement: 固定实验来源历史按明确取舍升级
+
+系统 SHALL 支持固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 的已结算普通会话 main Thread：将 catalog v11、control v18、rollout v26 和 Trace v1 JSONL 提交合同分别升到 v12、v20、v28 和 Trace SQLite schema 3。未登记的 fork／child／未结算意图和非空旧后台账本 SHALL 在首写前明确拒绝。转换 SHALL 保留完整原件及来源 SHA，正常链路只使用目标格式。
+
+经用户明确授权，无法补齐必需新事实的旧 job_started／goal_cleared SHALL 从当前 Trace 中丢弃并按类型报告数量，不伪造历史队列水位或 Goal revision，不增加旧运行时兼容协议。其它事件转换到当前 envelope，逻辑偏移重算；现行新事件 SHALL 写入独立的 format_version，未来不兼容变更 SHALL 递增该版本。
+
+#### Scenario: 真实旧历史恢复
+- **WHEN** 固定旧源码经真实产品入口生成非空会话和模型请求，当前软件初始化并启动两次
+- **THEN** 原 Session／Thread 身份、canonical 正文、item 与请求 hash 保持，旧 Trace 原件可核验，明确返回丢弃计数，重复初始化不重写或重复备份
+
+#### Scenario: 旧创建意图字段转换
+- **WHEN** v11 冻结创建 metadata 使用 current_provider_id，原 preimage 校验正确
+- **THEN** 转为同 Provider 的 default 模型引用并重算目标创建 preimage；完整原库保留原意图及原 hash，不改写 canonical 消息或请求正文

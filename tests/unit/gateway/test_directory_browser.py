@@ -260,8 +260,8 @@ async def test_registration_http_consumes_selected_directory_uri(
     gateway_directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
+    from boxteam_plugin_sdk.http import get_request_id
 
-    from app.core.trace_middleware import get_request_id
     from app.gateway.auth import verify_gateway_token
     from app.gateway.routes._shared import get_registry
     from app.gateway.routes.workspaces_lifecycle import router
@@ -303,8 +303,8 @@ async def test_managed_registration_http_uses_target_directory_binding(
     gateway_directory_request: Request, directory_root: Path, monkeypatch: pytest.MonkeyPatch, federated: bool,
 ) -> None:
     import httpx
+    from boxteam_plugin_sdk.http import get_request_id
 
-    from app.core.trace_middleware import get_request_id
     from app.gateway.auth import verify_federation_token, verify_gateway_token
     from app.gateway.routes import federation, workspaces_managed
     from app.gateway.routes._shared import get_registry

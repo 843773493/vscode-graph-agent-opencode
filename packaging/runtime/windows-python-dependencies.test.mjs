@@ -62,7 +62,7 @@ async function observeDependencies(moduleUrl, scenario) {
     const result = installWindowsPythonDependencies({ pythonExecutable, outputRoot, runtimePackageRoot,
       crossBuild: scenario !== "native", run(command, args) {
         calls.push([command, args]);
-        if (args[0] === "export") {
+        if (args[0] === "scripts/plugins/export-python-requirements.mjs") {
           if (scenario === "export-failure") throw failureMarker;
           fs.writeFileSync(requirementsPath, locked);
         } else if (args.includes("--no-build")) {
@@ -92,7 +92,8 @@ async function observeDependencies(moduleUrl, scenario) {
     });
     assert.equal(result, undefined);
   } catch (error) { failure = error; }
-  const exportCommand = ["uv", ["export", "--locked", "--no-dev", "--format", "requirements-txt", "--output-file", requirementsPath]];
+  const exportCommand = ["bun", ["scripts/plugins/export-python-requirements.mjs", requirementsPath]];
+  assert.deepEqual(calls.shift(), ["bun", ["scripts/plugins/prepare-product-sdk.mjs", "--check", "python"]]);
   const targetCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--python-version",
     PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath]];
   const sourceCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--no-deps",
@@ -141,7 +142,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   fs.writeFileSync(path.join(projectRoot, "package.json"), '{"version":"fixture"}\n');
   fs.writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture");
-  for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/shared", "src/clients/web", "src/clients/workbench",
+  for (const relative of ["app", "configs", "resources", "sdk", "src/shared", "src/clients/shared", "src/clients/web", "src/clients/workbench",
     "src/workspace-services/protocol",
     "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared", "src/workspace-services/terminal/client",
@@ -162,6 +163,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   }
   for (const relative of ["node_modules/@xterm/xterm/css/xterm.css", "node_modules/@xterm/xterm/lib/xterm.js",
     "node_modules/@xterm/addon-fit/lib/addon-fit.js", "node_modules/@xterm/addon-search/lib/addon-search.js",
+    "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js",
     "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css", "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf"]) {
     const file = path.join(projectRoot, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, relative);

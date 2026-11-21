@@ -104,12 +104,21 @@ try {
   async function mcpPanel() {
     stage = "open-main-mcp-panel";
     if (!targetSelected && initialization.owner.gateway_id !== initialization.relayGatewayId) {
-      await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('boxteam.mcp.selectTarget'); });
+      await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('boxteam.panel.selectTarget'); });
       const quick = page.locator('.quick-input-widget');
       await expect(quick).toBeVisible();
       const target = quick.locator('.monaco-list-row').filter({ hasText: initialization.owner.gateway_id });
       await expect(target).toHaveCount(1);
       await target.click();
+      await expect(quick).not.toBeVisible();
+    }
+    if (!targetSelected) {
+      await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('boxteam.panel.selectWorkspace'); });
+      const quick = page.locator('.quick-input-widget');
+      await expect(quick).toBeVisible();
+      const workspace = quick.locator('.monaco-list-row').filter({ hasText: fixture.workspaceId });
+      await expect(workspace).toHaveCount(1);
+      await workspace.click();
       await expect(quick).not.toBeVisible();
       targetSelected = true;
     }
@@ -179,7 +188,7 @@ try {
       const popup = await opened;
       if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 30000 });
     }
-    await submit("启动服务器");
+    await submit("连接");
     await authorize();
     await expect(page.locator(".notifications-toasts")).toContainText("授权已拒绝");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
@@ -190,7 +199,7 @@ try {
     await expect(details).toContainText("已取消");
 
     // 使用真实产品300秒期限，不改时钟或持久记录；页面通过原owner轮询取得过期事实。
-    const expiring = await submit("启动服务器");
+    const expiring = await submit("连接");
     assert(Math.abs(expiring.deadline - expiring.created_at - 300) < 1);
     await expect(details).toContainText("deadline_exceeded", { timeout: 330000 });
     const expiryObservedAt = Date.now() / 1000;
@@ -198,14 +207,14 @@ try {
     await expect(details).toContainText("已过期");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
 
-    await submit("启动服务器");
+    await submit("连接");
     await authorize();
     await expect(details).toContainText("连接可用", { timeout: 30000 });
-    await submit("停止服务器");
+    await submit("断开连接");
     await expect(details).toContainText("操作已完成");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
-    await expect(secure.getByRole("button", { name: "停止服务器", exact: true })).toHaveCount(0);
-    await expect(secure.getByRole("button", { name: "启动服务器", exact: true })).toBeEnabled();
+    await expect(secure.getByRole("button", { name: "断开连接", exact: true })).toHaveCount(0);
+    await expect(secure.getByRole("button", { name: "连接", exact: true })).toBeEnabled();
     await expect(sibling).toContainText("连接可用");
     assert.equal(callbacks.length, 2);
     assert.equal(callbackPosts.length, 1);
@@ -256,7 +265,7 @@ try {
     await expect(quick).toBeVisible();
     await expect(quick).toContainText(initialization.owner.gateway_id);
     await quick.locator(".monaco-list-row").filter({ has: page.getByText("secure", { exact: true }) }).click();
-    await expect(quick.getByText("停止服务", { exact: true })).toBeVisible();
+    await expect(quick.getByText("断开连接", { exact: true })).toBeVisible();
     await expect(quick.getByText("显示详情", { exact: true })).toBeVisible();
     await quick.locator("input").press("Escape");
     await expect(quick).not.toBeVisible();

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file
 from app.core.file_permissions import restrict_private_path_access
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
@@ -56,7 +57,7 @@ class RolloutOfflineRestoreMixin:
                 "SQLite offline restore source session identity 不匹配: "
                 f"expected={(session_id, thread_id)}, actual={owner}"
             )
-        self._validate_v2_commit_offsets(
+        self._host._validate_v2_commit_offsets(
             connection,
             self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
             validate_jsonl_items=True,
@@ -248,7 +249,7 @@ class RolloutOfflineRestoreMixin:
         )
         target_root = target_path.parent
         candidate_path = target_root / f".index.sqlite.{uuid4().hex}.offline-restore"
-        operation_id = uuid4().hex
+        operation_id = create_uuid_hex()
         quarantine_root = target_root / "recovery-quarantine"
         quarantine_path = quarantine_root / operation_id
 

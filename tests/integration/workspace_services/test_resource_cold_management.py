@@ -71,8 +71,8 @@ async def test_cold_peer_recovers_while_first_real_listing_receipt_is_pending(
         listing, sync = owner._transport.list_resources, owner._transport.sync_owner_revision
         revisions: list[tuple[str, int]] = []
 
-        async def receiving():
-            snapshot = await listing()
+        async def receiving(**query):
+            snapshot = await listing(**query)
             task = asyncio.current_task()
             assert task is not None
             if task.get_name() == "slow-initial-resource-listing":

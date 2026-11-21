@@ -67,7 +67,7 @@ Gateway 与 Workspace SHALL（必须）为每次配置尝试维护唯一 `candid
 
 ### Requirement: 配置诊断必须揭示真实来源和应用状态
 
-配置诊断接口 SHALL（必须）同时报告 JSONC 来源摘要、SQLite 记录摘要、当前有效来源、文件/记录 revision 或 digest、active/pending 状态及最近失败原因。诊断接口的重新读取 MUST（必须）只用于观测，不能绕过正常候选提交流程改变运行时配置。
+配置诊断接口 SHALL（必须）同时报告 JSONC 来源摘要、SQLite 记录摘要、当前有效来源、文件/记录 revision 或 digest、active/pending 状态及最近失败原因。来源正文编辑的结果 SHALL 分别报告文件保存、SQLite 层物化和 active／pending／最近失败事实，返回原候选及幂等提交身份；文件写入成功不得被表述为全部资源已生效。诊断接口的重新读取 MUST（必须）只用于观测，不能绕过正常候选提交流程改变运行时配置。
 
 #### Scenario: JSONC 已迁移到 SQLite
 - **WHEN** 用户查询 Gateway 或 Workspace 配置诊断
@@ -76,6 +76,10 @@ Gateway 与 Workspace SHALL（必须）为每次配置尝试维护唯一 `candid
 #### Scenario: 候选失败后查询状态
 - **WHEN** 最近一次配置候选因为 schema 或业务预检失败
 - **THEN** 诊断响应保留旧 active revision，并返回失败来源、路径和错误，不返回伪造的成功状态
+
+#### Scenario: 来源文件保存后候选等待重启
+- **WHEN** 显式来源保存成功，而有效变化包含原生效策略要求重启的字段
+- **THEN** 结果显示来源已保存、原 active 保留及实际 pending／restart required；重读或同幂等请求不得伪造 promotion、重复副作用或另一逻辑提交
 
 ### Requirement: 配置事件必须使用独立的可回放事件流
 
@@ -167,3 +171,88 @@ Gateway MUST（必须）按版本读取和迁移旧 `config_version: 1` 文档�
 - **WHEN** v1 JSONC 包含注释，或新版本需要回滚到旧 Gateway
 - **THEN** 迁移保留注释；回滚从精确 v1 backup 恢复原始字节后再启动旧 loader
 
+### Requirement: 插件热应用必须展示实际实例与配置 revision
+
+Gateway 配置诊断 SHALL 区分配置来源已保存、active 配置及每个受管插件实际应用的 revision／plugin_id／instance_id。日志、遥测和统计的应用失败 SHALL 返回原实例、阶段及具体错误；部分成功不得伪报全成功，也不要求跨服务事务回滚或通过重启强迫应用。实例重启后 SHALL 从当前已确认设置初始化，不恢复已关闭的采样定时器。
+
+#### Scenario: 一项诊断配置部分应用失败
+- **WHEN** 同一热更新在 Terminal 已应用，在 Browser 明确失败，MCP 尚未就绪
+- **THEN** 诊断分别报告三者实际状态，不假报采集已经全部关闭，不创建第二配置事实或把未就绪服务读查询当作启动指令
+
+### Requirement: 插件启用期望与运行回执必须分别报告
+
+插件配置提交 SHALL 返回原来源／候选及 enabled，运行 owner 分别报告精确插件和实例实际状态；启动或停止失败不伪报配置回滚／运行成功。旧配置 revision 的 ready／停止回执不得覆盖新期望，开关和重启串行且原进程退出核实前不重复启动。跨 owner 版本切换 SHALL 先预校验，再沿原 CAS 提交期望、撤新准入、停旧核退出／启新、按固定引用顺序发布；首次失败停止后续推进，保留各 owner 实际版本、阶段和部分结果，不跨 owner 补偿或自动重试。预校验失败保留旧发布，实际登记失败只清本次新增句柄，不重建已释放句柄；残留旧贡献只按旧版本诊断，版本不匹配的新调用不可用。期望提交后不自动回滚，原 active／pending 仍按各域既有 promotion 合同报告，不把期望当已生效或增加汇总账本／新恢复状态机。普通参数热应用不能隐式开启插件；需要重启的参数按原生效分类提示显式插件重启，不重启兄弟插件或 Backend。
+
+#### Scenario: 已保存开启但启动失败
+- **WHEN** enabled=true 已提交，插件入口启动失败
+- **THEN** 配置保持已开启、实际状态 failed 并显示原原因，其他插件可用；用户显式重启该绑定才重试，普通工具和读取不重试启动
+
+#### Scenario: 切版中已退出旧实例而新实例失败
+- **WHEN** 新版本期望已提交且旧实例退出已核实，新实例启动失败
+- **THEN** 诊断分别显示已提交期望、原 active／pending 事实和运行失败阶段；不自动恢复旧进程或重写来源，用户显式重启重新应用，选择旧版本须另作显式配置提交
+
+### Requirement: 受支持旧版本自动完成停写与可恢复升级
+
+软件启动或升级 SHALL 识别已有支持合同的旧版本，自动沿原生命周期停止写入、保留可恢复原件、由原 owner 迁移并校验，成功后恢复服务。已知且无需数据取舍的转换 MUST NOT 要求用户另行运行离线迁移命令。未知版本、歧义或需要数据取舍时 SHALL 保留原件并让用户决定；普通 I/O 或运行故障 SHALL 明确失败，不伪报完成。普通配置 loader 和业务请求 MUST NOT 兼容双读或偷偷执行结构迁移。
+
+SQLite 升级 SHALL 在锁内核版本，备份包含已提交 WAL；有序链及升级校验 MUST 在提交前完成，失败回滚且不开放写入。共享换代 MUST NOT 在旧实例仍运行时升级其存量旧结构。同版本再次启动 MUST 不重复备份、重写或执行全库校验。恢复 SHALL 沿原 journal 的冻结计划和方向，不能把显式回退自动反转成正向升级。
+
+#### Scenario: 已知旧配置正常启动
+- **WHEN** 软件识别无需取舍的受支持旧配置
+- **THEN** 自动停止原写入，备份、迁移、校验并启动当前服务，无需用户另跑迁移命令
+
+#### Scenario: 未知版本或取值冲突
+- **WHEN** 来源版本未知或迁移需要在冲突值之间取舍
+- **THEN** 保留原件并明确报告待决定事项，不猜测、不覆盖、不开放部分结果
+
+#### Scenario: 旧外观设置退役
+- **WHEN** 旧 Gateway 外观仍为原默认主题 warm 且无自定义主题
+- **THEN** 在保留原始备份后自动移除已退役字段；非默认值或自定义主题保留原件，并在停旧和首次写入前要求用户决定
+
+#### Scenario: 用户批准的空旧资源账本
+- **WHEN** 明确目标工作区存在精确空 records／leases 的旧 resources.json
+- **THEN** 原 owner 在 Workspace 停写锁内保留原字节备份后退休旧文件；非空或其他形状在首次写入前拒绝并要求用户决定，不新增完整 JSON 账本迁移或运行时双读
+
+#### Scenario: 迁移中断后再次启动
+- **WHEN** 原正向迁移只发布部分资产便中断
+- **THEN** 自动沿原冻结计划幂等续跑；已明确回退的记录继续保留该方向，不自动重新升级
+
+#### Scenario: SQLite 后续步骤失败
+- **WHEN** 已备份的有序升级链后续步骤或最终校验失败
+- **THEN** 本次链和版本登记全部回滚，备份仍可核验，服务不开放写入
+
+#### Scenario: 当前版本重复启动
+- **WHEN** 当前数据已处于目标结构
+- **THEN** 原正文及备份数量不变，启动不重复执行全库校验
+
+### Requirement: 持久化格式转换按业务域和两端版本命名
+
+新增持久化格式转换源码 MUST 位于 `<业务域 owner>/migrations/`；配置域 SHALL 沿用 `configs/migrations/<domain>/`。文件名 MUST 使用 `v<来源版本>_<来源格式>_to_v<目标版本>_<目标格式>.<实现语言后缀>`，明确两端版本和实际格式；格式名使用小写，版本中的点在 Python 模块名中以下划线表达。系统 MUST NOT 将目标固定为某种存储，也不因格式转换另建平行的 imports／recovery 目录或散落顶层模块。
+
+两端版本 SHALL 来自已明确登记的本域数据格式／结构合同，不混同软件发布版本或数据库 schema 版本；无版本旧数据 MUST 先核实来源和版本归属，不能为命名虚构版本。执行顺序 MUST 由原 owner 清单显式登记，不扫描文件名推导。既有有序 SQL 名称和已登记顺序 MUST 保持；只有实际数据库结构变化才提升 schema 版本，不为命名整理新增迁移、框架或版本映射账本。
+
+#### Scenario: 后续发布版换回先前格式
+- **WHEN** 某业务域先从 JSONL 合同 v1 迁到 SQLite 合同 v2，后续发布版决定采用 JSONL 合同 v3
+- **THEN** 两个转换分别命名为 `v1_jsonl_to_v2_sqlite.py` 和 `v2_sqlite_to_v3_jsonl.py`，位于该域 `migrations/`；第二步属于新的正向迁移，不复用 v1 或当成显式回退
+
+#### Scenario: 同格式升级与既有 SQL 共存
+- **WHEN** 某业务域新增 JSONL 合同 v3 到 v4 的转换，目录已有登记的 `001.sql`
+- **THEN** 新转换命名为 `v3_jsonl_to_v4_jsonl.py`，既有 SQL 不重命名、不重编号，执行仍由原 owner 显式登记
+
+#### Scenario: 格式未知且没有版本归属
+- **WHEN** 旧文件没有可核验的数据合同版本
+- **THEN** 保留原件并明确来源缺口，不擅自认定 v1，不因存在通用命名约定就自动纳入支持或创建转换文件
+
+### Requirement: 固定实验来源历史按明确取舍升级
+
+系统 SHALL 支持固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 的已结算普通会话 main Thread：将 catalog v11、control v18、rollout v26 和 Trace v1 JSONL 提交合同分别升到 v12、v20、v28 和 Trace SQLite schema 3。未登记的 fork／child／未结算意图和非空旧后台账本 SHALL 在首写前明确拒绝。转换 SHALL 保留完整原件及来源 SHA，正常链路只使用目标格式。
+
+经用户明确授权，无法补齐必需新事实的旧 job_started／goal_cleared SHALL 从当前 Trace 中丢弃并按类型报告数量，不伪造历史队列水位或 Goal revision，不增加旧运行时兼容协议。其它事件转换到当前 envelope，逻辑偏移重算；现行新事件 SHALL 写入独立的 format_version，未来不兼容变更 SHALL 递增该版本。
+
+#### Scenario: 真实旧历史恢复
+- **WHEN** 固定旧源码经真实产品入口生成非空会话和模型请求，当前软件初始化并启动两次
+- **THEN** 原 Session／Thread 身份、canonical 正文、item 与请求 hash 保持，旧 Trace 原件可核验，明确返回丢弃计数，重复初始化不重写或重复备份
+
+#### Scenario: 旧创建意图字段转换
+- **WHEN** v11 冻结创建 metadata 使用 current_provider_id，原 preimage 校验正确
+- **THEN** 转为同 Provider 的 default 模型引用并重算目标创建 preimage；完整原库保留原意图及原 hash，不改写 canonical 消息或请求正文

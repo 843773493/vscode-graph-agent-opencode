@@ -1,10 +1,10 @@
 import { create, toJson } from "@bufbuild/protobuf";
 import {
   BrowserClientMessageSchema,
-} from "../../protocol/generated/boxteam/browser/v1/browser_input_pb.js";
+} from "@boxteam/plugin-sdk/generated/boxteam/browser/v1/browser_input_pb.js";
 import {
   BrowserServerMessageSchema,
-} from "../../protocol/generated/boxteam/browser/v1/browser_page_pb.js";
+} from "@boxteam/plugin-sdk/generated/boxteam/browser/v1/browser_page_pb.js";
 
 function assertPlainObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

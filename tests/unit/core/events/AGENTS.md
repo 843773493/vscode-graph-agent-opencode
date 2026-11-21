@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-存放核心事件通道单测，覆盖后台消息总线、Job 事件总线及其通道适配器。
+存放核心事件通道单测，覆盖 Job 事件总线及其通道适配器；持久后台邮箱测试归 tests/unit/services/orchestration/background_work/。
 
 ## 可修改内容
 

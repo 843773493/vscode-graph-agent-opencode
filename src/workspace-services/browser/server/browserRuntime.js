@@ -1,4 +1,4 @@
-import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "@boxteam/plugin-sdk/logging";
 
 const logger = createRuntimeLogger("browser", "browser.browserRuntime");
 

@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from app.core.workspace_identity import read_workspace_id
+from app.prompting.validation import parse_root_section
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -64,17 +65,17 @@ def chat_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
+    provider = config["llm"]["providers"]["primary"]
+    provider["defaults"].update(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "browser-chat-tool-loop-stub",
             "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
+    provider["models"]["default"]["model"] = "browser-chat-tool-loop-stub"
+    for agent in config["agents"].values():
+        agent["model"]["fallbacks"] = []
     gateway_connection = config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})
     if gateway_connection.get("url") in {None, "http://127.0.0.1:8014"}:
         gateway_connection["url"] = f"http://127.0.0.1:{port_block.port(20)}"
@@ -364,9 +365,9 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 assistant, tool_result,
                 {"role": "assistant", "content": [{"text": "浏览器 SSE 工具调用已完成。", "type": "text"}]},
             ]
-            context_frames = [json.loads(message["content"]) for message in messages
+            context_frames = [parse_root_section(message["content"], tag="context_sources") for message in messages
                 if message["role"] == "user" and isinstance(message["content"], str)
-                and message["content"].startswith('{"protocol":"boxteam-context-sources:v2"')]
+                and message["content"].startswith('<context_sources ')]
             assert len(context_frames) == 1
             assert context_frames[0]["sources"]
         file = result["file"]

@@ -5,7 +5,7 @@
 ## Requirements
 ### Requirement: 工作区自身 UUID 是唯一 workspace_id
 
-系统 SHALL 使用工作区 `.boxteam/workspace-identity.json` 中既有的标准 UUID 作为唯一 `workspace_id`。Gateway 登记、Backend mount、公开协议、HTTP 请求与响应、资源 URI、持久引用和客户端恢复 MUST 使用同一值。有效既有 UUID MUST 保留；只允许既有身份初始化入口为尚无身份的新工作区创建一次 UUID，不得根据路径、连接、端口、Backend 进程或 Gateway 登记重新分配身份。
+系统 SHALL 使用工作区 `.boxteam/workspace-identity.json` 中既有的标准 UUID 作为唯一 `workspace_id`。Gateway 登记、Backend mount、公开协议、HTTP 请求与响应、资源 URI、持久引用和客户端恢复 MUST 使用同一值。有效既有 UUID MUST 保留；只允许既有身份初始化入口通过统一 ID 工厂为尚无身份的新工作区创建一次 UUIDv7，不得根据路径、连接、端口、Backend 进程或 Gateway 登记重新分配身份。
 
 系统 MUST 移除 `gw_...` 工作区别名、`backend_workspace_id`、重复的 `remote_workspace_id` 及其运行时换算链，不得通过改名为 `target_id` 等字段继续保留第二个工作区身份。连接、进程和导航文件夹的独立标识不受该删除要求影响。注册尚未完成时 MUST 使用明确的连接或注册操作状态，不得生成临时 `workspace_id` 冒充已登记工作区。
 
@@ -55,13 +55,13 @@ Gateway SHALL 将选定目标的原生 Gateway 归属和工作区 UUID 显式传
 
 ### Requirement: 旧工作区引用必须显式迁移且不保留双轨
 
-系统 SHALL 为已支持的旧版本控制面记录提供显式、可恢复的一次性迁移，将旧工作区别名准确替换为原生 Gateway 归属和工作区 UUID。迁移 MUST 覆盖 registry、root binding、共享 Backend 成员、活动选择、导航目录、Generator、用户视图态及客户端持久恢复引用；迁移范围按实际字段职责确定，不得替换用户正文中相似字符串。
+系统 SHALL 为已支持的旧版本控制面记录提供可恢复的一次性迁移，将旧工作区别名准确替换为原生 Gateway 归属和工作区 UUID。正常启动／升级 SHALL 自动在停止原 writer 后调用原迁移 owner；已知且无需取舍的来源无需用户另行发起维护命令，未知版本或数据取舍才由用户决定。迁移 MUST 覆盖 registry、root binding、共享 Backend 成员、活动选择、导航目录、Generator、用户视图态及客户端持久恢复引用；迁移范围按实际字段职责确定，不得替换用户正文中相似字符串。
 
 迁移 MUST 校验完整映射、重复项及引用完整性后发布；缺失、冲突或无法确认远端身份时必须保留原状态并报告阻塞项。客户端旧恢复项只能按已确认的迁移结果升级；无法解析时 MUST 明确报告该项不能恢复，不得按当前工作区猜测，也不得清空其他有效恢复项。迁移完成后 MUST 删除旧映射字段、生成器、接口和消费者，正常运行不保留旧别名查询或双读。有效资源 URI、canonical 正文、历史请求 hash、Session 和 Thread 身份 MUST 保留。
 
 #### Scenario: 完整旧登记迁移
 - **WHEN** 受支持旧库中的工作区身份均可从原登记和目标身份确认
-- **THEN** 所有相关控制面引用一致切换到 UUID 与归属，重启和客户端恢复仍定位原工作区；重复执行迁移不改变结果
+- **THEN** 软件自动迁移所有相关控制面引用到 UUID 与归属，重启和客户端恢复仍定位原工作区；重复启动不改变已完成结果
 
 #### Scenario: 远端离线或映射歧义
 - **WHEN** 迁移不能确认某个旧别名对应的来源 Gateway 与 UUID

@@ -5,16 +5,17 @@ import json
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 
 
 async def _send_message(client: httpx.AsyncClient, session_id: str, content: str) -> str:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": content},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200
     return response.json()["data"]["job_id"]

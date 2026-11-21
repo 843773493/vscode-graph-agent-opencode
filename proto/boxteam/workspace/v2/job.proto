@@ -45,14 +45,6 @@ message Job {
   string thread_id = 14;
 }
 
-message JobProgress {
-  string job_id = 1;
-  JobStatus status = 2;
-  optional string current_step_id = 3;
-  uint32 progress = 4;
-  optional string message = 5;
-}
-
 message ToolApprovalAction {
   string tool_call_id = 1;
   string name = 2;

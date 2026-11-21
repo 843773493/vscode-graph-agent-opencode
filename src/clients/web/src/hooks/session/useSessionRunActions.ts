@@ -1,4 +1,9 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect } from "react";
+import { MessageSubmissionUnknownError, reconcileMessageSubmissions } from "../../api/session/sessionMessages";
+import { loadMessageSubmissions, messageSubmissionKey } from "../../state/messageSubmissions/storage";
+import { mergeSubmissionConversation, submissionConversation } from "../../state/messageSubmissions/projection";
+import { subscribeBrowserViews } from "../../state/browserViewStore";
+import { createSnapshotReadCoordinator, SnapshotReadSupersededError } from "../../../../shared/core/syncState";
 import { HttpRequestError } from "../../api/http";
 import {
   compactSessionContext as apiCompactSessionContext,
@@ -12,7 +17,6 @@ import type {
   MessageReplayRequest,
   MessageRunAccepted,
   DeliveryPolicy,
-  PendingRequestList,
   Session,
   SessionCompactResult,
 } from "../../types/backend";
@@ -22,7 +26,6 @@ import { updateSessionAttachmentSummary } from "../../state/attachments";
 import {
   dispatchToConversationProjection,
   writeDispatchActiveJob,
-  writePendingList,
   writePendingSnapshot,
 } from "../../state/conversations";
 import { appendFrontendEvent } from "../../state/traceEvents";
@@ -55,6 +58,7 @@ export function useSessionRunActions({
   currentSessionGatewayWorkspaceId,
   currentSessionCacheKey,
   defaultGatewayWorkspaceId,
+  active = true,
   contentView,
   setState,
   refreshAgentStateSnapshot,
@@ -67,14 +71,12 @@ export function useSessionRunActions({
   currentSessionGatewayWorkspaceId: string | null;
   currentSessionCacheKey: string | null;
   defaultGatewayWorkspaceId: string | null;
+  active?: boolean;
   contentView: ConversationContentView;
   setState: SetAppState;
   refreshAgentStateSnapshot: (sessionId: string) => Promise<void>;
   createSession: ReturnType<typeof useSessionLifecycleActions>["createSession"];
 }) {
-  // 乐观提交标识必须单调递增：用时间戳时同一毫秒的两次发送会拿到同一个 id，
-  // 第一条失败回滚（或成功替换）会把仍在途的第二条乐观回合一起顶掉。
-  const pendingSubmissionSeqRef = useRef(0);
   const pendingRequestActions = usePendingRequestActions({
     apiPort,
     currentSession,
@@ -83,6 +85,77 @@ export function useSessionRunActions({
     currentSessionCacheKey,
     setState,
   });
+  const submissionThread = currentThreadId ?? currentSession?.thread_id;
+  const submissionSession = currentSession?.session_id;
+  useEffect(() => {
+    if (!active || !submissionSession || !submissionThread || !currentSessionGatewayWorkspaceId || !currentSessionCacheKey) return;
+    const owner = { workspaceKey: currentSessionGatewayWorkspaceId, sessionId: submissionSession, threadId: submissionThread };
+    const storageKey = messageSubmissionKey(owner);
+    let observing = true;
+    const reads = createSnapshotReadCoordinator();
+    const tracked = new Set<string>();
+    const canPublish = () => observing && document.visibilityState !== "hidden";
+    const apply = (results: Awaited<ReturnType<typeof reconcileMessageSubmissions>>) => {
+      if (!canPublish()) return;
+      setState(previous => {
+        if (!canPublish()) return previous;
+        const next = { ...previous, pendingConversations: new Map(previous.pendingConversations),
+          activeJobIdsBySession: new Map(previous.activeJobIdsBySession), pendingQueueVersions: new Map(previous.pendingQueueVersions) };
+        for (const { record, accepted } of results) {
+          const existing = next.pendingConversations.get(currentSessionCacheKey) ?? [];
+          next.pendingConversations.set(currentSessionCacheKey, mergeSubmissionConversation(existing, submissionConversation(record, accepted)));
+          if (accepted) writeDispatchActiveJob(next.activeJobIdsBySession, accepted.dispatch, currentSessionCacheKey, next.pendingQueueVersions);
+        }
+        return next;
+      });
+    };
+    const confirm = async () => {
+      if (!observing || document.visibilityState === "hidden") return;
+      try {
+        const results = await reads.read(storageKey, async signal => {
+          const records = await loadMessageSubmissions(owner);
+          signal.throwIfAborted();
+          if (canPublish()) setState(previous => {
+            if (!canPublish() || signal.aborted) return previous;
+            const pending = previous.pendingConversations.get(currentSessionCacheKey) ?? [];
+            const ids = new Set(records.map(record => record.request.operation_id));
+            const retained = pending.filter(item => !item.pendingSubmissionId || item.jobId
+              || !tracked.has(item.pendingSubmissionId) || ids.has(item.pendingSubmissionId));
+            for (const id of ids) tracked.add(id);
+            return { ...previous, pendingConversations: new Map(previous.pendingConversations).set(currentSessionCacheKey, retained) };
+          });
+          apply(records.map(record => ({ record, accepted: null })));
+          return reconcileMessageSubmissions(apiPort, owner, signal);
+        });
+        apply(results);
+      } catch (error) {
+        if (error instanceof SnapshotReadSupersededError) return;
+        if (canPublish()) setState(previous => canPublish() && isCurrentSessionOwner(previous, submissionSession, owner.workspaceKey)
+          ? { ...previous, status: `消息接收状态未确认: ${errorMessage(error)}` } : previous);
+      }
+    };
+    const refresh = () => { void confirm(); };
+    let timer: ReturnType<typeof globalThis.setInterval> | undefined;
+    const visibilityChanged = () => {
+      if (document.visibilityState === "hidden") {
+        globalThis.clearInterval(timer); timer = undefined;
+        reads.invalidate(storageKey);
+      } else {
+        if (timer === undefined) timer = globalThis.setInterval(refresh, 30_000);
+        refresh();
+      }
+    };
+    visibilityChanged();
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    const unsubscribe = subscribeBrowserViews(key => { if (key === storageKey) refresh(); });
+    return () => {
+      observing = false; reads.dispose(); globalThis.clearInterval(timer); unsubscribe();
+      window.removeEventListener("focus", refresh); window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [active, apiPort, submissionSession, submissionThread, currentSessionGatewayWorkspaceId, currentSessionCacheKey, setState]);
   const sendMessage = useCallback(
     async (
       content: string,
@@ -102,13 +175,13 @@ export function useSessionRunActions({
         currentSession && currentSessionCacheKey
           ? currentSessionCacheKey
           : sessionScopeKey(activeSessionGatewayWorkspaceId, activeSession.session_id);
-      pendingSubmissionSeqRef.current += 1;
-      const pendingSubmissionId = `pending_submission_${pendingSubmissionSeqRef.current}`;
+      const pendingSubmissionId = `op_${crypto.randomUUID().replaceAll("-", "")}`;
       const submittedAt = new Date().toISOString();
       setState((prev) => {
         const next = {
           ...prev,
           pendingConversations: new Map(prev.pendingConversations),
+          pendingQueueVersions: new Map(prev.pendingQueueVersions),
           sessionAttachmentSummaries: attachments.length > 0
             ? new Map(prev.sessionAttachmentSummaries)
             : prev.sessionAttachmentSummaries,
@@ -134,10 +207,10 @@ export function useSessionRunActions({
           },
           assistantMessages: [],
           events: [],
-          status: "running",
+          status: "queued",
           jobId: null,
           pending: true,
-          activeJobOverlay: true,
+          activeJobOverlay: false,
           pendingSubmissionId,
           source: "pending",
           deliveryPolicy,
@@ -171,55 +244,27 @@ export function useSessionRunActions({
           attachments,
           activeSessionGatewayWorkspaceId,
           deliveryPolicy,
-          currentThreadId,
+          targetThreadId,
+          pendingSubmissionId,
         );
         if (currentThreadId !== undefined && accepted.thread_id !== targetThreadId) throw new Error("消息接受结果的 Thread 归属不一致");
       } catch (error) {
-        let message = errorMessage(error);
-        // 发送失败不等于后端没收到：网关超时或响应丢失时，消息可能已经落库
-        // 排进队列。先按权威快照校准本地队列，只有重取也失败时才退回本地
-        // 回滚，避免把后端已经接受的回合从界面上抹掉。
-        let snapshot: PendingRequestList | null = null;
-        let reconciliationFailure: string | null = null;
-        try {
-          snapshot = await apiListThreadPendingRequests(
-            apiPort,
-            activeSession.session_id,
-            activeSessionGatewayWorkspaceId,
-            undefined,
-            currentThreadId,
-          );
-        } catch (reconciliationError) {
-          reconciliationFailure = errorMessage(reconciliationError);
-        }
-        if (!snapshot && reconciliationFailure) {
-          message = `${message}；重新读取待处理队列也失败: ${reconciliationFailure}`;
-        }
+        const message = errorMessage(error);
         setState((prev) => {
           const next = {
             ...prev,
             pendingConversations: new Map(prev.pendingConversations),
+            pendingQueueVersions: new Map(prev.pendingQueueVersions),
             activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
           };
-          if (snapshot) {
-            writePendingSnapshot(
-              next.pendingConversations,
-              next.activeJobIdsBySession,
-              snapshot,
-              activeSessionCacheKey,
-            );
-          } else {
-            const pendingList =
-              next.pendingConversations.get(activeSessionCacheKey) ?? [];
-            writePendingList(
-              next.pendingConversations,
-              activeSessionCacheKey,
-              pendingList.filter(
-                (conversation) =>
-                  conversation.pendingSubmissionId !== pendingSubmissionId,
-              ),
-            );
-          }
+          const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
+          next.pendingConversations.set(activeSessionCacheKey, pendingList.map(conversation =>
+            conversation.pendingSubmissionId === pendingSubmissionId
+              ? { ...conversation, status: "error", pending: error instanceof MessageSubmissionUnknownError,
+                  userMessage: conversation.userMessage ? { ...conversation.userMessage,
+                    metadata: { ...conversation.userMessage.metadata, submission_error: message } } : null }
+              : conversation,
+          ));
           // 待处理队列按会话作用域写回，切走后仍须校准发起会话自己的队列；
           // 但失败文案是全局状态栏字段，当前 Gateway workspace + Session owner
           // 已切走时不得覆盖。
@@ -243,6 +288,7 @@ export function useSessionRunActions({
         const next = {
           ...prev,
           pendingConversations: new Map(prev.pendingConversations),
+          pendingQueueVersions: new Map(prev.pendingQueueVersions),
           activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
         };
         const conversation: ConversationView = {
@@ -267,26 +313,23 @@ export function useSessionRunActions({
           },
           assistantMessages: [],
           events: [],
-          status: accepted.status === "queued" ? "queued" : "running",
+          status: accepted.status === "queued" ? "queued" : accepted.status === "completed" ? "done"
+            : ["failed", "cancelled", "timed_out"].includes(accepted.status) ? "error" : "running",
           jobId,
           turnId: accepted.turn_id ?? undefined,
-          pending: true,
-          activeJobOverlay: accepted.status !== "queued",
+          pending: !["completed", "failed", "cancelled", "timed_out"].includes(accepted.status),
+          activeJobOverlay: !["queued", "completed", "failed", "cancelled", "timed_out"].includes(accepted.status),
           pendingSubmissionId,
           source: "pending",
           ...dispatchToConversationProjection(accepted.dispatch),
         };
         const pendingList = next.pendingConversations.get(activeSessionCacheKey) ?? [];
-        next.pendingConversations.set(activeSessionCacheKey, [
-          ...pendingList.filter(
-            (item) => item.pendingSubmissionId !== pendingSubmissionId,
-          ),
-          conversation,
-        ]);
+        next.pendingConversations.set(activeSessionCacheKey, mergeSubmissionConversation(pendingList, conversation));
         writeDispatchActiveJob(
           next.activeJobIdsBySession,
           accepted.dispatch,
           activeSessionCacheKey,
+          next.pendingQueueVersions,
         );
         // 当前 Gateway workspace + Session owner 已切走时，旧会话的接受结果不得改写新状态栏；
         // 乐观回合本身仍按 activeSessionCacheKey 落在发起会话自己的队列里。
@@ -464,6 +507,7 @@ export function useSessionRunActions({
             const next = {
               ...prev,
               pendingConversations: new Map(prev.pendingConversations),
+              pendingQueueVersions: new Map(prev.pendingQueueVersions),
               activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
             };
             writePendingSnapshot(
@@ -471,6 +515,7 @@ export function useSessionRunActions({
               next.activeJobIdsBySession,
               snapshot,
               sessionCacheKey,
+              next.pendingQueueVersions,
             );
             // 队列快照按会话作用域写回；失败文案只在仍停留在发起会话时才写。
             if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
@@ -497,6 +542,7 @@ export function useSessionRunActions({
         const next = {
           ...prev,
           pendingConversations: new Map(prev.pendingConversations),
+          pendingQueueVersions: new Map(prev.pendingQueueVersions),
           activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
         };
         next.activeJobIdsBySession.delete(sessionCacheKey);
@@ -554,6 +600,7 @@ export function useSessionRunActions({
         const next = {
           ...prev,
           pendingConversations: new Map(prev.pendingConversations),
+          pendingQueueVersions: new Map(prev.pendingQueueVersions),
           activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
         };
         const conversation: ConversationView = {
@@ -596,6 +643,7 @@ export function useSessionRunActions({
           next.activeJobIdsBySession,
           accepted.dispatch,
           sessionCacheKey,
+          next.pendingQueueVersions,
         );
         next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
         // 会话已切走时，旧会话的回放结果不得改写新会话状态栏；历史重载与乐观

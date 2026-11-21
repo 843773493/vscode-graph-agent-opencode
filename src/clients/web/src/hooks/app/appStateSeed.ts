@@ -46,6 +46,7 @@ export const INITIAL_APP_STATE: AppState = {
   eventQueuesBySession: new Map(),
   sessionTraceHistoryBySession: new Map(),
   pendingConversations: new Map(),
+  pendingQueueVersions: new Map(),
   activeJobIdsBySession: new Map(),
   unreadSessionKeys: readUnreadSessionKeys(),
   status: "准备就绪",
@@ -63,6 +64,9 @@ export const INITIAL_APP_STATE: AppState = {
   lastCompactResult: null,
   currentGoal: null,
   currentGoalSessionId: null,
+  currentGoalControlRevision: 0,
+  currentGoalSyncVersion: 0,
+  sessionExecutionSyncError: null,
   goalLoading: false,
   goalError: null,
 };

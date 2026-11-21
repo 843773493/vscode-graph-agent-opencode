@@ -26,6 +26,7 @@ interface SessionHookStateOverrides {
   sessionGatewayWorkspaceById?: Map<string, string>;
   eventQueuesBySession?: Map<string, unknown>;
   pendingConversations?: Map<string, unknown>;
+  pendingQueueVersions?: Map<string, Map<string, number>>;
   activeJobIdsBySession?: Map<string, string>;
   unreadSessionKeys?: Set<string>;
   sessionAttachmentSummaries?: Map<string, unknown>;
@@ -47,6 +48,7 @@ export function createSessionHookState(
     sessionGatewayWorkspaceById = new Map(),
     eventQueuesBySession = new Map(),
     pendingConversations = new Map(),
+    pendingQueueVersions = new Map(),
     activeJobIdsBySession = new Map(),
     unreadSessionKeys = new Set(),
     sessionAttachmentSummaries = new Map(),
@@ -59,6 +61,7 @@ export function createSessionHookState(
     sessionAttachmentSummaries,
     eventQueuesBySession,
     pendingConversations,
+    pendingQueueVersions,
     activeJobIdsBySession,
     unreadSessionKeys,
     activeGatewayWorkspaceId: workspaceId,
@@ -67,5 +70,6 @@ export function createSessionHookState(
     contentView: "default",
     sessionHistoryReloadNonce: 0,
     status: "",
+    sessionExecutionSyncError: null,
   } as unknown as AppState;
 }

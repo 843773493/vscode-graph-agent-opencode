@@ -13,7 +13,7 @@
 
 # 规范
 
-- bootstrap 安装根、共享 Web 和 Workbench 的 frozen-lockfile 依赖；固定上游尚未初始化时明确提示使用 `bootstrap --submodules`，不复制参考仓库或静默忽略缺失依赖。
+- bootstrap 先构建并只读核对 SDK 归档，再安装 Python、根、共享 Web 和 Workbench 的冻结依赖，最后执行当前 wheel 的应用协议检查；固定上游尚未初始化时明确提示使用 `bootstrap --submodules`，不复制参考仓库或静默忽略缺失依赖。
 
 - 使用 `set -eu` 快速失败，所有路径作为独立参数传入并加引号。
 - 删除或覆盖前必须验证目标是配置声明的精确专用路径。

@@ -7,14 +7,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-from pydantic import ValidationError
-
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+from pydantic import ValidationError
+
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.federation.workspace_port import WorkspaceSessionMainPort
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -27,7 +26,7 @@ from app.schemas.search_federation import (
     GatewayContextSearchRequest,
     GatewayContextSearchResultDTO,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     workspace_session_inventory_identity,

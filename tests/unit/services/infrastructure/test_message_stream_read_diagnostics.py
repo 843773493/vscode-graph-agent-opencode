@@ -10,8 +10,8 @@ from pathlib import Path
 from traceback import format_exception
 
 import pytest
+from boxteam_plugin_sdk.logging import _RuntimeHandler
 
-from app.core.logging_config import _RuntimeHandler
 from app.services.infrastructure.message_stream_store import (
     MessageStreamError,
     MessageStreamStore,

@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlencode
 from zipfile import ZipFile
 
@@ -119,14 +120,14 @@ def distribution_gateway(request: pytest.FixtureRequest,
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=application / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update(endpoint="http://distribution-model.invalid/v1", model="distribution-session",
-        api_key="distribution-plugin-unused-key", custom_llm_provider="openai")
-    for item in config["llm"]["providers"]:
-        if "api_key" in item:
-            item["api_key"] = "distribution-plugin-unused-key"
+    provider = config["llm"]["providers"]["primary"]
+    provider["models"]["default"]["model"] = "distribution-session"
+    provider["defaults"].update(endpoint="http://distribution-model.invalid/v1", custom_llm_provider="openai")
+    for item in config["llm"]["providers"].values():
+        if "api_key" in item["defaults"]:
+            item["defaults"]["api_key"] = ""
     for agent in config["agents"].values():
-        agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+        agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config), encoding="utf-8")
     (workspace / "distribution-debug.mjs").write_text(
@@ -144,7 +145,8 @@ def distribution_gateway(request: pytest.FixtureRequest,
     runtime_path = os.pathsep.join((str(python.parent), str(python.parent / "DLLs"),
         str(Path(os.environ["SystemRoot"]) / "System32"), str(empty_path))) if sys.platform == "win32" else str(empty_path)
     environment.update({"BOXTEAM_HOME": str(home), "HOME": str(runtime / "user-home"),
-        "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": str(manifest_path),
+        # Launcher 从 manifest 重建解释器路径，Windows 原生 DLL 也须沿同一短路径加载。
+        "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": _process_path(manifest_path),
         "BOXTEAM_DISTRIBUTION": manifest["distribution"], "BOXTEAM_NODE_BIN": str(node),
         "BOXTEAM_PYTHON_BIN": _process_path(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": str(package / manifest["chromium_executable"]),
@@ -246,16 +248,21 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         evidence.append({"method": method, "path": path, "status": response.status_code, "body": payload})
         return response
 
-    def states() -> dict[str, dict]:
+    def states(*, workspace: bool = False) -> dict[str, dict]:
         result = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status()
-        return {item["binding"]["plugin_id"]: item for item in result.json()["data"]["plugins"]}
+        owner_id = workspace_id if workspace else None
+        return {item["binding"]["plugin_id"]: item for item in result.json()["data"]["plugins"]
+            if item["binding"].get("workspace_id") == owner_id}
 
-    def bind(entries: list[dict[str, object]], *, workspace: bool = False) -> dict[str, dict]:
+    def bind(entries: list[dict[str, object]], *,
+        scope: Literal["gateway", "workspace", "defaults"] = "gateway",
+    ) -> dict[str, dict]:
+        workspace = scope == "workspace"
         source_key = "workspace_root_mutable_override" if workspace else "gateway_mutable_override"
         path = f"/api/v1/workspaces/{workspace_id}/config/sources/{source_key}" if workspace else f"/api/gateway/config/sources/{source_key}"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        source.setdefault("plugins", {})["workspace_defaults" if scope == "defaults" else "runtime"] = {"entries": entries}
         reply = exchange("PUT", path, {"gateway_id": gateway_id,
             **({"workspace_id": workspace_id} if workspace else {}), "source_key": source_key,
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
@@ -263,7 +270,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
             "idempotency_key": f"distribution-bind-{len(evidence)}"}).raise_for_status()
         assert reply.json()["data"]["edit"]["state"] == "active"
-        return states()
+        return states(workspace=workspace)
 
     def install(path: Path) -> None:
         with path.open("rb") as stream:
@@ -413,7 +420,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         developer_tools = distribution / "application/resources/plugins/developer-tools.zip"
         install(developer_tools)
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "terminal", "enabled": True}], workspace=True)
+            "plugin_id": "terminal", "enabled": True}], scope="workspace")
         terminal = _wait_for_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id, state="ready")
         assert terminal["state"] == "ready"
         session = exchange("POST", "/api/v1/sessions", {"title": "源码外发行 PTY"}).raise_for_status().json()["data"]
@@ -442,7 +449,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             {"expected_revision": latest["owner_revision"]}).raise_for_status()
         # 同一发行包的 Debug 插件也必须在空 PATH 下真实启动目标，不能只验管理 ready。
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "debugging", "enabled": True}], workspace=True)
+            "plugin_id": "debugging", "enabled": True}], scope="workspace")
         require_exited({"terminal": terminal})
         debug_plugin: dict | None = None
         deadline = time.monotonic() + 30
@@ -450,7 +457,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             assert debug_plugin is None or debug_plugin["state"] != "failed", debug_plugin
             assert time.monotonic() < deadline, debug_plugin
             time.sleep(0.1)
-            debug_plugin = states().get("debugging")
+            debug_plugin = states(workspace=True).get("debugging")
         assert debug_plugin is not None
         owner = {"session_id": session["session_id"], "thread_id": session["thread_id"]}
         configured = exchange("POST", "/api/v1/debug/node/configurations", {**owner,
@@ -491,11 +498,11 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "debug_pids_exited": [run["pid"], second_run["pid"]],
             "debug_instances": [debug_plugin["instance"]["instance_id"], restarted["instance"]["instance_id"]]})
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "browser", "enabled": True}], workspace=True)
+            "plugin_id": "browser", "enabled": True}], scope="workspace")
         require_exited({"debugging": restarted})
         deadline = time.monotonic() + 30
         while True:
-            browser_plugin = states().get("browser")
+            browser_plugin = states(workspace=True).get("browser")
             if browser_plugin is not None and browser_plugin["state"] == "ready":
                 break
             assert (browser_plugin is None or browser_plugin["state"] != "failed") and time.monotonic() < deadline, browser_plugin
@@ -503,7 +510,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         browser_create = exchange("POST", "/api/v1/resources/browsers", {**owner,
             "retention_scope": "workspace", "title": "源码外发行 Browser", "url": "about:blank"})
         if browser_create.status_code == 503 and "browser_creation_paused_memory_pressure" in browser_create.text:
-            rejection = {"incident_observed_at_unix_ns": time.time_ns()}
+            rejection: dict[str, object] = {"incident_observed_at_unix_ns": time.time_ns()}
             try:
                 browser_process = psutil.Process(browser_plugin["instance"]["process_id"])
                 browser_port = int(browser_process.environ()["BOXTEAM_PLUGIN_PORT"])
@@ -533,29 +540,31 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             result_path = context.artifacts_dir / "workbench.json"
             temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
             electron_asset = os.environ.get("BOXTEAM_TEST_ELECTRON_ASSET")
-            native: dict[str, str] = {}
-            if electron_asset:
-                destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
-                with tarfile.open(electron_asset) as archive:
-                    archive.extractall(destination, filter="data")
-                executable, = destination.glob("*/boxteam.exe" if sys.platform == "win32" else "*/boxteam")
-                native = {"electron": str(executable), "cwd": str(temporary),
-                    "profile": str(temporary / "electron-home"), "emptyPath": str(temporary / "empty-path")}
-                Path(native["emptyPath"]).mkdir(parents=True)
-            environment = {**os.environ, "HOME": str(temporary),
-                "XDG_CACHE_HOME": str(temporary / "cache"),
-                "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
-                    "application": str(distribution / manifest["application_root"]),
-                    "chromium": str(distribution / manifest["chromium_executable"]),
-                    "browserResource": {"resourceId": browser_resource["resource_id"], "workspaceId": workspace_id,
-                        "gatewayId": gateway_id, "instanceId": browser_plugin["instance"]["instance_id"]},
-                    "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
-                        for version in ("1.0.0", "2.0.0")],
-                    "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
             command = [_process_path(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
             if electron_asset and sys.platform == "linux":
                 command = ["/usr/bin/xvfb-run", "-a", *command]
             with chromium_temporary_environment(temporary) as browser_environment:
+                native: dict[str, str] = {}
+                if electron_asset:
+                    destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
+                    with tarfile.open(electron_asset) as archive:
+                        archive.extractall(destination, filter="data")
+                    executable, = destination.glob("*/boxteam.exe" if sys.platform == "win32" else "*/boxteam")
+                    # Chromium 的存储子目录也受路径限长约束，复用同一正式 runtime 的短别名。
+                    native = {"electron": _process_path(executable), "cwd": str(temporary),
+                        "profile": str(Path(browser_environment["TEMP"]) / "electron-home"),
+                        "emptyPath": str(temporary / "empty-path")}
+                    Path(native["emptyPath"]).mkdir(parents=True)
+                environment = {**os.environ, "HOME": str(temporary),
+                    "XDG_CACHE_HOME": str(temporary / "cache"),
+                    "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
+                        "application": str(distribution / manifest["application_root"]),
+                        "chromium": _process_path(distribution / manifest["chromium_executable"]),
+                        "browserResource": {"resourceId": browser_resource["resource_id"], "workspaceId": workspace_id,
+                            "gatewayId": gateway_id, "instanceId": browser_plugin["instance"]["instance_id"]},
+                        "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
+                            for version in ("1.0.0", "2.0.0")],
+                        "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
                 browser = subprocess.run(command, env=environment | browser_environment,
                     capture_output=True, text=True, timeout=180, check=False)
             (context.artifacts_dir / "browser.stdout.raw").write_text(browser.stdout, encoding="utf-8")
@@ -574,8 +583,12 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "expected_revision": latest_browser["owner_revision"],
         }).raise_for_status().json()["data"]
         assert stopped_browser["status"] == "closed"
-        bind([], workspace=True)
+        bind([], scope="workspace")
         require_exited({"browser": browser_plugin})
+        blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "boxteam.developer-tools", "package_version": "0.1.0"})
+        assert blocked.status_code == 409, "新建工作区模板仍引用自带包，不能卸载"
+        bind([], scope="defaults")
         uninstall("boxteam.developer-tools", "0.1.0")
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:

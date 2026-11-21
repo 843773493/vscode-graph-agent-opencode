@@ -9,12 +9,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable, Mapping
 from functools import partial
-from uuid import uuid4
 
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 
 from app.core.execution_admission_context import current_execution_admission
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.identifier import create_uuid_hex
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.mutation_intents import (
@@ -262,7 +262,7 @@ class RolloutCheckpointPersistenceMixin:
             # checkpoint/view 和 database_meta 才共享同一个 rollback guard；
             # 不能先写文件再 BEGIN，否则失败窗口会留下无法由事务回滚的尾部。
             connection.execute("BEGIN IMMEDIATE")
-            transaction_id = uuid4().hex
+            transaction_id = create_uuid_hex()
             timestamp = _now()
             canonical_items = tuple(
                 item for row in prepared for item in row[6]

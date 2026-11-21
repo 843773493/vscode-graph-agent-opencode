@@ -15,6 +15,7 @@ import pytest
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -33,20 +34,19 @@ def process_replay(
     ports = integration_port_block_for_file(Path(request.node.path))
     config_path = Path(integration_workspace_root_path) / ".boxteam/workspace.jsonc"
     config = read_jsonc_object(config_path)
-    providers = cast(list[dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
-    for provider in providers:
-        provider.update({
-            "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1",
-            "model": "e2e-stub-model", "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
-            "api_mode": {
-                "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                "supports_reasoning": {"reasoning_content": False},
-            },
-        })
-        provider.pop("auth", None)
-        provider.pop("request_options", None)
+    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
+    provider = providers["primary"]
+    provider["defaults"] = {
+        "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1",
+        "api_key": "", "custom_llm_provider": "openai",
+        "api_mode": {
+            "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+            "supports_reasoning": {"reasoning_content": False},
+        },
+    }
+    cast(dict[str, dict[str, object]], provider["models"])["default"]["model"] = "e2e-stub-model"
     for agent in cast(dict[str, dict[str, object]], config["agents"]).values():
-        cast(dict[str, object], agent["model"])["fallback_providers"] = []
+        cast(dict[str, object], agent["model"])["fallbacks"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
@@ -100,9 +100,9 @@ def _complete_turn(
     )
     interaction, = cast(list[dict[str, object]], cassette.raw["interactions"])
     call, = replay.control.plan_model_calls(session_id, thread_id, [interaction])
-    accepted = _data(client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    accepted = _data(client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": message}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }))
+    })))
     deadline = time.monotonic() + 60
     while True:
         job = _data(client.get(f"/api/v1/jobs/{accepted['job_id']}"))

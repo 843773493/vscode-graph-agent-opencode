@@ -2,9 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useRef,
 } from "react";
 import { t } from "../../../../shared/core/i18n/index.js";
 import {
@@ -141,14 +139,6 @@ export function WorkspaceFileReferenceProvider({
   ) => void;
   children: React.ReactNode;
 }) {
-  const cacheRef = useRef(
-    new Map<string, Promise<WorkspaceFileLookup>>(),
-  );
-
-  useEffect(() => {
-    cacheRef.current.clear();
-  }, [apiPort, workspaceId]);
-
   const resolve = useCallback(
     async (target: string): Promise<WorkspaceFileReferenceResolution> => {
       if (!workspaceId) return { status: "error", message: t("workspace.fileReference.missingWorkspace") };
@@ -164,10 +154,7 @@ export function WorkspaceFileReferenceProvider({
       if (!isWorkspaceTextFilePath(reference.path)) {
         return { status: "missing" };
       }
-      const cacheKey = `${workspaceId}:${reference.path}`;
-      let request = cacheRef.current.get(cacheKey);
-      if (!request) {
-        request = (async (): Promise<WorkspaceFileLookup> => {
+      const request = (async (): Promise<WorkspaceFileLookup> => {
           try {
             try {
               return { status: "resolved", content: await getWorkspaceFileContent(apiPort, reference.path, workspaceId) };
@@ -189,8 +176,6 @@ export function WorkspaceFileReferenceProvider({
               : { status: "error", message: errorDisplayMessage(error) };
           }
         })();
-        cacheRef.current.set(cacheKey, request);
-      }
       return request.then((lookup): WorkspaceFileReferenceResolution =>
         lookup.status === "resolved"
           ? { ...lookup, reference: { ...reference, path: lookup.content.path } }

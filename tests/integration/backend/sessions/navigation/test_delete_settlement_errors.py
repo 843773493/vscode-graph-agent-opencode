@@ -317,7 +317,7 @@ async def test_preparation_and_subtree_delete_share_deadline_without_blocking_er
             })
             assert accepted.status_code == 202, accepted.text
             async with asyncio.timeout(5):
-                while sid not in jobs._deleting_sessions:
+                while sid not in jobs._closed_sessions:
                     await asyncio.sleep(0)
             assert (await _receipt(client, operation_id)).state == "running"
             assert resolver.catalog_store.get_node(sid).state == "active"
@@ -343,7 +343,7 @@ async def test_preparation_and_subtree_delete_share_deadline_without_blocking_er
             assert failed.error_code == ("delete_wait_timeout" if stage == "preparation" else "delete_settlement_repair_required")
             assert sid in str(failed.error_detail) and str(source) not in str(failed.error_detail)
             assert failed.settlement == (None if stage == "preparation" else "repair_required")
-            assert sid not in jobs._deleting_sessions
+            assert sid not in jobs._closed_sessions
             assert source.is_dir() and _catalog_dump(source / "session-control.sqlite") == original_control
             assert not (resolver._delete_service._deleting_dir(operation_id) / sid).exists()
             if stage == "preparation":

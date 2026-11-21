@@ -169,14 +169,6 @@ export interface Job {
   thread_id: string;
 }
 
-export interface JobProgress {
-  job_id: string;
-  status: JobStatus;
-  current_step_id?: string | undefined;
-  progress: number;
-  message?: string | undefined;
-}
-
 export interface ToolApprovalAction {
   tool_call_id: string;
   name: string;
@@ -328,55 +320,6 @@ export const Job: MessageFns<Job> = {
     message.updated_at = object.updated_at ?? undefined;
     message.ended_at = object.ended_at ?? undefined;
     message.thread_id = object.thread_id ?? "";
-    return message;
-  },
-};
-
-function createBaseJobProgress(): JobProgress {
-  return { job_id: "", status: 0, current_step_id: undefined, progress: 0, message: undefined };
-}
-
-export const JobProgress: MessageFns<JobProgress> = {
-  fromJSON(object: any): JobProgress {
-    return {
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
-      status: isSet(object.status) ? jobStatusFromJSON(object.status) : 0,
-      current_step_id: isSet(object.current_step_id) ? globalThis.String(object.current_step_id) : undefined,
-      progress: isSet(object.progress) ? globalThis.Number(object.progress) : 0,
-      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
-    };
-  },
-
-  toJSON(message: JobProgress): unknown {
-    const obj: any = {};
-    if (message.job_id !== "") {
-      obj.job_id = message.job_id;
-    }
-    if (message.status !== 0) {
-      obj.status = jobStatusToJSON(message.status);
-    }
-    if (message.current_step_id !== undefined) {
-      obj.current_step_id = message.current_step_id;
-    }
-    if (message.progress !== 0) {
-      obj.progress = Math.round(message.progress);
-    }
-    if (message.message !== undefined) {
-      obj.message = message.message;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobProgress>, I>>(base?: I): JobProgress {
-    return JobProgress.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobProgress>, I>>(object: I): JobProgress {
-    const message = createBaseJobProgress();
-    message.job_id = object.job_id ?? "";
-    message.status = object.status ?? 0;
-    message.current_step_id = object.current_step_id ?? undefined;
-    message.progress = object.progress ?? 0;
-    message.message = object.message ?? undefined;
     return message;
   },
 };

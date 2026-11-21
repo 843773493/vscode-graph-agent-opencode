@@ -22,7 +22,7 @@ try {
     result.searches.push({ request: response.request().postDataJSON(), status: response.status(), requestId: response.headers()['x-request-id'] });
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const api = async (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...init, headers: { 'X-Local-Token': credential.data.token, 'Content-Type': 'application/json', ...init.headers } });

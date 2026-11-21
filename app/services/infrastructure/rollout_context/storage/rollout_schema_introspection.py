@@ -6,8 +6,8 @@ import sqlite3
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
@@ -17,6 +17,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    CatalogBodyValidationCache,
     validate_catalog_body,
     validate_projection_membership,
 )
@@ -176,7 +177,7 @@ class RolloutSchemaIntrospectionMixin:
                     )
                 branch_id = strict_text(meta[0], field="database_meta.active_branch_id")
             else:
-                branch_id = "branch-" + uuid4().hex[:12]
+                branch_id = "branch-" + create_uuid_hex()
                 branch_result = connection.execute(
                     "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, created_at, updated_at) VALUES (?, 'root', 'active', NULL, NULL, ?, ?)",
                     (branch_id, timestamp, timestamp),
@@ -292,7 +293,7 @@ class RolloutSchemaIntrospectionMixin:
         if schema_version < expected_version:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
-                "18/19/20/21/22/23/24/25版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24→25→26；其余旧实验库不支持转换，原始数据保留；"
+                "旧版本须显式迁移；当前协作投递回执使用 facet hash，禁止仅修改版本号，原始数据保留；"
                 f"current={schema_version}, target={expected_version}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:
@@ -300,6 +301,10 @@ class RolloutSchemaIntrospectionMixin:
                 "rollout JSONL message format 版本不受支持: "
                 f"database={row[1]}, supported={storage_version.MESSAGE_FORMAT_VERSION}"
             )
+        if schema_version >= 28 and connection.execute(
+            "SELECT 1 FROM pragma_table_info('team_source_observations') WHERE name='facet_hashes_json'"
+        ).fetchone() is None:
+            raise RuntimeError("schema-incompatible: rollout 缺少团队 facet 投递回执结构")
         if connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' "
             "AND name='item_catalog_background_result_identity'"
@@ -321,12 +326,13 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError("source-mismatch: context view 缺少已提交创建顺序")
         validate_schema_journal(connection, schema_version)
 
+    @staticmethod
     def _validate_v2_commit_offsets(
-        self,
         connection: sqlite3.Connection,
         jsonl_path: Path,
         *,
         validate_jsonl_items: bool = True,
+        cache: CatalogBodyValidationCache | None = None,
     ) -> None:
         """校验 committed offset 的单一权威和 storage commit 链。"""
         # 完整历史审计只用于恢复、迁移与显式完整校验；普通快照只检查当前提交边界。
@@ -471,7 +477,7 @@ class RolloutSchemaIntrospectionMixin:
                             catalog_hash=catalog_hash,
                             payload_length=logical_length,
                             source_revision=source_revision,
-                            cache=self._host._catalog_body_validation_cache,
+                            cache=cache,
                         )
                     if (
                         item_offset < commit_start

@@ -28,14 +28,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
-from app.core.lifecycle import LifetimeScope
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.config import McpCleanupDTO
@@ -144,18 +144,6 @@ class McpManagementSnapshot:
     catalog_revision: str
     catalog_generation: int
     servers: tuple[McpServerSnapshot, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class McpCatalogSnapshot:
-    """不可变目录快照：一个 revision 与它对应的全部工具对象。
-
-    server 连接状态是运行时视图，由 :meth:`McpCatalogOwner.list_servers` 现读，
-    不进入不可变目录语义。
-    """
-
-    revision: str
-    tools: Mapping[str, BaseTool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,7 +296,8 @@ class McpCatalogOwner:
         )
         self._session_scope: LifetimeScope | None = None
         self._started = False
-        self._snapshot: McpCatalogSnapshot | None = None
+        # 成功发布后才推进；unavailable publication 也可能携带尚未提交的候选。
+        self._committed_catalog_revision: str | None = None
         self._tools_by_id: dict[str, BaseTool] = {}
         self._descriptors_by_server: dict[str, tuple[McpToolDescriptor, ...]] = {}
         # 目录 generation lease：revision 每实际推进一次单调 +1；unchanged 不推进。
@@ -366,11 +355,11 @@ class McpCatalogOwner:
                         raise
                     await runtime.scope.close()
                     continue
-            if self._snapshot is None:
+            if self._committed_catalog_revision is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
                 async with self._catalog_lock:
-                    if self._snapshot is None:
-                        self._publish_snapshot_locked(
+                    if self._committed_catalog_revision is None:
+                        self._publish_catalog(
                             server_id=None,
                             candidate_tools={},
                             candidate_descriptors={},
@@ -391,7 +380,7 @@ class McpCatalogOwner:
                 self._tools_by_id.clear()
                 self._descriptors_by_server.clear()
                 self._publication = None
-                self._snapshot = None
+                self._committed_catalog_revision = None
                 self._dirty_servers.clear()
             if isinstance(error, asyncio.CancelledError):
                 if failure is error:
@@ -420,7 +409,7 @@ class McpCatalogOwner:
             self._tools_by_id.clear()
             self._descriptors_by_server.clear()
             self._publication = None
-            self._snapshot = None
+            self._committed_catalog_revision = None
             self._dirty_servers.clear()
         for task in tuple(self._pending_relist_tasks):
             task.cancel()
@@ -690,7 +679,7 @@ class McpCatalogOwner:
                     if not runtime.scope.is_closed:
                         self._retirement.retire(self._connection_ref(runtime), runtime,
                             admits_sealed=runtime.server.server_id in prepared, owner_scope=owner_scope)
-                self._publish_snapshot_locked(server_id=None, candidate_tools=candidate_tools,
+                self._publish_catalog(server_id=None, candidate_tools=candidate_tools,
                                               candidate_descriptors=candidate_descriptors)
                 for key in invalidated:
                     runtime = prepared[key]
@@ -870,7 +859,7 @@ class McpCatalogOwner:
                     self._runtimes[server_id] = runtime
                     self._dirty_servers.discard(server_id)
                     published = True
-                    self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools,
+                    self._publish_catalog(server_id=server_id, candidate_tools=tools,
                         candidate_descriptors={**self._descriptors_by_server, server_id: descriptors})
         except BaseException as original:
             if not published:
@@ -898,7 +887,7 @@ class McpCatalogOwner:
                 self._dirty_servers.discard(server_id)
                 publication_error: Exception | None = None
                 try:
-                    self._publish_snapshot_locked(
+                    self._publish_catalog(
                         server_id=server_id, candidate_tools=tools,
                         candidate_descriptors=dict(self._descriptors_by_server),
                         readiness_overrides={server_id: "disconnected"},
@@ -922,7 +911,7 @@ class McpCatalogOwner:
             runtime = self._runtimes.get(server_id)
             if runtime is not None and runtime.running:
                 raise McpCatalogError("正在运行的 MCP 连接不能改为未授权目录")
-            self._publish_snapshot_locked(
+            self._publish_catalog(
                 server_id=server_id, candidate_tools=dict(self._tools_by_id),
                 candidate_descriptors=dict(self._descriptors_by_server),
                 readiness_overrides={server_id: "authorization_required"},
@@ -1114,7 +1103,7 @@ class McpCatalogOwner:
                         candidate_tools.update(server_tools)
                         candidate_descriptors[server_id] = descriptors
                     self._dirty_servers.difference_update(server_ids)
-                    self._publish_snapshot_locked(
+                    self._publish_catalog(
                         server_id=server_ids[0] if len(server_ids) == 1 else None,
                         candidate_tools=candidate_tools,
                         candidate_descriptors=candidate_descriptors,
@@ -1186,7 +1175,7 @@ class McpCatalogOwner:
     # 内部状态
     # ------------------------------------------------------------------
 
-    def _publish_snapshot_locked(
+    def _publish_catalog(
         self,
         *,
         server_id: str | None,
@@ -1215,9 +1204,7 @@ class McpCatalogOwner:
             new_revision = _compute_catalog_revision(
                 definitions, candidate_descriptors,
             )
-            previous_revision = (
-                self._snapshot.revision if self._snapshot is not None else None
-            )
+            previous_revision = self._committed_catalog_revision
             unchanged = new_revision == previous_revision
             generation = self._catalog_generation + int(not unchanged)
             descriptors = tuple(sorted(
@@ -1267,9 +1254,7 @@ class McpCatalogOwner:
             self._catalog_generation = generation
             self._tools_by_id = candidate_tools
             self._descriptors_by_server = candidate_descriptors
-            self._snapshot = McpCatalogSnapshot(
-                revision=new_revision, tools=publication.tools,
-            )
+            self._committed_catalog_revision = new_revision
             self._publication = publication
             self._publisher.publish(
                 server_id=server_id,

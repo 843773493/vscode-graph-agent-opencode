@@ -149,6 +149,7 @@ class WorkspaceService:
         return WorkspaceDTO(
             workspace_id=self.workspace_id,
             name=self.name,
+            data_directory=str(self._workspace_root / ".boxteam"),
             project_type="python",
             git={
                 "enabled": False,

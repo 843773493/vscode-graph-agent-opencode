@@ -299,6 +299,8 @@ async def install_terminal_plugin_gateway_components(
     if node_bin is None:
         raise RuntimeError("Terminal 插件 Gateway 组件测试需要 PATH 中存在 node")
     node_environment = {key: os.environ.get(key) for key in ("BOXTEAM_NODE_BIN",)}
+    runtime_config = commentjson.loads((Path.cwd() / "configs/gateway_inline.jsonc").read_text(encoding="utf-8"))
+    runtime_config["logging"]["runtime"] = {"level": "WARNING", "pretty": False}
     try:
         os.environ["BOXTEAM_NODE_BIN"] = node_bin
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -313,7 +315,7 @@ async def install_terminal_plugin_gateway_components(
             gateway_id=gateway_id, skills_root=boxteam_home / "skills", update_policy=SourceUpdatePolicy(mode="manual"),
         ).lifespan() as skill_sources, plugin_runtime_lifespan(
             home=boxteam_home, gateway_id=gateway_id, skill_sources=skill_sources,
-            payload=lambda: {"logging": {"runtime": {"level": "WARNING", "pretty": False}}},
+            payload=lambda: runtime_config,
             revision=lambda: "service-plugin-test", preserve=lambda: False,
             workspace_root=workspace_root,
         ) as runtime:

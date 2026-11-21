@@ -9,6 +9,7 @@ import { flushSessionStreamEventBatch } from "../sessionEventStream/batchUpdates
 import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   catalogChildrenResponse,
   apiErrorResponse,
   installGatewayFetch,
@@ -354,9 +355,10 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
       },
     };
     const refreshedParents: Array<string | null> = [];
-    installGatewayFetch(({ path, method, url }) => {
+    installGatewayFetch((request) => {
+      const { path, method, url } = request;
       if (path === `/api/v1/session-catalog/breadcrumb/${sesB.session_id}`) {
-        return apiSuccessResponse({
+        return catalogReadResponse(request, {
           revision: "catalog-revision-3",
           catalog_revision: 3,
           items: [
@@ -386,7 +388,9 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
         });
       }
       if (path === "/api/v1/session-catalog/children" && method === "GET") {
-        const parentNodeId = new URL(url, "http://localhost").searchParams.get("parent_node_id");
+        const params = new URL(url, "http://localhost").searchParams;
+        expect(params.get("minimum_catalog_revision")).toBe("4");
+        const parentNodeId = params.get("parent_node_id");
         refreshedParents.push(parentNodeId);
         return catalogChildrenResponse("catalog-revision-4", [], parentNodeId, 4);
       }
@@ -453,15 +457,16 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
       settlement: "repair_required", errorCode: "delete_settlement_repair_required",
       errorDetail: "日期目录隔离失败",
     }) });
-    installGatewayFetch(({ path }) => {
-      if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiSuccessResponse({
+    installGatewayFetch((request) => {
+      const { path } = request;
+      if (path.endsWith(`/breadcrumb/${current.session_id}`)) return catalogReadResponse(request, {
         revision: "catalog-revision-3", catalog_revision: 3, items: [{
           node_id: current.session_id, kind: "session", name: current.title,
           parent_node_id: null, session_id: current.session_id, has_children: false,
           node_revision: 2, state: "active", session: current,
         }],
       });
-      if (path === "/api/v1/session-catalog/children") return apiSuccessResponse({
+      if (path === "/api/v1/session-catalog/children") return catalogReadResponse(request, {
         parent_node_id: null, catalog_revision: 4, revision: "catalog-revision-4",
         items: [], cursor: null, total: 0, consistency_warning: null,
       });
@@ -491,8 +496,9 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
         ...outbox.runtime,
         waitForTerminal: async () => { throw terminalError; },
       };
-      installGatewayFetch(({ path }) => {
-        if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiSuccessResponse({
+      installGatewayFetch((request) => {
+        const { path } = request;
+        if (path.endsWith(`/breadcrumb/${current.session_id}`)) return catalogReadResponse(request, {
           revision: "catalog-revision-3", catalog_revision: 3, items: [{
             node_id: current.session_id, kind: "session", name: current.title,
             parent_node_id: null, session_id: current.session_id, has_children: false,
@@ -689,7 +695,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
     const { actions, state: readState } = mountRace(before, [before]);
     const failure = await (kind === "agent"
       ? actions.setWorkspaceDefaultAgent("agent-new")
-      : actions.setWorkspaceDefaultProvider("agent-new", "provider-new"))
+      : actions.setWorkspaceDefaultModel("agent-new", { provider_id: "provider-new", model_id: "default" }))
       .then(() => { throw new Error("必须拒绝"); }, (error: unknown) => error);
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toHaveLength(2);
@@ -1055,18 +1061,19 @@ describe("会话列表收敛的活动工作区边界", () => {
   });
 
   test("模型切换回包不覆盖另一工作区同 ID 会话的状态栏与缓存归属", async () => {
-    const before = { ...raceSession("ses_shared"), current_provider_id: "provider_a" };
+    const before = { ...raceSession("ses_shared"), current_model: { provider_id: "shared", model_id: "main" } };
     const selected = {
       ...raceSession("ses_shared"),
       title: "工作区 B 会话",
-      current_provider_id: "provider_b",
+      current_model: { provider_id: "shared", model_id: "other-workspace" },
     };
-    const updated = { ...before, current_provider_id: "provider_new" };
+    const updated = { ...before, current_model: { provider_id: "shared", model_id: "backup" } };
     let started = false;
     let releasePatch: (() => void) | undefined;
     const requests: string[] = [];
     installGatewayFetch(({ path, method, init }) => {
       if (path === `/api/v1/sessions/${before.session_id}` && method === "PATCH") {
+        expect(JSON.parse(String(init?.body))).toEqual({ model: updated.current_model });
         started = true;
         requests.push(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") ?? "");
         return new Promise<Response>((resolve) => {
@@ -1077,7 +1084,7 @@ describe("会话列表收敛的活动工作区边界", () => {
     });
 
     const mounted = mountDuplicateSessionOwners(before, selected);
-    const pending = mounted.actions.switchModel("provider_new");
+    const pending = mounted.actions.switchModel(updated.current_model);
     for (let index = 0; index < 100 && !started; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }

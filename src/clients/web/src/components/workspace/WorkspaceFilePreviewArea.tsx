@@ -11,11 +11,13 @@ import NodeDebugBreakpointGutter, {
   type NodeDebugBreakpointDefinition,
 } from "../nodeDebug/NodeDebugBreakpointGutter";
 import WorkspaceMarkdownPreview from "./preview/WorkspaceMarkdownPreview";
+import WorkspaceCodePreview from "./preview/WorkspaceCodePreview";
 
 export type WorkspacePreviewTab =
   | (WorkspaceFileContent & {
       previewType: "file";
       selection: WorkspaceFileSelection | null;
+      fragment?: string;
     })
   | {
       previewType: "file-placeholder";
@@ -68,7 +70,7 @@ interface WorkspaceFilePreviewAreaProps {
   onDraftChange: (content: string) => void;
   onCancelEdit: () => void;
   onSaveEdit: () => Promise<void>;
-  onOpenWorkspacePath: (path: string) => Promise<void>;
+  onOpenWorkspacePath: (path: string, fragment?: string) => Promise<void>;
   onClose?: () => void;
   debugMode?: boolean;
   debugExecutionPath?: string | null;
@@ -168,8 +170,6 @@ export default function WorkspaceFilePreviewArea({
   debugActionBusy = false,
   onChangeDebugBreakpoint,
 }: WorkspaceFilePreviewAreaProps) {
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const editorLineNumbersRef = useRef<HTMLDivElement | null>(null);
   const debugExecutionLineRef = useRef<HTMLDivElement | null>(null);
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.path === activePath) ?? tabs[0] ?? null,
@@ -206,18 +206,9 @@ export default function WorkspaceFilePreviewArea({
   const markdownActiveFile = activeTab?.previewType === "file" &&
     activeTab.language === "markdown";
   const debugActiveFile = debugMode && activeTab?.previewType === "file";
-  const needsEditorLineRows = activeTab?.previewType === "file" && (
-    (debugActiveFile && !editingActiveFile)
-    || !markdownActiveFile
-    || markdownSourceVisible
-  );
   const activeEditorLines = useMemo(
-    () => needsEditorLineRows ? lineRows(activeEditorContent) : [],
-    [activeEditorContent, needsEditorLineRows],
-  );
-  const editorLineNumbers = useMemo(
-    () => activeEditorLines.map((_, index) => index + 1).join("\n"),
-    [activeEditorLines],
+    () => debugActiveFile && !editingActiveFile ? lineRows(activeEditorContent) : [],
+    [activeEditorContent, debugActiveFile, editingActiveFile],
   );
   const activeDebugLine = debugActiveFile && activeTab.path === debugExecutionPath
     ? debugExecutionLine
@@ -230,31 +221,6 @@ export default function WorkspaceFilePreviewArea({
     ),
     [activeTab?.path, debugBreakpoints],
   );
-
-  useEffect(() => {
-    if (activeTab?.previewType !== "file" || !activeTab.selection) {
-      return;
-    }
-    const editor = editorRef.current;
-    if (!editor) {
-      return;
-    }
-    const lines = lineRows(activeTab.content);
-    const start = lines
-      .slice(0, activeTab.selection.startLine - 1)
-      .reduce((offset, line) => offset + line.length + 1, 0);
-    const end = lines
-      .slice(0, activeTab.selection.endLine)
-      .reduce((offset, line) => offset + line.length + 1, 0) - 1;
-    editor.setSelectionRange(start, Math.max(start, end));
-    editor.scrollTop = Math.max(0, (activeTab.selection.startLine - 3) * 20);
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (editingActiveFile) {
-      editorRef.current?.focus();
-    }
-  }, [editingActiveFile]);
 
   useEffect(() => {
     if (!activeDebugLine) return;
@@ -389,66 +355,28 @@ export default function WorkspaceFilePreviewArea({
                   })}
                 </div>
               </div>
-            ) : markdownActiveFile && !markdownSourceVisible ? (
+            ) : markdownActiveFile && !markdownSourceVisible && !editingActiveFile ? (
               <WorkspaceMarkdownPreview
                 apiPort={apiPort}
                 workspaceId={workspaceId}
                 path={activeTab.path}
+                fragment={activeTab.fragment}
                 content={activeEditorContent}
                 onOpenWorkspacePath={onOpenWorkspacePath}
               />
-            ) : <div className="workspace-preview-text-editor-shell">
-              <div
-                ref={editorLineNumbersRef}
-                className="workspace-preview-text-editor-line-numbers"
-                aria-hidden="true"
-                style={{ width: `${Math.max(2, String(activeEditorLines.length).length) + 2}ch` }}
-              >
-                {editorLineNumbers}
-              </div>
-              <textarea
-                ref={editorRef}
-                className="workspace-preview-text-editor"
-                aria-label={t("workspace.preview.editPath", activeTab.path)}
-                value={activeEditorContent}
-                readOnly={!editingActiveFile}
-                spellCheck={false}
-                onPointerDown={() => {
-                  if (!editingActiveFile) {
-                    onBeginEdit(activeTab.path);
-                  }
-                }}
-                onScroll={(event) => {
-                  if (editorLineNumbersRef.current) {
-                    editorLineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
-                  }
-                }}
-                onChange={(event) => onDraftChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if ((event.ctrlKey || event.metaKey) && event.key === "s") {
-                    event.preventDefault();
-                    if (hasUnsavedEdit && savingPath !== activeTab.path) {
-                      void onSaveEdit();
-                    }
-                    return;
-                  }
-                  if (!editingActiveFile || event.key !== "Tab") {
-                    return;
-                  }
-                  event.preventDefault();
-                  const editor = event.currentTarget;
-                  const start = editor.selectionStart;
-                  const end = editor.selectionEnd;
-                  onDraftChange(
-                    `${draftContent.slice(0, start)}\t${draftContent.slice(end)}`,
-                  );
-                  window.requestAnimationFrame(() => {
-                    editor.selectionStart = start + 1;
-                    editor.selectionEnd = start + 1;
-                  });
-                }}
-              />
-            </div>}
+            ) : <WorkspaceCodePreview
+              path={activeTab.path}
+              content={activeEditorContent}
+              language={activeTab.language}
+              readOnly={!editingActiveFile}
+              selection={activeTab.selection}
+              onBeginEdit={() => onBeginEdit(activeTab.path)}
+              onChange={onDraftChange}
+              onSave={() => {
+                if (hasUnsavedEdit && savingPath !== activeTab.path) void onSaveEdit();
+              }}
+            />}
+
           </>
         ) : activeTab?.previewType === "terminal" ? (
           <iframe

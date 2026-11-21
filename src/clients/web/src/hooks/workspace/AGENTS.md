@@ -21,6 +21,8 @@ workspace/  (所有文件直接位于本目录；测试与被测实现按缩进�
 │   └── useWorkspacePreviewTabs.test.tsx
 ├── useWorkspaceResources.ts              工作区 Terminal/Browser 资源查询与控制
 │   └── useWorkspaceResources.test.tsx
+├── useTerminalFrameObservation.ts        iframe 可见订阅转接宿主统一实时入口
+│   └── useTerminalFrameObservation.test.tsx
 ├── resourceActions.ts                    运行资源管理的临时动作句柄及唯一写入结算
 └── useWorkspaceInformationClipboard.ts            工作区信息复制
 ```
@@ -51,3 +53,5 @@ workspace/  (所有文件直接位于本目录；测试与被测实现按缩进�
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
 运行资源管理成功仅消费完整 owner 回执，失败沿原清单回读，切换范围不向旧 owner 追加读取。Workbench 原按钮可把临时 scope／资源快照句柄交给统一 Command；该句柄的执行仍归原 Hook，不登记全局资源状态或重放结果未知的写入。
+
+终端 iframe 的逻辑观察由宿主登记到同工作区共享逻辑订阅，经页面唯一 Gateway WS 传输；校验同源、具体 iframe 和页面订阅身份，按资源ID过滤，卸载释放。状态读取失败最多追加两次有界补读，保留可见错误，不重放写入，不恢复周期清单轮询。

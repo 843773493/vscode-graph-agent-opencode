@@ -19,11 +19,11 @@ from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
 from app.services.business.session_service import SessionService
-from app.services.infrastructure.llm_request_log_service import (
+from app.services.infrastructure.llm_request_log_reader import (
     LLMRequestLogError,
-    LLMRequestLogService,
-    LogSearchBudget,
-    LogSearchPosition,
+    LLMRequestLogReader,
+    LLMRequestLogSearchBudget,
+    LLMRequestLogSearchPosition,
 )
 
 MAX_SCANNED_SESSIONS = 64
@@ -38,11 +38,11 @@ class _Cursor(BaseModel):
     query: str
     catalog_revision: int
     node_offset: int = Field(default=0, ge=0)
-    position: LogSearchPosition | None = None
+    position: LLMRequestLogSearchPosition | None = None
 
 
 async def search_workspace_llm_requests(
-    catalog: SessionCatalogReadService, sessions: SessionService, logs: LLMRequestLogService,
+    catalog: SessionCatalogReadService, sessions: SessionService, logs: LLMRequestLogReader,
     request: WorkspaceSearchRequest, *, gateway_id: str,
 ) -> WorkspaceLLMRequestLogSearchResultsDTO:
     admission = NameSearchBudget.create(request.deadline_at)
@@ -64,7 +64,7 @@ async def search_workspace_llm_requests(
         state = previous
     if state.node_offset > len(snapshot.items):
         raise LLMRequestLogError("invalid_request_log_cursor", "position_out_of_bounds", "请求日志搜索 cursor 目录位置越界")
-    budget = LogSearchBudget(check=admission.check)
+    budget = LLMRequestLogSearchBudget(check=admission.check)
     items: list[WorkspaceLLMRequestLogMatchDTO] = []
     scanned_nodes = scanned_sessions = 0
     reason = None

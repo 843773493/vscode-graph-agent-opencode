@@ -20,6 +20,7 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
+from tests.support.workspaces import clear_test_provider_api_keys
 
 
 @pytest.fixture
@@ -40,9 +41,7 @@ def gateway(
     # 本场景不调用模型，工作区启动不能依赖开发者的个人凭据。
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "private-key-preflight-unused-key"
-        provider.pop("auth", None)
+    clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
     port = integration_port_block_for_file(Path(request.node.path)).port(0)

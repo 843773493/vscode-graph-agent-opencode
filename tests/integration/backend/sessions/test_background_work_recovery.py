@@ -15,15 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_contracts import (
-    BackgroundTaskDescriptor,
-    BackgroundToolResultIdentity,
-)
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.background_work import (
+    BackgroundTaskDescriptor,
+    BackgroundToolResultIdentity,
+)
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -32,15 +30,17 @@ from app.domain.itemized.identity.item_projection import (
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.background_work_handlers import (
-    SystemTimeEmitterHandler,
-)
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
+)
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.system_time_emitter import (
+    SystemTimeEmitterHandler,
 )
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
@@ -50,10 +50,10 @@ from tests.support.background_work import ControlledBackgroundHandler
 _PROCESS = r'''
 import asyncio, os, sys
 from pathlib import Path
-from app.core.background_task_contracts import BackgroundTaskDescriptor
-from app.core.background_task_registry import BackgroundTaskRegistry
+from app.domain.background_work import BackgroundTaskDescriptor
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.domain.itemized.hashing import sha256_jcs
-from app.services.infrastructure.background_work_handlers import SystemTimeEmitterHandler
+from app.services.orchestration.background_work.system_time_emitter import SystemTimeEmitterHandler
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.support.session_catalog_owner import fixture_catalog_scope
@@ -256,7 +256,7 @@ async def test_process_exit_after_canonical_commit_before_ack_reconciles_exact_b
     identity = BackgroundToolResultIdentity(model_call_id="model-consumer", tool_call_id="collect-call")
     consumption_id = software_tool_operation_id("background_collect", case.session_id, case.thread_id,
         identity.model_call_id, identity.tool_call_id)
-    bus = BackgroundMessageBus(store=case.store)
+    bus = BackgroundMailbox(store=case.store)
     await bus.emit(case.session_id, case.thread_id, "agent", "stop", message_id="consumer-stop", kind="interrupt")
     batch = await bus.collect(case.session_id, case.thread_id, "agent", consumption_id=consumption_id,
         timeout_seconds=1, tool_result_identity=identity)
@@ -267,7 +267,7 @@ async def test_process_exit_after_canonical_commit_before_ack_reconciles_exact_b
     assert process.returncode == 83, output.decode()
     with case.store.control(case.session_id, read_only=True) as control:
         assert len(control.unacknowledged_background_consumptions()) == 1
-    cold = BackgroundMessageBus(store=case.store)
+    cold = BackgroundMailbox(store=case.store)
     assert await cold.reconcile(RolloutCheckpointSaver(case.store.sessions_dir)) == 1
     assert await cold.reconcile(saver) == 0
     with case.store.control(case.session_id, read_only=True) as control:
@@ -280,7 +280,7 @@ async def test_canonical_batch_ack_reuses_one_control_store_connection(
     process_case: BackgroundCase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     case = process_case
-    bus = BackgroundMessageBus(store=case.store)
+    bus = BackgroundMailbox(store=case.store)
     identities = (
         BackgroundToolResultIdentity(
             model_call_id="model-first", tool_call_id="call-first"
@@ -437,7 +437,7 @@ async def test_cold_canonical_locator_uses_exact_index_without_body_read_and_wro
             "full_snapshot_vm_steps": counts["boundary"], "query_plan": plan})
     assert measurements[1]["locator_vm_steps"] == measurements[0]["locator_vm_steps"]
     assert measurements[1]["locator_boundary_vm_steps"] == measurements[0]["locator_boundary_vm_steps"]
-    bus = BackgroundMessageBus(store=case.store)
+    bus = BackgroundMailbox(store=case.store)
     for agent, identity in (
         ("right", BackgroundToolResultIdentity(model_call_id="model-target", tool_call_id="collect-call")),
         ("wrong-model", BackgroundToolResultIdentity(model_call_id="absent-model", tool_call_id="collect-call")),
@@ -447,7 +447,7 @@ async def test_cold_canonical_locator_uses_exact_index_without_body_read_and_wro
         await bus.collect(case.session_id, case.thread_id, agent, consumption_id=software_tool_operation_id(
             "background_collect", case.session_id, case.thread_id, identity.model_call_id, identity.tool_call_id),
             timeout_seconds=1, tool_result_identity=identity)
-    assert await BackgroundMessageBus(store=case.store).reconcile(RolloutCheckpointSaver(case.store.sessions_dir)) == 1
+    assert await BackgroundMailbox(store=case.store).reconcile(RolloutCheckpointSaver(case.store.sessions_dir)) == 1
     with case.store.control(case.session_id, read_only=True) as control:
         pending = control.unacknowledged_background_consumptions()
         assert {(identity.model_call_id, identity.tool_call_id) for _, _, identity in pending} == {
@@ -469,7 +469,7 @@ async def test_cold_canonical_locator_rejects_damaged_commit_without_ack_or_rewr
         initial_execution_id="execution-locator")
     await append_real_tool_results(saver, ["model-target", "model-noise"])
     identity = BackgroundToolResultIdentity(model_call_id="model-target", tool_call_id="collect-call")
-    bus = BackgroundMessageBus(store=case.store)
+    bus = BackgroundMailbox(store=case.store)
     await bus.emit(case.session_id, case.thread_id, "agent", "结束 batch", message_id="damaged-stop", kind="interrupt")
     await bus.collect(case.session_id, case.thread_id, "agent", consumption_id=software_tool_operation_id(
         "background_collect", case.session_id, case.thread_id, identity.model_call_id, identity.tool_call_id),
@@ -498,7 +498,7 @@ async def test_cold_canonical_locator_rejects_damaged_commit_without_ack_or_rewr
     before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in sources]
     expected = "owner/state" if damage == "owner" else "identity 歧义" if damage == "ambiguous" else "真实提交边界"
     with pytest.raises(RuntimeError, match=expected):
-        await BackgroundMessageBus(store=case.store).reconcile(RolloutCheckpointSaver(case.store.sessions_dir))
+        await BackgroundMailbox(store=case.store).reconcile(RolloutCheckpointSaver(case.store.sessions_dir))
     assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in sources] == before
     with case.store.control(case.session_id, read_only=True) as control:
         assert len(control.unacknowledged_background_consumptions()) == 1

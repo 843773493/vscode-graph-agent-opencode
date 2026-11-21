@@ -24,6 +24,8 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+from app.services.business.runtime_reminder import submit_runtime_reminder
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -198,7 +200,8 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
     manifest = json.loads((workspace_root / "rollout-fixture.json").read_text())
     session = next(item for item in manifest["sessions"] if item["session_id"] == STATIC_LONG_SESSION_ID)
     assert session["turn_count"] == 128
-    seed_catalog_session_bundle(sessions_dir, STATIC_LONG_SESSION_ID, title=session["title"], current_provider_id="primary")
+    seed_catalog_session_bundle(sessions_dir, STATIC_LONG_SESSION_ID, title=session["title"],
+                                current_model=ModelReferenceDTO(provider_id="primary", model_id="main"))
     saver = RolloutCheckpointSaver(sessions_dir)
     owner = saver.forks.source.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
     pending = []
@@ -244,6 +247,13 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
         admission = saver.execution_admission(STATIC_LONG_SESSION_ID, thread_id=owner.thread_id, execution_id=execution_id)
         with (session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
               execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
+            if turn_id == "job-0001":
+                submit_runtime_reminder(
+                    checkpointer=saver, session_id=STATIC_LONG_SESSION_ID, thread_id=owner.thread_id,
+                    reminder="大来源冻结正文|" * 16384, response_metadata={"source": "interrupt"},
+                    checkpoint_source="interrupt", event_identity="progressive-large-context",
+                    execution_id=execution_id,
+                )
             assemblies[turn_id] = prepare(saver, key=f"progressive-display:{turn_id}").assembly_id
     for turn_id, execution_id, items, has_result, final_id in pending:
         # 样本先构造推理再插入工具；构造时刻不代表逻辑顺序，统一使用真实提交时刻。
@@ -477,32 +487,29 @@ async def test_rollout_history_around_loading_real_web_chain(
         assert result["defaultProjectionSafe"] is True
         assert result["detailProjectionSafe"] is True
         assert result["canonicalMixedMessageRestored"] is True
-        assert result["responseActionsVisible"] is True
-        assert result["responseActionLabels"] == [
-            "从此消息创建分支",
-            "朗读（暂未开放）",
-            "复制",
-            "有帮助（暂未开放）",
-            "没有帮助（暂未开放）",
-        ]
-        assert result["boundaryResponseActionsVisible"] is True
-        assert result["boundaryResponseActionLabels"] == [
-            "朗读（暂未开放）",
-            "复制（暂无可复制内容）",
-            "有帮助（暂未开放）",
-            "没有帮助（暂未开放）",
-        ]
+        assert result["responseCopyInContextMenu"] is True
+        assert result["boundarySummaryWithoutToolbar"] is True
         assert result["toolDetailsLoaded"] is True
         assert result["largeToolSummarySafe"] is True
         assert result["largeToolDetailsBounded"] is True
         assert result["aroundOrdinals"] == list(range(61, 68))
         assert result["aroundCursorsPresent"] is True
         assert result["aroundBidirectionalSafe"] is True
-        assert result["beforeOrdinals"] == [
+        assert result["beforeOrdinals"][:3] == [
             [121, 122, 123],
             [118, 119, 120],
             [115, 116, 117],
         ]
+        assert len(result["beforeOrdinals"]) == 20
+        assert result["latestWindowRestored"] is True
+        assert result["outlinePreviewCancelled"] is True
+        assert len(result["appendPages"]) == 20
+        assert [sample["ordinals"] for sample in result["appendPages"]] == [
+            list(range(first, first + 3)) for first in range(36, 94, 3)
+        ]
+        assert all(sample["layout"]["restored"] and sample["renderAndAnchorMs"] <= 200
+                   for sample in result["appendPages"])
+        assert len(result["historyRequestSamplesMs"]) == 20
         # SQLite reader 本身远低于该值；这里约束完整浏览器/Gateway 链路，
         # 不把前端渲染预算误当成数据库耗时。
         assert result["historyRequestP95Ms"] < 200

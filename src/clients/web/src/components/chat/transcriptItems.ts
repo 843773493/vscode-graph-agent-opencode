@@ -4,8 +4,11 @@ import type {
   InternalExecutionHistory,
 } from "../../types/backend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
+import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
+import type { TurnResponsePart } from "../../types/backend";
 
 export type ChatTranscriptItem =
+  | { kind: "context_event"; key: string; notices: TurnResponsePart[] }
   | {
       kind: "turn";
       key: string;
@@ -89,6 +92,11 @@ export function chatTranscriptItems(
   const displayItemIds = new Set<string>();
   const displayItemSequences = new Set<number>();
   for (const execution of executions) {
+    for (const event of responsePartsToTimelineItems(execution.response_parts)) {
+      if (event.kind !== "context_event") continue;
+      orderedHistory.push({ item: { kind: "context_event", key: event.id, notices: event.notices },
+        ordinal: logicalItemOrdinal(event.notices[0].context_anchor_ordinal, "context_notice.anchor_ordinal") });
+    }
     for (const displayPart of execution.display_parts) {
       if (!displayPart.item_id || !Number.isSafeInteger(displayPart.item_sequence)
         || displayPart.item_sequence < 1) {

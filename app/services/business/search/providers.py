@@ -25,8 +25,8 @@ from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_history.workspace_search import (
     search_workspace_messages,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 def register_navigation_search(
@@ -98,7 +98,7 @@ def register_history_search(
 
 def register_llm_request_search(
     service: WorkspaceSearchService, catalog: SessionCatalogReadService, sessions: SessionService,
-    logs: LLMRequestLogService,
+    logs: LLMRequestLogReader,
 ) -> None:
     async def content_search(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
         if gateway_id is None:

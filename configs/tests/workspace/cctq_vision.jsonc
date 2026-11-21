@@ -1,28 +1,44 @@
 {
   "$schema": "../../workspace_schema.jsonc",
   "llm": {
-    "providers": [
-      {
-        "id": "backup_3",
-        "endpoint": "https://newapi.hyf2333.top/v1",
-        "model": "gpt-6-luna",
-        "api_key": "${CCTQ_API_KEY}",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "responses",
-          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
-          "replay_policy": {"encrypted_content": "same_source"}
-        },
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max"
+    "providers": {
+      "backup_3": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "api_key": "${CCTQ_API_KEY}",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
             }
+          },
+          "request_options": {
+            "parameters": {
+              "reasoning": {
+                "effort": "max"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
           }
         }
       }
-    ]
+    }
   },
   "default_agent": "default",
   "agents": {
@@ -34,8 +50,11 @@
         "system_prompt": "你是一个图片识别测试助手。回答必须简短、直接，并准确描述用户提供图片中的可见几何图形和颜色。"
       },
       "model": {
-        "primary_provider": "backup_3",
-        "fallback_providers": []
+        "primary": {
+          "provider_id": "backup_3",
+          "model_id": "default"
+        },
+        "fallbacks": []
       },
       "tools": {
         "denylist": [],

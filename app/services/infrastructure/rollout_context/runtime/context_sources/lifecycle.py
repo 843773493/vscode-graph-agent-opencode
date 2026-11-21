@@ -31,9 +31,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceLifecycleMixin:
-        _pending: dict[str, ContextSourceDelta]
+        _pending: dict[str, None]
         _sources: dict[str, SourceState]
-        _queue_delta: Callable[[SourceState], None]
+        _queue_source: Callable[[SourceState], None]
+        _build_source_delta: Callable[[SourceState], ContextSourceDelta]
 
         def observe(self, source_id: str, content: str, *, revision: str | None = None,
                     rebuild: ContextSourceRebuildState | None | EllipsisType = ...) -> SourceObservationResult:
@@ -72,7 +73,7 @@ class SourceLifecycleMixin:
             candidate = self._source_observation_candidate(state, content, revision)
             self._persist_control_state(candidate, operation="observe")
             self._sources[state.source_id] = candidate
-            self._queue_delta(candidate)
+            self._queue_source(candidate)
 
         def _source_observation_candidate(
             self, state: SourceState, content: str, revision: str,
@@ -224,7 +225,7 @@ class SourceLifecycleMixin:
                         selection_sequence=state.selection_sequence,
                         expected_control_revision=state.persisted_state_revision,
                     ))
-                    deltas.append(self._pending[state.source_id])
+                    deltas.append(self._build_source_delta(state))
                     continue
                 frozen = published.get(state.source_id)
                 if frozen is None and (supplier is None or descriptor.resource_uri is None):
@@ -247,6 +248,8 @@ class SourceLifecycleMixin:
                     raise RuntimeError("tracked-source-unavailable: 已发布快照缺少 tracked source: " + state.source_id)
                 if not isinstance(frozen, PublishedContextSourceRevision) or frozen.source_id != state.source_id:
                     raise RuntimeError("context-source-rebuild-conflict: published snapshot source identity 不一致")
+                if state.latest_visible_committed_revision is None and not frozen.content:
+                    continue
                 sources.append(ContextSourceSnapshot(
                     descriptor=descriptor, revision=frozen.revision, content=frozen.content,
                     applied_revision=state.latest_visible_committed_revision, tracked=True,
@@ -278,10 +281,9 @@ class SourceLifecycleMixin:
             current_rebuild: ContextSourceRebuildState | None = self.refresh_context_rebuild_state(rebuild)
             if current_rebuild is not None:
                 return self.prepare_rebuild_sources(current_rebuild)
-            # 目录重绑或模式变更也推进控制 CAS；preparation 冻结当前候选，
-            # 不让更早观察时的 CAS 误伤合法 seal，已冻结 plan 仍独立校验原 CAS。
+            # 对齐最新基准并剔除抵消的变化；diff 和控制 CAS 只在本次冻结时生成。
             for source_id in tuple(self._pending):
-                self._queue_delta(self._sources[source_id])
+                self._queue_source(self._sources[source_id])
             sources = []
             for state in self._sources.values():
                 revision, content = state.latest_revision, state.latest_content
@@ -290,6 +292,8 @@ class SourceLifecycleMixin:
                     # 重建只能携带已经封存的正文，不能重新激活被显式替换的更新。
                     revision, content = state.latest_visible_committed_revision, state.latest_visible_committed_content
                 if revision is None or content is None:
+                    continue
+                if state.latest_visible_committed_revision is None and not content:
                     continue
                 if state.descriptor is None:
                     raise RuntimeError(
@@ -304,7 +308,8 @@ class SourceLifecycleMixin:
                     selection_sequence=state.selection_sequence,
                 ))
             return PendingContextSourceBatch(
-                deltas=tuple(self._pending.values()), sources=tuple(sources),
+                deltas=tuple(self._build_source_delta(self._sources[source_id]) for source_id in self._pending),
+                sources=tuple(sources),
             )
 
         def _source_is_selected(self, state: SourceState) -> bool:
@@ -412,7 +417,7 @@ class SourceLifecycleMixin:
                     state.observed_revisions.clear()
                 else:
                     state.pending_kind = "delta"
-                    self._queue_delta(state)
+                    self._queue_source(state)
             receipt = CommittedContextSourceBatch(
                 deltas=batch.deltas, assembly_id=binding.prefix.assembly_id,
             )

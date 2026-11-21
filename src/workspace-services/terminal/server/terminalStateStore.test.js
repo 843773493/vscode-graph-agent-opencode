@@ -1,6 +1,7 @@
-import { inspect } from "node:util";
+import { inspect, promisify } from "node:util";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ async function createStore(t) {
 }
 const snapshot = (...terminals) => ({ updated_at: "2026-10-20T00:00:00.000Z", terminals });
 const record = (id, title) => ({ terminal_id: id, title });
+const runNode = promisify(execFile);
 
 test("批次原子提交更新、删除和顺序，重开保留完整正文", async t => {
   const store = await createStore(t);
@@ -103,7 +105,17 @@ test("旧JSON不会自动读写；显式导入后只读SQLite，重复导入不�
   await writeFile(legacyFile, original);
   await assert.rejects(store.readRecords(), error => error.cause.message.includes("显式导入"));
   assert.deepEqual(await readdir(store.stateDir), ["terminals.json"]);
-  assert.deepEqual(await store.request("import"), { terminals: 1 });
+  await store.close();
+  const workspaceRoot = path.dirname(path.dirname(store.stateDir));
+  await writeFile(path.join(workspaceRoot, ".boxteam/workspace-identity.json"), JSON.stringify({ workspace_id: store.workspaceId }));
+  const args = ["src/workspace-services/terminal/server/storage/migrations/v3_json_to_v1_sqlite.mjs", "--workspace", workspaceRoot];
+  await assert.rejects(runNode(process.execPath, [...args, "--workspace-id", "00000000-0000-4000-8000-000000000002"]), /工作区 UUID 与权威身份文件不一致/);
+  assert.deepEqual(await readdir(store.stateDir), ["terminals.json"]);
+  const { stdout } = await runNode(process.execPath, [...args, "--workspace-id", store.workspaceId]);
+  assert.deepEqual(JSON.parse(stdout), { workspace_id: store.workspaceId, terminals: 1, database: store.stateFile });
+  const db = new DatabaseSync(store.stateFile);
+  try { assert.equal(db.prepare("PRAGMA user_version").get().user_version, 1); }
+  finally { db.close(); }
   const imported = await store.readRecords();
   assert.deepEqual(imported, JSON.parse(original).terminals);
   await assert.rejects(store.request("import"), error => error.cause.message.includes("已存在"));

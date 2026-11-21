@@ -55,6 +55,10 @@ def test_import_keeps_terminal_output_after_session_deletion_and_advances_accept
     run, = store.runs(task.task_id)
     assert run.run_id == result.run_id and run.trigger_key == "old-scheduler-key" and run.generation == result
     assert store.runs(task.task_id, pending_only=True) == []
+    assert store.generated_for_session("ses_deleted") == {task.task_id}
+    assert store.generated_for_session("ses_deleted", task_id=task.task_id) == {task.task_id}
+    assert store.generated_for_session("ses_deleted", task_id="other-task") == set()
+    assert store.generated_for_session("other-session", task_id=task.task_id) == set()
     assert imported_files(store, request) == {".boxteam/generation-runs/input.json": "b" * 64}
     changed = request.model_copy(update={"source_hash": "c" * 64})
     with pytest.raises(ClientStateConflictError, match="源快照发生变化"):

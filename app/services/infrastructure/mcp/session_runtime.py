@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 import anyio
 import httpx
+from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from langchain_core.tools import BaseTool
 
-from app.core.lifecycle import LifetimeScope
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER

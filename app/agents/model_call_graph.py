@@ -17,8 +17,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.runtime import Runtime
 
-from app.agents.graph_tool_adapter import content_preserving_tool_node
 from app.agents.model_call_execution import ModelCallExecution
+from app.agents.tool_node_adapter import adapt_agent_tool_node
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
 )
@@ -36,7 +36,7 @@ def create_model_call_agent(model, *, execution: ModelCallExecution, **options) 
         if not isinstance(tools_node.runnable, ToolNode):
             raise TypeError("model-call graph 缺少框架 ToolNode")
         graph.builder.nodes["tools"] = replace(
-            tools_node, runnable=content_preserving_tool_node(tools_node.runnable),
+            tools_node, runnable=adapt_agent_tool_node(tools_node.runnable),
         )
     node = graph.builder.nodes["model"]
     runnable = node.runnable

@@ -9,6 +9,46 @@ from __future__ import annotations
 import httpx
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.core.identifier import create_prefixed_id
+from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
+
+
+def new_message_operation_id() -> str:
+    """为一个逻辑消息请求生成稳定身份。"""
+    return create_prefixed_id("op")
+
+
+def with_message_run_operation_id(payload: dict[str, object]) -> dict[str, object]:
+    """给消息请求补上身份；重试时复用同一个 payload 会保留原身份。"""
+    if "operation_id" not in payload:
+        payload["operation_id"] = new_message_operation_id()
+    return payload
+
+
+def running_job_dispatch_snapshot(
+    session_id: str,
+    thread_id: str,
+    job_id: str,
+    *,
+    queued_job_count: int,
+    queue_snapshot_version: int,
+) -> JobDispatchSnapshotDTO:
+    """构造具有完整队列水位的运行中 JOB_STARTED 测试快照。"""
+    return JobDispatchSnapshotDTO(
+        session_id=session_id,
+        thread_id=thread_id,
+        job_id=job_id,
+        job_status="running",
+        active_job_id=job_id,
+        blocked_by_job_id=None,
+        queued_jobs_ahead=0,
+        queued_job_count=queued_job_count,
+        pending_job_count=queued_job_count + 1,
+        delivery_policy=None,
+        enqueue_sequence=None,
+        queue_snapshot_version=queue_snapshot_version,
+    )
+
 
 async def create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/v1/sessions", json={"title": title})
@@ -20,6 +60,23 @@ async def create_session(client: httpx.AsyncClient, title: str) -> str:
     if not isinstance(session_id, str) or not session_id:
         raise AssertionError(f"创建会话成功响应缺少有效 session_id: {response.text}")
     return session_id
+
+
+async def read_job_trace(
+    client: httpx.AsyncClient, session_id: str, job_id: str,
+    *, headers: dict[str, str] | None = None,
+) -> list[dict]:
+    """经唯一 Trace HTTP 入口分页读取指定 Job 的原始事件。"""
+    events = []
+    params: dict[str, str | int] = {"limit": 200}
+    while True:
+        response = await client.get(f"/api/v1/sessions/{session_id}/traces", params=params, headers=headers)
+        assert response.status_code == 200, response.text
+        page = response.json()["data"]
+        events.extend(item["raw"] for item in page["items"] if item["job_id"] == job_id)
+        if page["next_cursor"] is None:
+            return events
+        params["cursor"] = page["next_cursor"]
 
 
 def checkpoint_fixture(

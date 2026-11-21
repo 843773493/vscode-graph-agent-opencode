@@ -1,31 +1,18 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
-import type { TurnProjectionState } from "../../state/session/turnTimeline";
 
 export default function ChatHistoryPageHeader({
-  projectionState,
-  hasOlderMessages,
   loadingOlderMessages,
   error,
   onRetry,
 }: {
-  projectionState: TurnProjectionState;
-  hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
   error: string | null;
   onRetry: () => void;
 }): React.ReactNode {
   return (
-    <div className="chat-history-page-header">
-      {projectionState === "partial" ? (
-        <span role="status">{t("chat.history.migratingOlder")}</span>
-      ) : hasOlderMessages ? (
-        <span role="status">
-          {loadingOlderMessages ? t("chat.history.loadingOlder") : t("chat.history.scrollOlder")}
-        </span>
-      ) : (
-        <span>{t("chat.history.start")}</span>
-      )}
+    <div className="chat-history-page-header" aria-busy={loadingOlderMessages}>
+      {loadingOlderMessages && !error ? <span className="chat-history-page-progress codicon codicon-loading codicon-modifier-spin" role="status" aria-label={t("chat.history.loadingOlder")} /> : null}
       {error ? (
         <div className="chat-history-page-error" role="alert" title={error}>
           <span className="chat-history-page-error-message">{error}</span>

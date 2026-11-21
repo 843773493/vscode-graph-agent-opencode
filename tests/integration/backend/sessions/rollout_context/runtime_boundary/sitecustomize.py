@@ -10,7 +10,7 @@ from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType
 
-LEGACY_IMPORT_ROOT = "app.services.infrastructure.rollout_context.migration"
+LEGACY_IMPORT_ROOT = "app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl"
 _OBSERVED = (
     "tests.integration.backend.sessions.rollout_context._history_storage_app",
     "app.services.infrastructure.rollout_context.checkpoint.saver",

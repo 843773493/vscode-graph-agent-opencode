@@ -54,6 +54,7 @@ function sourceFixture(targetPlatform, scenario) {
   mkdirSync(path.join(root, "src/clients/workbench"), { recursive: true });
   mkdirSync(path.join(root, "src/clients/shared"), { recursive: true });
   mkdirSync(path.join(root, "scripts/plugins"), { recursive: true });
+  mkdirSync(path.join(root, "sdk"), { recursive: true });
   return root;
 }
 
@@ -168,6 +169,7 @@ function observeHostPathOrdering(projectRoot, targetPlatform) {
       const filesystem = {
         lstatSync: (file) => fs.lstatSync(realPath(file)),
         readdirSync: (file, options) => fs.readdirSync(realPath(file), options),
+        readFileSync: (file, ...args) => fs.readFileSync(realPath(file), ...args),
         readlinkSync: (file) => fs.readlinkSync(realPath(file)),
         openSync: (file, flags) => {
           openedPaths.push(relative(file).split(hostPath.sep).join("/"));
@@ -200,6 +202,23 @@ function observeHostPathOrdering(projectRoot, targetPlatform) {
 
 describe("构建输入指纹的文件读取", () => {
   for (const targetPlatform of Object.keys(golden)) {
+    test(`${targetPlatform}SDK安装元数据不触发重建，真实源码变化仍失效`, () => {
+      const projectRoot = sourceFixture(targetPlatform, "sdk-editable-metadata");
+      const source = path.join(projectRoot, "sdk/python/src/boxteam_plugin_sdk/lifecycle.py");
+      mkdirSync(path.dirname(source), { recursive: true });
+      writeFileSync(source, "# 原 SDK 实现\n");
+      const fingerprint = () => computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      const original = fingerprint();
+      for (const relative of ["sdk/python/src/boxteam_plugin_sdk.egg-info/PKG-INFO", "sdk/python/build/lib/cached.py"]) {
+        const file = path.join(projectRoot, relative);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, "安装时生成的元数据与缓存\n");
+      }
+      expect(fingerprint()).toBe(original);
+      writeFileSync(source, "# 修改后的 SDK 实现\n");
+      expect(fingerprint()).not.toBe(original);
+    });
+
     test(`${targetPlatform}在POSIX和Windows路径规则下使用相同顺序及指纹`, () => {
       const projectRoot = sourceFixture(targetPlatform, "cross-host-paths");
       for (const relative of ["app/a/nested.py", "app/a0.py", "app/树/叶.py", "app/树0.py"]) {
@@ -231,6 +250,28 @@ describe("构建输入指纹的文件读取", () => {
         "export const validate = () => false;\n",
       );
       expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(initialFingerprint);
+    });
+
+    test(`${targetPlatform}规范化构建生成JSON的行尾但保留其他输入原字节`, () => {
+      const projectRoot = sourceFixture(targetPlatform, "clean-line-endings");
+      const textPath = path.join(projectRoot, "src/clients/shared/core/i18n/actionTitles.en.json");
+      mkdirSync(path.dirname(textPath), { recursive: true });
+      writeFileSync(textPath, "{\"value\":1}\n");
+      const textFingerprint = computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      writeFileSync(textPath, "{\"value\":1}\r\n");
+      expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).toBe(textFingerprint);
+
+      const otherTextPath = path.join(projectRoot, "src/clients/shared/core/i18n/bootstrapMessages.json");
+      writeFileSync(otherTextPath, "{\"value\":1}\r\n");
+      const otherTextFingerprint = computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      writeFileSync(otherTextPath, "{\"value\":1}\n");
+      expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).toBe(otherTextFingerprint);
+
+      const binaryPath = path.join(projectRoot, "resources/payload.bin");
+      writeFileSync(binaryPath, Buffer.from([0x00, 0x0d, 0x0a, 0x41]));
+      const binaryFingerprint = computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      writeFileSync(binaryPath, Buffer.from([0x00, 0x0a, 0x41]));
+      expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(binaryFingerprint);
     });
 
     test(`${targetPlatform}的客户端共享词典变化使发布缓存失效`, () => {

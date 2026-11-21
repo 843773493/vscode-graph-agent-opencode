@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.services.infrastructure.turn_history.trace_database import TraceDatabase
+from app.services.infrastructure.session_trace.trace_database import TraceDatabase
 
 
 def trace_bytes(path: Path) -> bytes:

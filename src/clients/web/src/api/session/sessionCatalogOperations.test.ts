@@ -162,6 +162,20 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
     expect(snapshot.catalog_revision).toBe(12);
     expect(snapshot.event_seq_watermark).toBe(7);
   });
+
+  test("snapshot透传105下限，103和其它工作区都拒绝", async () => {
+    let revision = 105;
+    let workspaceId = workspaceTarget.workspace_id as string;
+    installSessionApiFetchMock(({ url }) => {
+      expect(new URL(url).searchParams.get("minimum_catalog_revision")).toBe("105");
+      return Response.json({ data: { workspace_id: workspaceId, catalog_revision: revision, event_seq_watermark: 7, generation: 12 }, request_id: "req-floor" });
+    });
+    expect((await fetchSessionCatalogSnapshot(48_509, workspaceTarget, { minimumCatalogRevision: 105 })).catalog_revision).toBe(105);
+    revision = 103;
+    await expect(fetchSessionCatalogSnapshot(48_509, workspaceTarget, { minimumCatalogRevision: 105 })).rejects.toThrow();
+    revision = 105; workspaceId = "other";
+    await expect(fetchSessionCatalogSnapshot(48_509, workspaceTarget, { minimumCatalogRevision: 105 })).rejects.toThrow();
+  });
 });
 
 describe("会话目录 navigation 事件 channel", () => {

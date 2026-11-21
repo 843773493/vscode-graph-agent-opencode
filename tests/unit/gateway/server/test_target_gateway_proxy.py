@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -16,12 +18,13 @@ from starlette.responses import Response
 from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import LOCAL_TOKEN, get_gateway_local_token
+from app.gateway.control.catalog_search import (
+    GatewaySessionCatalogSearchService,
+    _CatalogSnapshot,
+)
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
-from app.gateway.federation.grants import (
-    ContextGrantTarget,
-    ResourceNavigationGrantTarget,
-)
+from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -29,9 +32,18 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.resource_navigation import router as navigation_router
 from app.gateway.server.text_mutation import router as text_mutation_router
 from app.gateway.server.workspace_proxy import router
-from app.services.business.session_context_resource import (
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    ResourceNavigationGrantTarget,
+)
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
+from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
+)
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
 )
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -61,6 +73,8 @@ class Proxy:
     requests: list[httpx.Request]
     relay: Relay
     credentials: FederationCredentialStore
+    catalog: GatewaySessionCatalogSearchService
+    policy: FederationPolicyStore
 
 
 @pytest.fixture
@@ -115,15 +129,22 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
     app.include_router(router)
     app.state.registry = registry
     app.state.gateway_id = gateway_id
+    policy = FederationPolicyStore()
+    app.state.federation_policy_store = policy
     relay = Relay(gateway_id)
     app.state.federation_rpc_service = relay
     async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as upstream:
         app.state.http_client = app.state.streaming_http_client = upstream
+        catalog = GatewaySessionCatalogSearchService(registry=registry, http_client=upstream, cache_dir=tmp_path / "catalog-index", gateway_id=gateway_id)
+        app.state.session_catalog_search_service = catalog
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test",
                                     headers={"X-Local-Token": get_gateway_local_token()}) as client:
             try:
-                yield Proxy(client, registry, gateway_id, forwarded, relay, credentials)
+                yield Proxy(client, registry, gateway_id, forwarded, relay, credentials, catalog, policy)
             finally:
+                for task in tuple(catalog._in_flight.values()):
+                    task.cancel()
+                await asyncio.gather(*catalog._in_flight.values(), return_exceptions=True)
                 registry.close()
 
 
@@ -151,6 +172,72 @@ async def test_canonical_workspace_route_uses_target_gateway_without_merging_equ
         assert "X-Local-Token" not in outgoing.headers
     assert state.registry.active_workspace == (state.gateway_id, WORKSPACE_ID)
     assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
+
+
+@pytest.mark.parametrize("path,scope", [("children", {"parent_node_id": "folder"}), ("breadcrumb/folder", {}), ("export", {"node_id": "folder"})])
+async def test_catalog_mirror_keeps_owner_request_and_105_minimum_on_authoritative_fallback(target_proxy: Proxy, path, scope):
+    state = target_proxy
+    owner = GatewaySearchWorkspaceOwnerDTO(gateway_id=state.gateway_id, workspace_id=WORKSPACE_ID)
+    snapshot = _CatalogSnapshot(owner, 103, catalog_projection_revision(103, "config"), datetime.now(UTC), {
+        "folder": SessionCatalogNodeDTO(node_id="folder", kind="folder", name="镜像目录", node_revision=1, folder_id="folder"),
+    })
+    state.catalog._snapshots[owner] = snapshot
+    state.catalog._confirmed_at[owner] = datetime.now(UTC)
+    headers = {TARGET_GATEWAY_ID_HEADER: state.gateway_id, "X-BoxTeam-Workspace-Id": WORKSPACE_ID, "X-Request-ID": "req_catalog_scope"}
+    response = await state.client.get(f"/api/v1/session-catalog/{path}", params=scope, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["catalog_revision"] == 103
+    assert response.json()["data"]["sync"]["source"] == "gateway_mirror"
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req_catalog_scope"
+    assert state.requests == []
+    response = await state.client.get(f"/api/v1/session-catalog/{path}", params={**scope, "minimum_catalog_revision": 105}, headers=headers)
+    assert response.status_code == 200, response.text
+    foreground, = [request for request in state.requests if not request.url.path.endswith("/version")]
+    assert foreground.url.host == "local.test" and foreground.url.params["minimum_catalog_revision"] == "105"
+    assert foreground.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+    assert foreground.headers["X-BoxTeam-Gateway-Id"] == state.gateway_id
+    assert foreground.headers["X-Request-ID"] == "req_catalog_scope"
+    assert state.catalog._snapshots[owner] is snapshot
+    assert state.registry.route_reference_counts((state.gateway_id, WORKSPACE_ID)) == (0, 0)
+
+
+@pytest.mark.parametrize("path,scope", [("children", {"parent_node_id": "folder"}), ("breadcrumb/folder", {}), ("export", {"node_id": "folder"})])
+@pytest.mark.parametrize("target_gateway", [None, REMOTE_GATEWAY_IDS[0]])
+async def test_same_catalog_number_with_changed_projection_uses_authoritative_range(target_proxy: Proxy, path, scope, target_gateway):
+    state = target_proxy
+    owner = GatewaySearchWorkspaceOwnerDTO(gateway_id=target_gateway or state.gateway_id, workspace_id=WORKSPACE_ID)
+    state.catalog._snapshots[owner] = _CatalogSnapshot(owner, 105, "old-config", datetime.now(UTC), {
+        "folder": SessionCatalogNodeDTO(node_id="folder", kind="folder", name="旧投影", node_revision=1, folder_id="folder"),
+    })
+    state.catalog._confirmed_at[owner] = datetime.now(UTC)
+    headers = {TARGET_GATEWAY_ID_HEADER: owner.gateway_id, "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
+        "X-BoxTeam-Catalog-Revision": "new-config", "X-Request-ID": "req_config_projection"}
+    response = await state.client.get(f"/api/v1/session-catalog/{path}", params={**scope, "minimum_catalog_revision": 105}, headers=headers)
+    assert response.status_code == 200, response.text
+    foreground, = [request for request in state.requests if not request.url.path.endswith("/version")]
+    assert foreground.url.params["minimum_catalog_revision"] == "105"
+    assert foreground.headers["X-BoxTeam-Catalog-Revision"] == "new-config"
+    assert foreground.url.host == ("remote-0.test" if target_gateway else "local.test")
+    assert foreground.headers["X-Request-ID"] == response.json()["request_id"] == "req_config_projection"
+    assert state.registry.route_reference_counts((owner.gateway_id, WORKSPACE_ID)) == (0, 0)
+
+
+@pytest.mark.parametrize("path", ["children", "version", "snapshot"])
+async def test_catalog_read_permission_revocation_blocks_cached_and_authoritative_disclosure(target_proxy: Proxy, path):
+    state = target_proxy
+    owner = GatewaySearchWorkspaceOwnerDTO(gateway_id=state.gateway_id, workspace_id=WORKSPACE_ID)
+    state.catalog._snapshots[owner] = _CatalogSnapshot(owner, 105, "r105", datetime.now(UTC), {})
+    state.catalog._confirmed_at[owner] = datetime.now(UTC)
+    state.policy.publish({"rules": [{"capability": "read", "effect": "deny"}]})
+    credential = state.credentials.get("rgw_0")
+    headers = {"X-Local-Token": "", "X-BoxTeam-Federation-Token": credential.token,
+        "X-BoxTeam-Gateway-Id": state.gateway_id, "X-BoxTeam-Workspace-Id": WORKSPACE_ID, "X-Request-ID": "req_catalog_revoked"}
+    response = await state.client.get(f"/api/v1/session-catalog/{path}", headers=headers)
+    assert response.status_code == 403, response.text
+    assert "read" in response.json()["detail"]
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req_catalog_revoked"
+    assert state.requests == []
+    assert state.registry.route_reference_counts((state.gateway_id, WORKSPACE_ID)) == (0, 0)
 
 
 @pytest.mark.parametrize("index", [None, 0, 1])

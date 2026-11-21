@@ -65,7 +65,7 @@ def test_initialization_failure_with_successful_close_allows_retry(
     connection = catalog.connection
     assert connection is connections[1] and initialization_attempts == 2
     assert connection.in_transaction is False
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_initialization_failure_with_close_failure_isolates_catalog(

@@ -4,6 +4,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../../support/operation_ids.mjs';
 
 const required = name => {
   if (!process.env[name]) throw new Error(`Session 分支验收缺少 ${name}`);
@@ -88,7 +89,7 @@ try {
   await testControl({ action: 'plan_model', session_id: beta.session_id,
     thread_id: betaMain.thread_id, interactions });
   const accepted = await api(`/api/v1/sessions/${beta.session_id}/threads/${betaMain.thread_id}/messages`, owner,
-    { message: { content: '为 Session fork 验收创建真实来源消息。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '为 Session fork 验收创建真实来源消息。' }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

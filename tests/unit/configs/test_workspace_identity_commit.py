@@ -19,12 +19,74 @@ from configs.cli import main
 from configs.maintenance import runtime_logging_commit as publisher
 from configs.maintenance.workspace_identity_commit import (
     commit_workspace_identity_migration,
+    read_completed_client_recovery,
 )
 from tests.unit.configs.conftest import LegacyGateway
 
 
 def commit(case: LegacyGateway, **options):
     return commit_workspace_identity_migration(gateway_root=case.root, project_root=Path.cwd(), **options)
+
+
+def test_client_can_read_committed_mapping_without_export_file_or_database_writes(legacy_gateway: LegacyGateway) -> None:
+    case = legacy_gateway
+    result = commit(case)
+    exported = Path(result["recovery_output"])
+    expected = json.loads(exported.read_text())
+    exported.unlink()
+    before = case.dump()
+    actual = read_completed_client_recovery(gateway_root=case.root, gateway_id=case.gateway_id)
+    assert actual is not None and actual.model_dump() == expected
+    assert case.dump() == before and not exported.exists()
+
+
+def test_client_recovery_requires_committed_matching_origin(legacy_gateway: LegacyGateway) -> None:
+    case = legacy_gateway
+    assert read_completed_client_recovery(gateway_root=case.root, gateway_id=case.gateway_id) is None
+    commit(case)
+    path = case.root / ".workspace-identity-migration.json"
+    original = json.loads(path.read_text())
+    with pytest.raises(ValueError, match="不一致"):
+        read_completed_client_recovery(gateway_root=case.root, gateway_id="gateway_other")
+    for changed in ({"state": "applying"}, {"gateway_root": str(case.directory)}, {"state": "restored"}):
+        path.write_text(json.dumps({**original, **changed}))
+        if changed.get("state") == "restored":
+            assert read_completed_client_recovery(gateway_root=case.root, gateway_id=case.gateway_id) is None
+        else:
+            with pytest.raises(ValueError, match="尚未完成或属于另一"):
+                read_completed_client_recovery(gateway_root=case.root, gateway_id=case.gateway_id)
+
+
+@pytest.fixture
+def recovery_client(legacy_gateway: LegacyGateway):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.trace_middleware import TraceMiddleware
+    from app.gateway.auth import verify_gateway_token
+    from app.gateway.routes._shared import get_registry
+    from app.gateway.routes.workspaces import router
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(router)
+    application.dependency_overrides[verify_gateway_token] = lambda: "test-token"
+    application.dependency_overrides[get_registry] = lambda: SimpleNamespace(gateway_id=legacy_gateway.gateway_id)
+    with TestClient(application) as client:
+        yield client
+
+
+def test_client_recovery_http_exposes_only_completed_public_mapping(legacy_gateway: LegacyGateway, recovery_client) -> None:
+    response = recovery_client.get("/api/gateway/client-recovery")
+    assert response.status_code == 200 and response.json()["data"]["workspace_identity"] is None
+    result = commit(legacy_gateway)
+    response = recovery_client.get("/api/gateway/client-recovery", headers={"X-Request-ID": "client-recovery-request"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "client-recovery-request"
+    assert response.json()["data"] == {"gateway_id": legacy_gateway.gateway_id,
+        "workspace_identity": json.loads(Path(result["recovery_output"]).read_text())}
+    assert "backup_root" not in response.text and "assets" not in response.text
 
 
 def test_full_legacy_state_migrates_to_single_owner_and_keeps_views_and_shared_group(legacy_gateway: LegacyGateway) -> None:

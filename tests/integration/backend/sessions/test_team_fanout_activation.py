@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import json
 import sqlite3
 import sys
@@ -15,10 +16,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import (
     get_session_creation_service,
     get_session_path_resolver,
@@ -33,6 +34,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.team import TeamBoardDTO, TeamEventDTO
 from app.services.business.resource_derivations.team import (
     TEAM_EVENT_SOURCE_ID,
@@ -58,8 +60,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
+)
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.team.store import TeamStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -87,7 +92,7 @@ from app.core.session_control_store import SessionControlStore
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.owner_thread_creation_factory import OwnerThreadCreationFactory
 from app.services.orchestration.team.fanout_service import TeamFanoutService
 from tests.support.session_catalog_owner import fixture_catalog_scope
@@ -136,7 +141,8 @@ async def team_case(request):
     context, _, workspace = prepare_session_test_workspace(test_file=Path(request.node.path), node_id=request.node.nodeid)
     workspace_id = load_or_create_workspace_id(workspace)
     sessions_root = workspace / ".boxteam/sessions"
-    bundle = seed_catalog_session_bundle(sessions_root, SESSION)
+    bundle = seed_catalog_session_bundle(sessions_root, SESSION,
+        current_model=ModelReferenceDTO(provider_id="test-provider", model_id="test-model"))
     with workspace_context(workspace_id, workspace):
         resolver = get_session_path_resolver(sessions_root)
         saver = RolloutCheckpointSaver(sessions_root)
@@ -238,7 +244,35 @@ def subscribe(case, *, thread=None, fanout=None):
 def observation_rows(case, thread):
     index = case.saver._storage.storage.index_path(SESSION, "", thread_id=thread)
     with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
-        return connection.execute("SELECT ledger_revision,event_hash,payload_json FROM team_source_observations ORDER BY ledger_revision").fetchall()
+        return connection.execute("SELECT ledger_revision,event_hash,facet_hashes_json FROM team_source_observations ORDER BY ledger_revision").fetchall()
+
+
+@pytest.mark.asyncio
+async def test_schema27_receipts_preserve_frozen_facets_after_explicit_upgrade(team_case):
+    case = team_case
+    await create_member(case, "migration-member")
+    await case.fanout.reconcile(SESSION)
+    expected = observation_rows(case, case.main)
+    storage = case.saver._storage.storage
+    with sqlite3.connect(storage.index_path(SESSION, "", thread_id=case.main)) as connection:
+        connection.execute("ALTER TABLE team_source_observations RENAME COLUMN facet_hashes_json TO payload_json")
+        for revision, _event_hash, _hashes in expected:
+            payload = json.loads(case.control.get_collaboration_fanout(revision).payload_json)
+            for member in payload["members"]:
+                member["task_seed"] = case.control.get_collaboration_member(member["delegation_id"]).task_seed
+                del member["team_id"]
+            connection.execute("UPDATE team_source_observations SET payload_json=? WHERE ledger_revision=?",
+                               (json.dumps(payload), revision))
+        connection.execute("UPDATE database_meta SET schema_version=27")
+        connection.execute("UPDATE schema_migrations SET to_version=27,migration_name='rollout_sqlite_v27',migration_checksum=? WHERE from_version=0",
+                           (hashlib.sha256(b"rollout_sqlite_v27").hexdigest(),))
+    case.saver = RolloutCheckpointSaver(case.root)
+    case.saver._storage.storage.migrate_schema(case.main, session_id=SESSION, to_version=28,
+        migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL)
+    assert observation_rows(case, case.main) == expected
+    for revision, event_hash, _hashes in expected:
+        case.saver.require_team_source_observation(SESSION, case.main, ledger_revision=revision,
+            event_hash=event_hash, payload_json=case.control.get_collaboration_fanout(revision).payload_json)
 
 
 def admission(case, ordinal):

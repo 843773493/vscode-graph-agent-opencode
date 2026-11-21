@@ -1,3 +1,4 @@
+import { selectPluginScope, pluginScopeAction } from './service_plugin_controls.mjs';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
@@ -39,13 +40,15 @@ async function scenario() {
   const starts = async () => (await readFile(input.attempts, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   const view = page.locator('.service-plugin-packages-view'), quick = page.locator('.quick-input-widget');
+  const details = page.locator('.service-plugin-editor:visible');
+  await selectPluginScope(page, 'gateway');
   const pick = async label => { await expect(quick).toBeVisible(); await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click(); };
   if (input.phase === 'missing-repair' || input.phase === 'missing-remove') {
     result.phase = input.phase;
     const binding = view.locator('section[aria-label="安装声明不可用的插件绑定"]');
     await expect(binding).toHaveCount(1);
     await expect(binding.getByRole('heading')).toHaveText('proof.version-failures/probe@1.0.0');
-    await expect(binding.locator('[data-plugin-runtime-value]')).toContainText('启用 @1.0.0 · 实际：failed');
+    await expect(binding.locator('[data-plugin-runtime-value]')).toContainText('启用 @1.0.0 · 实际：失败');
     await expect(binding.locator('[data-plugin-runtime-error]')).toContainText('插件包版本不存在');
     await expect(binding.getByRole('button', { name: '编辑参数 JSON', exact: true })).toHaveCount(0);
     assert.equal((await starts()).length, input.expectedStarts);
@@ -70,17 +73,17 @@ async function scenario() {
   } else {
     const packages = input.phase === 'missing-prepare' ? input.packages.slice(0, 1) : input.packages;
     for (let i = 0; i < packages.length; i++) {
-      await view.getByRole('button', { name: '安装插件包', exact: true }).click(); await pick('ZIP 文件');
+      await (await pluginScopeAction(page, '安装插件包')).click({ delay: 150 }); await pick('ZIP 文件');
       const field = quick.locator('input').first(); await field.fill(packages[i]); await field.press('Enter');
       await expect(view.locator('.service-plugin-package')).toHaveCount(i + 1);
     }
   }
   const row = version => view.locator('.service-plugin-package').filter({
-    has: page.getByRole('heading', { name: `换版失败探针包 · proof.version-failures@${version}`, exact: true }),
+    has: page.getByText(`换版失败探针包 · proof.version-failures@${version}`, { exact: true }),
   });
-  const open = async version => { await row(version).getByRole('button', { name: '运行探针 · probe', exact: true }).click(); };
+  const open = async version => { await row(version).getByRole('listitem', { name: '运行探针 · probe', exact: true }).click(); };
   const apply = async (version, action) => {
-    await open(version); await view.getByRole('button', { name: action, exact: true }).click();
+    await open(version); await details.getByRole('button', { name: action, exact: true }).click();
     await pick('gateway_mutable_override');
     const saved = page.waitForResponse(response => response.request().method() === 'PUT'
       && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
@@ -90,18 +93,18 @@ async function scenario() {
     assert.equal(receipt.request_id, response.headers()['x-request-id']);
     assert.equal(receipt.data.edit.source_saved, true); assert.equal(receipt.data.edit.state, 'active');
     result.receipts.push({ action, version, ...receipt });
-    await expect(view.getByLabel('插件配置与运行版本')).toContainText(`配置：启用 @${version}`);
+    await expect(details.getByLabel('插件配置与运行版本')).toContainText(`配置：启用 @${version}`);
   };
   const call = item => api(`/api/gateway/service-plugins/${item.binding.package_id}/probe/instances/${item.instance.instance_id}/services/echo/value?package_version=${item.instance.package_version}`);
   const restart = async version => {
     await open(version);
     const completed = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
-    await view.getByRole('button', { name: '重启实例', exact: true }).click();
+    await details.getByRole('button', { name: '重启实例', exact: true }).click();
     const response = await completed; assert.equal(response.status(), 200);
     const receipt = await response.json(); assert.equal(receipt.request_id, response.headers()['x-request-id']);
     result.receipts.push({ restart: version, ...receipt });
-    await expect(view.getByLabel('插件配置与运行版本')).toContainText(`实际：ready @${version}`);
+    await expect(details.getByLabel('插件配置与运行版本')).toContainText(`实际：已就绪 @${version}`);
     return status();
   };
   if (input.phase === 'missing-repair') {
@@ -118,14 +121,14 @@ async function scenario() {
 
   result.phase = 'start-failure';
   await apply('2.0.0', '切换到此版本（保留开关）');
-  await expect(view.getByLabel('插件运行失败原因')).toContainText('启动实例失败: 插件在 ready 前退出: exit_code=23');
-  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：failed · 尚无 ready 实例回执');
+  await expect(details.getByLabel('插件运行失败原因')).toContainText('启动实例失败: 插件在 ready 前退出: exit_code=23');
+  await expect(details.getByLabel('插件配置与运行版本')).toContainText('实际：失败 · 尚无 ready 实例回执');
   const failed = await status(); assert.equal(failed.binding.package_version, '2.0.0'); assert.equal(failed.binding.enabled, true);
   assert.equal(failed.instance, null); assert.equal((await call(original)).status, 409);
   assert.equal((await source()).source_effective.plugins.runtime.entries[0].package_version, '2.0.0');
   for (let i = 0; i < 2; i++) {
     await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
-    await expect(view.getByLabel('插件运行失败原因')).toContainText('启动实例失败');
+    await expect(details.getByLabel('插件运行失败原因')).toContainText('启动实例失败');
   }
   assert.deepEqual((await starts()).map(item => item.version), ['1.0.0', '2.0.0']);
   result.exitedPids.push(original.instance.process_id, (await starts())[1].pid);
@@ -140,8 +143,8 @@ async function scenario() {
   const beforeStop = await status(); assert.equal(beforeStop.state, 'ready');
   result.exitedPids.push(recovered.instance.process_id);
   await apply('1.0.0', '切换到此版本（保留开关）');
-  await expect(view.getByLabel('插件运行失败原因')).toContainText('停止原实例失败（原运行版本 3.0.0；未启动新实例）: 插件 shutdown 回执失败；原进程已核实退出');
-  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：failed @3.0.0');
+  await expect(details.getByLabel('插件运行失败原因')).toContainText('停止原实例失败（原运行版本 3.0.0；未启动新实例）: 插件 shutdown 回执失败；原进程已核实退出');
+  await expect(details.getByLabel('插件配置与运行版本')).toContainText('实际：失败 @3.0.0');
   const stopped = await status(); assert.equal(stopped.binding.package_version, '1.0.0'); assert.equal(stopped.binding.enabled, true);
   assert.deepEqual(stopped.instance, beforeStop.instance);
   assert.equal((await call(beforeStop)).status, 409); assert.equal((await starts()).length, 4);

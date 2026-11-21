@@ -1,6 +1,8 @@
 from typing import cast
 
 import pytest
+from boxteam.browser.v1 import browser_pb2
+from boxteam.terminal.v1 import terminal_pb2
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from app.gateway.protocol.control import gateway_health_to_proto
@@ -9,8 +11,6 @@ from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
 )
-from app.protocol.generated.boxteam.browser.v1 import browser_pb2
-from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.schemas.gateway.diagnostics import GatewayHealthDTO
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 

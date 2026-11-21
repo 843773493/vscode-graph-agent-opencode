@@ -7,10 +7,11 @@ from time import time
 from typing import NoReturn
 
 import httpx
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from pydantic import ValidationError
 
 from app.core.failures import report_failure
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.diagnostic_log_transport import read_diagnostic_log_target
 from app.gateway.registry import GatewayWorkspaceRegistry

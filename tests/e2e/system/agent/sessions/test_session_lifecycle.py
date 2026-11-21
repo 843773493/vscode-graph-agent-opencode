@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.core.workspace_identity import read_workspace_id
+from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.ports import e2e_port_block_for_file
@@ -131,10 +132,10 @@ async def test_create_session_and_send_message(client: httpx.AsyncClient):
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "简单回复一句话：你好，我是测试助手"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -155,10 +156,10 @@ async def test_full_session_flow(client: httpx.AsyncClient):
 
     start_job_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "你好，请简单回复一句话。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert start_job_response.status_code == 200
     job_id = start_job_response.json()["data"]["job_id"]
@@ -188,10 +189,10 @@ async def test_frontend_response_diagnostic_flow(client: httpx.AsyncClient):
     message_content = "请只回复一句简短的中文问候。"
     start_job_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": message_content},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert start_job_response.status_code == 200
     accepted = start_job_response.json()["data"]
@@ -207,9 +208,7 @@ async def test_frontend_response_diagnostic_flow(client: httpx.AsyncClient):
     assert job_data["session_id"] == session_id
     assert job_data["status"] in {"completed", "succeeded"}
 
-    events_response = await client.get(f"/api/v1/jobs/{job_id}/events")
-    assert events_response.status_code == 200
-    events = events_response.json()["data"]
+    events = await read_job_trace(client, session_id, job_id)
     assert events, "job 事件为空，说明后端没有完整发布执行轨迹"
 
     agent_end_events = [event for event in events if event["type"] == "agent_end"]

@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
-from uuid import uuid4
+
+from app.core.identifier import create_uuid_hex
 
 ConfigLifecycleState = Literal[
     "none",
@@ -220,7 +221,7 @@ def _index_json_array(value: list[object], identity_key: str) -> dict[str, objec
 def new_config_id(prefix: str) -> str:
     if not prefix or not prefix.replace("_", "").isalnum():
         raise ValueError("配置 ID 前缀必须是非空字母数字字符串")
-    return f"{prefix}_{uuid4().hex}"
+    return f"{prefix}_{create_uuid_hex(namespace=prefix)}"
 
 
 _SECRET_FIELD_NAMES = frozenset(
@@ -250,6 +251,8 @@ def normalize_secret_reference(value: str) -> str:
     if env_name is not None:
         return f"env:{env_name}"
     if value.startswith("env:") and value[4:]:
+        return value
+    if value.startswith("secret:"):
         return value
     if value.startswith(_LITERAL_SECRET_PREFIX):
         return value
@@ -327,8 +330,8 @@ def prepare_config_for_persistence(
 ) -> dict[str, object]:
     """生成可持久化的候选 payload。
 
-    支持两种秘密输入：``${ENV_NAME}``（规范化为 ``env:NAME`` 引用）和字面量
-    key（例如本地部署模型的 dummy key、临时测试 key）。字面量按原文写入
+    支持命名密钥 ``secret:sec_…``、``${ENV_NAME}``（规范化为 ``env:NAME``）
+    和字面量 key（例如本地部署模型的 dummy key、临时测试 key）。命名密钥只保存引用，字面量按原文写入
     SQLite，保证重启后能原样恢复；而诊断、事件和日志侧由
     ``redact_config_payload``/``build_secret_binding_summary`` 统一降级为
     不可逆摘要，二者职责分离。
@@ -343,7 +346,8 @@ def prepare_config_for_persistence(
                 if key_text in _SECRET_FIELD_NAMES and isinstance(item, str):
                     reference = normalize_secret_reference(item)
                     # 字面量自包含：无需也不能解析环境变量。
-                    if resolve_environment and reference.startswith("env:"):
+                    # 模型凭据在执行准入时按实际候选解析；配置恢复只核对其引用。
+                    if resolve_environment and reference.startswith("env:") and item_path[:2] != ("llm", "providers"):
                         _resolve_secret_reference(
                             reference,
                             path="/" + "/".join(item_path),
@@ -380,7 +384,7 @@ def redact_config_payload(value: object) -> object:
             str(key): (
                 (
                     _literal_secret_digest(item)
-                    if not item.startswith(("env:", _LITERAL_SECRET_PREFIX))
+                    if not item.startswith(("env:", "secret:", _LITERAL_SECRET_PREFIX))
                     else normalize_secret_reference(item)
                 )
                 if str(key) in _SECRET_FIELD_NAMES and isinstance(item, str)
@@ -428,7 +432,8 @@ def build_secret_binding_summary(
     """返回引用和绑定摘要；永远不把解析后的秘密写入结果。
 
     ``resolve_environment`` 只决定 env 引用是否用解析后的值计算绑定的
-    digest（用于检测密钥轮换）。字面量自包含，直接按其原文计算。
+    digest（用于检测密钥轮换）。模型凭据始终只核对引用，其值与轮换归执行准入。
+    字面量自包含，直接按其原文计算。
     """
 
     bindings: dict[str, object] = {}
@@ -446,7 +451,7 @@ def build_secret_binding_summary(
                                 reference,
                                 path="/" + "/".join(item_path),
                             )
-                            if resolve_environment
+                            if resolve_environment and item_path[:2] != ("llm", "providers")
                             else reference
                         )
                     else:

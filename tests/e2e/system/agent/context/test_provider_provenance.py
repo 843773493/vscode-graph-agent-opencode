@@ -35,7 +35,9 @@ from app.domain.itemized.hashing import (
 )
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.business.resource_derivations.agents import WORKSPACE_AGENTS_SOURCE_ID
-from app.services.business.session_context_resource import context_assembly_identity
+from app.services.business.session_context_query.resources import (
+    context_assembly_identity,
+)
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
 )
@@ -52,6 +54,7 @@ from app.services.mapping.itemized.content_blocks import (
     reasoning_content_rows,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -604,7 +607,7 @@ def _audit_agents_versions(
                         if source.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
         assert root_source.revision == revisions[0]
         assert root_source.content_hash == contribution_content_hash("root_source", _AGENTS_VERSIONS[0])
-        assert binding.root.source_protocol == 2
+        assert binding.root.source_protocol == 3
         root_block, = [block for block in parse_source_blocks(
             binding.root.content, expected_version=binding.root.source_protocol,
         ) if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
@@ -625,7 +628,7 @@ def _audit_agents_versions(
             (revisions[index + 1], "user", deltas[index]) for index in range(ordinal - 1)
         ]
         for index, (frame, ref, block) in enumerate(members):
-            assert frame.source_protocol == 2
+            assert frame.source_protocol == 3
             assert (block.revision, block.base_revision, block.operation, block.representation,
                     block.replaces) == (
                 revisions[index + 1], revisions[index], "update", "unified_diff",
@@ -660,7 +663,8 @@ async def test_real_provider_provenance_survives_cold_history(
     session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider provenance"}), artifacts / "created-session.json")["data"]
     session_id, thread_id = session["session_id"], session["thread_id"]
     # 只选择隔离 Session 已配置的真实 Responses Provider，不改全局配置或增加请求覆盖。
-    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
+    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "backup_3", "model_id": "default"}}), artifacts / "selected-model.json")["data"]
+    assert session["current_model"] == {"provider_id": "backup_3", "model_id": "default"}
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
     session_node = resolver.resolve_session_node(session_id)
     thread_node = resolver.resolve_thread_node(session_id, thread_id)
@@ -677,9 +681,9 @@ async def test_real_provider_provenance_survives_cold_history(
             active_backend = provenance_backend_start(f"provenance-source-{ordinal}-backend")
         marker = f"CIL_PROVENANCE_TURN_{ordinal}_OK"
         prompt = f"不要调用任何工具。只回复这一行且不添加其它内容：{marker}"
-        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
             "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }), artifacts / f"turn-{ordinal}-entry.json")["data"]
+        })), artifacts / f"turn-{ordinal}-entry.json")["data"]
         job = await _terminal_job(client, sent["job_id"], artifacts / f"turn-{ordinal}-job.json")
         succeeded = job["status"] in {"completed", "succeeded"}
         traces = await _trace_events(client, session_id, artifacts, ordinal)

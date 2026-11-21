@@ -48,6 +48,7 @@ export function applySessionSelectionTransition(
   next.sessionResourcesLoading = previous.contentView === "resources";
   next.sessionResourcesError = null;
   next.pendingConversations.delete(cacheKey);
+  next.pendingQueueVersions.delete(cacheKey);
   next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
   next.status = t('navigation.sessions.loadingHistory');
   Object.assign(next, resetAgentStateFields(next));

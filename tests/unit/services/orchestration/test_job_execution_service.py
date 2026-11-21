@@ -97,6 +97,11 @@ async def test_run_forwards_full_execution_binding_and_message_identity(
     result = await service.run(job)
 
     assert result == "已执行"
+    assert service._bus.events[-1] == {
+        "job_id": "job_runtime", "event_type": EventType.JOB_COMPLETED,
+        "payload": {"session_id": "ses_runtime", "result": "已执行"},
+        "agent_id": "job_service",
+    }
     assert job.status == JobStatus.completed
     assert step_executor.calls == [
         {

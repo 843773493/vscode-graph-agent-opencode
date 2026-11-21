@@ -1,0 +1,16 @@
+/* 保留原列表高度，错误在底部覆盖层显示，不把刷新提示插入列表上方。 */
+.boxteam-mcp-connections {
+  position: relative;
+}
+.boxteam-mcp-connections.has-mcp-items .message-container {
+  position: absolute;
+  bottom: 0;
+  inset-inline: 0;
+  z-index: 1;
+  max-height: 40%;
+  overflow: auto;
+  background: var(--vscode-panel-background);
+  border-top: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-errorForeground);
+  overflow-wrap: anywhere;
+}

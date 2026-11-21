@@ -23,32 +23,180 @@
   "$id": "https://boxteam.dev/schemas/workspace-config-v2.json",
   "x-boxteam-config-domain": "workspace",
   "x-boxteam-policy-manifest": [
-    { "pattern": "/ui/**", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
-    { "pattern": "/llm/providers", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/agents/*/instructions/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/runtime/agent/run/timeout_seconds", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
-    { "pattern": "/runtime/gateway/connection/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/context/resource_activation", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/context/resource_activation/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/context/source_messages/grouping", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/gateway_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/supervision", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
-    { "pattern": "/mcp/supervision/**", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
-    { "pattern": "/mcp/servers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/enabled", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/transport", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/service", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/service/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/url", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/headers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/headers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/headers/*/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null }
+    {
+      "pattern": "/runtime/session_stop/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/**",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/llm/providers",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/llm/providers/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/agents/*/model/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/agents/*/instructions/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/runtime/agent/run/timeout_seconds",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/runtime/agent/run/mode",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/runtime/gateway/connection/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/context/resource_activation",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/context/resource_activation/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/context/source_messages/grouping",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/gateway_updates/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/sources",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/sources/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/plugins",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/plugins/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/supervision",
+      "policy": "restart_workspace",
+      "activation_scope": "restart_workspace",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/supervision/**",
+      "policy": "restart_workspace",
+      "activation_scope": "restart_workspace",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/enabled",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/transport",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/service",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/service/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/url",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/headers",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/headers/*",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/mcp/servers/*/headers/*/*",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    }
   ],
   "title": "BoxTeam Workspace Config Schema",
   "type": "object",
@@ -65,7 +213,7 @@
     },
     "config_version": {
       "type": "integer",
-      "const": 2,
+      "const": 3,
       "description": "配置格式版本；旧 logger 必须通过 migrate-runtime-config 显式迁移。"
     },
     "llm": {
@@ -77,9 +225,12 @@
       ],
       "properties": {
         "providers": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+          },
+          "additionalProperties": {
             "$ref": "#/$defs/provider"
           }
         }
@@ -192,7 +343,7 @@
     },
     "agents": {
       "type": "object",
-      "description": "Workspace agent registry, keyed by agent name. 支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
+      "description": "按 Agent 名称索引的工作区 Agent 注册表。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。timezone、persona、safety、env、tools.tool_choice、tools.timeout_ms、execution.stream、execution.max_turns、execution.max_history_messages 和 execution.max_context_tokens 当前未接入，保存这些字段不会改变运行行为。",
       "minProperties": 1,
       "additionalProperties": {
         "$ref": "#/$defs/agentConfig"
@@ -307,6 +458,55 @@
       "default": []
     },
 
+    "sessionStopPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "jobs", "pending_messages", "debug", "background_task", "terminal", "browser", "collaboration", "goal", "thread_runtime"],
+      "properties": {
+        "scope": { "enum": ["thread", "session"] },
+        "jobs": { "enum": ["interrupt", "cancel", "delete"] },
+        "pending_messages": { "enum": ["continue", "keep", "discard"] },
+        "debug": { "enum": ["keep", "stop"] },
+        "background_task": { "enum": ["keep", "stop", "delete"] },
+        "terminal": { "enum": ["keep", "stop", "delete", "release"] },
+        "browser": { "enum": ["keep", "stop", "delete", "release"] },
+        "collaboration": { "enum": ["keep", "stop"] },
+        "goal": { "enum": ["keep", "pause"] },
+        "thread_runtime": { "enum": ["keep", "close"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "thread_runtime": { "const": "close" } } },
+          "then": { "properties": { "terminal": { "enum": ["release", "delete"] }, "browser": { "enum": ["release", "delete"] } } }
+        },
+        {
+          "if": { "properties": { "scope": { "const": "thread" } } },
+          "then": { "properties": { "collaboration": { "const": "keep" } } }
+        },
+        {
+          "if": { "properties": { "jobs": { "const": "delete" } } },
+          "then": { "properties": { "pending_messages": { "const": "discard" } } }
+        },
+        {
+          "if": { "properties": { "pending_messages": { "const": "continue" } } },
+          "then": { "properties": { "jobs": { "const": "interrupt" } } }
+        }
+      ]
+    },
+    "sessionStopConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interrupt", "stop"],
+      "properties": {
+        "interrupt": { "$ref": "#/$defs/sessionStopPolicy" },
+        "stop": {
+          "allOf": [
+            { "$ref": "#/$defs/sessionStopPolicy" },
+            { "properties": { "jobs": { "enum": ["cancel", "delete"] } } }
+          ]
+        }
+      }
+    },
     "runtimeConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -315,6 +515,7 @@
         "gateway": { "$ref": "#/$defs/gatewayRuntimeConfig" },
         "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
         "events": { "$ref": "#/$defs/eventsRuntimeConfig" },
+        "session_stop": { "$ref": "#/$defs/sessionStopConfig" },
         "debug": { "$ref": "#/$defs/debugRuntimeConfig" }
       }
     },
@@ -565,7 +766,7 @@
         "default_model": {
           "type": "string",
           "minLength": 1,
-          "description": "可选的 UI 展示模型；省略时根据 default_agent.primary_provider 动态解析。"
+          "description": "可选的 UI 展示模型；省略时根据默认 Agent 的 model.primary 引用动态解析。"
         },
         "default_orchestration": {
           "type": "string",
@@ -740,374 +941,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "id",
-        "endpoint",
-        "model",
-        "custom_llm_provider",
-        "api_mode"
-      ],
-      "allOf": [
-        {
-          "if": {
-            "required": ["auth"]
-          },
-          "then": {
-            "properties": {
-              "custom_llm_provider": {
-                "const": "chatgpt"
-              },
-              "api_mode": {
-                "properties": {
-                  "protocol": {
-                    "const": "responses"
-                  }
-                }
-              }
-            }
-          },
-          "else": {
-            "required": ["api_key"]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "api_mode": {
-                "properties": {
-                  "protocol": {
-                    "const": "anthropic_messages"
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "custom_llm_provider": {
-                "const": "anthropic"
-              }
-              // 已验证：Anthropic Messages adapter 只在该 provider 适配族下实例化。
-            }
-          }
-        }
+        "models"
       ],
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Stable unique ID of the provider, referenced by agents.*.model",
-          "pattern": "^[a-zA-Z0-9._-]{2,64}$",
-          "minLength": 2,
-          "maxLength": 64
-        },
-        "endpoint": {
-          "type": "string",
-          "format": "uri",
-          "minLength": 1
-        },
-        "model": {
+        "name": {
           "type": "string",
           "minLength": 1
         },
-        "api_key": {
-          "description": "Can be a literal API key string, or an environment variable reference like ${OPENAI_API_KEY}.",
-          "type": "string",
-          "minLength": 1
+        "defaults": {
+          "$ref": "#/$defs/modelOptions"
         },
-        "auth": {
+        "models": {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "method"],
-          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
-          "properties": {
-            "type": {
-              "const": "oauth"
-            },
-            "method": {
-              "const": "chatgpt"
-            }
-          }
-        },
-        "custom_llm_provider": {
-          "type": "string",
-          "minLength": 1,
-          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
-        },
-        "api_mode": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "protocol",
-            "model_info",
-            "supports_reasoning"
-          ],
-          "description": "Provider 请求协议、LiteLLM 对齐的模型能力、reasoning 线格式以及请求特性。",
-          "properties": {
-            "protocol": {
-              "type": "string",
-              "enum": [
-                "chat_completions",
-                "responses",
-                "anthropic_messages"
-              ],
-              "description": "选择 LiteLLM 请求协议；custom_llm_provider 只选择适配族，不替代协议。"
-              // 已验证：AgentFactory 根据 protocol 分派 Chat Completions、Responses 和 Anthropic Messages。
-            },
-            "model_info": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
-              "properties": {
-                "max_input_tokens": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "显式声明模型输入上下文容量，写入 LangChain model.profile；不作为上游请求参数，也不推导输出上限。"
-                },
-                "supports_vision": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受图片输入；对应 LiteLLM supports_vision。"
-                  // 已验证：多模态输入路由使用该字段推导 image 能力。
-                },
-                "supports_video_input": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受视频输入；LiteLLM 当前没有统一 supports_video 字段，因此由本项目显式声明。"
-                  // 已验证：视频 content block 校验使用该字段，不再读取旧 capabilities 数组。
-                },
-                "supports_audio_input": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受音频输入；对应 LiteLLM supports_audio_input。"
-                  // 已验证：音频 content block 校验使用 LiteLLM 对齐字段。
-                },
-                "supports_audio_output": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否能输出音频；对应 LiteLLM supports_audio_output，当前只作为能力声明保存。"
-                  // 已验证：配置解析保留该能力，当前请求适配不把它误当成输入能力。
-                },
-                "supports_function_calling": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否支持工具/函数调用；对应 LiteLLM supports_function_calling。"
-                  // 已验证：模型能力路由可读取该字段。
-                },
-                "supports_reasoning": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否支持 reasoning；必须与 supports_reasoning 下至少一个实际线格式字段一致。"
-                  // 已验证：解析器会拒绝该字段与具体 reasoning 线格式不一致的配置。
-                }
-              }
-            },
-            "supports_reasoning": {
-              "type": "object",
-              "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
-              "oneOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "reasoning_content": {
-                      "type": "boolean",
-                      "default": false,
-                      "description": "Chat Completions 的 assistant.reasoning_content。"
-                      // 已验证：Chat Completions adapter 用该字段投影历史 reasoning_content。
-                    },
-                    "thinking_blocks": {
-                      "type": "boolean",
-                      "default": false,
-                      "description": "Chat Completions 兼容端返回 thinking_blocks。"
-                      // 已验证：Chat Completions adapter 可从 payload 提取 thinking_blocks。
-                    }
-                  },
-                  "anyOf": [
-                    {"required": ["reasoning_content"]},
-                    {"required": ["thinking_blocks"]}
-                  ]
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "reasoning_items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["summary", "encrypted_content"],
-                      "properties": {
-                        "summary": {
-                          "type": "boolean",
-                          "description": "Responses reasoning item 的 summary。"
-                          // 已验证：Responses 历史投影会保留 summary。
-                        },
-                        "encrypted_content": {
-                          "type": "boolean",
-                          "description": "Responses reasoning item 的 encrypted_content。"
-                          // 已验证：只有 replay_policy.same_source 时才回放该字段。
-                        }
-                      }
-                    }
-                  },
-                  "required": ["reasoning_items"]
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "thinking_blocks": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["thinking", "redacted_thinking"],
-                      "properties": {
-                        "thinking": {
-                          "type": "boolean",
-                          "description": "Anthropic Messages thinking block 的明文 thinking。"
-                          // 已验证：Anthropic 配置解析会映射到 thinking_blocks_thinking。
-                        },
-                        "redacted_thinking": {
-                          "type": "boolean",
-                          "description": "Anthropic Messages thinking block 的 redacted_thinking。"
-                          // 已验证：Anthropic 配置解析会映射到 thinking_blocks_redacted_thinking。
-                        }
-                      }
-                    }
-                  },
-                  "required": ["thinking_blocks"]
-                }
-              ]
-            },
-            "request_features": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "请求适配器可选附加的特性，不属于模型输入输出能力。",
-              "properties": {
-                "prompt_cache_key": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "是否向 Chat Completions 请求附加 prompt_cache_key。"
-                  // 已验证：prompt cache key 路径读取该字段，不再读取旧 capabilities 数组。
-                }
-              }
-            },
-            "replay_policy": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "历史 reasoning 回放规则；加密内容不能仅凭 custom_llm_provider 相同而回放。",
-              "properties": {
-                "encrypted_content": {
-                  "type": "string",
-                  "enum": ["same_source"],
-                  "default": "same_source",
-                  "description": "只允许同一稳定 provider 实例 ID 回放 Responses encrypted_content。"
-                  // 已验证：密文来源比较使用 provider.id，而不是 custom_llm_provider。
-                }
-              }
-            }
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9._-]{1,64}$"
           },
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "protocol": {"const": "chat_completions"}
-                }
-              },
-              "then": {
-                "properties": {
-                  "supports_reasoning": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "reasoning_content": {"type": "boolean"},
-                      "thinking_blocks": {"type": "boolean"}
-                    },
-                    "anyOf": [
-                      {"required": ["reasoning_content"]},
-                      {"required": ["thinking_blocks"]}
-                    ]
-                  }
-                }
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "protocol": {"const": "responses"}
-                }
-              },
-              "then": {
-                "properties": {
-                  "supports_reasoning": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "reasoning_items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["summary", "encrypted_content"],
-                        "properties": {
-                          "summary": {"type": "boolean"},
-                          "encrypted_content": {"type": "boolean"}
-                        }
-                      }
-                    },
-                    "required": ["reasoning_items"]
-                  }
-                }
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "protocol": {"const": "anthropic_messages"}
-                }
-              },
-              "then": {
-                "properties": {
-                  "supports_reasoning": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "thinking_blocks": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["thinking", "redacted_thinking"],
-                        "properties": {
-                          "thinking": {"type": "boolean"},
-                          "redacted_thinking": {"type": "boolean"}
-                        }
-                      }
-                    },
-                    "required": ["thinking_blocks"]
-                  }
-                }
-              }
-            }
-          ]
-        },
-        "auth_header": {
-          "type": "string",
-          "minLength": 1
-        },
-        "request_options": {
-          "type": "object",
-          "description": "Provider-specific request options passed to the chat model client.",
-          "additionalProperties": false,
-          "default": {},
-          "properties": {
-            "overrides": {
-              "type": "object",
-              "description": "Raw LiteLLM completion parameters. These values override agent-level defaults such as temperature, top_p and max_tokens. Put provider body extensions under extra_body.",
-              "additionalProperties": true,
-              "default": {}
-            },
-            "default_headers": {
-              "type": "object",
-              "description": "Additional default HTTP headers for this provider.",
-              "additionalProperties": {
-                "type": "string"
-              },
-              "default": {}
-            },
-            "no_proxy": {
-              "type": "boolean",
-              "default": false,
-              "description": "该 Provider 的请求是否绕过 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；用于本地或内网网关，避免被全局代理拦截。需要重启工作区后端。"
-              // 已验证：为该 Provider 注入 trust_env=False 的 HTTP client，不修改全局 NO_PROXY。
-            }
+          "additionalProperties": {
+            "$ref": "#/$defs/modelDefinition"
           }
         }
       }
@@ -1263,25 +1113,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "primary_provider"
+        "primary"
       ],
       "properties": {
-        "primary_provider": {
-          "type": "string",
-          "description": "Primary provider ID from llm.providers[].id",
-          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-        },
-        "fallback_providers": {
-          "type": "array",
-          "description": "Fallback provider IDs from llm.providers[].id, used in order",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-          },
-          "uniqueItems": true,
-          "maxItems": 10,
-          "default": []
-        },
         "temperature": {
           "type": "number",
           "minimum": 0,
@@ -1298,6 +1132,17 @@
           "type": "integer",
           "minimum": 1,
           "description": "Optional explicit output cap. Omit to avoid imposing a client-side output limit."
+        },
+        "primary": {
+          "$ref": "#/$defs/modelReference"
+        },
+        "fallbacks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/modelReference"
+          },
+          "default": []
         }
       }
     },
@@ -1532,6 +1377,359 @@
             "type": "boolean"
           },
           "default": {}
+        }
+      }
+    },
+    "modelOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "api_key": {
+          "type": "string",
+          "pattern": "^(?:secret:sec_[a-f0-9]{32}|\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}|)$",
+          "description": "所属 Gateway 的密钥引用、目标 Workspace 的环境引用或显式无认证空值；不接受密钥字面量。"
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "method"
+          ],
+          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
+          "properties": {
+            "type": {
+              "const": "oauth"
+            },
+            "method": {
+              "const": "chatgpt"
+            }
+          }
+        },
+        "custom_llm_provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
+        },
+        "api_mode": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "来源及 Provider/Model 两阶段合并后的协议、传输、能力和 reasoning 线格式。",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "chat_completions",
+                "responses",
+                "anthropic_messages"
+              ],
+              "description": "选择 LiteLLM 请求协议；custom_llm_provider 只选择适配族，不替代协议。"
+            },
+            "model_info": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
+              "properties": {
+                "max_input_tokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "显式声明模型输入上下文容量，写入 LangChain model.profile；不作为上游请求参数，也不推导输出上限。"
+                },
+                "supports_vision": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受图片输入；对应 LiteLLM supports_vision。"
+                },
+                "supports_video_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受视频输入；LiteLLM 当前没有统一 supports_video 字段，因此由本项目显式声明。"
+                },
+                "supports_audio_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受音频输入；对应 LiteLLM supports_audio_input。"
+                },
+                "supports_audio_output": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否能输出音频；对应 LiteLLM supports_audio_output，当前只作为能力声明保存。"
+                },
+                "supports_function_calling": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持工具/函数调用；对应 LiteLLM supports_function_calling。"
+                },
+                "supports_reasoning": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持 reasoning；必须与 supports_reasoning 下至少一个实际线格式字段一致。"
+                }
+              }
+            },
+            "supports_reasoning": {
+              "type": "object",
+              "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_content": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 的 assistant.reasoning_content。"
+                    },
+                    "thinking_blocks": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 兼容端返回 thinking_blocks。"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "required": [
+                        "reasoning_content"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "thinking_blocks"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "summary",
+                        "encrypted_content"
+                      ],
+                      "properties": {
+                        "summary": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 summary。"
+                        },
+                        "encrypted_content": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 encrypted_content。"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "reasoning_items"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "thinking_blocks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "thinking",
+                        "redacted_thinking"
+                      ],
+                      "properties": {
+                        "thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的明文 thinking。"
+                        },
+                        "redacted_thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的 redacted_thinking。"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "thinking_blocks"
+                  ]
+                },
+                {
+                  "maxProperties": 0
+                }
+              ]
+            },
+            "request_features": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "请求适配器可选附加的特性，不属于模型输入输出能力。",
+              "properties": {
+                "prompt_cache_key": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "是否向 Chat Completions 请求附加 prompt_cache_key。"
+                }
+              }
+            },
+            "replay_policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "历史 reasoning 回放规则；加密内容不能仅凭 custom_llm_provider 相同而回放。",
+              "properties": {
+                "encrypted_content": {
+                  "type": "string",
+                  "enum": [
+                    "same_source"
+                  ],
+                  "default": "same_source",
+                  "description": "仅相同完整模型、归属、连接、协议和认证来源可回放密文。"
+                }
+              }
+            },
+            "streaming": {
+              "type": "boolean",
+              "description": "上游传输模式；最终未声明时为 true。"
+            }
+          }
+        },
+        "auth_header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_options": {
+          "type": "object",
+          "description": "Provider-specific request options passed to the chat model client.",
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "default_headers": {
+              "type": "object",
+              "description": "Additional default HTTP headers for this provider.",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "no_proxy": {
+              "type": "boolean",
+              "default": false,
+              "description": "该 Provider 的请求是否绕过 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；用于本地或内网网关，避免被全局代理拦截。需要重启工作区后端。"
+            },
+            "parameters": {
+              "type": "object",
+              "description": "请求默认或覆盖；Agent 及本次调用显式参数优先，最终 null 表示不发送，扩展放入 extra_body。",
+              "additionalProperties": true,
+              "default": {}
+            }
+          }
+        }
+      }
+    },
+    "resolvedModelOptions": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/modelOptions"
+        },
+        {
+          "required": [
+            "endpoint",
+            "custom_llm_provider",
+            "api_mode"
+          ],
+          "properties": {
+            "api_mode": {
+              "required": [
+                "protocol",
+                "model_info",
+                "supports_reasoning"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "auth"
+            ]
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "chatgpt"
+              },
+              "api_mode": {
+                "properties": {
+                  "protocol": {
+                    "const": "responses"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "api_key"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "api_mode": {
+                "properties": {
+                  "protocol": {
+                    "const": "anthropic_messages"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "anthropic"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "modelDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "overrides": {
+          "$ref": "#/$defs/modelOptions"
+        }
+      }
+    },
+    "modelReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "model_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{1,64}$"
         }
       }
     }

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
@@ -19,7 +20,6 @@ from app.core.model_delta_context import (
     get_current_model_delta_sink,
     model_tool_invocation_scope,
 )
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.turn_execution_scope import (
     ScopeCancelledError,
     get_current_turn_execution_scope,

@@ -1,5 +1,5 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import { normalizeDisplayText } from "../../utils/displayText";
+import { normalizeDisplayText, truncateDisplayText } from "../../utils/displayText";
 import { isRecord, redactLargeData } from "../../utils/jsonDisplay";
 import {
   compactKeyFlowText,
@@ -71,7 +71,7 @@ function* iterateAgentStateJsonlLines(
           ok: false,
           lineNumber,
           raw: raw.length > AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT
-            ? `${raw.slice(0, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
+            ? `${truncateDisplayText(raw, AGENT_STATE_INVALID_LINE_SNIPPET_LIMIT)}...`
             : raw,
           message: errorMessage(error),
         };

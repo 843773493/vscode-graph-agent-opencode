@@ -14,6 +14,8 @@ export interface AnchoredOverlayProps {
   offset?: number;
   viewportPadding?: number;
   dismissible?: boolean;
+  /** 键盘菜单在定位完成后聚焦首项，关闭后归焦原按钮。 */
+  manageFocus?: boolean;
   onClose: () => void;
   children: React.ReactNode;
 }

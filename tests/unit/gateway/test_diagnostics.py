@@ -8,17 +8,19 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
-from app.core.logging_contract import load_runtime_log_contract
 from app.gateway.control import router as control_router
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.diagnostics import (
+    _MAX_READ_BYTES,
     _candidate_gateway_logs,
     _launcher_log_path,
     _LogCandidate,
     _process_log_path,
+    _read_log,
     _scope_log_candidates,
     collect_gateway_diagnostics,
 )
@@ -69,10 +71,70 @@ def test_empty_workspace_scope_keeps_all_log_sources() -> None:
     assert scoped == [*gateway_candidates, *workspace_candidates]
 
 
-def test_diagnostics_finds_role_logs_and_launcher_override(
+def test_large_process_log_reads_only_bounded_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "large-backend.log"
+    with log_path.open("wb") as stream:
+        stream.write(b"old-process-output\n")
+        stream.write(b"ordinary record\n" * 200_000)
+        stream.write(b"tail-one\ntail-two\ntail-three\n")
+    file_size = log_path.stat().st_size
+    assert file_size > _MAX_READ_BYTES * 4
+
+    read_sizes: list[int] = []
+    seek_offsets: list[int] = []
+    original_open = Path.open
+
+    class ReadTracker:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def seek(self, offset: int, *args):
+            seek_offsets.append(offset)
+            return self.stream.seek(offset, *args)
+
+        def read(self, size: int = -1):
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    def tracked_open(path: Path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        return ReadTracker(stream) if path == log_path else stream
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    candidate = _LogCandidate(
+        log_id="gateway:large-process",
+        source="gateway",
+        service="workspace_api",
+        label="Backend 日志",
+        log_path=log_path,
+    )
+
+    result = _read_log(candidate, 3, include_tail=True)
+
+    assert read_sizes == [_MAX_READ_BYTES]
+    assert seek_offsets == [file_size - _MAX_READ_BYTES]
+    assert result.tail == "tail-one\ntail-two\ntail-three"
+    assert result.line_count == 3
+    assert result.size_bytes == file_size
+    assert result.truncated is True
+
+
+async def test_diagnostics_finds_role_logs_and_launcher_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
+    control_root = tmp_path / "原控制面覆盖"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(control_root))
     override = tmp_path / "显式路径/launcher.log"
     monkeypatch.setenv("BOXTEAM_SERVICE_LOG_PATH", str(override))
     contract = load_runtime_log_contract()
@@ -85,6 +147,10 @@ def test_diagnostics_finds_role_logs_and_launcher_override(
     assert _launcher_log_path() == override
     candidates = _candidate_gateway_logs({paths[1].name})
     assert {candidate.log_path for candidate in candidates} == {override, paths[0], paths[2]}
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    payload = (await collect_gateway_diagnostics(registry, gateway_id="gateway_diagnostic_paths")).model_dump(mode="json")
+    assert payload["control_directory"] == str(control_root)
+    assert payload["log_directory"] == str(root)
 
 
 def test_explicit_instance_log_stays_readable_outside_recent_log_limit(
@@ -195,6 +261,7 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
     diagnostics = {
         "gateway_id": "gateway_peer", "gateway_name": "来源", "connection_kind": "local",
         "status": "ready", "checked_at": "2026-10-29T00:00:00Z",
+        "control_directory": r"C:\BoxTeam\state\gateway", "log_directory": r"C:\BoxTeam\state\logs",
         "logs": [{"log_id": "gateway-stderr", "source": "gateway", "service": "gateway",
                   "label": "原始日志", "status": "available", "tail": native_path}],
     }
@@ -246,6 +313,8 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
     assert recovered.data.logs[0].tail == native_path
     assert recovered.data.gateway_name == "原远端"
     assert recovered.data.gateway_connection_id == "rgw_diagnostics"
+    assert recovered.data.control_directory == diagnostics["control_directory"]
+    assert recovered.data.log_directory == diagnostics["log_directory"]
     assert [request.headers["X-Request-ID"] for request in requests] == ["req_diagnostics_boundary"] * 2
     assert all(request.headers["X-BoxTeam-Federation-Token"] == "private-test-token" for request in requests)
     assert not responses

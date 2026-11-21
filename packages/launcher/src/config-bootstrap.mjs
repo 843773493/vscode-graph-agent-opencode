@@ -1,6 +1,21 @@
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { stopLauncher } from "./stop.mjs";
+import { resolveNodeExecutable } from "./configuration/runtime-manifest.mjs";
+
+export async function stopLauncherForSupportedUpgrade({
+  runtime, environment, targetLock, spawnSyncImpl = spawnSync, stopLauncherImpl = stopLauncher,
+}) {
+  const preview = initializeUserConfiguration({
+    runtime, environment, args: ["initialize", "--preview"], spawnSyncImpl,
+  });
+  const inspection = JSON.parse(preview.output);
+  if (inspection.upgrade_required) {
+    return stopLauncherImpl({ boxteamHome: preview.boxteamHome, expectedToken: targetLock.value.token });
+  }
+  return null;
+}
 
 export function defaultBoxteamHome(distribution, homeDirectory = os.homedir()) {
   return path.join(
@@ -21,6 +36,9 @@ export function initializeUserConfiguration({
   const childEnvironment = {
     ...environment,
     BOXTEAM_HOME: boxteamHome,
+    BOXTEAM_NODE_BIN: resolveNodeExecutable(runtime),
+    // stdout JSON 与下方解码共用UTF-8，不依赖目标终端的默认代码页。
+    PYTHONIOENCODING: "utf-8",
     PYTHONPATH: [
       runtime.applicationRoot,
       environment.PYTHONPATH,
@@ -30,7 +48,7 @@ export function initializeUserConfiguration({
   };
   const result = spawnSyncImpl(
     runtime.pythonExecutable,
-    ["-m", "configs.boxteam", ...args],
+    ["-m", "configs.boxteam", ...args, "--bundled-plugins", JSON.stringify(runtime.bundledPlugins)],
     {
       cwd: runtime.applicationRoot,
       env: childEnvironment,

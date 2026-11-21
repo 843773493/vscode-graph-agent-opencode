@@ -18,9 +18,11 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
     definition_resource_id,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
@@ -51,17 +53,20 @@ class DiscoveredToolRef(DefinitionProvenance, frozen=True):
     model_call_id: str = Field(min_length=1)
 
 
-class RestoredDefinition(BaseModel):
+class RestoredToolDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     description: str
     input_schema: dict[str, object]
     kind: str
     group_id: str
+    # 缺省与空数组属于不同资源正文；保留原字段存在性，不能据此改写 revision。
+    skill_associations: list[dict[str, object]] | None = None
     schema_hash: str
     provenance: DefinitionProvenance
 
-    def payload(self) -> dict[str, object]:
-        return self.model_dump(exclude={"schema_hash", "provenance"})
+    @property
+    def resource_payload(self) -> dict[str, object]:
+        return self.model_dump(exclude={"schema_hash", "provenance"}, exclude_none=True)
 
 
 class DefinitionSourceValue(BaseModel):
@@ -69,14 +74,14 @@ class DefinitionSourceValue(BaseModel):
     tool_id: str
     status: Literal["available", "unavailable"]
     discovered_from: DiscoveredToolRef
-    definition: RestoredDefinition | None = None
+    definition: RestoredToolDefinition | None = None
     reason: Literal["tool-disabled", "tool-removed", "connection-disconnected", "connection-authorization-required"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryEntry:
     ref: DiscoveredToolRef
-    inline_payload: Mapping[str, object] | None
+    inline_contract: Mapping[str, object] | None
     schema_hash: str
 
 
@@ -195,8 +200,8 @@ def tool_definition_batch(
     originals = {name: resolved[ref] for name, ref in discoveries.items()}
     for entry in entries:
         original = resolved[entry.ref]
-        if (entry.schema_hash != original.schema_hash or entry.inline_payload is not None
-                and canonical_json_bytes(entry.inline_payload) != canonical_json_bytes(original.payload)):
+        if (entry.schema_hash != original.schema_hash or entry.inline_contract is not None
+                and canonical_json_bytes(entry.inline_contract) != canonical_json_bytes(original.contract_payload)):
             raise ExtensionCatalogUnavailableError("发现结果正文与原冻结定义不一致")
     catalog = catalog_supplier(frozenset(originals))
     current = {definition.metadata.tool_id: definition for definition in catalog.definitions}
@@ -204,7 +209,7 @@ def tool_definition_batch(
     if set(policies) != set(originals):
         raise ExtensionCatalogUnavailableError("定义恢复缺少完整有效策略")
     current_entries = {entry.ref for entry in current_discoveries}
-    inline_refs = {entry.ref for entry in entries if entry.inline_payload is not None}
+    inline_refs = {entry.ref for entry in entries if entry.inline_contract is not None}
     # 普通续读已完整验证同一个前驱；复用本次提取的 revision，避免重解码、重算正文摘要。
     # rebuild 的不同来源或受限选集不能代表完整前驱，仍独立验证 previous。
     previous_revisions = retained_revisions if retained_assembly is previous and retained_source_refs is None else {
@@ -233,8 +238,8 @@ def tool_definition_batch(
                 definition = original if unchanged else definition
                 value = DefinitionSourceValue(
                     tool_id=name, status="available", discovered_from=discovered,
-                    definition=RestoredDefinition.model_validate({
-                        **definition.payload, "schema_hash": definition.schema_hash,
+                    definition=RestoredToolDefinition.model_validate({
+                        **definition.resource_payload, "schema_hash": definition.schema_hash,
                         "provenance": DefinitionProvenance(
                             activation_snapshot_id=discovered.activation_snapshot_id if unchanged else catalog.activation_snapshot_id,
                             resource_id=definition.provenance.resource_id, revision=definition.provenance.revision,

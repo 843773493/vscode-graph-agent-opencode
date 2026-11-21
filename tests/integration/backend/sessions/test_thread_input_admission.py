@@ -15,7 +15,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 复用生产装配与 model_stream
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 async def _replay(case: RuntimeSourceCase, session: str, message: str):
@@ -177,11 +177,11 @@ async def test_main_manual_compaction_allows_child_input_while_main_input_waits(
     loading = asyncio.Event()
     release = asyncio.Event()
     main_prepared = asyncio.Event()
-    store = case.container.context_compaction_service._checkpoint_store
-    original_load = store.load
+    adapter = case.container.context_compaction_service._checkpoint_adapter
+    original_load = adapter.load_snapshot
     original_create = case.container.message_service.create
 
-    async def load(owner):
+    async def load_snapshot(owner):
         checkpoint = await original_load(owner)
         loading.set()
         await release.wait()
@@ -193,17 +193,17 @@ async def test_main_manual_compaction_allows_child_input_while_main_input_waits(
             main_prepared.set()
         return message
 
-    monkeypatch.setattr(store, "load", load)
+    monkeypatch.setattr(adapter, "load_snapshot", load_snapshot)
     monkeypatch.setattr(case.container.message_service, "create", create)
     compact = asyncio.create_task(case.client.post(f"/api/v1/sessions/{session}/compact"))
     send = None
     try:
         await asyncio.wait_for(loading.wait(), 10)
         child_response = await asyncio.wait_for(case.client.post(
-            f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+            f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
                 "message": {"content": "child 无需等待 main 摘要"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         ), 10)
         assert child_response.status_code == 200, child_response.text
         child_accepted = child_response.json()["data"]

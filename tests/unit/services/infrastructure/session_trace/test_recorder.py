@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from app.core.job_event_bus import EventType, JobEventBus
+from app.core.path_utils import get_session_path_resolver
+from app.schemas.event import (
+    AgentStartEvent,
+    AgentStartPayload,
+    JobCreatedEvent,
+    JobCreatedPayload,
+    JobFailedEvent,
+    JobFailedPayload,
+)
+from app.services.infrastructure.session_trace.recorder import TraceEventRecorder
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.execution_step.stream_bindings import StepEventPublisher
+from tests.support.api_helpers import running_job_dispatch_snapshot
+from tests.support.job_thread_fixture import job_fixture_thread_id
+
+
+def _job_created(job_id: str, session_id: str) -> JobCreatedEvent:
+    return JobCreatedEvent(
+        event_id=f"evt_created_{job_id}",
+        job_id=job_id,
+        timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(session_id=session_id, thread_id=job_fixture_thread_id(session_id), message="hi", agent_id="a"),
+    )
+
+
+def _agent_start(job_id: str) -> AgentStartEvent:
+    # payload 不带 session_id：录音器必须靠 _job_sessions 映射回填。
+    return AgentStartEvent(
+        event_id=f"evt_start_{job_id}",
+        job_id=job_id,
+        timestamp=datetime.now(UTC),
+        payload=AgentStartPayload(message="start", agent_id="a"),
+    )
+
+
+def _job_failed(job_id: str, session_id: str) -> JobFailedEvent:
+    return JobFailedEvent(
+        event_id=f"evt_failed_{job_id}",
+        job_id=job_id,
+        timestamp=datetime.now(UTC),
+        payload=JobFailedPayload(error="boom", session_id=session_id),
+    )
+
+
+@pytest.fixture
+def step_event_flow() -> tuple[tuple[str, dict[str, object]], ...]:
+    # 首次启动与 retry 使用同一 publisher；模型、工具、文本及错误也不带 session_id。
+    return (
+        (EventType.AGENT_START, {"message": "start", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry extension", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry delegation", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry communication", "agent_id": "default"}),
+        (EventType.AGENT_START, {"message": "retry reasoning", "agent_id": "default"}),
+        (EventType.AGENT_STEP, {"phase": "model"}),
+        (EventType.LLM_REQUEST, {"model": "recovery-contract", "timestamp": 1000}),
+        (EventType.MODEL_FAILED, {"provider_id": "contract", "model": "recovery-contract", "error_type": "ValueError", "error": "failed candidate"}),
+        (EventType.TOOL_CALL_START, {"part_id": "tool-1", "execution_id": "execution-1", "tool_name": "read_context", "args": {}}),
+        (EventType.TOOL_CALL_END, {"part_id": "tool-1", "execution_id": "execution-1", "tool_call_id": "call-1", "tool_name": "read_context", "result": "frozen"}),
+        (EventType.TEXT_START, {"part_id": "text-1", "kind": "markdown"}),
+        (EventType.TEXT_DELTA, {"part_id": "text-1", "kind": "markdown", "text": "recovered"}),
+        (EventType.TEXT_END, {"part_id": "text-1", "kind": "markdown", "text": "recovered"}),
+        (EventType.ERROR, {"error": "visible failure", "phase": "agent_execution"}),
+        (EventType.AGENT_END, {"final_text": "recovered", "agent_id": "default"}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_recorder_persists_job_events(tmp_path: Path, trace_event_store_factory):
+    session_id = "ses_019ba1bfed0773fc80049132b9745deb"
+    store, _ = trace_event_store_factory(session_id)
+    main_thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=store)
+    await recorder.start()
+
+    try:
+        await bus.publish(
+            job_id="job_1",
+            event_type=EventType.JOB_CREATED,
+            payload={"session_id": session_id, "thread_id": main_thread_id, "message": "hi", "agent_id": "default"},
+            agent_id="test",
+        )
+        await bus.publish(
+            job_id="job_1",
+            event_type=EventType.JOB_STARTED,
+            payload={"session_id": session_id, "thread_id": main_thread_id,
+                     "dispatch": running_job_dispatch_snapshot(session_id, main_thread_id, "job_1", queued_job_count=0, queue_snapshot_version=1)},
+            agent_id="job_service",
+        )
+        await bus.publish(
+            job_id="job_1",
+            event_type=EventType.AGENT_START,
+            payload={"message": "start", "agent_id": "default"},
+            agent_id="default",
+        )
+
+        events = store.read_events(session_id)
+        assert [event.type for event in events] == [
+            "job_created",
+            "job_started",
+            "agent_start",
+        ]
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
+async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
+    tmp_path: Path,
+    trace_event_store_factory,
+    step_event_flow: tuple[tuple[str, dict[str, object]], ...],
+):
+    session_id = "ses_019b9b92ef127e83870baac3f15d7bc4"
+    store, _ = trace_event_store_factory(session_id)
+    main_thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=store)
+    await recorder.start()
+
+    try:
+        await bus.publish(
+            job_id="job_direct",
+            event_type=EventType.JOB_STARTED,
+            payload={"session_id": session_id, "thread_id": main_thread_id,
+                     "dispatch": running_job_dispatch_snapshot(session_id, main_thread_id, "job_direct", queued_job_count=0, queue_snapshot_version=1)},
+            agent_id="job_service",
+        )
+        publisher = StepEventPublisher(bus, job_id="job_direct", agent_id="default")
+        for event_type, payload in step_event_flow:
+            await publisher.publish(event_type, payload)
+        await bus.publish(
+            job_id="job_direct",
+            event_type=EventType.JOB_FAILED,
+            payload={
+            "session_id": session_id,
+                "error": "startup timeout",
+                "code": "job_startup_timeout",
+            },
+            agent_id="job_service",
+        )
+
+        events = store.read_events(session_id)
+        assert [event.type for event in events] == [
+            "job_started", *[event_type for event_type, _ in step_event_flow], "job_failed",
+        ]
+        assert all(event.job_id == "job_direct" for event in events)
+        assert recorder._job_sessions == {}
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
+async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Path):
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(sessions_dir=tmp_path))
+    await recorder.start()
+
+    queue = await bus.subscribe("job_without_session", subscriber_kind="test_rejection")
+    try:
+        with pytest.raises(RuntimeError, match="缺少 session_id"):
+            await bus.publish(
+                job_id="job_without_session",
+                event_type=EventType.AGENT_START,
+                payload={"message": "start", "agent_id": "default"},
+                agent_id="default",
+            )
+        assert queue.empty()
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
+async def test_recorder_does_not_treat_session_shaped_job_id_as_session_id(tmp_path: Path):
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(sessions_dir=tmp_path))
+    await recorder.start()
+
+    try:
+        with pytest.raises(RuntimeError, match="缺少 session_id"):
+            await bus.publish(
+                job_id="ses_not_a_job",
+                event_type=EventType.AGENT_START,
+                payload={"message": "start", "agent_id": "default"},
+                agent_id="default",
+            )
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", [EventType.JOB_CREATED, EventType.JOB_STARTED])
+async def test_failed_lifecycle_write_does_not_commit_job_session_mapping(event_type: str):
+    class FailingSink:
+        async def append(self, session_id, event):
+            if event.type in {EventType.JOB_CREATED, EventType.JOB_STARTED}:
+                raise OSError(f"cannot write {session_id}")
+
+    bus = JobEventBus()
+    recorder = TraceEventRecorder(bus=bus, store=FailingSink())
+    await recorder.start()
+
+    try:
+        with pytest.raises(OSError, match="cannot write ses_failed"):
+            await bus.publish(
+                job_id="job_failed_mapping",
+                event_type=event_type,
+                payload={"session_id": "ses_failed", "thread_id": "thr_failed", "message": "hi", "agent_id": "default",
+                         **({"dispatch": running_job_dispatch_snapshot("ses_failed", "thr_failed", "job_failed_mapping", queued_job_count=0, queue_snapshot_version=1)} if event_type == EventType.JOB_STARTED else {})},
+                agent_id="test",
+            )
+        with pytest.raises(RuntimeError, match="缺少 session_id"):
+            await bus.publish(
+                job_id="job_failed_mapping",
+                event_type=EventType.AGENT_START,
+                payload={"message": "start", "agent_id": "default"},
+                agent_id="default",
+            )
+    finally:
+        await recorder.stop()
+
+
+@pytest.mark.asyncio
+async def test_recorder_session_lock_pool_is_bounded_and_stable() -> None:
+    """会话锁池对 session 数量必须有固定上界，且同一 session 恒定同一把锁。"""
+
+    class Sink:
+        async def append(self, session_id, event):
+            return None
+
+    recorder = TraceEventRecorder(bus=JobEventBus(), store=Sink())
+
+    for index in range(5000):
+        recorder._session_lock(f"ses_recorder_{index}")
+
+    # 上界恒定：锁数量不随历史会话数增长。
+    assert len(recorder._session_locks) <= 64
+    # 同 session 恒定命中同一把锁（保住互斥语义）。
+    assert recorder._session_lock("ses_shared") is recorder._session_lock("ses_shared")
+
+
+@pytest.mark.asyncio
+async def test_recorder_session_lock_serializes_same_session() -> None:
+    """分片后同一 session 的临界区仍严格互斥（并发峰值恒为 1）。"""
+
+    class Sink:
+        async def append(self, session_id, event):
+            return None
+
+    recorder = TraceEventRecorder(bus=JobEventBus(), store=Sink())
+    lock = recorder._session_lock("ses_serial")
+    concurrent = 0
+    peak = 0
+
+    async def worker() -> None:
+        nonlocal concurrent, peak
+        async with lock:
+            concurrent += 1
+            peak = max(peak, concurrent)
+            await asyncio.sleep(0.01)
+            concurrent -= 1
+
+    await asyncio.gather(*(worker() for _ in range(20)))
+    assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_recorder_job_session_mapping_is_reclaimed_on_terminal_state() -> None:
+    """Job 终态后 job -> session 映射应回收，上界不随历史 Job 数增长。"""
+
+    class Sink:
+        async def append(self, session_id, event):
+            return None
+
+    recorder = TraceEventRecorder(bus=JobEventBus(), store=Sink())
+
+    for index in range(5000):
+        job_id = f"job_rec_{index}"
+        session_id = f"ses_rec_{index}"
+        await recorder._handle_event(_job_created(job_id, session_id))
+        # 终态事件携带权威 session_id，之后该 job 再无事件。
+        await recorder._handle_event(_job_failed(job_id, session_id))
+
+    # 全默认态语义：终态即回收，表上界恒为 0，与历史 Job 数无关。
+    assert len(recorder._job_sessions) == 0
+
+    # 有实质映射的活跃 Job 仍恒定命中（语义不变）。
+    await recorder._handle_event(_job_created("job_live", "ses_live"))
+    assert recorder._job_sessions["job_live"] == "ses_live"
+
+
+@pytest.mark.asyncio
+async def test_recorder_still_resolves_job_session_before_terminal_state() -> None:
+    """收敛映射不得破坏「终态前依赖映射回填 session_id」的既有行为。"""
+
+    class Sink:
+        def __init__(self) -> None:
+            self.appended: list[tuple[str, str]] = []
+
+        async def append(self, session_id, event):
+            self.appended.append((session_id, event.type))
+
+    sink = Sink()
+    recorder = TraceEventRecorder(bus=JobEventBus(), store=sink)
+
+    await recorder._handle_event(_job_created("job_res", "ses_res"))
+    # AGENT_START 的 payload 不带 session_id，必须靠映射回填。
+    await recorder._handle_event(_agent_start("job_res"))
+
+    assert sink.appended == [
+        ("ses_res", "job_created"),
+        ("ses_res", "agent_start"),
+    ]
+    assert recorder._job_sessions["job_res"] == "ses_res"

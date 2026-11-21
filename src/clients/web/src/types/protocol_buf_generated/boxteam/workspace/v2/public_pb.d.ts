@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
-import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
 import type { PluginServiceReference } from "../../gateway/v2/service_plugin_pb.js";
 
@@ -79,9 +79,9 @@ export declare type AgentDTO = Message<"boxteam.workspace.v2.AgentDTO"> & {
   capabilities: string[];
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.AgentProviderDTO providers = 7;
+   * @generated from field: repeated boxteam.workspace.v2.AgentModelDTO models = 9;
    */
-  providers: AgentProviderDTO[];
+  models: AgentModelDTO[];
 
   /**
    * @generated from field: optional bool workspace_default = 8;
@@ -96,13 +96,34 @@ export declare type AgentDTO = Message<"boxteam.workspace.v2.AgentDTO"> & {
 export declare const AgentDTOSchema: GenMessage<AgentDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.AgentProviderDTO
+ * @generated from message boxteam.workspace.v2.ModelReferenceDTO
  */
-export declare type AgentProviderDTO = Message<"boxteam.workspace.v2.AgentProviderDTO"> & {
+export declare type ModelReferenceDTO = Message<"boxteam.workspace.v2.ModelReferenceDTO"> & {
   /**
    * @generated from field: string provider_id = 1;
    */
   providerId: string;
+
+  /**
+   * @generated from field: string model_id = 2;
+   */
+  modelId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ModelReferenceDTO.
+ * Use `create(ModelReferenceDTOSchema)` to create a new message.
+ */
+export declare const ModelReferenceDTOSchema: GenMessage<ModelReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.AgentModelDTO
+ */
+export declare type AgentModelDTO = Message<"boxteam.workspace.v2.AgentModelDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 7;
+   */
+  modelRef?: ModelReferenceDTO | undefined;
 
   /**
    * @generated from field: string model = 2;
@@ -128,13 +149,23 @@ export declare type AgentProviderDTO = Message<"boxteam.workspace.v2.AgentProvid
    * @generated from field: optional string configuration_error = 6;
    */
   configurationError?: string | undefined;
+
+  /**
+   * @generated from field: optional string name = 8;
+   */
+  name?: string | undefined;
+
+  /**
+   * @generated from field: optional string provider_name = 9;
+   */
+  providerName?: string | undefined;
 };
 
 /**
- * Describes the message boxteam.workspace.v2.AgentProviderDTO.
- * Use `create(AgentProviderDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.AgentModelDTO.
+ * Use `create(AgentModelDTOSchema)` to create a new message.
  */
-export declare const AgentProviderDTOSchema: GenMessage<AgentProviderDTO>;
+export declare const AgentModelDTOSchema: GenMessage<AgentModelDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.AgentStateMessagesDTO
@@ -455,6 +486,54 @@ export declare type ConfigSourceLayerViewDTO = Message<"boxteam.workspace.v2.Con
 export declare const ConfigSourceLayerViewDTOSchema: GenMessage<ConfigSourceLayerViewDTO>;
 
 /**
+ * 文件事实也参与临时探测准入，不能仅依赖尚未追赶磁盘变化的物化层。
+ *
+ * @generated from message boxteam.workspace.v2.ConfigSourceBaselineDTO
+ */
+export declare type ConfigSourceBaselineDTO = Message<"boxteam.workspace.v2.ConfigSourceBaselineDTO"> & {
+  /**
+   * @generated from field: google.protobuf.Value uri = 1;
+   */
+  uri?: Value | undefined;
+
+  /**
+   * @generated from field: string presence = 2;
+   */
+  presence: string;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_revision = 3;
+   */
+  layerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_digest = 4;
+   */
+  layerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value source_generation = 5;
+   */
+  sourceGeneration?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value file_presence = 6;
+   */
+  filePresence?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value file_digest = 7;
+   */
+  fileDigest?: Value | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceBaselineDTO.
+ * Use `create(ConfigSourceBaselineDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceBaselineDTOSchema: GenMessage<ConfigSourceBaselineDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.ConfigSourceOriginDTO
  */
 export declare type ConfigSourceOriginDTO = Message<"boxteam.workspace.v2.ConfigSourceOriginDTO"> & {
@@ -706,6 +785,16 @@ export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.Conf
    * @generated from field: optional boxteam.workspace.v2.ConfigSourceFanoutDTO fanout = 21;
    */
   fanout?: ConfigSourceFanoutDTO | undefined;
+
+  /**
+   * @generated from field: map<string, boxteam.workspace.v2.ConfigSourceBaselineDTO> source_baseline = 22;
+   */
+  sourceBaseline: { [key: string]: ConfigSourceBaselineDTO };
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigSourceOriginDTO active_origins = 23;
+   */
+  activeOrigins: ConfigSourceOriginDTO[];
 };
 
 /**
@@ -713,6 +802,499 @@ export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.Conf
  * Use `create(ConfigSourceDocumentDTOSchema)` to create a new message.
  */
 export declare const ConfigSourceDocumentDTOSchema: GenMessage<ConfigSourceDocumentDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmCredentialInput
+ */
+export declare type LlmCredentialInput = Message<"boxteam.workspace.v2.LlmCredentialInput"> & {
+  /**
+   * @generated from field: string scope = 1;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string provider_id = 2;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: optional string model_id = 3;
+   */
+  modelId?: string | undefined;
+
+  /**
+   * @generated from field: string value = 4;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmCredentialInput.
+ * Use `create(LlmCredentialInputSchema)` to create a new message.
+ */
+export declare const LlmCredentialInputSchema: GenMessage<LlmCredentialInput>;
+
+/**
+ * active 与 draft 是互斥输入，业务校验拒绝混用。
+ *
+ * @generated from message boxteam.workspace.v2.LlmDiscoverRequest
+ */
+export declare type LlmDiscoverRequest = Message<"boxteam.workspace.v2.LlmDiscoverRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string mode = 3;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: string provider_id = 4;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: int64 edit_version = 5;
+   */
+  editVersion: bigint;
+
+  /**
+   * @generated from field: optional string source_key = 6;
+   */
+  sourceKey?: string | undefined;
+
+  /**
+   * @generated from field: optional string jsonc = 7;
+   */
+  jsonc?: string | undefined;
+
+  /**
+   * @generated from field: map<string, boxteam.workspace.v2.ConfigSourceBaselineDTO> expected_source_baseline = 8;
+   */
+  expectedSourceBaseline: { [key: string]: ConfigSourceBaselineDTO };
+
+  /**
+   * @generated from field: optional int64 expected_active_revision = 9;
+   */
+  expectedActiveRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string expected_active_digest = 10;
+   */
+  expectedActiveDigest?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LlmCredentialInput credential_input = 11;
+   */
+  credentialInput?: LlmCredentialInput | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmDiscoverRequest.
+ * Use `create(LlmDiscoverRequestSchema)` to create a new message.
+ */
+export declare const LlmDiscoverRequestSchema: GenMessage<LlmDiscoverRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmCredentialObservationDTO
+ */
+export declare type LlmCredentialObservationDTO = Message<"boxteam.workspace.v2.LlmCredentialObservationDTO"> & {
+  /**
+   * @generated from field: string source = 1;
+   */
+  source: string;
+
+  /**
+   * @generated from field: optional string secret_id = 2;
+   */
+  secretId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 revision = 3;
+   */
+  revision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string scope = 4;
+   */
+  scope?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmCredentialObservationDTO.
+ * Use `create(LlmCredentialObservationDTOSchema)` to create a new message.
+ */
+export declare const LlmCredentialObservationDTOSchema: GenMessage<LlmCredentialObservationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmProbeObservationDTO
+ */
+export declare type LlmProbeObservationDTO = Message<"boxteam.workspace.v2.LlmProbeObservationDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string mode = 3;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: string provider_id = 4;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: int64 edit_version = 5;
+   */
+  editVersion: bigint;
+
+  /**
+   * @generated from field: optional string source_key = 6;
+   */
+  sourceKey?: string | undefined;
+
+  /**
+   * @generated from field: map<string, boxteam.workspace.v2.ConfigSourceBaselineDTO> source_baseline = 7;
+   */
+  sourceBaseline: { [key: string]: ConfigSourceBaselineDTO };
+
+  /**
+   * @generated from field: optional int64 active_revision = 8;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string active_digest = 9;
+   */
+  activeDigest?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.LlmCredentialObservationDTO credential = 10;
+   */
+  credential?: LlmCredentialObservationDTO | undefined;
+
+  /**
+   * @generated from field: string protocol = 11;
+   */
+  protocol: string;
+
+  /**
+   * @generated from field: string endpoint = 12;
+   */
+  endpoint: string;
+
+  /**
+   * @generated from field: string observed_at = 13;
+   */
+  observedAt: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmProbeObservationDTO.
+ * Use `create(LlmProbeObservationDTOSchema)` to create a new message.
+ */
+export declare const LlmProbeObservationDTOSchema: GenMessage<LlmProbeObservationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmDiscoveredModelDTO
+ */
+export declare type LlmDiscoveredModelDTO = Message<"boxteam.workspace.v2.LlmDiscoveredModelDTO"> & {
+  /**
+   * @generated from field: string model = 1;
+   */
+  model: string;
+
+  /**
+   * @generated from field: optional string name = 2;
+   */
+  name?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmDiscoveredModelDTO.
+ * Use `create(LlmDiscoveredModelDTOSchema)` to create a new message.
+ */
+export declare const LlmDiscoveredModelDTOSchema: GenMessage<LlmDiscoveredModelDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmProbeErrorDTO
+ */
+export declare type LlmProbeErrorDTO = Message<"boxteam.workspace.v2.LlmProbeErrorDTO"> & {
+  /**
+   * @generated from field: string category = 1;
+   */
+  category: string;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: optional int64 status_code = 3;
+   */
+  statusCode?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string field = 4;
+   */
+  field?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmProbeErrorDTO.
+ * Use `create(LlmProbeErrorDTOSchema)` to create a new message.
+ */
+export declare const LlmProbeErrorDTOSchema: GenMessage<LlmProbeErrorDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmDiscoverResultDTO
+ */
+export declare type LlmDiscoverResultDTO = Message<"boxteam.workspace.v2.LlmDiscoverResultDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.LlmProbeObservationDTO observation = 1;
+   */
+  observation?: LlmProbeObservationDTO | undefined;
+
+  /**
+   * @generated from field: string source = 2;
+   */
+  source: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.LlmDiscoveredModelDTO models = 3;
+   */
+  models: LlmDiscoveredModelDTO[];
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LlmProbeErrorDTO error = 5;
+   */
+  error?: LlmProbeErrorDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmDiscoverResultDTO.
+ * Use `create(LlmDiscoverResultDTOSchema)` to create a new message.
+ */
+export declare const LlmDiscoverResultDTOSchema: GenMessage<LlmDiscoverResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmTestRequest
+ */
+export declare type LlmTestRequest = Message<"boxteam.workspace.v2.LlmTestRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string mode = 3;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: string provider_id = 4;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: int64 edit_version = 5;
+   */
+  editVersion: bigint;
+
+  /**
+   * @generated from field: optional string source_key = 6;
+   */
+  sourceKey?: string | undefined;
+
+  /**
+   * @generated from field: optional string jsonc = 7;
+   */
+  jsonc?: string | undefined;
+
+  /**
+   * @generated from field: map<string, boxteam.workspace.v2.ConfigSourceBaselineDTO> expected_source_baseline = 8;
+   */
+  expectedSourceBaseline: { [key: string]: ConfigSourceBaselineDTO };
+
+  /**
+   * @generated from field: optional int64 expected_active_revision = 9;
+   */
+  expectedActiveRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string expected_active_digest = 10;
+   */
+  expectedActiveDigest?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LlmCredentialInput credential_input = 11;
+   */
+  credentialInput?: LlmCredentialInput | undefined;
+
+  /**
+   * @generated from field: string model_id = 12;
+   */
+  modelId: string;
+
+  /**
+   * @generated from field: optional bool streaming = 13;
+   */
+  streaming?: boolean | undefined;
+
+  /**
+   * @generated from field: double timeout_seconds = 14;
+   */
+  timeoutSeconds: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmTestRequest.
+ * Use `create(LlmTestRequestSchema)` to create a new message.
+ */
+export declare const LlmTestRequestSchema: GenMessage<LlmTestRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmTestStartDTO
+ */
+export declare type LlmTestStartDTO = Message<"boxteam.workspace.v2.LlmTestStartDTO"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.LlmProbeObservationDTO observation = 2;
+   */
+  observation?: LlmProbeObservationDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 3;
+   */
+  modelRef?: ModelReferenceDTO | undefined;
+
+  /**
+   * @generated from field: bool streaming = 4;
+   */
+  streaming: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmTestStartDTO.
+ * Use `create(LlmTestStartDTOSchema)` to create a new message.
+ */
+export declare const LlmTestStartDTOSchema: GenMessage<LlmTestStartDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmTestDeltaDTO
+ */
+export declare type LlmTestDeltaDTO = Message<"boxteam.workspace.v2.LlmTestDeltaDTO"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string text = 2;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmTestDeltaDTO.
+ * Use `create(LlmTestDeltaDTOSchema)` to create a new message.
+ */
+export declare const LlmTestDeltaDTOSchema: GenMessage<LlmTestDeltaDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmTestResultDTO
+ */
+export declare type LlmTestResultDTO = Message<"boxteam.workspace.v2.LlmTestResultDTO"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.LlmProbeObservationDTO observation = 2;
+   */
+  observation?: LlmProbeObservationDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 3;
+   */
+  modelRef?: ModelReferenceDTO | undefined;
+
+  /**
+   * @generated from field: bool streaming = 4;
+   */
+  streaming: boolean;
+
+  /**
+   * @generated from field: string status = 5;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional double first_content_ms = 6;
+   */
+  firstContentMs?: number | undefined;
+
+  /**
+   * @generated from field: double elapsed_ms = 7;
+   */
+  elapsedMs: number;
+
+  /**
+   * @generated from field: string preview = 8;
+   */
+  preview: string;
+
+  /**
+   * @generated from field: bool preview_truncated = 9;
+   */
+  previewTruncated: boolean;
+
+  /**
+   * @generated from field: optional google.protobuf.Struct usage = 10;
+   */
+  usage?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LlmProbeErrorDTO error = 11;
+   */
+  error?: LlmProbeErrorDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmTestResultDTO.
+ * Use `create(LlmTestResultDTOSchema)` to create a new message.
+ */
+export declare const LlmTestResultDTOSchema: GenMessage<LlmTestResultDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ConfigSourcePreflightDTO
@@ -737,6 +1319,16 @@ export declare type ConfigSourcePreflightDTO = Message<"boxteam.workspace.v2.Con
    * @generated from field: repeated string changed_paths = 4;
    */
   changedPaths: string[];
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigModelInspectionDTO model_options = 5;
+   */
+  modelOptions?: ConfigModelInspectionDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigModelInspectionDTO active_model_options = 6;
+   */
+  activeModelOptions?: ConfigModelInspectionDTO | undefined;
 };
 
 /**
@@ -744,6 +1336,78 @@ export declare type ConfigSourcePreflightDTO = Message<"boxteam.workspace.v2.Con
  * Use `create(ConfigSourcePreflightDTOSchema)` to create a new message.
  */
 export declare const ConfigSourcePreflightDTOSchema: GenMessage<ConfigSourcePreflightDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigModelOptionOriginDTO
+ */
+export declare type ConfigModelOptionOriginDTO = Message<"boxteam.workspace.v2.ConfigModelOptionOriginDTO"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: string source_key = 2;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string definition = 3;
+   */
+  definition: string;
+
+  /**
+   * @generated from field: string definition_path = 4;
+   */
+  definitionPath: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigModelOptionOriginDTO.
+ * Use `create(ConfigModelOptionOriginDTOSchema)` to create a new message.
+ */
+export declare const ConfigModelOptionOriginDTOSchema: GenMessage<ConfigModelOptionOriginDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigModelInspectionDTO
+ */
+export declare type ConfigModelInspectionDTO = Message<"boxteam.workspace.v2.ConfigModelInspectionDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 1;
+   */
+  modelRef?: ModelReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string model = 2;
+   */
+  model: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct options = 3;
+   */
+  options?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigModelOptionOriginDTO origins = 4;
+   */
+  origins: ConfigModelOptionOriginDTO[];
+
+  /**
+   * @generated from field: string request_url = 5;
+   */
+  requestUrl: string;
+
+  /**
+   * @generated from field: optional string catalog_url = 6;
+   */
+  catalogUrl?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigModelInspectionDTO.
+ * Use `create(ConfigModelInspectionDTOSchema)` to create a new message.
+ */
+export declare const ConfigModelInspectionDTOSchema: GenMessage<ConfigModelInspectionDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ConfigEventDTO
@@ -1037,9 +1701,9 @@ export declare type ChildThreadListDTO = Message<"boxteam.workspace.v2.ChildThre
   total: bigint;
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.TeamBoardDTO teams = 4;
+   * @generated from field: repeated boxteam.workspace.v2.TeamBoardSummaryDTO teams = 5;
    */
-  teams: TeamBoardDTO[];
+  teams: TeamBoardSummaryDTO[];
 };
 
 /**
@@ -1047,6 +1711,129 @@ export declare type ChildThreadListDTO = Message<"boxteam.workspace.v2.ChildThre
  * Use `create(ChildThreadListDTOSchema)` to create a new message.
  */
 export declare const ChildThreadListDTOSchema: GenMessage<ChildThreadListDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TeamMemberSummaryDTO
+ */
+export declare type TeamMemberSummaryDTO = Message<"boxteam.workspace.v2.TeamMemberSummaryDTO"> & {
+  /**
+   * @generated from field: string thread_id = 1;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string role = 2;
+   */
+  role: string;
+
+  /**
+   * @generated from field: string work_mode = 3;
+   */
+  workMode: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TeamMemberSummaryDTO.
+ * Use `create(TeamMemberSummaryDTOSchema)` to create a new message.
+ */
+export declare const TeamMemberSummaryDTOSchema: GenMessage<TeamMemberSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TeamTaskSummaryDTO
+ */
+export declare type TeamTaskSummaryDTO = Message<"boxteam.workspace.v2.TeamTaskSummaryDTO"> & {
+  /**
+   * @generated from field: string task_id = 1;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: string title = 2;
+   */
+  title: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string assignee_thread_id = 4;
+   */
+  assigneeThreadId: string;
+
+  /**
+   * @generated from field: string phase = 5;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: int64 cycle = 6;
+   */
+  cycle: bigint;
+
+  /**
+   * @generated from field: optional string summary = 7;
+   */
+  summary?: string | undefined;
+
+  /**
+   * @generated from field: optional string error = 8;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TeamTaskSummaryDTO.
+ * Use `create(TeamTaskSummaryDTOSchema)` to create a new message.
+ */
+export declare const TeamTaskSummaryDTOSchema: GenMessage<TeamTaskSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TeamBoardSummaryDTO
+ */
+export declare type TeamBoardSummaryDTO = Message<"boxteam.workspace.v2.TeamBoardSummaryDTO"> & {
+  /**
+   * @generated from field: string team_id = 1;
+   */
+  teamId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string session_id = 3;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string coordinator_thread_id = 4;
+   */
+  coordinatorThreadId: string;
+
+  /**
+   * @generated from field: int64 version = 5;
+   */
+  version: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TeamMemberSummaryDTO members = 6;
+   */
+  members: TeamMemberSummaryDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TeamTaskSummaryDTO tasks = 7;
+   */
+  tasks: TeamTaskSummaryDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TeamBoardSummaryDTO.
+ * Use `create(TeamBoardSummaryDTOSchema)` to create a new message.
+ */
+export declare const TeamBoardSummaryDTOSchema: GenMessage<TeamBoardSummaryDTO>;
 
 /**
  * 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。
@@ -1159,6 +1946,11 @@ export declare type SessionCatalogPageDTO = Message<"boxteam.workspace.v2.Sessio
    * @generated from field: optional string consistency_warning = 7;
    */
   consistencyWarning?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionCatalogSyncDTO sync = 8;
+   */
+  sync?: SessionCatalogSyncDTO | undefined;
 };
 
 /**
@@ -1185,6 +1977,16 @@ export declare type SessionCatalogBreadcrumbDTO = Message<"boxteam.workspace.v2.
    * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO items = 3;
    */
   items: SessionCatalogNodeDTO[];
+
+  /**
+   * @generated from field: string node_id = 4;
+   */
+  nodeId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionCatalogSyncDTO sync = 5;
+   */
+  sync?: SessionCatalogSyncDTO | undefined;
 };
 
 /**
@@ -1273,6 +2075,21 @@ export declare type SessionCatalogExportDTO = Message<"boxteam.workspace.v2.Sess
    * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO items = 3;
    */
   items: SessionCatalogNodeDTO[];
+
+  /**
+   * @generated from field: repeated string node_ids = 4;
+   */
+  nodeIds: string[];
+
+  /**
+   * @generated from field: bool complete = 5;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionCatalogSyncDTO sync = 6;
+   */
+  sync?: SessionCatalogSyncDTO | undefined;
 };
 
 /**
@@ -1280,6 +2097,109 @@ export declare type SessionCatalogExportDTO = Message<"boxteam.workspace.v2.Sess
  * Use `create(SessionCatalogExportDTOSchema)` to create a new message.
  */
 export declare const SessionCatalogExportDTOSchema: GenMessage<SessionCatalogExportDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogSyncDTO
+ */
+export declare type SessionCatalogSyncDTO = Message<"boxteam.workspace.v2.SessionCatalogSyncDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string source = 3;
+   */
+  source: string;
+
+  /**
+   * @generated from field: bool stale = 4;
+   */
+  stale: boolean;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp authoritative_confirmed_at = 5;
+   */
+  authoritativeConfirmedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional string error = 6;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogSyncDTO.
+ * Use `create(SessionCatalogSyncDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogSyncDTOSchema: GenMessage<SessionCatalogSyncDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogVersionDTO
+ */
+export declare type SessionCatalogVersionDTO = Message<"boxteam.workspace.v2.SessionCatalogVersionDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: string projection_revision = 3;
+   */
+  projectionRevision: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogVersionDTO.
+ * Use `create(SessionCatalogVersionDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogVersionDTOSchema: GenMessage<SessionCatalogVersionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NavigationSnapshotDTO
+ */
+export declare type NavigationSnapshotDTO = Message<"boxteam.workspace.v2.NavigationSnapshotDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: int64 event_seq_watermark = 3;
+   */
+  eventSeqWatermark: bigint;
+
+  /**
+   * @generated from field: int64 generation = 4;
+   */
+  generation: bigint;
+
+  /**
+   * @generated from field: optional string projection_revision = 5;
+   */
+  projectionRevision?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NavigationSnapshotDTO.
+ * Use `create(NavigationSnapshotDTOSchema)` to create a new message.
+ */
+export declare const NavigationSnapshotDTOSchema: GenMessage<NavigationSnapshotDTO>;
 
 /**
  * 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。
@@ -2207,191 +3127,6 @@ export declare type JobDispatchSnapshotDTO = Message<"boxteam.workspace.v2.JobDi
  * Use `create(JobDispatchSnapshotDTOSchema)` to create a new message.
  */
 export declare const JobDispatchSnapshotDTOSchema: GenMessage<JobDispatchSnapshotDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.JobProgressDTO
- */
-export declare type JobProgressDTO = Message<"boxteam.workspace.v2.JobProgressDTO"> & {
-  /**
-   * @generated from field: string job_id = 1;
-   */
-  jobId: string;
-
-  /**
-   * @generated from field: string status = 2;
-   */
-  status: string;
-
-  /**
-   * @generated from field: optional string current_step_id = 3;
-   */
-  currentStepId?: string | undefined;
-
-  /**
-   * @generated from field: optional int64 progress = 4;
-   */
-  progress?: bigint | undefined;
-
-  /**
-   * @generated from field: optional string message = 5;
-   */
-  message?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobProgressDTO.
- * Use `create(JobProgressDTOSchema)` to create a new message.
- */
-export declare const JobProgressDTOSchema: GenMessage<JobProgressDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.JobStatusChangedExecutionEventDTO
- */
-export declare type JobStatusChangedExecutionEventDTO = Message<"boxteam.workspace.v2.JobStatusChangedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.JobProgressDTO payload = 6;
-   */
-  payload?: JobProgressDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobStatusChangedExecutionEventDTO.
- * Use `create(JobStatusChangedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const JobStatusChangedExecutionEventDTOSchema: GenMessage<JobStatusChangedExecutionEventDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.JobStepProgressDTO
- */
-export declare type JobStepProgressDTO = Message<"boxteam.workspace.v2.JobStepProgressDTO"> & {
-  /**
-   * @generated from field: optional string agent_id = 1;
-   */
-  agentId?: string | undefined;
-
-  /**
-   * @generated from field: optional string message = 2;
-   */
-  message?: string | undefined;
-
-  /**
-   * @generated from field: optional string phase = 3;
-   */
-  phase?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobStepProgressDTO.
- * Use `create(JobStepProgressDTOSchema)` to create a new message.
- */
-export declare const JobStepProgressDTOSchema: GenMessage<JobStepProgressDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.JobStepUpdatedExecutionEventDTO
- */
-export declare type JobStepUpdatedExecutionEventDTO = Message<"boxteam.workspace.v2.JobStepUpdatedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.JobStepProgressDTO payload = 6;
-   */
-  payload?: JobStepProgressDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobStepUpdatedExecutionEventDTO.
- * Use `create(JobStepUpdatedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const JobStepUpdatedExecutionEventDTOSchema: GenMessage<JobStepUpdatedExecutionEventDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.JobUpdatedExecutionEventDTO
- */
-export declare type JobUpdatedExecutionEventDTO = Message<"boxteam.workspace.v2.JobUpdatedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.JobProgressDTO payload = 6;
-   */
-  payload?: JobProgressDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobUpdatedExecutionEventDTO.
- * Use `create(JobUpdatedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const JobUpdatedExecutionEventDTOSchema: GenMessage<JobUpdatedExecutionEventDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.LLMRequestLogRecordDTO
@@ -3611,6 +4346,11 @@ export declare type MessageRunAccepted = Message<"boxteam.workspace.v2.MessageRu
    * @generated from field: optional string turn_id = 6;
    */
   turnId?: string | undefined;
+
+  /**
+   * @generated from field: optional string operation_id = 7;
+   */
+  operationId?: string | undefined;
 };
 
 /**
@@ -3632,6 +4372,11 @@ export declare type MessageRunRequest = Message<"boxteam.workspace.v2.MessageRun
    * @generated from field: boxteam.workspace.v2.RunOptions run = 2;
    */
   run?: RunOptions | undefined;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
 };
 
 /**
@@ -3639,6 +4384,42 @@ export declare type MessageRunRequest = Message<"boxteam.workspace.v2.MessageRun
  * Use `create(MessageRunRequestSchema)` to create a new message.
  */
 export declare const MessageRunRequestSchema: GenMessage<MessageRunRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.MessageSubmissionResultDTO
+ */
+export declare type MessageSubmissionResultDTO = Message<"boxteam.workspace.v2.MessageSubmissionResultDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.MessageRunAccepted accepted = 5;
+   */
+  accepted?: MessageRunAccepted | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.MessageSubmissionResultDTO.
+ * Use `create(MessageSubmissionResultDTOSchema)` to create a new message.
+ */
+export declare const MessageSubmissionResultDTOSchema: GenMessage<MessageSubmissionResultDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ExtensionCatalogBindingAuditDTO
@@ -5258,6 +6039,11 @@ export declare type PendingRequestDTO = Message<"boxteam.workspace.v2.PendingReq
    * @generated from field: google.protobuf.Struct execution_binding = 21;
    */
   executionBinding?: JsonObject | undefined;
+
+  /**
+   * @generated from field: bool reorderable = 22;
+   */
+  reorderable: boolean;
 };
 
 /**
@@ -5296,6 +6082,11 @@ export declare type PendingRequestListDTO = Message<"boxteam.workspace.v2.Pendin
    * @generated from field: optional string thread_id = 5;
    */
   threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 thread_revision = 6;
+   */
+  threadRevision?: bigint | undefined;
 };
 
 /**
@@ -5303,6 +6094,135 @@ export declare type PendingRequestListDTO = Message<"boxteam.workspace.v2.Pendin
  * Use `create(PendingRequestListDTOSchema)` to create a new message.
  */
 export declare const PendingRequestListDTOSchema: GenMessage<PendingRequestListDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PendingRequestReorderRequest
+ */
+export declare type PendingRequestReorderRequest = Message<"boxteam.workspace.v2.PendingRequestReorderRequest"> & {
+  /**
+   * @generated from field: repeated string message_ids = 1;
+   */
+  messageIds: string[];
+
+  /**
+   * @generated from field: int64 expected_thread_revision = 2;
+   */
+  expectedThreadRevision: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PendingRequestReorderRequest.
+ * Use `create(PendingRequestReorderRequestSchema)` to create a new message.
+ */
+export declare const PendingRequestReorderRequestSchema: GenMessage<PendingRequestReorderRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.UserQuestionDTO
+ */
+export declare type UserQuestionDTO = Message<"boxteam.workspace.v2.UserQuestionDTO"> & {
+  /**
+   * @generated from field: string question_id = 1;
+   */
+  questionId: string;
+
+  /**
+   * @generated from field: int64 sequence = 2;
+   */
+  sequence: bigint;
+
+  /**
+   * @generated from field: string markdown = 3;
+   */
+  markdown: string;
+
+  /**
+   * @generated from field: optional string turn_id = 4;
+   */
+  turnId?: string | undefined;
+
+  /**
+   * @generated from field: string created_at = 5;
+   */
+  createdAt: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.UserQuestionDTO.
+ * Use `create(UserQuestionDTOSchema)` to create a new message.
+ */
+export declare const UserQuestionDTOSchema: GenMessage<UserQuestionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.UserQuestionSummaryDTO
+ */
+export declare type UserQuestionSummaryDTO = Message<"boxteam.workspace.v2.UserQuestionSummaryDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: int64 count = 3;
+   */
+  count: bigint;
+
+  /**
+   * @generated from field: int64 revision = 4;
+   */
+  revision: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.UserQuestionSummaryDTO.
+ * Use `create(UserQuestionSummaryDTOSchema)` to create a new message.
+ */
+export declare const UserQuestionSummaryDTOSchema: GenMessage<UserQuestionSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.UserQuestionPageDTO
+ */
+export declare type UserQuestionPageDTO = Message<"boxteam.workspace.v2.UserQuestionPageDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: int64 count = 3;
+   */
+  count: bigint;
+
+  /**
+   * @generated from field: int64 revision = 4;
+   */
+  revision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.UserQuestionDTO items = 5;
+   */
+  items: UserQuestionDTO[];
+
+  /**
+   * @generated from field: optional int64 next_before = 6;
+   */
+  nextBefore?: bigint | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.UserQuestionPageDTO.
+ * Use `create(UserQuestionPageDTOSchema)` to create a new message.
+ */
+export declare const UserQuestionPageDTOSchema: GenMessage<UserQuestionPageDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.PendingRequestPolicyUpdateRequest
@@ -6064,47 +6984,6 @@ export declare type SessionCompactResultDTO = Message<"boxteam.workspace.v2.Sess
 export declare const SessionCompactResultDTOSchema: GenMessage<SessionCompactResultDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.SessionCompletedExecutionEventDTO
- */
-export declare type SessionCompletedExecutionEventDTO = Message<"boxteam.workspace.v2.SessionCompletedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.JobProgressDTO payload = 6;
-   */
-  payload?: JobProgressDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionCompletedExecutionEventDTO.
- * Use `create(SessionCompletedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const SessionCompletedExecutionEventDTOSchema: GenMessage<SessionCompletedExecutionEventDTO>;
-
-/**
  * 仅标识封存来源，不是当前资源定位器或访问凭据。
  *
  * @generated from message boxteam.workspace.v2.SessionContextProvenanceRefDTO
@@ -6765,11 +7644,6 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
   currentAgentId: string;
 
   /**
-   * @generated from field: optional string current_provider_id = 8;
-   */
-  currentProviderId?: string | undefined;
-
-  /**
    * catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
    *
    * @generated from field: optional string parent_session_id = 9;
@@ -6812,6 +7686,11 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
    * @generated from field: optional string thread_id = 17;
    */
   threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ModelReferenceDTO current_model = 18;
+   */
+  currentModel?: ModelReferenceDTO | undefined;
 };
 
 /**
@@ -6819,94 +7698,6 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
  * Use `create(SessionDTOSchema)` to create a new message.
  */
 export declare const SessionDTOSchema: GenMessage<SessionDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.SessionErrorExecutionEventDTO
- */
-export declare type SessionErrorExecutionEventDTO = Message<"boxteam.workspace.v2.SessionErrorExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.SessionErrorPayloadDTO payload = 6;
-   */
-  payload?: SessionErrorPayloadDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionErrorExecutionEventDTO.
- * Use `create(SessionErrorExecutionEventDTOSchema)` to create a new message.
- */
-export declare const SessionErrorExecutionEventDTOSchema: GenMessage<SessionErrorExecutionEventDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.SessionErrorPayloadDTO
- */
-export declare type SessionErrorPayloadDTO = Message<"boxteam.workspace.v2.SessionErrorPayloadDTO"> & {
-  /**
-   * @generated from field: string error = 1;
-   */
-  error: string;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionErrorPayloadDTO.
- * Use `create(SessionErrorPayloadDTOSchema)` to create a new message.
- */
-export declare const SessionErrorPayloadDTOSchema: GenMessage<SessionErrorPayloadDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.SessionExecutionEventBaseDTO
- */
-export declare type SessionExecutionEventBaseDTO = Message<"boxteam.workspace.v2.SessionExecutionEventBaseDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionExecutionEventBaseDTO.
- * Use `create(SessionExecutionEventBaseDTOSchema)` to create a new message.
- */
-export declare const SessionExecutionEventBaseDTOSchema: GenMessage<SessionExecutionEventBaseDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionExecutionSnapshotDTO
@@ -6963,32 +7754,6 @@ export declare type SessionExecutionSnapshotDTO = Message<"boxteam.workspace.v2.
  * Use `create(SessionExecutionSnapshotDTOSchema)` to create a new message.
  */
 export declare const SessionExecutionSnapshotDTOSchema: GenMessage<SessionExecutionSnapshotDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.SessionExecutionSseDTO
- */
-export declare type SessionExecutionSseDTO = Message<"boxteam.workspace.v2.SessionExecutionSseDTO"> & {
-  /**
-   * @generated from field: google.protobuf.Struct event = 1;
-   */
-  event?: JsonObject | undefined;
-
-  /**
-   * @generated from field: string raw_type = 2;
-   */
-  rawType: string;
-
-  /**
-   * @generated from field: optional google.protobuf.Struct raw_payload = 3;
-   */
-  rawPayload?: JsonObject | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionExecutionSseDTO.
- * Use `create(SessionExecutionSseDTOSchema)` to create a new message.
- */
-export declare const SessionExecutionSseDTOSchema: GenMessage<SessionExecutionSseDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionFileChangeDTO
@@ -7624,30 +8389,107 @@ export declare type SessionGenerationOriginDTO = Message<"boxteam.workspace.v2.S
 export declare const SessionGenerationOriginDTOSchema: GenMessage<SessionGenerationOriginDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.SessionGoalClearResultDTO
+ * @generated from message boxteam.workspace.v2.SessionGoalClearRequest
  */
-export declare type SessionGoalClearResultDTO = Message<"boxteam.workspace.v2.SessionGoalClearResultDTO"> & {
+export declare type SessionGoalClearRequest = Message<"boxteam.workspace.v2.SessionGoalClearRequest"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: int64 expected_control_revision = 2;
+   */
+  expectedControlRevision: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGoalClearRequest.
+ * Use `create(SessionGoalClearRequestSchema)` to create a new message.
+ */
+export declare const SessionGoalClearRequestSchema: GenMessage<SessionGoalClearRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGoalSnapshotDTO
+ */
+export declare type SessionGoalSnapshotDTO = Message<"boxteam.workspace.v2.SessionGoalSnapshotDTO"> & {
   /**
    * @generated from field: string session_id = 1;
    */
   sessionId: string;
 
   /**
-   * @generated from field: bool cleared = 2;
-   */
-  cleared: boolean;
-
-  /**
-   * @generated from field: string thread_id = 3;
+   * @generated from field: string thread_id = 2;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGoalDTO goal = 3;
+   */
+  goal?: SessionGoalDTO | undefined;
+
+  /**
+   * @generated from field: int64 control_revision = 4;
+   */
+  controlRevision: bigint;
+
+  /**
+   * @generated from field: int64 sync_version = 5;
+   */
+  syncVersion: bigint;
 };
 
 /**
- * Describes the message boxteam.workspace.v2.SessionGoalClearResultDTO.
- * Use `create(SessionGoalClearResultDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.SessionGoalSnapshotDTO.
+ * Use `create(SessionGoalSnapshotDTOSchema)` to create a new message.
  */
-export declare const SessionGoalClearResultDTOSchema: GenMessage<SessionGoalClearResultDTO>;
+export declare const SessionGoalSnapshotDTOSchema: GenMessage<SessionGoalSnapshotDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionGoalOperationResultDTO
+ */
+export declare type SessionGoalOperationResultDTO = Message<"boxteam.workspace.v2.SessionGoalOperationResultDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * @generated from field: int64 control_revision = 5;
+   */
+  controlRevision: bigint;
+
+  /**
+   * @generated from field: int64 sync_version = 6;
+   */
+  syncVersion: bigint;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGoalDTO goal = 7;
+   */
+  goal?: SessionGoalDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionGoalOperationResultDTO.
+ * Use `create(SessionGoalOperationResultDTOSchema)` to create a new message.
+ */
+export declare const SessionGoalOperationResultDTOSchema: GenMessage<SessionGoalOperationResultDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionSkillUntrackRequest
@@ -7823,26 +8665,21 @@ export declare type SessionGoalDTO = Message<"boxteam.workspace.v2.SessionGoalDT
   updatedAt?: Timestamp | undefined;
 
   /**
-   * @generated from field: optional string last_accounted_job_id = 11;
-   */
-  lastAccountedJobId?: string | undefined;
-
-  /**
-   * @generated from field: optional string last_continued_job_id = 12;
-   */
-  lastContinuedJobId?: string | undefined;
-
-  /**
-   * @generated from field: optional google.protobuf.Struct accounted_jobs = 13;
-   */
-  accountedJobs?: JsonObject | undefined;
-
-  /**
    * 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。
    *
    * @generated from field: string thread_id = 14;
    */
   threadId: string;
+
+  /**
+   * @generated from field: int64 control_revision = 15;
+   */
+  controlRevision: bigint;
+
+  /**
+   * @generated from field: int64 sync_version = 16;
+   */
+  syncVersion: bigint;
 };
 
 /**
@@ -7874,6 +8711,16 @@ export declare type SessionGoalSetRequest = Message<"boxteam.workspace.v2.Sessio
    * @generated from field: optional bool replace = 4;
    */
   replace?: boolean | undefined;
+
+  /**
+   * @generated from field: string operation_id = 5;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: int64 expected_control_revision = 6;
+   */
+  expectedControlRevision: bigint;
 };
 
 /**
@@ -8032,11 +8879,6 @@ export declare type SessionInformationSessionDTO = Message<"boxteam.workspace.v2
   currentAgentId: string;
 
   /**
-   * @generated from field: optional string current_provider_id = 5;
-   */
-  currentProviderId?: string | undefined;
-
-  /**
    * catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
    *
    * @generated from field: optional string parent_session_id = 6;
@@ -8073,6 +8915,11 @@ export declare type SessionInformationSessionDTO = Message<"boxteam.workspace.v2
    * @generated from field: optional bool title_truncated = 11;
    */
   titleTruncated?: boolean | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ModelReferenceDTO current_model = 12;
+   */
+  currentModel?: ModelReferenceDTO | undefined;
 };
 
 /**
@@ -9095,37 +9942,6 @@ export declare type SessionNetworkWaitDTO = Message<"boxteam.workspace.v2.Sessio
 export declare const SessionNetworkWaitDTOSchema: GenMessage<SessionNetworkWaitDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.SessionObservationStateDTO
- */
-export declare type SessionObservationStateDTO = Message<"boxteam.workspace.v2.SessionObservationStateDTO"> & {
-  /**
-   * @generated from field: string session_id = 1;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string active_job_id = 2;
-   */
-  activeJobId?: string | undefined;
-
-  /**
-   * @generated from field: optional bool is_streaming = 3;
-   */
-  isStreaming?: boolean | undefined;
-
-  /**
-   * @generated from field: optional bool is_idle = 4;
-   */
-  isIdle?: boolean | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionObservationStateDTO.
- * Use `create(SessionObservationStateDTOSchema)` to create a new message.
- */
-export declare const SessionObservationStateDTOSchema: GenMessage<SessionObservationStateDTO>;
-
-/**
  * @generated from message boxteam.workspace.v2.SessionResourceControlRequest
  */
 export declare type SessionResourceControlRequest = Message<"boxteam.workspace.v2.SessionResourceControlRequest"> & {
@@ -10052,47 +10868,6 @@ export declare type BrowserResourceOperationRequest = Message<"boxteam.workspace
 export declare const BrowserResourceOperationRequestSchema: GenMessage<BrowserResourceOperationRequest>;
 
 /**
- * @generated from message boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO
- */
-export declare type SessionStatusChangedExecutionEventDTO = Message<"boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: google.protobuf.Struct payload = 6;
-   */
-  payload?: JsonObject | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO.
- * Use `create(SessionStatusChangedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const SessionStatusChangedExecutionEventDTOSchema: GenMessage<SessionStatusChangedExecutionEventDTO>;
-
-/**
  * @generated from message boxteam.workspace.v2.SessionStatusDTO
  */
 export declare type SessionStatusDTO = Message<"boxteam.workspace.v2.SessionStatusDTO"> & {
@@ -10204,9 +10979,9 @@ export declare type SessionUpdateRequest = Message<"boxteam.workspace.v2.Session
   agentId?: string | undefined;
 
   /**
-   * @generated from field: optional string provider_id = 3;
+   * @generated from field: optional boxteam.workspace.v2.ModelReferenceDTO model = 5;
    */
-  providerId?: string | undefined;
+  model?: ModelReferenceDTO | undefined;
 };
 
 /**
@@ -10765,6 +11540,26 @@ export declare type ToolDTO = Message<"boxteam.workspace.v2.ToolDTO"> & {
    * @generated from field: optional bool test_supported = 12;
    */
   testSupported?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool execution_locked = 13;
+   */
+  executionLocked?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool model_visibility_locked = 14;
+   */
+  modelVisibilityLocked?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string availability = 15;
+   */
+  availability?: string | undefined;
+
+  /**
+   * @generated from field: optional string availability_detail = 16;
+   */
+  availabilityDetail?: string | undefined;
 };
 
 /**
@@ -10835,9 +11630,9 @@ export declare type ToolTestAttemptDTO = Message<"boxteam.workspace.v2.ToolTestA
   caseId: string;
 
   /**
-   * @generated from field: string provider_id = 3;
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 15;
    */
-  providerId: string;
+  modelRef?: ModelReferenceDTO | undefined;
 
   /**
    * @generated from field: string model = 4;
@@ -10902,13 +11697,13 @@ export declare type ToolTestAttemptDTO = Message<"boxteam.workspace.v2.ToolTestA
 export declare const ToolTestAttemptDTOSchema: GenMessage<ToolTestAttemptDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.ToolTestProviderResultDTO
+ * @generated from message boxteam.workspace.v2.ToolTestModelResultDTO
  */
-export declare type ToolTestProviderResultDTO = Message<"boxteam.workspace.v2.ToolTestProviderResultDTO"> & {
+export declare type ToolTestModelResultDTO = Message<"boxteam.workspace.v2.ToolTestModelResultDTO"> & {
   /**
-   * @generated from field: string provider_id = 1;
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model_ref = 12;
    */
-  providerId: string;
+  modelRef?: ModelReferenceDTO | undefined;
 
   /**
    * @generated from field: string model = 2;
@@ -10962,10 +11757,10 @@ export declare type ToolTestProviderResultDTO = Message<"boxteam.workspace.v2.To
 };
 
 /**
- * Describes the message boxteam.workspace.v2.ToolTestProviderResultDTO.
- * Use `create(ToolTestProviderResultDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.ToolTestModelResultDTO.
+ * Use `create(ToolTestModelResultDTOSchema)` to create a new message.
  */
-export declare const ToolTestProviderResultDTOSchema: GenMessage<ToolTestProviderResultDTO>;
+export declare const ToolTestModelResultDTOSchema: GenMessage<ToolTestModelResultDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ToolTestRunDTO
@@ -11007,9 +11802,9 @@ export declare type ToolTestRunDTO = Message<"boxteam.workspace.v2.ToolTestRunDT
   repetitions: bigint;
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.ToolTestProviderResultDTO providers = 8;
+   * @generated from field: repeated boxteam.workspace.v2.ToolTestModelResultDTO models = 11;
    */
-  providers: ToolTestProviderResultDTO[];
+  models: ToolTestModelResultDTO[];
 
   /**
    * @generated from field: repeated boxteam.workspace.v2.ToolTestAttemptDTO attempts = 9;
@@ -11054,14 +11849,14 @@ export declare type ToolTestStartRequest = Message<"boxteam.workspace.v2.ToolTes
   agentId?: string | undefined;
 
   /**
-   * @generated from field: repeated string provider_ids = 2;
-   */
-  providerIds: string[];
-
-  /**
    * @generated from field: optional int64 repetitions = 3;
    */
   repetitions?: bigint | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ModelReferenceDTO model_refs = 4;
+   */
+  modelRefs: ModelReferenceDTO[];
 };
 
 /**
@@ -11161,63 +11956,6 @@ export declare type TraceEventDTO = Message<"boxteam.workspace.v2.TraceEventDTO"
  * Use `create(TraceEventDTOSchema)` to create a new message.
  */
 export declare const TraceEventDTOSchema: GenMessage<TraceEventDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.TraceObservedExecutionEventDTO
- */
-export declare type TraceObservedExecutionEventDTO = Message<"boxteam.workspace.v2.TraceObservedExecutionEventDTO"> & {
-  /**
-   * @generated from field: string event_id = 1;
-   */
-  eventId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: optional string job_id = 3;
-   */
-  jobId?: string | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp time = 4;
-   */
-  time?: Timestamp | undefined;
-
-  /**
-   * @generated from field: string type = 5;
-   */
-  type: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.TraceObservedPayloadDTO payload = 6;
-   */
-  payload?: TraceObservedPayloadDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.TraceObservedExecutionEventDTO.
- * Use `create(TraceObservedExecutionEventDTOSchema)` to create a new message.
- */
-export declare const TraceObservedExecutionEventDTOSchema: GenMessage<TraceObservedExecutionEventDTO>;
-
-/**
- * @generated from message boxteam.workspace.v2.TraceObservedPayloadDTO
- */
-export declare type TraceObservedPayloadDTO = Message<"boxteam.workspace.v2.TraceObservedPayloadDTO"> & {
-  /**
-   * @generated from field: string raw_type = 1;
-   */
-  rawType: string;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.TraceObservedPayloadDTO.
- * Use `create(TraceObservedPayloadDTOSchema)` to create a new message.
- */
-export declare const TraceObservedPayloadDTOSchema: GenMessage<TraceObservedPayloadDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TurnActivityStatsDTO
@@ -12147,6 +12885,11 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: optional string anchor_tool_result = 12;
    */
   anchorToolResult?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_cursor = 13;
+   */
+  contextCursor?: string | undefined;
 };
 
 /**
@@ -12154,6 +12897,32 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
  * Use `create(TurnHistoryLoadRequestSchema)` to create a new message.
  */
 export declare const TurnHistoryLoadRequestSchema: GenMessage<TurnHistoryLoadRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ContextNoticeBatchDTO
+ */
+export declare type ContextNoticeBatchDTO = Message<"boxteam.workspace.v2.ContextNoticeBatchDTO"> & {
+  /**
+   * @generated from field: string owner_id = 1;
+   */
+  ownerId: string;
+
+  /**
+   * @generated from field: string owner_kind = 2;
+   */
+  ownerKind: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO parts = 3;
+   */
+  parts: TurnResponsePartDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextNoticeBatchDTO.
+ * Use `create(ContextNoticeBatchDTOSchema)` to create a new message.
+ */
+export declare const ContextNoticeBatchDTOSchema: GenMessage<ContextNoticeBatchDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TurnHistoryPageDTO
@@ -12233,6 +13002,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: optional boxteam.workspace.v2.TurnToolResultDTO located_tool_result = 15;
    */
   locatedToolResult?: TurnToolResultDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ContextNoticeBatchDTO context_notices = 16;
+   */
+  contextNotices: ContextNoticeBatchDTO[];
 };
 
 /**
@@ -12568,6 +13342,68 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
    * @generated from field: optional bool partial = 16;
    */
   partial?: boolean | undefined;
+
+  /**
+   * 内部上下文标记只携带来源；正文沿 Item inspect 按需读取。
+   *
+   * @generated from field: optional string context_kind = 17;
+   */
+  contextKind?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_source_id = 18;
+   */
+  contextSourceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_model_call_id = 19;
+   */
+  contextModelCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_before_item_id = 20;
+   */
+  contextBeforeItemId?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO context_content_ref = 21;
+   */
+  contextContentRef?: ContextContentReferenceDTO | undefined;
+
+  /**
+   * @generated from field: optional string context_source_revision = 22;
+   */
+  contextSourceRevision?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 context_content_length = 23;
+   */
+  contextContentLength?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string context_availability = 24;
+   */
+  contextAvailability?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_anchor = 25;
+   */
+  contextAnchor?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 context_anchor_ordinal = 26;
+   */
+  contextAnchorOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 context_plan_ordinal = 27;
+   */
+  contextPlanOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string context_cursor = 28;
+   */
+  contextCursor?: string | undefined;
 };
 
 /**
@@ -12643,6 +13479,11 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
    * @generated from field: optional int64 logical_item_ordinal = 12;
    */
   logicalItemOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string model_call_id = 13;
+   */
+  modelCallId?: string | undefined;
 };
 
 /**
@@ -13049,6 +13890,13 @@ export declare type WorkspaceDTO = Message<"boxteam.workspace.v2.WorkspaceDTO"> 
    * @generated from field: optional google.protobuf.Struct runtime = 6;
    */
   runtime?: JsonObject | undefined;
+
+  /**
+   * 由工作区 owner 提供的目标机器展示位置，不承担资源寻址职责。
+   *
+   * @generated from field: optional string data_directory = 7;
+   */
+  dataDirectory?: string | undefined;
 };
 
 /**
@@ -13074,20 +13922,20 @@ export declare type WorkspaceDefaultAgentUpdateRequest = Message<"boxteam.worksp
 export declare const WorkspaceDefaultAgentUpdateRequestSchema: GenMessage<WorkspaceDefaultAgentUpdateRequest>;
 
 /**
- * @generated from message boxteam.workspace.v2.WorkspaceDefaultProviderUpdateRequest
+ * @generated from message boxteam.workspace.v2.WorkspaceDefaultModelUpdateRequest
  */
-export declare type WorkspaceDefaultProviderUpdateRequest = Message<"boxteam.workspace.v2.WorkspaceDefaultProviderUpdateRequest"> & {
+export declare type WorkspaceDefaultModelUpdateRequest = Message<"boxteam.workspace.v2.WorkspaceDefaultModelUpdateRequest"> & {
   /**
-   * @generated from field: string provider_id = 1;
+   * @generated from field: boxteam.workspace.v2.ModelReferenceDTO model = 2;
    */
-  providerId: string;
+  model?: ModelReferenceDTO | undefined;
 };
 
 /**
- * Describes the message boxteam.workspace.v2.WorkspaceDefaultProviderUpdateRequest.
- * Use `create(WorkspaceDefaultProviderUpdateRequestSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.WorkspaceDefaultModelUpdateRequest.
+ * Use `create(WorkspaceDefaultModelUpdateRequestSchema)` to create a new message.
  */
-export declare const WorkspaceDefaultProviderUpdateRequestSchema: GenMessage<WorkspaceDefaultProviderUpdateRequest>;
+export declare const WorkspaceDefaultModelUpdateRequestSchema: GenMessage<WorkspaceDefaultModelUpdateRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceFileChangeBatchDTO
@@ -13728,123 +14576,6 @@ export declare type WorkspaceFileWatchRequest = Message<"boxteam.workspace.v2.Wo
  * Use `create(WorkspaceFileWatchRequestSchema)` to create a new message.
  */
 export declare const WorkspaceFileWatchRequestSchema: GenMessage<WorkspaceFileWatchRequest>;
-
-/**
- * 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
- *
- * @generated from message boxteam.workspace.v2.WorkspaceObservationSubscription
- */
-export declare type WorkspaceObservationSubscription = Message<"boxteam.workspace.v2.WorkspaceObservationSubscription"> & {
-  /**
-   * @generated from field: string subscription_id = 1;
-   */
-  subscriptionId: string;
-
-  /**
-   * @generated from field: string kind = 2;
-   */
-  kind: string;
-
-  /**
-   * @generated from field: optional string session_id = 3;
-   */
-  sessionId?: string | undefined;
-
-  /**
-   * @generated from field: optional int64 activity_after = 4;
-   */
-  activityAfter?: bigint | undefined;
-
-  /**
-   * @generated from field: optional string trace_after = 5;
-   */
-  traceAfter?: string | undefined;
-
-  /**
-   * @generated from field: repeated string paths = 6;
-   */
-  paths: string[];
-
-  /**
-   * @generated from field: optional int64 files_after = 7;
-   */
-  filesAfter?: bigint | undefined;
-
-  /**
-   * 仅 Trace 观察者使用；省略时保留 Session 聚合视图。
-   *
-   * @generated from field: optional string thread_id = 8;
-   */
-  threadId?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationSubscription.
- * Use `create(WorkspaceObservationSubscriptionSchema)` to create a new message.
- */
-export declare const WorkspaceObservationSubscriptionSchema: GenMessage<WorkspaceObservationSubscription>;
-
-/**
- * @generated from message boxteam.workspace.v2.WorkspaceObservationRequest
- */
-export declare type WorkspaceObservationRequest = Message<"boxteam.workspace.v2.WorkspaceObservationRequest"> & {
-  /**
-   * @generated from field: repeated boxteam.workspace.v2.WorkspaceObservationSubscription subscriptions = 1;
-   */
-  subscriptions: WorkspaceObservationSubscription[];
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationRequest.
- * Use `create(WorkspaceObservationRequestSchema)` to create a new message.
- */
-export declare const WorkspaceObservationRequestSchema: GenMessage<WorkspaceObservationRequest>;
-
-/**
- * frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。
- *
- * @generated from message boxteam.workspace.v2.WorkspaceObservationFrameDTO
- */
-export declare type WorkspaceObservationFrameDTO = Message<"boxteam.workspace.v2.WorkspaceObservationFrameDTO"> & {
-  /**
-   * @generated from field: string subscription_id = 1;
-   */
-  subscriptionId: string;
-
-  /**
-   * @generated from field: string state = 2;
-   */
-  state: string;
-
-  /**
-   * @generated from field: optional string frame = 3;
-   */
-  frame?: string | undefined;
-
-  /**
-   * @generated from field: optional int32 status = 4;
-   */
-  status?: number | undefined;
-
-  /**
-   * @generated from field: optional string detail_json = 5;
-   */
-  detailJson?: string | undefined;
-
-  /**
-   * connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
-   * Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
-   *
-   * @generated from field: optional string cursor = 6;
-   */
-  cursor?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationFrameDTO.
- * Use `create(WorkspaceObservationFrameDTOSchema)` to create a new message.
- */
-export declare const WorkspaceObservationFrameDTOSchema: GenMessage<WorkspaceObservationFrameDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceIndexRebuildDTO
@@ -14571,6 +15302,13 @@ export declare type PersistentTaskConfigurationDTO = Message<"boxteam.workspace.
    * @generated from field: boxteam.workspace.v2.TaskPoliciesDTO policies = 6;
    */
   policies?: TaskPoliciesDTO | undefined;
+
+  /**
+   * 累计执行预算，缺省不限制；不覆盖模型单次输出参数。
+   *
+   * @generated from field: optional int64 token_budget = 7;
+   */
+  tokenBudget?: bigint | undefined;
 };
 
 /**
@@ -14659,6 +15397,21 @@ export declare type PersistentTaskDTO = Message<"boxteam.workspace.v2.Persistent
    * @generated from field: optional boxteam.workspace.v2.SessionGoalDTO goal = 15;
    */
   goal?: SessionGoalDTO | undefined;
+
+  /**
+   * @generated from field: int64 tokens_used = 16;
+   */
+  tokensUsed: bigint;
+
+  /**
+   * @generated from field: int64 time_used_seconds = 17;
+   */
+  timeUsedSeconds: bigint;
+
+  /**
+   * @generated from field: int64 sync_version = 18;
+   */
+  syncVersion: bigint;
 };
 
 /**
@@ -15133,6 +15886,20 @@ export declare type PersistentTaskListDTO = Message<"boxteam.workspace.v2.Persis
    * @generated from field: repeated boxteam.workspace.v2.PersistentTaskRunSummaryDTO active_runs = 3;
    */
   activeRuns: PersistentTaskRunSummaryDTO[];
+
+  /**
+   * 会话范围包含空槽位版本；清空后也不能让迟到响应复活旧 Goal。
+   *
+   * @generated from field: optional boxteam.workspace.v2.SessionGoalSnapshotDTO session_goal = 4;
+   */
+  sessionGoal?: SessionGoalSnapshotDTO | undefined;
+
+  /**
+   * 首次连接和事件缺口需补读历史；单纯 Goal 状态通知不使运行历史失效。
+   *
+   * @generated from field: optional bool history_invalidated = 5;
+   */
+  historyInvalidated?: boolean | undefined;
 };
 
 /**
@@ -15978,4 +16745,235 @@ export declare type LLMRequestLogSummaryDTO = Message<"boxteam.workspace.v2.LLMR
  * Use `create(LLMRequestLogSummaryDTOSchema)` to create a new message.
  */
 export declare const LLMRequestLogSummaryDTOSchema: GenMessage<LLMRequestLogSummaryDTO>;
+
+/**
+ * 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。
+ *
+ * @generated from message boxteam.workspace.v2.ContextContentReferenceDTO
+ */
+export declare type ContextContentReferenceDTO = Message<"boxteam.workspace.v2.ContextContentReferenceDTO"> & {
+  /**
+   * item 或 sealed_contribution；引用分支由运行时业务模型校验。
+   *
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string item_id = 2;
+   */
+  itemId?: string | undefined;
+
+  /**
+   * 历史 owner 保留原身份，物理存储使用 inspection 路由的目标 Thread。
+   *
+   * @generated from field: optional string session_id = 3;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 4;
+   */
+  threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional string assembly_id = 5;
+   */
+  assemblyId?: string | undefined;
+
+  /**
+   * @generated from field: optional string contribution_id = 6;
+   */
+  contributionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextContentReferenceDTO.
+ * Use `create(ContextContentReferenceDTOSchema)` to create a new message.
+ */
+export declare const ContextContentReferenceDTOSchema: GenMessage<ContextContentReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadItemInspectionRequest
+ */
+export declare type ThreadItemInspectionRequest = Message<"boxteam.workspace.v2.ThreadItemInspectionRequest"> & {
+  /**
+   * @generated from field: optional string item_id = 1;
+   */
+  itemId?: string | undefined;
+
+  /**
+   * @generated from field: optional string message_id = 2;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * content_metadata 仅返回沿原正文投影取得的格式／资源引用，content 才交付正文。
+   *
+   * @generated from field: string operation = 3;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO content_ref = 4;
+   */
+  contentRef?: ContextContentReferenceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadItemInspectionRequest.
+ * Use `create(ThreadItemInspectionRequestSchema)` to create a new message.
+ */
+export declare const ThreadItemInspectionRequestSchema: GenMessage<ThreadItemInspectionRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadItemLocationDTO
+ */
+export declare type ThreadItemLocationDTO = Message<"boxteam.workspace.v2.ThreadItemLocationDTO"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+
+  /**
+   * @generated from field: optional string turn_id = 2;
+   */
+  turnId?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_id = 3;
+   */
+  executionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string job_id = 4;
+   */
+  jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string model_call_id = 5;
+   */
+  modelCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string message_id = 6;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * @generated from field: string semantic_kind = 7;
+   */
+  semanticKind: string;
+
+  /**
+   * @generated from field: string content_hash = 8;
+   */
+  contentHash: string;
+
+  /**
+   * @generated from field: int64 byte_length = 9;
+   */
+  byteLength: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadItemLocationDTO.
+ * Use `create(ThreadItemLocationDTOSchema)` to create a new message.
+ */
+export declare const ThreadItemLocationDTOSchema: GenMessage<ThreadItemLocationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadItemContentDTO
+ */
+export declare type ThreadItemContentDTO = Message<"boxteam.workspace.v2.ThreadItemContentDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string language = 2;
+   */
+  language: string;
+
+  /**
+   * @generated from field: optional string content = 3;
+   */
+  content?: string | undefined;
+
+  /**
+   * @generated from field: optional string uri = 4;
+   */
+  uri?: string | undefined;
+
+  /**
+   * @generated from field: optional string mime_type = 5;
+   */
+  mimeType?: string | undefined;
+
+  /**
+   * @generated from field: optional string encoding = 6;
+   */
+  encoding?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadItemContentDTO.
+ * Use `create(ThreadItemContentDTOSchema)` to create a new message.
+ */
+export declare const ThreadItemContentDTOSchema: GenMessage<ThreadItemContentDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadItemInspectionDTO
+ */
+export declare type ThreadItemInspectionDTO = Message<"boxteam.workspace.v2.ThreadItemInspectionDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ThreadItemLocationDTO location = 1;
+   */
+  location?: ThreadItemLocationDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ThreadItemContentDTO contents = 2;
+   */
+  contents: ThreadItemContentDTO[];
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LLMRequestLogMatchDTO request_log = 3;
+   */
+  requestLog?: LLMRequestLogMatchDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TraceMatchDTO trace = 4;
+   */
+  trace?: TraceMatchDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO content_ref = 5;
+   */
+  contentRef?: ContextContentReferenceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadItemInspectionDTO.
+ * Use `create(ThreadItemInspectionDTOSchema)` to create a new message.
+ */
+export declare const ThreadItemInspectionDTOSchema: GenMessage<ThreadItemInspectionDTO>;
+
+/**
+ * 工作区终端资源失效通知；null 表示重新取得完整列表。
+ *
+ * @generated from message boxteam.workspace.v2.WorkspaceResourceChangesDTO
+ */
+export declare type WorkspaceResourceChangesDTO = Message<"boxteam.workspace.v2.WorkspaceResourceChangesDTO"> & {
+  /**
+   * @generated from field: google.protobuf.ListValue resource_ids = 1;
+   */
+  resourceIds?: ListValue | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceResourceChangesDTO.
+ * Use `create(WorkspaceResourceChangesDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceResourceChangesDTOSchema: GenMessage<WorkspaceResourceChangesDTO>;
 

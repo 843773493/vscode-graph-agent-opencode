@@ -545,20 +545,59 @@ export function transformMcp(root, path, source, replaceOnce) {
       action = replaceOnce(action, '\t\tif (!this.mcpServer.local) {\n\t\t\treturn;\n\t\t}\n', '');
       action = replaceOnce(action, 'if (!this.mcpServer) {', 'if (!(this.mcpServer instanceof WorkspaceMcpServer)) {');
       action = replaceOnce(action, `if (${condition}) {`, `if (server instanceof WorkspaceMcpServer ? !server.${name === 'StartServerAction' ? 'canConnect' : 'canStop'} : ${condition}) {`);
-      if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('workbench.mcp.cancelConnection', 'Cancel Connection Operation') : localize('stop', 'Stop Server');");
+      if (name === 'StartServerAction') action = action.replaceAll("localize('start', \"Start Server\")", "localize('workbench.mcp.startServer', 'Connect')");
+      if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('workbench.mcp.cancelConnection', 'Cancel Connection Operation') : localize('workbench.mcp.stopServer', 'Disconnect');");
       contents = replaceOnce(contents, contents.slice(begin, end), action);
     }
-    contents = serverImport + contents;
+    contents = serverImport + `import { configureWorkspaceMcpServer, manageWorkspaceMcpPlugin } from ${JSON.stringify(join(root, 'src/mcp/commands.js'))};\n` + contents + `
+export class WorkspaceMcpPluginAction extends McpServerAction {
+  constructor(@IInstantiationService private readonly instantiationService: IInstantiationService) {
+    super('mcp.managePlugin', localize('workbench.mcp.managePlugin', 'Manage Plugin'), 'extension-action text', false);
+    this.update();
+  }
+  update(): void {
+    this.enabled = this.mcpServer instanceof WorkspaceMcpServer && Boolean(this.mcpServer.data?.service);
+    this.class = 'extension-action text' + (this.enabled ? '' : ' hide');
+  }
+  override async run(): Promise<void> {
+    if (this.mcpServer instanceof WorkspaceMcpServer) await this.instantiationService.invokeFunction(manageWorkspaceMcpPlugin, this.mcpServer);
+  }
+}
+export class WorkspaceMcpConfigurationAction extends McpServerAction {
+  constructor(private readonly pluginParameters: boolean,
+    @IInstantiationService private readonly instantiationService: IInstantiationService) {
+    super(pluginParameters ? 'mcp.pluginParameters' : 'mcp.configurationSource',
+      pluginParameters ? localize('workbench.mcp.pluginParameters', 'Plugin Parameters and Private Inputs')
+        : localize('workbench.mcp.configurationSource', 'Configuration Source'), 'extension-action text', false);
+    this.update();
+  }
+  update(): void {
+    this.enabled = this.mcpServer instanceof WorkspaceMcpServer
+      && (!this.pluginParameters || Boolean(this.mcpServer.data?.service));
+  }
+  override async run(): Promise<void> {
+    if (!(this.mcpServer instanceof WorkspaceMcpServer)) throw new Error(localize('workbench.mcp.serverRemoved', 'The MCP service is no longer in the original target catalog'));
+    await this.instantiationService.invokeFunction(configureWorkspaceMcpServer, this.mcpServer, this.pluginParameters);
+  }
+}
+`;
   }
   if (relative.endsWith('/mcpServerEditor.ts')) {
+    contents = replaceOnce(contents, "import './media/mcpServerEditor.css';",
+      "import './media/mcpServerEditor.css';\nimport '../../extensions/browser/media/extensionEditor.css';\nimport { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';");
+    contents = replaceOnce(contents, '\t\t@IContextMenuService private readonly contextMenuService: IContextMenuService,\n',
+      '\t\t@IContextMenuService private readonly contextMenuService: IContextMenuService,\n\t\t@IQuickInputService private readonly quickInputService: IQuickInputService,\n');
     const actionImports = contents.split('\n').find(line => line.startsWith('import { ButtonWithDropDownExtensionAction,') && line.endsWith("from './mcpServerActions.js';"));
     if (!actionImports) throw new Error('上游 MCP 详情 action import 锚点缺失');
-    contents = replaceOnce(contents, actionImports, "import { InstallAction, StartServerAction, StopServerAction, AuthServerAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
+    contents = replaceOnce(contents, actionImports, "import { InstallAction, StartServerAction, StopServerAction, AuthServerAction, WorkspaceMcpConfigurationAction, WorkspaceMcpPluginAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
     contents = replaceSection(contents, '\t\tconst actions = [', '\n\t\tconst actionsAndStatusContainer', `\t\tconst actions = [
       this.instantiationService.createInstance(InstallAction, false),
       this.instantiationService.createInstance(StartServerAction),
       this.instantiationService.createInstance(StopServerAction),
       this.instantiationService.createInstance(AuthServerAction),
+      this.instantiationService.createInstance(WorkspaceMcpPluginAction),
+      this.instantiationService.createInstance(WorkspaceMcpConfigurationAction, false),
+      this.instantiationService.createInstance(WorkspaceMcpConfigurationAction, true),
     ];
 `, replaceOnce);
     contents = replaceOnce(contents, 'if (extension.readmeUrl || extension.gallery?.readme) {', 'if (extension instanceof WorkspaceMcpServer || extension.readmeUrl) {');
@@ -573,6 +612,7 @@ protected override setEditorVisible(visible: boolean): void {
 this.workspaceMcpObservation.value = this.isVisible() && mcpServer instanceof WorkspaceMcpServer ? mcpServer.observe() : undefined;`);
     contents = replaceOnce(contents, 'this.renderNavbar(mcpServer, template, preserveFocus);', 'this.renderNavbar(mcpServer, template, preserveFocus, token);');
     contents = replaceOnce(contents, 'private renderNavbar(extension: IWorkbenchMcpServer, template: IExtensionEditorTemplate, preserveFocus: boolean): void {', 'private renderNavbar(extension: IWorkbenchMcpServer, template: IExtensionEditorTemplate, preserveFocus: boolean, token: CancellationToken): void {');
+    contents = replaceOnce(contents, '\t\t\t\t\tif (focus) {', '\t\t\t\t\tif (focus && this.hasFocus() && !this.quickInputService.currentQuickInput) {');
     contents = replaceOnce(contents, '\toverride clearInput(): void {', '\toverride clearInput(): void {\nthis.workspaceMcpObservation.clear();');
     contents = replaceOnce(contents, 'if (e === extension) {', `if (e === extension) {
 if (extension instanceof WorkspaceMcpServer) {
@@ -615,7 +655,7 @@ if (extension instanceof WorkspaceMcpServer) {
   }
   if (relative.endsWith('/mcpServersView.ts')) {
     // 原列表的 hidden 规则归 Extensions 容器；项目面板在可移动视图自身接回原样式作用域。
-    contents = replaceOnce(contents, '\t\tsuper.renderBody(container);', "\t\tsuper.renderBody(container);\nif (this.id === 'boxteam.mcp.view') this.element.classList.add('extensions-viewlet');");
+    contents = replaceOnce(contents, '\t\tsuper.renderBody(container);', "\t\tsuper.renderBody(container);\nif (this.id === 'boxteam.mcp.view') { this.element.classList.add('extensions-viewlet'); container.classList.add('boxteam-mcp-connections'); }");
     contents = replaceOnce(contents, "private currentQuery = '@mcp';", "private currentQuery = '@mcp';\nprivate workspaceMcpQueryFailed = false;");
     contents = replaceOnce(contents, '\t\tthis.currentQuery = query;', '\t\tthis.workspaceMcpQueryFailed = false;\n\t\ttry {\n\t\tthis.currentQuery = query;');
     contents = replaceOnce(contents, '\t\treturn this.input.model;\n\t}\n\n\tprivate renderInput()', '\t\treturn this.input.model;\n\t\t} catch (error) { this.workspaceMcpQueryFailed = true; throw error; }\n\t}\n\n\tprivate renderInput()');
@@ -634,9 +674,9 @@ this._register(this.mcpWorkbenchService.onChange(() => {
   }
 }));
 this._register(this.mcpWorkbenchService.onReset(() => {
-  if (this.currentQuery === '' && this.isBodyVisible()) void this.show('').catch(error => {
+  if (this.currentQuery === '' && this.isBodyVisible()) { this.input?.disposables.dispose(); this.input = undefined; this.updateBody(); void this.show('').catch(error => {
     if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
-  });
+  }); }
 }));
 \t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {`);
     contents = replaceOnce(contents, '\t\t\t\tupdateEnablement();', '\t\t\t\tdata.description.textContent = mcpServer.description;\n\t\t\t\tupdateEnablement();');

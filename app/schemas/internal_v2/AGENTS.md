@@ -37,7 +37,7 @@ internal_v2/
 │   ├── mcp.py                        MCP 工具和 Server 目录 DTO
 │   └── node_debug.py                 Node 调试请求与动作 DTO
 └── 工作区与资源
-    ├── workspace.py / workspace_observation.py
+    ├── workspace.py
     │                                 工作区信息与观察订阅
     ├── workspace_file_operations.py / text_mutation.py
     │                                 文件集合操作与条件文本修改

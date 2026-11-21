@@ -43,6 +43,7 @@ from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
 )
+from tests.support.workspaces import clear_test_provider_api_keys
 
 
 @pytest.fixture(autouse=True)
@@ -50,10 +51,7 @@ def shell_model_configuration(terminal_workspace_root_path: str) -> None:
     """Shell 验收不调用模型，配置不得依赖个人凭据或外部 Provider。"""
     config_path = Path(terminal_workspace_root_path) / ".boxteam/workspace.jsonc"
     config = read_jsonc_object(config_path)
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "shell-contract-unused-key"
-        provider["endpoint"] = "http://127.0.0.1:1/v1"
-        provider.pop("auth", None)
+    clear_test_provider_api_keys(config, endpoint="http://127.0.0.1:1/v1")
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
 
 

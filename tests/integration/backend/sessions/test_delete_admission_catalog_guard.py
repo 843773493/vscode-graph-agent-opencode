@@ -12,7 +12,6 @@ from time import perf_counter
 
 import pytest
 
-from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import (
@@ -29,11 +28,12 @@ from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.harness.python.run_context import TestRunContext
 from tests.support.message_service import build_message_service
 from tests.support.workspaces import prepare_test_workspace
@@ -63,7 +63,7 @@ class _AdmissionHarness:
     workspace: CatalogWorkspaceContext
     session_service: SessionService
     job_service: JobService
-    message_bus: BackgroundMessageBus
+    message_bus: BackgroundMailbox
     executor: _InstantJobExecutor
     input_owner: MessageService
     saver: RolloutCheckpointSaver
@@ -238,7 +238,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         creation_service=workspace.creation_service,
 
     )
-    message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
+    message_bus = BackgroundMailbox(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
     executor = _InstantJobExecutor()
     input_owner = build_message_service(
         workspace.sessions_root, checkpointer=saver,
@@ -256,7 +256,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         session_lifecycle_guard=session_lifecycle_guard,
         input_owner=input_owner,
         terminal_status_writer=saver,
-        pending_request_store=PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+        execution_queue_service=ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
             input_reader=lambda ref: input_owner.accepted_job_message(ref, display=False)),
     )
     try:
@@ -310,11 +310,11 @@ async def test_delete_drains_existing_preparation_before_catalog_mark(
 
     preparation = asyncio.create_task(service.run_session_preparation(session_id, preparing))
     await asyncio.wait_for(entered.wait(), timeout=3)
-    deletion = asyncio.create_task(service.run_session_delete_operation(session_id, deleting, deadline=asyncio.get_running_loop().time() + 30))
+    deletion = asyncio.create_task(service.run_session_control_operation(session_id, deleting, deadline=asyncio.get_running_loop().time() + 30))
     try:
         # 经过同一调度锁确认删除已经关闭新准入，不能以 sleep 猜测执行顺序。
         async def admission_closed() -> None:
-            while session_id not in service._deleting_sessions:
+            while session_id not in service._closed_sessions:
                 if deletion.done():
                     await deletion
                 await asyncio.sleep(0)
@@ -333,7 +333,7 @@ async def test_delete_drains_existing_preparation_before_catalog_mark(
             deletion.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await deletion
-            assert session_id not in service._deleting_sessions
+            assert session_id not in service._closed_sessions
             assert not delete_entered.is_set()
             assert await service.run_session_preparation(session_id, sibling_preparation) == "sibling-open"
         release.set()
@@ -359,7 +359,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
     workspace = admission_harness.workspace
     service = admission_harness.job_service
     session_id = await workspace.create_session(
-        "活跃任务删除排空", current_provider_id="test-provider",
+        "活跃任务删除排空", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     thread_id = workspace.resolver.main_thread_id(session_id)
     admission_harness.executor.hold = True
@@ -375,7 +375,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
             queued_message,
             execution_identity=identity, queue_input=ExecutionQueueInput(
             execution_binding=identity, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=queued_message.created_at.isoformat(),
         ),
         )
@@ -404,7 +404,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
         assert workspace.node(session_id).state == "deleting"
         drain_started.set()
         await release_drain.wait()
-        await service.delete_session_jobs(session_id)
+        await service.stop_session_jobs(session_id)
         assert database.is_file(), "canonical 终态必须先于物理隔离"
         with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
             terminal_rows.update(connection.execute(
@@ -414,7 +414,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
             assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (3,)
 
     workspace.delete_service.set_session_drain_callback(cleanup)
-    deletion = asyncio.create_task(service.run_sessions_delete_operation(
+    deletion = asyncio.create_task(service.run_sessions_control_operation(
         [session_id],
         lambda: workspace.resolver.delete_subtree(
             idempotency_key="delete-active-and-queued", root_node_id=session_id,
@@ -457,11 +457,11 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     message_bus = admission_harness.message_bus
     target_session_id = await workspace.create_session(
         "删除后准入拒绝",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     active_session_id = await workspace.create_session(
         "删除失败不影响",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     target_thread_id = workspace.resolver.main_thread_id(target_session_id)
     active_thread_id = workspace.resolver.main_thread_id(active_session_id)
@@ -483,7 +483,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     delete_key = "delete-admission-after-bus-close"
 
     with pytest.raises(RuntimeError, match="injected failure after close_session"):
-        await job_service.run_sessions_delete_operation(
+        await job_service.run_sessions_control_operation(
             [target_session_id],
             lambda: workspace.resolver.delete_subtree(
                 idempotency_key=delete_key,
@@ -495,7 +495,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     assert cleanup_reads == [target_session_id]
     assert workspace.store.get_node(target_session_id).state == "deleting"
     assert workspace.session_dir(target_session_id).is_dir()
-    assert target_session_id not in job_service._deleting_sessions
+    assert target_session_id not in job_service._closed_sessions
     assert workspace.store.get_node(active_session_id).state == "active"
     with pytest.raises(SessionDeletionPendingError):
         await message_bus.list_messages(target_session_id, target_thread_id, "default")
@@ -576,7 +576,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         queued_message,
         execution_identity=active_identity, queue_input=ExecutionQueueInput(
         execution_binding=active_identity, message_id=queued_message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=queued_message.created_at.isoformat(),
     ),
     )

@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 
 
@@ -48,10 +49,10 @@ async def test_session_resource_api_lists_and_controls_model_created_background_
     )
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]

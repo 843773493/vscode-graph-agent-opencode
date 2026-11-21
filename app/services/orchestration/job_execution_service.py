@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
+
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.core.failures import execution_failure_message, report_failure
 from app.core.job_event_bus import EventType
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.message_service import MessageService
@@ -100,7 +100,6 @@ class JobExecutionService:
 
         result_text = result if isinstance(result, str) else str(result)
 
-        job.result = result_text
         transition_job_status(job, JobStatus.completed)
         job.progress = 100
 

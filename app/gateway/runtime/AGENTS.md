@@ -19,7 +19,7 @@ runtime/
 ├── process_logs.py        子进程日志句柄、写入归属与接管核验
 ├── log_query.py           原诊断文件的有界行查询和精确区间核验
 ├── ssh_process.py         SSH 隧道进程
-├── port_forwarding.py     本地与 SSH 端口转发
+├── port_forwarding/       独立 Host 间 TCP 与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议
 ├── logging_control.py     唯一受管进程发现、受认证日志状态与应用确认
 ├── logging_consumer.py    冻结进程集合、逐进程应用与补偿结算

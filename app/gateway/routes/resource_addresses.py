@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+from boxteam_plugin_sdk.http import get_request_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.resource_uri import (
@@ -12,10 +13,10 @@ from app.core.resource_uri import (
     parse_change_resource_uri,
     parse_resource_uri,
     parse_session_thread_uri,
+    parse_thread_item_uri,
     resource_display_uri,
     thread_resource_uri,
 )
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.schemas.gateway.resource_address import (
     GatewayChangeAddressRequest,
@@ -29,11 +30,14 @@ router = APIRouter(dependencies=[Depends(verify_gateway_token)])
 
 
 def _project_address(parsed: ParsedResourceUri, resource_gateway_id: str) -> GatewayResourceAddressDTO:
-    session_id = thread_id = changeset_id = change_file_uri = None
+    session_id = thread_id = item_id = changeset_id = change_file_uri = None
     if parsed.kind == "changes":
         _, session_id, changeset_id, change_file_uri = parse_change_resource_uri(parsed.display_uri, local_gateway_id=resource_gateway_id)
     elif parsed.kind == "session" and parsed.tail_segments and parsed.session_artifact_kind is None:
-        _, session_id, thread_id = parse_session_thread_uri(parsed.display_uri)
+        if len(parsed.tail_segments) == 5:
+            _, session_id, thread_id, item_id = parse_thread_item_uri(parsed.display_uri)
+        else:
+            _, session_id, thread_id = parse_session_thread_uri(parsed.display_uri)
     return GatewayResourceAddressDTO(
         uri=parsed.display_uri,
         reference_uri=resource_display_uri(
@@ -44,7 +48,7 @@ def _project_address(parsed: ParsedResourceUri, resource_gateway_id: str) -> Gat
         gateway_id=parsed.gateway_authority or resource_gateway_id,
         scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
         file_root_uri=file_uri_root(parsed.display_uri) if parsed.kind in {"files", "attachments"} else None,
-        session_id=session_id, thread_id=thread_id,
+        session_id=session_id, thread_id=thread_id, item_id=item_id,
         changeset_id=changeset_id, change_file_uri=change_file_uri,
     )
 
@@ -75,7 +79,7 @@ def thread_resource_address(
     if body.local_gateway_id != request.app.state.gateway_id:
         raise HTTPException(409, detail="发起复制的 Gateway 身份已改变，请重新复制资源")
     uri = thread_resource_uri(body.workspace_id, body.session_id, body.thread_id,
-                              gateway_authority=body.resource_gateway_id)
+                              gateway_authority=body.resource_gateway_id, item_id=body.item_id)
     parsed = parse_resource_uri(uri, local_gateway_id=body.local_gateway_id)
     return APIResponse(data=_project_address(parsed, body.resource_gateway_id), request_id=request_id)
 

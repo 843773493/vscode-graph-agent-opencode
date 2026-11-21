@@ -2,7 +2,7 @@
 
 `app/schemas/event/` 定义工作区后端 Agent 执行事件的 Pydantic 模型，是该事件模式 discriminated union 的唯一实现点。目录当前只有 `__init__.py`，内容分四段：`BaseEvent` 公共字段与身份校验、各事件的 Payload Schema、带 `type` 字面量的具体事件类，以及末尾的 `Event` union 类型。
 
-事件的权威来源是 `app/core/job_event_bus.py` 定义的事件类型集合；`Event` union 被 `app/services/`（事件流处理、trace 记录、turn history）与 `app/api/`（jobs 事件查询）消费。
+事件的权威来源是 `app/core/job_event_bus.py` 定义的事件类型集合；`Event` union 被 `app/services/`（事件流处理、Trace 记录、turn history）及 Session Trace 接口消费。
 
 # 可修改内容
 
@@ -17,6 +17,7 @@
 
 # 规范
 
+- 当前 envelope 的 `format_version=1` 与 Trace SQLite schema 版本独立；新事件序列化必须包含该字段，后续不兼容字段变化必须递增格式版本，不以默认值伪造旧历史缺失的业务事实。
 - 每个事件类必须带 `type` 字面量字段，并通过 `BaseEvent` 继承公共字段，使 Pydantic 能按 `type` 正确判别 union 成员。
 - `timestamp` 必须包含时区；带 `part_id` 语义的事件（`text_*`、`tool_call_*`）必须携带 `part_id`。
 - 校验失败直接抛出明确错误，不用默认值掩盖协议不匹配。

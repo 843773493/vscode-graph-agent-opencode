@@ -8,11 +8,11 @@ from time import time
 from typing import overload
 
 import httpx
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from pydantic import ValidationError
 
 from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
-from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.control.diagnostic_logs import (
     locate_diagnostic_log,
     query_diagnostic_logs,

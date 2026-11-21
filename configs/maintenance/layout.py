@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import commentjson
 import jsonschema
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
-from app.core.logging_contract import load_runtime_log_contract
+from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from configs.installer import atomic_write
-from configs.migrations.legacy import read_and_migrate_config
+from configs.maintenance.runtime_logging_migration import without_retired_defaults
+from configs.migrations.legacy import migrate_config
 
 _LAYOUT_STATE_NAME = ".config-layout-migration.json"
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutMigration:
+    legacy_path: Path
+    original: bytes
+    targets: tuple[tuple[Path, bytes], ...]
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:
@@ -50,7 +60,10 @@ def _validate_candidate(
             }
         else:
             schema["required"] = [key for key in cast(list[str], schema["required"]) if key != "logging"]
-        jsonschema.validate(payload, schema)
+        jsonschema.validate(without_retired_defaults(
+            payload, "workspace" if schema.get("x-boxteam-config-domain") == "workspace" else "gateway",
+            source=str(source_path),
+        ), schema)
     except jsonschema.ValidationError as error:
         location = ".".join(str(item) for item in error.absolute_path) or "<root>"
         raise ValueError(
@@ -60,16 +73,18 @@ def _validate_candidate(
 
 
 def _commit_split_layout(
+    plan: LayoutMigration,
     *,
-    legacy_path: Path,
-    targets: tuple[tuple[Path, bytes], ...],
+    preview: bool = False,
 ) -> bool:
+    legacy_path, targets = plan.legacy_path, plan.targets
     state_path = legacy_path.parent / _LAYOUT_STATE_NAME
-    source_digest = _digest(legacy_path.read_bytes())
+    if legacy_path.read_bytes() != plan.original:
+        raise RuntimeError(f"配置布局迁移来源已变化，拒绝覆盖: {legacy_path}")
     expected_state = {
         "schema_version": 1,
         "legacy_path": legacy_path.name,
-        "source_sha256": source_digest,
+        "source_sha256": _digest(plan.original),
         "targets": {path.name: _digest(content) for path, content in targets},
     }
     if state_path.exists():
@@ -83,14 +98,21 @@ def _commit_split_layout(
                 "新旧配置布局同时存在，拒绝猜测优先级: "
                 f"legacy={legacy_path} targets={existing_targets}"
             )
-        atomic_write(state_path, _json_bytes(expected_state), 0o600)
+    for target_path, content in targets:
+        if target_path.exists() and _digest(target_path.read_bytes()) != _digest(content):
+            raise RuntimeError(f"配置布局迁移目标被修改，拒绝覆盖: {target_path}")
+    backup_path = legacy_path.with_name(legacy_path.name + ".migrated.bak")
+    if backup_path.exists() and backup_path.read_bytes() != plan.original:
+        raise RuntimeError(f"旧配置备份已存在不同内容，拒绝覆盖: {backup_path}")
+    if preview:
+        return True
+    if not backup_path.exists():
+        atomic_write(backup_path, plan.original, 0o600)
+    atomic_write(state_path, _json_bytes(expected_state), 0o600)
 
     for target_path, content in targets:
-        if target_path.exists():
-            if _digest(target_path.read_bytes()) != _digest(content):
-                raise RuntimeError(f"配置布局迁移目标被修改，拒绝覆盖: {target_path}")
-            continue
-        atomic_write(target_path, content, 0o600)
+        if not target_path.exists():
+            atomic_write(target_path, content, 0o600)
 
     for target_path, content in targets:
         if not target_path.is_file() or _digest(target_path.read_bytes()) != _digest(
@@ -102,17 +124,21 @@ def _commit_split_layout(
     return True
 
 
-def migrate_legacy_user_configuration(
+def plan_legacy_user_configuration(
     *,
     config_root: Path,
     gateway_schema_path: Path,
     workspace_schema_path: Path,
-) -> bool:
+    legacy_path: Path | None = None,
+) -> LayoutMigration | None:
     resolved_root = config_root.expanduser().resolve()
-    legacy_path = resolved_root / "boxteam.jsonc"
-    if not legacy_path.exists():
-        return False
-    legacy = dict(read_and_migrate_config(legacy_path, persist=False).config)
+    legacy_path = legacy_path or resolved_root / "boxteam.jsonc"
+    snapshot = read_stable_config_file(legacy_path)
+    if snapshot.raw_bytes is None:
+        return None
+    parsed = parse_stable_config_file(snapshot)
+    assert parsed is not None
+    legacy = dict(migrate_config(parsed).config)
     raw_gateway = legacy.pop("gateway", {"workspaces": []})
     if not isinstance(raw_gateway, dict):
         raise TypeError(f"旧配置 gateway 必须是对象: {legacy_path}")
@@ -138,25 +164,29 @@ def migrate_legacy_user_configuration(
         schema_path=workspace_schema_path,
         source_path=legacy_path,
     )
-    return _commit_split_layout(
-        legacy_path=legacy_path,
-        targets=(
+    plan = LayoutMigration(
+        legacy_path, snapshot.raw_bytes, (
             (resolved_root / "gateway.jsonc", _json_bytes(gateway)),
             (resolved_root / "workspace.jsonc", _json_bytes(workspace)),
         ),
     )
+    _commit_split_layout(plan, preview=True)
+    return plan
 
 
-def migrate_legacy_workspace_configuration(
+def plan_legacy_workspace_configuration(
     *,
     workspace_root: Path,
     workspace_schema_path: Path,
-) -> bool:
+) -> LayoutMigration | None:
     config_root = workspace_root.expanduser().resolve() / ".boxteam"
     legacy_path = config_root / "boxteam.jsonc"
-    if not legacy_path.exists():
-        return False
-    legacy = dict(read_and_migrate_config(legacy_path, persist=False).config)
+    snapshot = read_stable_config_file(legacy_path)
+    if snapshot.raw_bytes is None:
+        return None
+    parsed = parse_stable_config_file(snapshot)
+    assert parsed is not None
+    legacy = dict(migrate_config(parsed).config)
     if "gateway" in legacy:
         raise ValueError(
             "工作区级旧配置包含 gateway 字段；Gateway 配置只能迁移到 "
@@ -174,7 +204,29 @@ def migrate_legacy_workspace_configuration(
         schema_path=workspace_schema_path,
         source_path=legacy_path,
     )
-    return _commit_split_layout(
-        legacy_path=legacy_path,
-        targets=((config_root / "workspace.jsonc", _json_bytes(workspace)),),
+    plan = LayoutMigration(
+        legacy_path, snapshot.raw_bytes,
+        ((config_root / "workspace.jsonc", _json_bytes(workspace)),),
     )
+    _commit_split_layout(plan, preview=True)
+    return plan
+
+
+def migrate_legacy_user_configuration(
+    *, config_root: Path, gateway_schema_path: Path,
+    workspace_schema_path: Path, preview: bool = False,
+) -> bool:
+    plan = plan_legacy_user_configuration(
+        config_root=config_root, gateway_schema_path=gateway_schema_path,
+        workspace_schema_path=workspace_schema_path,
+    )
+    return _commit_split_layout(plan, preview=preview) if plan is not None else False
+
+
+def migrate_legacy_workspace_configuration(
+    *, workspace_root: Path, workspace_schema_path: Path, preview: bool = False,
+) -> bool:
+    plan = plan_legacy_workspace_configuration(
+        workspace_root=workspace_root, workspace_schema_path=workspace_schema_path,
+    )
+    return _commit_split_layout(plan, preview=preview) if plan is not None else False

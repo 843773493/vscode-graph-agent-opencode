@@ -4,6 +4,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.text import normalize_text
@@ -23,10 +24,10 @@ async def test_agent_name_matches_system_prompt_after_switch(client: httpx.Async
 
     default_job_resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "请严格只输出你的英文名称，不要输出任何其他内容。"},
             "run": {"mode": "single_agent"},
-        },
+        }),
     )
     assert default_job_resp.status_code == 200
     default_job_id = default_job_resp.json()["data"]["job_id"]
@@ -50,10 +51,10 @@ async def test_agent_name_matches_system_prompt_after_switch(client: httpx.Async
 
     coder_job_resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "请严格只输出你的英文名称，不要输出任何其他内容。"},
             "run": {"mode": "single_agent"},
-        },
+        }),
     )
     assert coder_job_resp.status_code == 200
     coder_job_id = coder_job_resp.json()["data"]["job_id"]
@@ -84,10 +85,10 @@ async def test_denied_tools_are_hidden_from_model(client: httpx.AsyncClient):
 
     job_resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent"},
-        },
+        }),
     )
     assert job_resp.status_code == 200
     job_id = job_resp.json()["data"]["job_id"]

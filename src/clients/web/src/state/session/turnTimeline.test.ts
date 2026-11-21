@@ -5,11 +5,13 @@ import type {
   TurnDetail,
   TurnPage,
   TurnSummary,
+  TurnResponsePart,
 } from "../../types/backend";
 import {
   applyTurnBootstrap,
   applyTurnDetails,
   applyTurnHistoryPage,
+  applyContextNoticePage,
   applyTurnPage,
   beginTurnBootstrap,
   createSessionTurnTimeline,
@@ -383,6 +385,8 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.beforeCursor).toBe("older-1");
     expect(timeline.hasBefore).toBe(true);
 
+    timeline = upsertTurns(timeline, Array.from({ length: 12 }, (_, index) => detail(`old_${index}`, index + 10)));
+    expect(timeline.detailAccessOrder.length).toBeGreaterThan(0);
     // around 命中窗口已经包含最旧 Turn：后端给出 before_cursor=null、has_before=false，
     // 这是权威结论，必须清空 before 方向的游标与 has-before。
     const around = applyTurnHistoryPage(timeline, {
@@ -400,6 +404,17 @@ describe("Turn timeline revision 合并", () => {
       projection_epoch: 1,
     }, "around");
 
+    expect(around.orderedTurnIds).toEqual(["job_3"]);
+    expect(around.turnsById.latest).toBeUndefined();
+    expect(around.summaryTurnsById.latest).toBeUndefined();
+    expect(around.detailAccessOrder).toEqual(["job_3"]);
+    const appended = applyTurnHistoryPage(around, {
+      items: [detail("job_4", 4)], summaries: [],
+      after_cursor: "newer-2", has_after: true,
+      thread_id: THREAD_ID, source_view_id: "view_history_fixture", source_view_revision: 1, projection_epoch: 1,
+    }, "after");
+    expect(appended.orderedTurnIds).toEqual(["job_3", "job_4"]);
+    expect(appended.afterCursor).toBe("newer-2");
     expect(around.beforeCursor).toBeNull();
     expect(around.hasBefore).toBe(false);
     expect(around.afterCursor).toBe("newer-1");
@@ -1213,4 +1228,30 @@ describe("Turn timeline revision 合并", () => {
       Array.from({ length: 64 }, (_, index) => `scope-${index + 6}`),
     );
   });
+});
+
+test("上下文续页合并元数据且不改变正文、统计或 Turn 游标", () => {
+  const marker: TurnResponsePart = { kind: "context_notice", part_id: "context-1", projection: "summary",
+    source: { message_sequence: 0 }, context_content_ref: { kind: "item", item_id: "notice-1" },
+    context_anchor: "before_user_message", context_cursor: "context-next" };
+  const first = { ...detail("turn-context", 1), response_parts: [marker] };
+  const short = { ...summary("turn-context", 1), response_parts: [marker] };
+  const timeline = applyTurnHistoryPage({ ...createSessionTurnTimeline(SCOPE_KEY), threadId: THREAD_ID }, {
+    thread_id: THREAD_ID, source_view_id: "view_history_fixture", source_view_revision: 1,
+    items: [first], summaries: [short], projection_epoch: 1, before_cursor: "turn-before", has_before: true,
+  }, "before");
+  const extra = { ...marker, part_id: "context-2", context_cursor: null };
+  const page = { thread_id: THREAD_ID, source_view_id: "view_history_fixture", source_view_revision: 1,
+    items: [], projection_epoch: 1, context_notices: [{ owner_id: first.turn_id, owner_kind: "turn", parts: [extra] }] };
+  const next = applyContextNoticePage(timeline, page, "context-next");
+  expect(next.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-1", "context-2"]);
+  expect(next.summaryTurnsById[first.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-1", "context-2"]);
+  expect(next.turnsById[first.turn_id].response_parts?.[0].context_cursor).toBeNull();
+  expect(next.beforeCursor).toBe(timeline.beforeCursor);
+  expect(next.hasBefore).toBe(true);
+  expect(next.orderedTurnIds).toEqual(timeline.orderedTurnIds);
+  expect(next.turnsById[first.turn_id].revision).toBe(first.revision);
+  expect(next.turnsById[first.turn_id].activity_stats).toBe(first.activity_stats);
+  expect(applyContextNoticePage(next, page, "context-next").turnsById[first.turn_id].response_parts).toHaveLength(2);
+  expect(() => applyContextNoticePage(next, { ...page, thread_id: "other-thread" }, "context-next")).toThrow();
 });

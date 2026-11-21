@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from langchain_core.messages import (
     AIMessage,
@@ -14,6 +16,7 @@ from pydantic import ValidationError
 from app.agents.providers.message_content_schema import validate_content_blocks
 from app.agents.providers.output_normalization import build_ai_message_content
 from app.agents.providers.response_normalization import canonicalize_ai_message
+from app.domain.itemized.identity.model_source import ModelSource
 from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
     visible_text,
@@ -222,7 +225,14 @@ def test_build_content_does_not_duplicate_carrier_already_present_in_content():
     assert content[1]["reasoning_content"] == "已在正文序列"
 
 
-def test_projection_keeps_encrypted_reasoning_only_for_same_provider():
+@pytest.fixture
+def model_source() -> ModelSource:
+    return ModelSource(gateway_id="gateway-a", workspace_id="workspace-a", provider_id="backup_4",
+                       model_id="main", protocol="responses", endpoint="https://example.com/v1",
+                       model="test-model", authentication="env:MODEL_KEY")
+
+
+def test_projection_keeps_encrypted_reasoning_only_for_same_model_source(model_source: ModelSource):
     content = build_ai_message_content(
         "最终回答",
         reasoning_items=[
@@ -239,9 +249,9 @@ def test_projection_keeps_encrypted_reasoning_only_for_same_provider():
 
     same = project_ai_message_content(
         content,
-        target_provider="backup_4",
+        target_source=model_source,
         target_capabilities={"reasoning_items", "encrypted_reasoning_replay"},
-        response_metadata={"provider_id": "backup_4"},
+        response_metadata={"model_source": model_source.to_dict()},
     )
     assert same["content"] == [{"type": "text", "text": "最终回答"}]
     assert same["reasoning_items"] == [
@@ -254,9 +264,9 @@ def test_projection_keeps_encrypted_reasoning_only_for_same_provider():
 
     other = project_ai_message_content(
         content,
-        target_provider="backup_2",
+        target_source=replace(model_source, provider_id="backup_2"),
         target_capabilities={"reasoning_items", "reasoning_summary"},
-        response_metadata={"provider_id": "backup_4"},
+        response_metadata={"model_source": model_source.to_dict()},
     )
     assert other["reasoning_items"] == [
         {
@@ -278,7 +288,7 @@ def test_projection_removes_stream_runtime_fields_from_visible_blocks():
                 "extras": {"provider_part_id": "text-1"},
             }
         ],
-        target_provider="backup_1",
+        target_source=None,
         target_capabilities=set(),
     )
 

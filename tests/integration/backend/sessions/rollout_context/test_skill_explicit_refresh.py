@@ -12,6 +12,7 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.prompting.validation import parse_root_section
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -21,15 +22,15 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 使用当前文件的正式隔离工作区
-)
 from tests.integration.backend.sessions.rollout_context.test_skill_catalog_shadow_binding import (
     WORKSPACE_BODY,
     _write_shared_skill,
 )
 from tests.integration.backend.sessions.rollout_context.test_skill_catalog_shadow_binding import (
     skill_catalog_owner as skill_catalog_owner,  # noqa: PLC0414 - 真实来源 owner
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 
@@ -90,7 +91,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
         for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
         if ref.source_identity == new_source]
     assert new_block.body == WORKSPACE_BODY
-    switched, = [block for block in json.loads(new_frame.content)["sources"] if block["source_identity"] == new_source]
+    switched, = [block for block in parse_root_section(new_frame.content, tag="context_sources")["sources"] if block["source_identity"] == new_source]
     assert (switched["source_identity"], switched["revision"], switched["operation"]) == (
         new_source, refreshed["revision"], "replace",
     )
@@ -126,7 +127,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     # 接受后丢弃驻留 CSM；下一次 preparation 必须从原 owner 控制行和冻结版本恢复。
     manager = ContextSourceManager(owner=owner, control_state_port=saver)
     returned = seal("gateway-body-again")
-    returned_block = json.loads(returned.seal_binding.prefix.state.frames[-1].content)["sources"][0]
+    returned_block = parse_root_section(returned.seal_binding.prefix.state.frames[-1].content, tag="context_sources")["sources"][0]
     assert (returned_block["source_identity"], returned_block["revision"], returned_block["operation"]) == (
         gateway_source, first["revision"], "replace",
     )
@@ -149,5 +150,5 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
             if sealed is updated:
                 content = projected.messages[-1].content
                 assert isinstance(content, str)
-                assert json.loads(content)["sources"][0]["replaces"] == switched["replaces"]
+                assert parse_root_section(content, tag="context_sources")["sources"][0]["replaces"] == switched["replaces"]
         assert cold.load_context_source_control_states(owner) == saver.load_context_source_control_states(owner)

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from app.agents.agent_factory import provider_configuration_error
-from app.schemas.internal_v2.agent import AgentDTO, AgentProviderDTO
+from app.runtime.provider_model import provider_configuration_error
+from app.schemas.internal_v2.agent import AgentDTO, AgentModelDTO
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -12,57 +13,61 @@ class AgentService:
         self._config_service = config_service
 
     async def list(self) -> list[AgentDTO]:
+        # 配置展开、工具策略和凭据读取均是同步工作，整次读取只切换一次线程。
+        return await asyncio.to_thread(self._list)
+
+    def _list(self) -> list[AgentDTO]:
         if self._config_service is None:
             raise RuntimeError("AgentService 未绑定 ConfigService")
         config_service = self._config_service
-        agents_config = config_service.list_agents()
+        with config_service.use_snapshot(config_service.get_snapshot()):
+            agents_config = config_service.list_agents()
+            providers = config_service.get_snapshot().to_dict()["llm"]["providers"]
 
-        if agents_config:
-            workspace_default_agent_id = config_service.get_workspace_default_agent_id()
-            agent_dtos: list[AgentDTO] = []
-            for agent_id, agent_info in agents_config.items():
-                policy = config_service.resolve_agent_tool_policy(agent_id)
-                agent_runtime_config = config_service.get_agent_runtime_config(agent_id)
-                workspace_default_provider_id = (
-                    config_service.get_workspace_default_provider_id(agent_id)
-                )
-                provider_dtos: list[AgentProviderDTO] = []
-                for provider_config in agent_runtime_config["providers"]:
-                    # 列表只检查本地配置与必要凭据；SDK 构造由首次执行校验。
-                    # OAuth 凭据可独立更新，逐次在线程中检查，不按配置 revision 缓存。
-                    configuration_error = await asyncio.to_thread(
-                        provider_configuration_error,
-                        provider_config,
+            if agents_config:
+                workspace_default_agent_id = config_service.get_workspace_default_agent_id()
+                agent_dtos: list[AgentDTO] = []
+                for agent_id, agent_info in agents_config.items():
+                    policy = config_service.resolve_agent_tool_policy(agent_id)
+                    agent_runtime_config = config_service.get_agent_runtime_config(agent_id)
+                    workspace_default_model = (
+                        config_service.get_workspace_default_model(agent_id)
                     )
-                    provider_dtos.append(
-                        AgentProviderDTO(
-                            provider_id=str(provider_config["id"]),
-                            model=str(provider_config["model"]),
-                            custom_llm_provider=str(
-                                provider_config["custom_llm_provider"]
-                            ),
-                            workspace_default=(
-                                provider_config["id"] == workspace_default_provider_id
-                            ),
-                            available=configuration_error is None,
-                            configuration_error=configuration_error,
+                    model_dtos: list[AgentModelDTO] = []
+                    for provider_config in agent_runtime_config["models"]:
+                        definition = providers[provider_config["provider_id"]]
+                        # 列表只检查本地配置与必要凭据；SDK 构造由首次执行校验。
+                        # OAuth 凭据可独立更新，逐次在线程中检查，不按配置 revision 缓存。
+                        configuration_error = provider_configuration_error(provider_config)
+                        model_dtos.append(
+                            AgentModelDTO(
+                                model_ref=ModelReferenceDTO(provider_id=provider_config["provider_id"], model_id=provider_config["model_id"]),
+                                model=str(provider_config["model"]),
+                                name=definition["models"][provider_config["model_id"]].get("name"),
+                                provider_name=definition.get("name"),
+                                custom_llm_provider=str(
+                                    provider_config["custom_llm_provider"]
+                                ),
+                                workspace_default=(
+                                    ModelReferenceDTO(provider_id=provider_config["provider_id"], model_id=provider_config["model_id"]) == workspace_default_model
+                                ),
+                                available=configuration_error is None,
+                                configuration_error=configuration_error,
+                            )
+                        )
+                    agent_dtos.append(
+                        AgentDTO(
+                            agent_id=agent_id,
+                            name=agent_info.get("name", agent_id),
+                            description=agent_info.get("description", ""),
+                            model=agent_runtime_config["models"][0]["model"],
+                            tools=sorted(policy.enabled_names),
+                            capabilities=list(agent_info.get("tags", [])),
+                            models=model_dtos,
+                            workspace_default=(agent_id == workspace_default_agent_id),
                         )
                     )
-                agent_dtos.append(
-                    AgentDTO(
-                        agent_id=agent_id,
-                        name=agent_info.get("name", agent_id),
-                        description=agent_info.get("description", ""),
-                        model=agent_info.get("model", {}).get(
-                            "primary_provider", "unknown"
-                        ),
-                        tools=sorted(policy.enabled_names),
-                        capabilities=list(agent_info.get("tags", [])),
-                        providers=provider_dtos,
-                        workspace_default=(agent_id == workspace_default_agent_id),
-                    )
-                )
-            return agent_dtos
+                return agent_dtos
 
         raise RuntimeError(
             "Agent配置加载失败，没有找到有效的agent定义。\n"
@@ -74,12 +79,12 @@ class AgentService:
         self._config_service.set_workspace_default_agent(agent_id)
         return await self.list()
 
-    async def set_workspace_default_provider(
+    async def set_workspace_default_model(
         self,
         agent_id: str,
-        provider_id: str,
+        model: ModelReferenceDTO,
     ) -> list[AgentDTO]:
-        self._config_service.set_workspace_default_provider(agent_id, provider_id)
+        self._config_service.set_workspace_default_model(agent_id, model)
         return await self.list()
 
     async def get(self, agent_id: str) -> AgentDTO:

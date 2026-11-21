@@ -17,7 +17,7 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

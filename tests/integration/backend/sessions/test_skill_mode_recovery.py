@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from pydantic import ValidationError
 
-from app.api.deps import get_session_skill_tracking_service, verify_local_token
+from app.api.deps import get_session_skill_untrack_service, verify_local_token
 from app.api.sessions import router
 from app.core.trace_middleware import TraceMiddleware
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
@@ -170,7 +170,7 @@ async def untrack_http(runtime_case: runner.RuntimeCase):
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(router, prefix="/api/v1")
-    application.dependency_overrides[get_session_skill_tracking_service] = lambda: runtime_case.runner.container.session_skill_tracking_service
+    application.dependency_overrides[get_session_skill_untrack_service] = lambda: runtime_case.runner.container.session_skill_untrack_service
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application, raise_app_exceptions=False), base_url="http://test") as client:
         yield client

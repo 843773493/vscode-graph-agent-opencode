@@ -60,6 +60,8 @@ Section 8 日常验证按改动影响选择场景，完整覆盖可以由各组�
 
 ## 工作区 API 的显式身份
 
+页面常驻业务事件统一复用到入口 Gateway 的 `/api/gateway/realtime` WebSocket；各领域仍拥有自己的 SSE 格式、鉴权、心跳和恢复游标，不为每个会话或业务创建独立长连接。有限搜索／模型测试及 PTY、DAP、浏览器画面等专用协议保留各自传输。接入边界见[页面实时订阅](docs/architecture/runtime-distribution.md#页面实时订阅)。
+
 直接调用 Workspace 后端时，使用 `/api/v1/workspaces/{workspace_id}/...`，例如 `/api/v1/workspaces/{workspace_id}/sessions`。这里的 `workspace_id` 是后端已挂载工作区的稳定 UUID。也可以在 `/api/v1/...` 请求中提供等价的 `X-BoxTeam-Workspace-Id` 请求头；同时提供路径和请求头时，两者必须一致。
 
 旧的无工作区路径前缀、也无身份请求头的后端调用会被拒绝；后端不再用激活工作区或 `WORKSPACE_ROOT` 补齐身份。缺少或非法身份返回 400，两载体冲突返回 400，合法但未挂载的 UUID 返回 404。客户端应在调用前固定目标，不能靠切换激活态改变已指定的工作区。
@@ -69,7 +71,7 @@ Section 8 日常验证按改动影响选择场景，完整覆盖可以由各组�
 ## 测试分层
 
 - `tests/unit/`：单模块或纯函数测试。
-- `tests/contracts/`：HTTP、SSE、生成类型和辅助服务公开协议契约。
+- `tests/contracts/`：HTTP、共享实时 WebSocket／SSE、生成类型和辅助服务公开协议契约。
 - `tests/integration/`：关键链路含 stub、fake、mock、固定响应、替代服务或替代运行面的组合测试。
 - `tests/e2e/`：不含替身的真实进程、真实传输和真实外部依赖链路。
 

@@ -1,34 +1,8 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { test, expect } from "bun:test";
-import {
-  SessionExecutionEventSchema,
-} from "../../src/workspace-services/protocol/generated/boxteam/workspace/v2/session_interaction_pb.js";
-
-test("Node Protobuf 生成结果保留跨文件 import 与 oneof", () => {
-  const event = create(SessionExecutionEventSchema, {
-    type: "job.updated",
-    header: {
-      eventId: "event_123",
-      sessionId: "session_123",
-    },
-    payload: {
-      case: "jobUpdated",
-      value: {
-        jobId: "job_123",
-        status: 2,
-        progress: 42,
-      },
-    },
-  });
-
-  expect(event.payload.case).toBe("jobUpdated");
-  expect(event.payload.value.progress).toBe(42);
-});
-
-
 test("公开诊断字段没有真实定位，通信目标的三种 destination 均可往返", async () => {
   const [workspaceBinding, webBinding] = await Promise.all([
-    import("../../src/workspace-services/protocol/generated/boxteam/workspace/v2/public_pb.js"),
+    import("../../sdk/node/src/generated/boxteam/workspace/v2/public_pb.js"),
     import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/workspace/v2/public_pb.js"),
   ]);
   const {
@@ -139,7 +113,7 @@ test("公开诊断字段没有真实定位，通信目标的三种 destination �
 test("Gateway v2 在两套客户端绑定中保留同 UUID 的完整 owner 与连接集合", async () => {
   const workspaceId = "00000000-0000-4000-8000-000000000001";
   for (const binding of [
-    await import("../../src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js"),
+    await import("../../sdk/node/src/generated/boxteam/gateway/v2/public_pb.js"),
     await import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v2/public_pb.js"),
   ]) {
     const owners = ["gateway-a", "gateway-b"].map(gatewayId => ({ gatewayId, workspaceId }));
@@ -166,7 +140,7 @@ test("Gateway v2 在两套客户端绑定中保留同 UUID 的完整 owner 与�
 
 test("Gateway 完整组请求、blocker 与两种客户端绑定往返保持成员和 generation", async () => {
   const bindings = await Promise.all([
-    import("../../src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js"),
+    import("../../sdk/node/src/generated/boxteam/gateway/v2/public_pb.js"),
     import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v2/public_pb.js"),
   ]);
   for (const binding of bindings) {
@@ -221,7 +195,7 @@ test("Gateway 完整组请求、blocker 与两种客户端绑定往返保持成�
 
 test("Node 与 Web 的独立文本写入 destination 保留固定 URI", async () => {
   for (const binding of [
-    await import("../../src/workspace-services/protocol/generated/boxteam/workspace/v2/public_pb.js"),
+    await import("../../sdk/node/src/generated/boxteam/workspace/v2/public_pb.js"),
     await import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/workspace/v2/public_pb.js"),
   ]) {
     const schema = binding.CommunicationGatewayRequestSchema;

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -34,13 +35,12 @@ from tests.support.terminal_plugin import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "phases", [("before-unload", "after-unload"), ("workspace-browser",)],
-    ids=["unload-restart", "workspace-browser"],
+    "phases", [("before-unload", "after-unload"), ("workspace-browser",), ("management-open",)],
+    ids=["unload-restart", "workspace-browser", "management-open"],
 )
 async def test_persistent_resources_through_real_workbench(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
-    web_workbench_assets: Path,
     prepared_developer_tools_package: Path,
     phases: tuple[str, ...],
 ) -> None:
@@ -49,6 +49,9 @@ async def test_persistent_resources_through_real_workbench(
     workspace = Path(integration_workspace_root_path)
     artifacts = scope.artifacts_dir
     runtime = scope.runtime_root_for_node(request.node.nodeid)
+    prepared_assets = os.getenv("BOXTEAM_RESOURCE_WEB_ASSETS")
+    assets = Path(prepared_assets).resolve(strict=True) if prepared_assets else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "out/main.js").is_file() and (assets / "version.json").is_file(), assets
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     if chromium is None:
         pytest.fail("持久资源 Web Integration 需要真实 Chromium")
@@ -72,7 +75,7 @@ async def test_persistent_resources_through_real_workbench(
             workspace_root=workspace, default_backend_url=None, port=ports.port(21),
             boxteam_home=gateway_home, artifacts_dir=artifacts / "gateway",
             extra_env=temporary_environment | replay.environment | {
-                "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
+                "BOXTEAM_WEB_ASSETS": str(assets),
                 "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
             },
             asgi_app="tests.support.e2e_control.gateway_app:app",
@@ -95,13 +98,21 @@ async def test_persistent_resources_through_real_workbench(
             "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts), "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
         for phase in phases:
+            command = ["bun", "tests/integration/clients/web/persistent_resource_lifecycle.mjs", phase]
+            supervisor = project / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+            supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
+                                  "--timeout-seconds", "240", "--", *command]
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["bun", "tests/integration/clients/web/persistent_resource_lifecycle.mjs", phase],
-                cwd=project, env=environment, capture_output=True, text=True, timeout=240, check=False,
+                supervised_command,
+                cwd=project, env=environment, capture_output=True, text=True, timeout=255, check=False,
             )
             (artifacts / f"{phase}.log").write_text(result.stdout + result.stderr, encoding="utf-8")
-            (artifacts / f"{phase}-process.json").write_text(json.dumps({"exit_code": result.returncode}) + "\n", encoding="utf-8")
+            (artifacts / f"{phase}-process.json").write_text(json.dumps({
+                "command": command, "supervised_command": supervised_command, "cwd": str(project),
+                "exit_code": result.returncode, "timeout_seconds": 240, "memory_limit_kb": 4194304,
+                "assets": str(assets),
+            }) + "\n", encoding="utf-8")
             phase_result = artifacts / f"{phase}.json"
             details = phase_result.read_text() if phase_result.is_file() else "阶段报告未生成"
             assert result.returncode == 0, f"{phase}: {result.stdout}\n{result.stderr}\n{details}"
@@ -124,6 +135,11 @@ async def test_persistent_resources_through_real_workbench(
         facts = json.loads((artifacts / f"{phases[-1]}.json").read_text())
         assert facts["passed"] is True
         if phases == ("workspace-browser",):
+            assert facts["workspace_browser_created_and_deleted"] is True
+            return
+        if phases == ("management-open",):
+            assert facts["terminal_management"]["selected_output_visible"] is True
+            assert facts["browser_management"]["attached"] is True
             assert facts["workspace_browser_created_and_deleted"] is True
             return
         assert facts["kinds"] == ["terminal", "browser"]

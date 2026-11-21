@@ -2,12 +2,18 @@ import { describe, expect, test, spyOn } from 'bun:test';
 import { ThreadInput, ThreadSerializer, UnavailableThreadInput } from '../src/threadInput.js';
 import { gateway, type ThreadOwner } from '../src/agentApi.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
+import type { GatewayWorkspace, GatewayWorkspaceList } from '../../web/src/types/backend.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import type { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 
 const owner: ThreadOwner = { gatewayId: 'gateway_00000000000000000000000000000001', workspaceId: '00000000-0000-4000-8000-000000000001',
   sessionId: 'session-a', threadId: 'thread-child', workspaceKey: '', title: '原名称' };
 const workspaceKey = gatewayWorkspaceKey(owner);
+const workspace: GatewayWorkspace = { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
+  name: '原工作区', backend_url: 'http://workspace.invalid', connection_kind: 'local', status: 'ready', active: false,
+  managed: true, removable: true, system_default: false, services: {}, checked_at: '2026-11-13T00:00:00Z',
+  affected_workspace_ids: [], remote_gateways: [] };
+const directory: GatewayWorkspaceList = { items: [workspace], active_workspace: undefined };
 const serializer = new ThreadSerializer();
 // serializer 不使用实例化服务；测试只提供该未消费的位置参数。
 const instantiation = undefined as unknown as IInstantiationService;
@@ -90,17 +96,24 @@ describe('Thread 编辑器稳定身份', () => {
   test('并发只解析一次，重解与失败后重试保持归属并透传失效错误', async () => {
     const input = ThreadInput.fromResource(new ThreadInput({ ...owner, workspaceKey }).resource);
     expect(input.owner.workspaceKey).toBe('');
-    const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue(workspaceKey);
+    const resolve = spyOn(gateway, 'workspaces').mockResolvedValue(directory);
     try {
       const [first, second] = await Promise.all([input.resolveOwner(), input.resolveOwner()]);
       expect(resolve).toHaveBeenCalledTimes(1);
       expect(first).toBe(second);
-      expect(first).toBe(input.owner);
-      expect(first.workspaceKey).toBe(workspaceKey);
+      expect(first.owner).toBe(input.owner);
+      expect(first.owner.workspaceKey).toBe(workspaceKey);
+      expect(first.workspaces).toBe(directory.items);
+      expect(resolve.mock.calls[0][0]).toBe(false);
+      expect(resolve.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+      const updatedDirectory = { ...directory, items: [{ ...workspace, name: '当前登记' },
+        { ...workspace, workspace_id: '00000000-0000-4000-8000-000000000002', name: '另一个工作区' }] };
+      resolve.mockResolvedValueOnce(updatedDirectory);
       const reopened = await input.resolveOwner();
       expect(resolve).toHaveBeenCalledTimes(2);
-      expect(reopened).toBe(first);
-      expect(reopened.workspaceKey).toBe(workspaceKey);
+      expect(reopened.owner).toBe(first.owner);
+      expect(reopened.owner.workspaceKey).toBe(workspaceKey);
+      expect(reopened.workspaces).toBe(updatedDirectory.items);
       const failure = new Error('目标 Gateway／UUID 缺少唯一已登记工作区');
       resolve.mockRejectedValueOnce(failure);
       await expect(input.resolveOwner()).rejects.toBe(failure);
@@ -108,8 +121,19 @@ describe('Thread 编辑器稳定身份', () => {
       expect(input.owner.workspaceKey).toBe(workspaceKey);
       const retried = await input.resolveOwner();
       expect(resolve).toHaveBeenCalledTimes(4);
-      expect(retried).toBe(first);
-      expect(retried.workspaceKey).toBe(workspaceKey);
+      expect(retried.owner).toBe(first.owner);
+      expect(retried.owner.workspaceKey).toBe(workspaceKey);
+      expect(retried.workspaces).toBe(directory.items);
+    } finally { resolve.mockRestore(); }
+  });
+
+  test.each([{ items: [] }, { items: [workspace, { ...workspace, name: '重复登记' }] }])('目录缺失或重复目标时拒绝初始化且不发布目录', async ({ items }) => {
+    const input = new ThreadInput({ ...owner, workspaceKey: 'old-route' });
+    const resolve = spyOn(gateway, 'workspaces').mockResolvedValue({ ...directory, items });
+    try {
+      await expect(input.resolveOwner()).rejects.toThrow('缺少唯一已登记工作区');
+      expect(input.owner.workspaceKey).toBe('old-route');
+      expect(resolve).toHaveBeenCalledTimes(1);
     } finally { resolve.mockRestore(); }
   });
 });

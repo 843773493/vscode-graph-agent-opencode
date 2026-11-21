@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
+from boxteam.browser.v1 import browser_pb2
 from google.protobuf.descriptor import FieldDescriptor
 
 from app.protocol.codecs.json import struct_from_mapping, struct_to_mapping
-from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 
 
 def _status(value: object) -> browser_pb2.BrowserStatus:

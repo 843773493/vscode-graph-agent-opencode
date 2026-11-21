@@ -10,9 +10,9 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.core import failures
 
@@ -41,7 +41,7 @@ def argument_tool(request: pytest.FixtureRequest):
     }
     target = StructuredTool.from_function(count_values, name="count_values", description="计数", args_schema=schema)
     envelope = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     )
     return envelope, calls
 
@@ -98,7 +98,7 @@ async def test_argument_error_survives_diagnostic_sink_failure(
     envelope, calls = argument_tool
     errors: list[BaseException] = []
 
-    def fail_log(_message: str, *_args: object, exc_info: BaseException) -> None:
+    def fail_log(_message: str, *_args: object, exc_info: BaseException, **_kwargs: object) -> None:
         errors.append(exc_info)
         raise OSError("/private/diagnostics/output.log")
 
@@ -130,7 +130,7 @@ def mapping_argument_tool(request: pytest.FixtureRequest):
     }
     target = StructuredTool.from_function(count_values, name="count_values", description="计数", args_schema=schema)
     envelope = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     )
     return envelope, calls
 

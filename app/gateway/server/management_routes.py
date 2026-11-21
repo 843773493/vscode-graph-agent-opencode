@@ -6,10 +6,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from boxteam_plugin_sdk.http import get_request_id
 from starlette.requests import HTTPConnection
 
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease

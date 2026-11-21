@@ -2,14 +2,28 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException
 from starlette.staticfiles import StaticFiles
 
 _MCP_OAUTH_CALLBACK_PATH = "/mcp-oauth-callback.html"
+
+
+def _accepts_gzip(header: str) -> bool:
+    encodings: dict[str, bool] = {}
+    for value in header.lower().split(","):
+        coding, *parameters = value.split(";")
+        encodings[coding.strip()] = not any(
+            re.fullmatch(r"\s*q\s*=\s*0(?:\.0*)?\s*", parameter)
+            for parameter in parameters
+        )
+    return encodings.get("gzip", encodings.get("*", False))
 
 
 class _OAuthCallbackAccessFilter(logging.Filter):
@@ -38,14 +52,24 @@ class SpaStaticFiles(StaticFiles):
         normalized_path = path.replace("\\", "/")
         if normalized_path == "api" or normalized_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
+        compressed_path = f"{normalized_path}.gz"
+        has_gzip = compressed_path in self.immutable_assets
+        use_gzip = has_gzip and _accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
         try:
-            response = await super().get_response(normalized_path, scope)
+            response = await super().get_response(compressed_path if use_gzip else normalized_path, scope)
         except HTTPException as error:
             if error.status_code != 404 or Path(normalized_path).suffix or normalized_path.split("/")[0] in {
                 "out", "assets", "extensions", "node_modules",
             }:
                 raise
             response = await super().get_response("index.html", scope)
+        if has_gzip:
+            response.headers.add_vary_header("Accept-Encoding")
+        if use_gzip:
+            response.headers["Content-Encoding"] = "gzip"
+            if response.status_code != 304:
+                media_type = mimetypes.guess_type(normalized_path)[0] or "application/octet-stream"
+                response.headers["Content-Type"] = f"{media_type}; charset=utf-8" if media_type.startswith("text/") else media_type
         response.headers["Cache-Control"] = (
             "public, max-age=31536000, immutable" if normalized_path in self.immutable_assets else "no-cache"
         )

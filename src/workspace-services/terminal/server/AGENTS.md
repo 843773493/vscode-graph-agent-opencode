@@ -28,6 +28,10 @@ server/
 
 普通列表统一使用 Session 摘要，保留状态、命令、版本和输出游标，不携带 `buffer` 或 `display_buffer`，也不为列表过滤完整输出。原始缓冲仍由同一 Session 持有并持久化；单条详情、增量读取和 WebSocket 快照继续提供正文。
 
+列表的 `resource_id` 查询参数可重复；指定时直接按 Map 取所选 Session，不遍历或计算其它资源摘要。缺失资源返回空清单，由原 Python owner 保留未核实语义，不能据此推断已停止或删除。
+
+`/api/terminals/events` 在首次订阅及已提交的资源/命令状态变化时通知，不携带清单或输出正文；PTY输出、消费游标、普通交互输入和心跳不触发清单补读。断线后读取当前快照，慢订阅者断流，服务关闭前释放全部状态订阅；状态通知不成为恢复事实。
+
 ## 身份与传输授权
 
 `TerminalManager.terminalsById`按`terminal_id`保存`TerminalSession`资源实例，含仍保留的非运行记录；它不是聊天Session或Thread集合。管理器内部资源集合与跨层业务身份用具体资源名区分，不保留旧字段别名。
@@ -80,7 +84,7 @@ StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`.
 
 StateStore按实际阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause。事务失败回滚整批，保留已提交记录，Manager释放在途保存后仍允许下一次显式请求，不自动重试。回滚或诊断也失败时通过AggregateError保留原异常，公开主错误码和阶段不变。真实PTY/HTTP验收通过SQLite事务失败核原进程身份、解除故障后的同尺寸保存和真实资源回收。
 
-旧schema 3 JSON只允许停止终端服务后显式一次性导入：从应用根目录执行`node src/workspace-services/terminal/server/storage/importLegacyState.mjs --workspace <绝对工作区路径> --workspace-id <UUID>`。命令核对现有工作区身份、全部记录和唯一身份，要求目标库不存在，通过独占临时数据库和拒绝覆盖的原子发布完成导入；原JSON保留作离线原件。普通链路只有SQLite；目标库缺失但存在旧JSON时明确要求导入，不自动迁移、不双读双写。
+旧schema 3 JSON只允许停止终端服务后显式一次性导入：从应用根目录执行`node src/workspace-services/terminal/server/storage/migrations/v3_json_to_v1_sqlite.mjs --workspace <绝对工作区路径> --workspace-id <UUID>`。命令核对现有工作区身份、全部记录和唯一身份，要求目标库不存在，通过独占临时数据库和拒绝覆盖的原子发布完成导入；原JSON保留作离线原件。普通链路只有SQLite；目标库缺失但存在旧JSON时明确要求导入，不自动迁移、不双读双写。
 
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 
@@ -117,7 +121,7 @@ PTY自发退出也须经原Worker关闭入口确认宿主退出后才清除句�
 ## 规范
 
 - 使用 Node.js ESM。
-- 产品诊断统一使用 `src/shared/serverRuntimeLogging.mjs`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
+- 产品诊断统一使用 `@boxteam/plugin-sdk/logging`；独立启动时显式提供 `BOXTEAM_PROJECT_ROOT` 或从 application root 启动。PTY 和网页 console 原始输出不经过诊断等级过滤。
 - 失败时返回明确 HTTP 错误或 WebSocket error 消息。
 - detach 只断开客户端，不杀死 PTY；kill/delete 才终止终端。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

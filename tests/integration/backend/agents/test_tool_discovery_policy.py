@@ -27,7 +27,7 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 本文件正式工作区
 )
 from tests.integration.backend.agents.test_mcp_connection_wait import authorize
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一真实 MCP Server
@@ -88,10 +88,10 @@ async def test_large_definition_is_read_through_file_tool_before_real_invocation
             first = discovery_plan(replay, session, thread, [
                 ("search_tools", {"tool_ids": ["mcp__schema__probe"], "max_response_bytes": 4096}),
             ], key="large-definition-search")
-            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "检索 probe 的完整定义；超过预算时保留可读引用。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert response.status_code == 200, response.text
             await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
             search_request = json.loads((replay.artifacts / f"{first[-1]}.json").read_text())["request"]
@@ -110,10 +110,10 @@ async def test_large_definition_is_read_through_file_tool_before_real_invocation
                 ("read_file", {"path": definition["read_path"]}),
                 ("invoke_extension_tool", {"tool_name": "mcp__schema__probe", "arguments": {"proof": "artifact-verified"}}),
             ], key="large-definition-read-invoke")
-            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "沿上轮引用用普通 read_file 读取完整定义，再调用 probe。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert response.status_code == 200, response.text
             await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
             records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in [*first, *second]]
@@ -171,10 +171,10 @@ async def test_initially_disabled_tool_is_known_but_never_reaches_server(
             ("invoke_extension_tool", {"tool_name": "mcp__schema__probe", "arguments": {"proof": "must-not-run"}}),
         ]
         calls = discovery_plan(replay, session, thread, operations, key="initial-discovery-policy")
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "核查已知工具的禁用、隐藏与未知身份，并尝试一次受禁用策略保护的调用。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
         records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in calls]
@@ -234,10 +234,10 @@ async def test_previously_verified_oauth_catalog_remains_discoverable_without_ex
             ("invoke_extension_tool", {"tool_name": "mcp__secure__probe", "arguments": {"proof": "must-not-run"}}),
             ("invoke_extension_tool", {"tool_name": "mcp__schema__probe", "arguments": {"proof": "sibling-ready"}}),
         ], key="known-unready")
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "核查已知未授权目录、未知目标和就绪目标，并核对执行拒绝。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=100)
         records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in calls]
@@ -296,10 +296,10 @@ async def test_upstream_authorization_uses_published_remote_manager_without_reco
                 }}),
             ]
             calls = discovery_plan(replay, session, thread, operations, key="upstream-authorization-owner")
-            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "检查Server真实应用管理能力；上游应用授权不能用本地重连代替，不支持的能力明确报错。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert response.status_code == 200, response.text
             await wait_for_job_done(client, response.json()["data"]["job_id"], max_attempts=120)
             records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in calls]
@@ -366,10 +366,10 @@ async def test_invalid_extension_arguments_keep_diagnostics_out_of_canonical_res
                 "tool_name": "mcp__schema__probe", "arguments": {"count": value},
             }) for value in [*native_paths, 2]]
             calls = discovery_plan(replay, session, thread, operations, key="extension-argument-errors")
-            response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+            response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "核对工具参数类型，纠正参数后继续原工具调用。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert response.status_code == 200, response.text
             job_id = response.json()["data"]["job_id"]
             await wait_for_job_done(client, job_id, max_attempts=120)

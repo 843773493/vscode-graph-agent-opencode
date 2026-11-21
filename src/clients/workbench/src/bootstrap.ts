@@ -1,3 +1,4 @@
+import './typography.css';
 import { setLocaleResources, t, type DisplayLocale, type MessageCatalog } from '../../shared/core/i18n/index.js';
 import bootstrapMessages from '../../shared/core/i18n/bootstrapMessages.json';
 import { loadWorkbenchNlsMessages } from './nlsResources.js';
@@ -21,7 +22,7 @@ function showError(key: string, detail?: string, recover?: { labelKey: string; r
 }
 
 async function start(): Promise<void> {
-  document.documentElement.lang = 'zh-CN';
+  document.documentElement.lang = 'zh-Hans';
   let stored: string | null;
   let storageError: unknown;
   try {
@@ -60,7 +61,7 @@ async function start(): Promise<void> {
     return;
   }
   setLocaleResources(locale, messages);
-  document.documentElement.lang = locale === 'zh-cn' ? 'zh-CN' : 'en';
+  document.documentElement.lang = locale === 'zh-cn' ? 'zh-Hans' : 'en';
   const startup = document.getElementById('startup-status');
   if (startup) startup.textContent = t('bootstrap.loading');
   let nlsMessages: Record<string, unknown>;

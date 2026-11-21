@@ -10,10 +10,13 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 
 from app.core.failures import public_failure_message
 from app.core.resource_uri import resource_display_uri
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.federation.errors import (
     FEDERATION_MALFORMED_FRAME,
     FEDERATION_TARGET_NOT_RESOLVABLE,

@@ -34,12 +34,14 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO
-from app.services.business.session_context_resource import session_resource_identity
+from app.services.business.session_context_query.resources import (
+    session_resource_identity,
+)
 from tests.support.communication.probe import TARGET_SESSION, WORKSPACE_ID
 
 
-class _MissingAgentToolService:
-    """ToolService.list 在 agent 不存在时抛 ValueError（配置层口径）。"""
+class _MissingAgentToolSettingsService:
+    """AgentToolSettingsService.list 在 agent 不存在时抛 ValueError（配置层口径）。"""
 
     async def list(self, agent_id: str = "default"):
         raise ValueError(f"agent {agent_id} 不存在")
@@ -66,7 +68,7 @@ class _RejectingContextService:
         raise ValueError("上下文资源 URI 不符合规范")
 
 
-class _UnwritableLogService:
+class _UnwritableHtmlSnapshotStore:
     async def write_html_snapshot(self, record):
         raise PermissionError("快照 owner 目录不可写")
 
@@ -83,7 +85,7 @@ async def test_list_tools_maps_unknown_agent_to_400() -> None:
             "nope",
             _="local",
             request_id="req",
-            tool_service=_MissingAgentToolService(),
+            agent_tool_settings_service=_MissingAgentToolSettingsService(),
         )
 
     assert captured.value.status_code == 400
@@ -97,7 +99,7 @@ async def test_get_tool_maps_unknown_agent_to_400() -> None:
             "nope",
             _="local",
             request_id="req",
-            tool_service=_MissingAgentToolService(),
+            agent_tool_settings_service=_MissingAgentToolSettingsService(),
         )
 
     assert captured.value.status_code == 400
@@ -278,7 +280,7 @@ async def test_save_log_snapshot_exposes_owner_storage_failure() -> None:
             ),
             _="local",
             request_id="req",
-            log_service=_UnwritableLogService(),
+            html_snapshot_store=_UnwritableHtmlSnapshotStore(),
         )
 
 
@@ -298,7 +300,7 @@ async def test_set_workspace_default_agent_maps_unknown_agent_to_404() -> None:
 def _start_request():
     from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 
-    return ToolTestStartRequest(agent_id="default", provider_ids=[], repetitions=1)
+    return ToolTestStartRequest(agent_id="default", model_refs=[], repetitions=1)
 
 
 def _read_request():

@@ -26,6 +26,7 @@ class WorkspaceDTO(_WorkspaceMetadataDTO):
     project_type: str | None = None
     git: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
+    data_directory: str | None = Field(default=None, description="所属工作区在目标机器上的业务数据展示位置，不作资源定位")
 
 
 class WorkspaceContextDTO(_WorkspaceMetadataDTO):

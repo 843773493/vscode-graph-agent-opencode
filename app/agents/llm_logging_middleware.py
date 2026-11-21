@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT
 from langchain_core.messages import AIMessage, BaseMessage
@@ -24,7 +25,7 @@ from app.core.bounded_json import bound_json_value
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.failures import execution_failure_message
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import ExecutionAdmission
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)

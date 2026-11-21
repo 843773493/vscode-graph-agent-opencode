@@ -31,6 +31,8 @@ const pdfBytes = Buffer.from(
 const attachmentRequests = [];
 let brokenThumbnailAttempts = 0;
 let failNotesOriginal = false;
+let releaseSlowThumbnail;
+const slowThumbnail = new Promise(resolve => { releaseSlowThumbnail = resolve; });
 
 const { createServer } = await import(
   pathToFileURL(
@@ -96,6 +98,7 @@ try {
     attachmentRequests.push({ fileId, variant, maxEdge, ...requestOwner });
 
     if (fileId.endsWith("att_561d18fc1caaeb847ba561feab9afd9d") && variant === "thumbnail" && brokenThumbnailAttempts++ === 0) {
+      await slowThumbnail;
       await route.fulfill({
         status: 503,
         contentType: "application/json",
@@ -149,10 +152,16 @@ try {
   try {
     await page.goto(
       `http://127.0.0.1:${address.port}/structured_user_message_attachments_harness.html?${new URLSearchParams(owner)}`,
-      { waitUntil: "networkidle", timeout: 30_000 },
+      { waitUntil: "domcontentloaded", timeout: 30_000 },
     );
     const messageSurface = page.getByTestId("message-surface");
     await messageSurface.getByRole("heading", { name: "请检查这些附件" }).waitFor();
+    try {
+      // 另一张图尚未返回时，已经完成的图片必须可见。
+      await messageSurface.locator('img[alt="valid.png"]').waitFor({ state: "visible", timeout: 2_000 });
+    } finally {
+      releaseSlowThumbnail();
+    }
     await page.getByText("重新加载附件预览").waitFor({ state: "visible", timeout: 10_000 });
     result.thumbnailRequest = attachmentRequests.find(
       (request) => request.fileId.endsWith("att_ca0fdda93084dec429773195bbc9904e") && request.variant === "thumbnail",

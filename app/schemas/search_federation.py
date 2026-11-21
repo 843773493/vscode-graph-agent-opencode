@@ -5,12 +5,12 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
-from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.canonical_params import CanonicalGatewayId
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogQueryResultDTO,
     GatewayDiagnosticLogQueryScopeDTO,
 )
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.gateway.search import (
     GatewaySearchScopeRequest,
     GatewaySearchScopeResolutionDTO,

@@ -1,9 +1,9 @@
+import { goalStreamMutation } from "../protocol/sessionGoal";
 import { describe, expect, test } from "bun:test";
 import {
   goalCanResume,
   goalEditStatus,
   goalNeedsReplacementConfirmation,
-  goalStreamMutation,
   parseGoalSlashAction,
 } from "./sessionGoal";
 import type { SessionGoal } from "../types/backend";
@@ -58,14 +58,19 @@ describe("Goal Slash Command", () => {
       time_used_seconds: 5,
       created_at: "2026-07-27T00:00:00Z",
       updated_at: "2026-07-27T00:01:00Z",
+      revision: 1,
+      control_revision: 1,
+      sync_version: 1,
     };
     const owner = { session_id: "ses_1", thread_id: "thr_main" };
     expect(goalStreamMutation({
       type: "goal_updated", ...owner,
       raw: { payload: { ...owner, goal } },
     }, owner)).toEqual({ kind: "updated", goal });
-    expect(goalStreamMutation({ type: "goal_cleared", ...owner, raw: { payload: owner } }, owner)).toEqual({
-      kind: "cleared",
+    expect(goalStreamMutation({ type: "goal_cleared", ...owner, raw: { payload: {
+      ...owner, control_revision: 2, sync_version: 2,
+    } } }, owner)).toEqual({
+      kind: "cleared", controlRevision: 2, syncVersion: 2,
     });
   });
 
@@ -73,7 +78,7 @@ describe("Goal Slash Command", () => {
     expect(() => goalStreamMutation({
       type: "goal_updated", session_id: "ses_1", thread_id: "thr_main",
       payload: { session_id: "ses_1", thread_id: "thr_main", goal: { goal_id: "goal_broken" } },
-    }, { session_id: "ses_1", thread_id: "thr_main" })).toThrow("goal_updated 事件中的 goal 字段无效");
+    }, { session_id: "ses_1", thread_id: "thr_main" })).toThrow("Goal 协议缺少有效身份");
   });
 
   test("Goal SSE 拒绝 child、其它 Session 及内外 owner 不一致", () => {

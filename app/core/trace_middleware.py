@@ -1,27 +1,35 @@
+import json
 import logging
 import time
-import uuid
 from collections.abc import Callable
 from contextvars import ContextVar, Token
+from uuid import UUID
 
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.failures import failure_detail, public_failure_message
-from app.core.identifier import validate_gateway_id
+from app.core.failures import (
+    HTTP_FAILURE_HEADER,
+    failure_detail,
+    http_failure_context,
+    public_failure_message,
+)
+from app.core.identifier import create_uuid_hex, validate_gateway_id
 
 logger = logging.getLogger(__name__)
 
 # Gateway 身份头：由 Gateway 侧按请求注入（见「统一资源寻址」change 的
 # requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」）。
-# 与 ``X-Request-ID`` 共用 TraceMiddleware 这一套请求级上下文，不新建第二套机制。
 GATEWAY_ID_HEADER = "X-BoxTeam-Gateway-Id"
 NAVIGATION_ACTOR_HEADER = "X-BoxTeam-Navigation-Actor"
 
 # 当前请求绑定的 gateway_id；请求未携带时保持 None，由消费方 fail-closed。
-# 与 request_id 一样，生命周期由 TraceMiddleware 在请求作用域内承担。
 _CURRENT_GATEWAY_ID: ContextVar[str | None] = ContextVar(
     "boxteam_current_gateway_id",
     default=None,
@@ -30,53 +38,6 @@ _CURRENT_NAVIGATION_ACTOR: ContextVar[str | None] = ContextVar(
     "boxteam_current_navigation_actor",
     default=None,
 )
-
-
-def get_request_id(request: HTTPConnection) -> str:
-    """读取 TraceMiddleware 为当前 HTTP／WebSocket 请求创建的权威 request_id。"""
-    request_id = getattr(request.state, "request_id", None)
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError("TraceMiddleware 未向当前请求注入 request_id")
-    return request_id
-
-
-# 当前作用域绑定的请求级 request_id；与 gateway_id 共用同一套请求级上下文，
-# 不新建第二套机制。独立执行根（例如后台 job）必须由创建方显式随任务传递，
-# MUST NOT 依赖任何进程级「当前 request」单例，也不得在 job 内部补造第二个 ID。
-_CURRENT_REQUEST_ID: ContextVar[str | None] = ContextVar(
-    "boxteam_current_request_id",
-    default=None,
-)
-
-
-def set_current_request_id(request_id: str | None) -> Token[str | None]:
-    """在当前执行作用域内绑定请求级 request_id；返回 token 用于恢复。"""
-    return _CURRENT_REQUEST_ID.set(request_id)
-
-
-def reset_current_request_id(token: Token[str | None]) -> None:
-    """恢复先前的 request_id 绑定。"""
-    _CURRENT_REQUEST_ID.reset(token)
-
-
-def get_current_request_id() -> str | None:
-    """读取当前作用域绑定的 request_id；未绑定时返回 None。"""
-    return _CURRENT_REQUEST_ID.get()
-
-
-def require_current_request_id(consumer: str) -> str:
-    """读取当前作用域的 request_id；缺失或非法即 fail-closed 显式拒绝。
-
-    MUST NOT 回退随机 UUID 或任何虚假默认值（AGENTS.md「永不返回虚假的默认值」
-    与「任何一层不得补造第二个请求 ID」）。
-    """
-    request_id = _CURRENT_REQUEST_ID.get()
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError(
-            f"{consumer} 需要创建请求的权威 request_id，但当前作用域未绑定："
-            "调用方必须在请求作用域内传入（或从持久化的 Job 记录携带）"
-        )
-    return request_id
 
 
 def set_current_gateway_id(gateway_id: str | None) -> Token[str | None]:
@@ -139,6 +100,33 @@ def require_current_navigation_actor(consumer: str) -> str:
     return actor
 
 
+def http_failure_headers(request: HTTPConnection, error: BaseException | None = None) -> dict[str, str]:
+    """只在失败时组装来源；不读取身份文件、不复制凭据、URL 或原异常正文。"""
+    # HTTP 头不区分大小写；已有来源由原响应传回，避免两份 JSON 合并成非法头部。
+    if any(name.lower() == HTTP_FAILURE_HEADER.lower() for name in (getattr(error, "headers", None) or {})):
+        return {}
+    context = http_failure_context(error)
+    context.setdefault("stage", "http_request")
+    if error is not None:
+        context.setdefault("error_type", type(error).__name__)
+    source = {"component": request.scope["state"].get("http_component", "http_service")}
+    state = getattr(request.scope.get("app"), "state", None)
+    if source["component"] == "gateway":
+        registry = getattr(state, "registry", None)
+        if registry is not None:
+            source["gateway_id"] = registry.gateway_id
+    elif source["component"] == "workspace_backend":
+        backend_id = getattr(state, "backend_id", None)
+        if backend_id is not None:
+            source["backend_id"] = backend_id
+        registry = getattr(state, "workspace_container_registry", None)
+        workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+        if registry is not None and workspace_id is not None and workspace_id in registry.workspace_ids:
+            source["workspace_id"] = workspace_id
+    context["source"] = source
+    return {HTTP_FAILURE_HEADER: json.dumps(context, separators=(",", ":"))}
+
+
 class TraceMiddleware:
     """
     Middleware for request tracing and performance logging.
@@ -151,8 +139,10 @@ class TraceMiddleware:
     """
     
     def __init__(self, app: ASGIApp, *,
+                 component: str = "http_service",
                  on_request_complete: Callable[[Scope, int, float, bool], None] | None = None) -> None:
         self.app = app
+        self.component = component
         self.on_request_complete = on_request_complete
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -162,7 +152,7 @@ class TraceMiddleware:
 
         request = Request(scope, receive=receive) if scope["type"] == "http" else HTTPConnection(scope)
         incoming_request_id = request.headers.get("X-Request-ID", "").strip()
-        request_id = incoming_request_id or str(uuid.uuid4())
+        request_id = incoming_request_id or str(UUID(create_uuid_hex(namespace="req")))
         start_time = time.perf_counter()
 
         incoming_gateway_id = request.headers.get(GATEWAY_ID_HEADER, "").strip()
@@ -176,6 +166,7 @@ class TraceMiddleware:
 
         # Attach trace info to request state
         request.state.request_id = request_id
+        request.state.http_component = self.component
         request.state.start_time = start_time
         # 同时绑定到请求级 ContextVar：后台 job 创建点在请求作用域内读取该值，
         # 显式随 job 携带，避免下游补造第二个 request ID。
@@ -216,6 +207,9 @@ class TraceMiddleware:
                     if name.lower() != b"x-request-id"
                 ]
                 headers.append((b"x-request-id", request_id.encode("latin-1")))
+                if response_status >= 400 and not any(name.lower() == HTTP_FAILURE_HEADER.lower().encode() for name, _ in headers):
+                    headers.extend((name.lower().encode(), value.encode("ascii"))
+                                   for name, value in http_failure_headers(request).items())
                 message = {**message, "headers": headers}
             await send(message)
 
@@ -240,11 +234,12 @@ class TraceMiddleware:
                 )
             if response_started:
                 raise
+            status_code = http_failure_context(error).get("status_code", 500)
             response = JSONResponse(
-                status_code=500,
-                headers={"X-Request-ID": request_id},
+                status_code=status_code,
+                headers={"X-Request-ID": request_id, **http_failure_headers(request, error)},
                 content={
-                    "code": 500,
+                    "code": status_code,
                     "message": message,
                     "data": None,
                     "request_id": request_id,

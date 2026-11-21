@@ -13,15 +13,19 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from boxteam_plugin_sdk.request_context import get_current_request_id
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.graph.message import add_messages
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.agents.execution_checkpoint import (
+    checkpoint_accepted_execution_input,
+)
 from app.agents.graph_binding import compute_capability_profile_hash
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.container import AppContainer, build_app_container
 from app.core.checkpoint_config import build_checkpoint_config
@@ -32,7 +36,7 @@ from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
-from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -48,9 +52,6 @@ from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.reasoning_checkpoint_service import (
-    persist_user_message_checkpoint,
-)
 from app.services.infrastructure.message_stream_store import (
     RECOVERED_TOOL_RESULT_UNKNOWN,
     MessageStreamStore,
@@ -68,14 +69,17 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
 )
+from tests.support.api_helpers import running_job_dispatch_snapshot
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ async def _start_job(case: RunnerCase, origin: str, session_id: str, thread_id: 
             queued_message,
             execution_identity=binding, queue_input=ExecutionQueueInput(
             execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=get_current_gateway_id(),
+            model=None, delivery_policy="after_turn", gateway_id=get_current_gateway_id(),
             request_id=get_current_request_id(),
             created_at=queued_message.created_at.isoformat(),
         ),
@@ -202,7 +206,7 @@ def _facts(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
 @pytest.mark.parametrize("window", ["input_consumption", "admission_readback"])
-async def test_job_cancel_waits_for_real_admission_settlement(
+async def test_job_cancel_waits_for_execution_input_and_admission_reads(
     runner_case: RunnerCase,
     monkeypatch: pytest.MonkeyPatch,
     origin: str,
@@ -213,7 +217,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
     if window == "input_consumption":
         from app.services.orchestration.execution_step import runner
 
-        original = runner.persist_user_message_checkpoint
+        original = runner.checkpoint_accepted_execution_input
 
         def blocked_write(*args, **kwargs):
             if threading.current_thread() is not threading.main_thread() and not entered.is_set():
@@ -222,26 +226,26 @@ async def test_job_cancel_waits_for_real_admission_settlement(
                     raise TimeoutError("测试 Saver writer 屏障未释放")
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(runner, "persist_user_message_checkpoint", blocked_write)
+        monkeypatch.setattr(runner, "checkpoint_accepted_execution_input", blocked_write)
     else:
         from app.services.orchestration.execution_step import runner
 
-        admission_written = threading.Event()
-        original_write = runner.persist_user_message_checkpoint
+        input_checkpointed = threading.Event()
+        original_write = runner.checkpoint_accepted_execution_input
 
-        def mark_admission_written(*args, **kwargs):
+        def mark_input_checkpointed(*args, **kwargs):
             result = original_write(*args, **kwargs)
-            admission_written.set()
+            input_checkpointed.set()
             return result
 
         monkeypatch.setattr(
-            runner, "persist_user_message_checkpoint", mark_admission_written
+            runner, "checkpoint_accepted_execution_input", mark_input_checkpointed
         )
         original = runner_case.saver.execution_admission_for_job
 
         def blocked_read(*args, **kwargs):
             if (
-                admission_written.is_set()
+                input_checkpointed.is_set()
                 and threading.current_thread() is not threading.main_thread()
                 and not entered.is_set()
             ):
@@ -367,7 +371,7 @@ def _admit(
             queued_message,
             execution_identity=binding, queue_input=ExecutionQueueInput(
             execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=queued_message.created_at.isoformat(),
         ),
         )
@@ -386,7 +390,7 @@ def _admit(
             session_id, thread_id=thread_id, job_id=job_id, intent=binding, message=human,
             queue_input=ExecutionQueueInput(
                 execution_binding=binding, message_id=message_id, agent_id="default",
-                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
                 created_at=created_at.isoformat(),
             ),
         )
@@ -395,7 +399,7 @@ def _admit(
         MutationIntentOwner(session_id=session_id, thread_id=thread_id),
         langgraph_thread_id=thread_id,
     ):
-        persist_user_message_checkpoint(
+        checkpoint_accepted_execution_input(
             checkpointer=case.saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -411,7 +415,7 @@ def _admit(
 
 async def _settle_local_recovery_claim(case: RunnerCase, admission: ExecutionAdmission) -> None:
     """局部恢复 fixture 领取并启动原准入；无活 writer 时释放 holder，进程退出另有专项。"""
-    store = case.container.pending_request_store
+    store = case.container.execution_queue_service
     record = await store.record(admission.session_id, admission.thread_id, admission.job_id)
     claim = await store.claim(record)
     assert claim is not None
@@ -611,7 +615,7 @@ async def test_cancelled_runtime_input_failure_preserves_only_accepted_facts(
 
     from app.services.orchestration.execution_step import runner
 
-    monkeypatch.setattr(runner, "persist_user_message_checkpoint", rejected_write)
+    monkeypatch.setattr(runner, "checkpoint_accepted_execution_input", rejected_write)
     job = await _start_job(runner_case, origin, session_id, thread_id)
     try:
         assert await asyncio.to_thread(entered.wait, 3), job.error_message
@@ -652,7 +656,12 @@ async def test_restart_rejects_same_job_started_owner_drift(
                 job_id="job-owner-conflict",
                 timestamp=datetime.now(UTC),
                 payload=JobStartedPayload(
-                    session_id=session_id, thread_id=owner_thread
+                    session_id=session_id,
+                    thread_id=owner_thread,
+                    dispatch=running_job_dispatch_snapshot(
+                        session_id, owner_thread, "job-owner-conflict",
+                        queued_job_count=0, queue_snapshot_version=0,
+                    ),
                 ),
             ),
         )
@@ -771,21 +780,25 @@ async def test_restart_restores_original_child_before_provider_dispatch(
             job_id=admission.job_id,
             timestamp=datetime.now(UTC),
             payload=JobStartedPayload(
-                session_id=session_id, thread_id=child.child_thread_id
+                session_id=session_id,
+                thread_id=child.child_thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, child.child_thread_id, admission.job_id,
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
             ),
         ),
     )
     restarted = RolloutCheckpointSaver(sessions_root)
-    runtime = RuntimeService(
+    runtime = WorkspaceRuntimeLifecycleService(
         workspace_id=runner_case.container.workspace_service.workspace_id,
-        workspace_root=runner_case.workspace,
         job_service=runner_case.container.job_service,
         background_task_registry=runner_case.container.background_task_registry,
         trace_event_store=runner_case.container.trace_event_store,
         message_stream_store=runner_case.container.message_stream_store,
         terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=runner_case.container.pending_request_store,
+        execution_queue_service=runner_case.container.execution_queue_service,
     )
     await _settle_local_recovery_claim(runner_case, admission)
     try:
@@ -830,7 +843,7 @@ async def started_tool_attempt(
             owner=ContextSourceOwnerKey(session_id, thread_id), control_state_port=saver,
         )
         envelope = create_extension_tool_invoker_tool(
-            [], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([]),
+            [], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([]),
         )
         producer = registered_tool_set_producer_factory([envelope])
         producer.freeze_structured_output_tools({})
@@ -901,7 +914,14 @@ async def started_tool_attempt(
         await stream.start_tool(tool_execution_id=attempt_id, tool_call_id=call_id, tool_name="task")
     await runner_case.container.trace_event_store.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id=admission.job_id, timestamp=datetime.now(UTC),
-        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+        payload=JobStartedPayload(
+            session_id=session_id,
+            thread_id=thread_id,
+            dispatch=running_job_dispatch_snapshot(
+                session_id, thread_id, admission.job_id,
+                queued_job_count=0, queue_snapshot_version=0,
+            ),
+        ),
     ))
     completion = ToolResultCompletion(
         model_call_id=snapshot.model_call_id, tool_call_id=call_id,
@@ -980,15 +1000,14 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         path_resolver=get_session_path_resolver(sessions_root),
         workspace_id=runner_case.container.workspace_service.workspace_id,
     )
-    runtime = RuntimeService(
+    runtime = WorkspaceRuntimeLifecycleService(
         workspace_id=runner_case.container.workspace_service.workspace_id,
-        workspace_root=runner_case.workspace,
         job_service=runner_case.container.job_service,
         background_task_registry=runner_case.container.background_task_registry,
         trace_event_store=runner_case.container.trace_event_store,
         message_stream_store=cold_streams, terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=runner_case.container.pending_request_store,
+        execution_queue_service=runner_case.container.execution_queue_service,
     )
     assert await runtime.reconcile_stale_executions() == 2
     terminals = [item for item in restarted._storage.storage.read_items(session_id, thread_id)

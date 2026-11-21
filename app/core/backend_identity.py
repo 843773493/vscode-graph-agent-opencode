@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import portalocker
 
 from app.core.atomic_fs import atomic_write_bytes, native_io_path
+from app.core.identifier import create_uuid_hex
 
 
 def _identity_path(boxteam_home: Path) -> Path:
@@ -48,6 +49,6 @@ def load_or_create_backend_id(boxteam_home: Path) -> str:
         try:
             return read_backend_id(boxteam_home)
         except FileNotFoundError:
-            backend_id = str(uuid4())
+            backend_id = str(UUID(create_uuid_hex(namespace="backend")))
             atomic_write_bytes(path, (json.dumps({"schema_version": 1, "backend_id": backend_id}) + "\n").encode())
             return backend_id

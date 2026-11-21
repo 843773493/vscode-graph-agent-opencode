@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../api/workspaceResources";
@@ -15,6 +15,7 @@ const runResourceAction: DispatchWorkspaceResourceAction = (action, source, thre
 afterEach(() => {
   for (const renderer of renderers.splice(0)) act(() => renderer.unmount());
   for (const restore of restores.splice(0)) restore();
+  jest.useRealTimers();
   restoreGlobalDescriptor("window", originalWindow);
 });
 
@@ -36,10 +37,17 @@ function deferred<T>() {
 
 async function mount(kind: WorkspaceConnectionKind = "terminal", dispatch: DispatchWorkspaceResourceAction = runResourceAction) {
   let current!: ReturnType<typeof useWorkspaceResources>;
-  let poll = () => {};
+  let onChange = () => {};
+  let intervals = 0;
   Object.defineProperty(globalThis, "window", { configurable: true, value: {
-    setInterval: (callback: () => void) => { poll = callback; return 1; }, clearInterval: () => {},
+    setInterval: (callback: () => void) => { intervals += 1; onChange = callback; return 1; }, clearInterval: () => {},
   } });
+  const observe = spyOn(api, "observeTerminalResources").mockImplementation((_port, _workspace, changed, signal) => {
+    onChange = () => changed(null);
+    changed(null);
+    return new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  restores.push(() => observe.mockRestore());
   function Probe({ workspaceId }: { workspaceId: string }) {
     current = useWorkspaceResources(49_945, workspaceId, kind, true, dispatch);
     return null;
@@ -49,7 +57,9 @@ async function mount(kind: WorkspaceConnectionKind = "terminal", dispatch: Dispa
   renderers.push(renderer);
   return {
     current: () => current,
-    poll: () => poll(),
+    notify: () => onChange(),
+    intervals: () => intervals,
+    unmount: () => { act(() => renderer.unmount()); renderers.splice(renderers.indexOf(renderer), 1); },
     switchTo: async (workspaceId: string) => { await act(async () => renderer.update(<Probe workspaceId={workspaceId} />)); },
   };
 }
@@ -61,17 +71,65 @@ function stubList() {
 }
 
 describe("工作区连接 owner 镜像", () => {
-  test("读取慢于轮询周期时仍展示首个完成的完整清单", async () => {
+  test("快照失败保留错误并有界补读，不依赖下一次变化", async () => {
+    jest.useFakeTimers();
+    const list = stubList().mockRejectedValueOnce(new Error("短暂断连"));
+    const mounted = await mount();
+    expect(mounted.current().error).toContain("短暂断连");
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(mounted.current().items).toEqual([resource()]);
+    expect(mounted.current().error).toBeNull();
+  });
+
+  test("连续失败最多补读两次，卸载取消待执行的补读", async () => {
+    jest.useFakeTimers();
+    const list = stubList().mockRejectedValue(new Error("持续断连"));
+    const mounted = await mount();
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await act(async () => { jest.advanceTimersByTime(2000); });
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(mounted.current().error).toContain("持续断连");
+    await act(async () => mounted.notify());
+    expect(list).toHaveBeenCalledTimes(4);
+    mounted.unmount();
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(list).toHaveBeenCalledTimes(4);
+  });
+
+  test("终端静止时没有轮询定时器，资源变化才补读清单", async () => {
+    const list = stubList();
+    const mounted = await mount();
+    expect(mounted.intervals()).toBe(0);
+    expect(list).toHaveBeenCalledTimes(1);
+    list.mockResolvedValue({ workspace_id: "backend-uuid", items: [resource(2)] });
+    await act(async () => mounted.notify());
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(mounted.current().items).toEqual([resource(2)]);
+  });
+  test("读取期间的变化合并为一次补读，旧快照先展示后由新快照确认", async () => {
     const first = deferred<Awaited<ReturnType<typeof api.listWorkspaceResources>>>();
     const later = deferred<Awaited<ReturnType<typeof api.listWorkspaceResources>>>();
     stubList().mockReturnValueOnce(first.promise).mockReturnValue(later.promise);
     const mounted = await mount();
-    act(() => mounted.poll());
-    act(() => mounted.poll());
+    act(() => mounted.notify());
+    act(() => mounted.notify());
     await act(async () => { first.resolve({ workspace_id: "backend-uuid", items: [resource()] }); });
     expect(mounted.current().items).toEqual([resource()]);
+    await act(async () => { later.resolve({ workspace_id: "backend-uuid", items: [resource(2)] }); });
+    expect(mounted.current().items).toEqual([resource(2)]);
     expect(mounted.current().loading).toBe(false);
-    later.resolve({ workspace_id: "backend-uuid", items: [resource()] });
+  });
+
+  test("视图关闭后迟到的读取不继续补读变化", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof api.listWorkspaceResources>>>();
+    const list = stubList().mockReturnValue(pending.promise);
+    const mounted = await mount();
+    act(() => mounted.notify());
+    mounted.unmount();
+    await act(async () => { pending.resolve({ workspace_id: "backend-uuid", items: [resource()] }); });
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   test("原按钮通过统一命令的临时句柄执行，仅写一次并完整替换回执", async () => {
@@ -151,13 +209,13 @@ describe("工作区连接 owner 镜像", () => {
     const mounted = await mount();
     await act(async () => { await mounted.current().control(resource(), "promote"); });
     list.mockResolvedValue({ workspace_id: "backend-uuid", items: [promoted] });
-    await act(async () => mounted.poll());
+    await act(async () => mounted.notify());
     await act(async () => { oldList.resolve({ workspace_id: "backend-uuid", items: [resource()] }); });
     expect(mounted.current().items).toEqual([promoted]);
     expect(mounted.current().loading).toBe(false);
   });
 
-  test("管理进行中暂停轮询并拒绝重叠写入", async () => {
+  test("管理进行中合并变化通知并拒绝重叠写入", async () => {
     const list = stubList();
     const response = deferred<WorkspaceResourceDTO>();
     const control = spyOn(api, "controlWorkspaceResource").mockImplementation(() => response.promise);
@@ -166,14 +224,14 @@ describe("工作区连接 owner 镜像", () => {
     let operation!: Promise<WorkspaceResourceDTO>;
     act(() => { operation = mounted.current().control(resource(), "promote"); });
     expect(mounted.current().mutating).toBe(true);
-    act(() => mounted.poll());
+    act(() => mounted.notify());
     expect(list).toHaveBeenCalledTimes(1);
     await expect(mounted.current().control(resource(), "stop")).rejects.toThrow("尚未完成");
     await act(async () => { response.resolve(resource(2)); await operation; });
     expect(mounted.current().mutating).toBe(false);
   });
 
-  test("失败后重取完整 owner 对象，自动轮询保留操作错误", async () => {
+  test("失败后重取完整 owner 对象，自动更新保留操作错误", async () => {
     const list = stubList();
     const control = spyOn(api, "controlWorkspaceResource").mockRejectedValue(new Error("409 版本冲突"));
     restores.push(() => control.mockRestore());

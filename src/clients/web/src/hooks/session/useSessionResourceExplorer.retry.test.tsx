@@ -9,6 +9,7 @@ import {
 } from "../../api/session/sessionCatalogOperations";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
   withDefaultGatewayApiResponses,
@@ -123,19 +124,20 @@ describe("迟到定位请求的失败不得覆盖新分支终态", () => {
   test("被顶掉的定位分页失败后，已成功的新分支保持无错误", async () => {
     let pagingResolve: ((response: Response) => void) | null = null;
     let childrenCalls = 0;
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path } = request;
       if (path.includes("/api/v1/session-catalog/children")) {
         childrenCalls += 1;
         if (childrenCalls === 1) {
-          return apiSuccessResponse({ revision: "mount", catalog_revision: 7, parent_node_id: null, items: [], cursor: null, total: 0 });
+          return catalogReadResponse(request, { revision: "mount", catalog_revision: 7, parent_node_id: null, items: [], cursor: null, total: 0 });
         }
         if (childrenCalls === 2) {
-          return apiSuccessResponse({ revision: "refresh", catalog_revision: 7, parent_node_id: null, items: [], cursor: "c1", total: 0 });
+          return catalogReadResponse(request, { revision: "refresh", catalog_revision: 7, parent_node_id: null, items: [], cursor: "c1", total: 0 });
         }
         if (childrenCalls === 3) {
           return new Promise<Response>((resolve) => { pagingResolve = resolve; });
         }
-        return apiSuccessResponse({ revision: "ok", catalog_revision: 8, parent_node_id: null, items: [], cursor: null, total: 0 });
+        return catalogReadResponse(request, { revision: "ok", catalog_revision: 8, parent_node_id: null, items: [], cursor: null, total: 0 });
       }
       return undefined;
     }));

@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,7 @@ import { webSelectors } from "../../../clients/selectors/web-selectors.mjs";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import { Perf } from "../../../harness/js/performance.mjs";
 import { observePage } from "../../../harness/js/browser-performance.mjs";
+import { openSessionThreads } from "../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -132,11 +134,11 @@ async function verifyPreviewTabs(page, owner) {
   await mainTab.dblclick();
   await expect(mainTab.locator(".tab-label.italic")).toHaveCount(0);
 
-  // 只延迟真实主 Thread 查询：用户随后选择原版 Tab，迟到导航不能抢回活动编辑器。
+  // 只延迟携带主 Thread 身份的真实 Session 查询：用户随后选择原版 Tab，迟到导航不能抢回活动编辑器。
   const held = [];
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const navigationUrl = url => url.pathname === `/api/v1/sessions/${owner.sessionId}/main-thread`;
+  const navigationUrl = url => url.pathname === `/api/v1/sessions/${owner.sessionId}`;
   const holdNavigation = async route => {
     const request = route.request();
     if (request.method() !== "GET" || !hasWorkspaceOwner(request, owner)) {
@@ -161,6 +163,7 @@ async function verifyPreviewTabs(page, owner) {
     const payload = await response.json();
     expect(payload.request_id).toBe(response.headers()["x-request-id"]);
     expect(payload.data.session_id).toBe(owner.sessionId);
+    expect(payload.data.workspace_id).toBe(owner.workspaceId);
     expect(payload.data.thread_id).toBe(owner.threadId);
     await expect(mainRow).not.toHaveAttribute("aria-busy", "true");
     await expect(spareTab).toHaveClass(/\bactive\b/);
@@ -267,7 +270,8 @@ async function verifyParallelThreads(page, owner, initialJobId) {
   await right.getByRole("tab", { name: "运行与连接", exact: true }).click();
   await expect(mainResourceToggle).toHaveAttribute("aria-expanded", "false");
   await expect(main.getByRole("tab", { name: "运行与连接", exact: true })).toHaveCount(0);
-  await right.locator(`.child-thread-item[data-thread-id="${fork.thread_id}"] .child-thread-main`).click();
+  const threads = await openSessionThreads(page, owner);
+  await threads.locator(`.child-thread-item[data-thread-id="${fork.thread_id}"] .child-thread-main`).click();
   const child = groups.nth(1).locator(`${threadSelector}[data-thread-id="${fork.thread_id}"]`);
   await expect(main).toBeVisible();
   await expect(child).toBeVisible();
@@ -463,8 +467,9 @@ async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
   await page.route(replayUrl, rejectReplay);
   try {
     await composer.fill(draft);
-    await turn.getByRole("button", { name: "消息操作", exact: true }).click();
-    await thread.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click();
+    await turn.locator(".chat-user-bubble").click({ button: "right" });
+    // 原生菜单保留 100ms 的防误触窗口，鼠标松开须晚于此窗口。
+    await page.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click({ delay: 120 });
     const edit = turn.getByRole("textbox", { name: "编辑用户消息", exact: true });
     await expect(edit).toHaveValue(userMessage);
     await edit.fill(edited);
@@ -584,24 +589,15 @@ try {
   const observer = await observePage(page, perf, context);
   if (observer.close) runContext.addCleanup("页面性能观察", () => observer.close());
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  page.on("response", (response) => {
-    if (
-      response.status() === 200
-      && (response.url().includes("/workspace/observations/stream")
-        || response.url().includes("/message-stream?"))
-    ) {
-      streamResponses.push(response.url());
-      if (response.url().includes("/workspace/observations/stream")) {
-        const subscriptions = response.request().postDataJSON().subscriptions;
-        if (response.headers()["content-type"]?.includes("text/event-stream")) {
-          traceStreams.push(...subscriptions.filter((entry) => entry.kind === "session_trace").map(entry => ({
-            ...entry, gatewayId: response.request().headers()["x-boxteam-target-gateway-id"],
-            workspaceId: response.request().headers()["x-boxteam-workspace-id"],
-          })));
-        }
-      }
-    }
-  });
+  observeRealtime(page, { headers(request, response) {
+    if (response.status !== 200) return;
+    if (request.path.includes('/traces/stream') || request.path.includes('/message-stream?')) streamResponses.push(request.url);
+    const match = new URL(request.url).pathname.match(/\/sessions\/([^/]+)\/traces\/stream$/);
+    if (match && response.headers['content-type']?.includes('text/event-stream')) traceStreams.push({
+      session_id: match[1], thread_id: new URL(request.url).searchParams.get('thread_id'),
+      gatewayId: request.headers['x-boxteam-target-gateway-id'], workspaceId: request.headers['x-boxteam-workspace-id'],
+    });
+  } });
   result.phase = "gateway-bootstrap";
   await openWorkbenchPage(page);
   const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
@@ -629,11 +625,9 @@ try {
   const updated = await api(page, `/api/v1/sessions/${sessionId}`, {
     method: "PATCH",
     headers: workspaceHeaders,
-    body: JSON.stringify({ provider_id: "primary" }),
+    body: JSON.stringify({ model: { provider_id: "primary", model_id: "default" } }),
   });
-  if (updated?.data?.current_provider_id !== "primary") {
-    throw new Error("浏览器工具循环会话没有切换到 primary provider");
-  }
+  expect(updated?.data?.current_model).toEqual({ provider_id: "primary", model_id: "default" });
   const mainThread = await api(page, `/api/v1/sessions/${sessionId}/main-thread`, { headers: workspaceHeaders });
   expect(mainThread.data.session_id).toBe(sessionId);
   const threadId = mainThread.data.thread_id;

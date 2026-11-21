@@ -11,7 +11,10 @@ import WarmConfirmProvider from "../shell/WarmConfirmProvider";
 import type { AppState } from "../../types/frontend";
 import type { Agent, SessionGoal } from "../../types/backend";
 import Composer from "./Composer";
+import { ComposerDiagnosticsContext } from "./ComposerDiagnosticsContext";
 import { installComposerTestGlobals } from "./composerTestFixtures";
+import type { ComposerTasks } from "./ComposerTaskList";
+import type { ModelPickerRequest } from "../../state/modelPicker";
 
 const WORKSPACE_ID = "workspace";
 const SESSION_ID = "session";
@@ -24,9 +27,9 @@ const agent = (agentId: string, extra: Partial<Agent> = {}): Agent => ({
   model: "primary",
   tools: [],
   capabilities: [],
-  providers: [
+  models: [
     {
-      provider_id: "provider_a",
+      model_ref: { provider_id: "provider_a", model_id: "default" },
       model: "model-a",
       custom_llm_provider: "openai",
       available: true,
@@ -34,7 +37,7 @@ const agent = (agentId: string, extra: Partial<Agent> = {}): Agent => ({
       configuration_error: null,
     },
     {
-      provider_id: "provider_b",
+      model_ref: { provider_id: "provider_b", model_id: "default" },
       model: "model-b",
       custom_llm_provider: "openai",
       available: true,
@@ -57,6 +60,9 @@ function appState(agents: Agent[]): AppState {
       current_agent_id: "default",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
+      revision: 0,
+      control_revision: 0,
+      sync_version: 0,
     },
     currentSessionWorkspaceId: WORKSPACE_ID,
     contentView: "default",
@@ -85,6 +91,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
@@ -92,9 +99,9 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
-    refreshAgents: async () => undefined,
+    refreshAgents: async () => [agent("default"), agent("reviewer")],
     setWorkspaceDefaultAgent: async () => undefined,
-    setWorkspaceDefaultProvider: async () => undefined,
+    setWorkspaceDefaultModel: async () => undefined,
     switchContentView: () => undefined,
     createSession: async () => undefined,
     renameSession: async () => undefined,
@@ -103,7 +110,8 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
   } as unknown as Actions;
 }
 
-function mountComposer(state: AppState, actions: Actions): ReactTestRenderer {
+function mountComposer(state: AppState, actions: Actions, report: (message: string) => void = () => {}, tasks?: ComposerTasks,
+  pick: (request: ModelPickerRequest) => Promise<void> = async request => request.onSelect((await request.loadModels())[1].model_ref)): ReactTestRenderer {
   let renderer: ReactTestRenderer | undefined;
   function Boundary({ children }: { children: React.ReactNode }) {
     const ref = useRef<ComposerStateSnapshot | null>(null);
@@ -120,11 +128,11 @@ function mountComposer(state: AppState, actions: Actions): ReactTestRenderer {
   }
   act(() => {
     renderer = create(
-      <WarmConfirmProvider>
+      <ComposerDiagnosticsContext.Provider value={report}><WarmConfirmProvider>
         <Boundary>
-          <Composer />
+          <Composer onPickModel={pick} status={tasks ? { conversations: [], timeline: null, active: true, tasks } : undefined} />
         </Boundary>
-      </WarmConfirmProvider>,
+      </WarmConfirmProvider></ComposerDiagnosticsContext.Provider>,
     );
   });
   if (!renderer) {
@@ -145,7 +153,19 @@ afterEach(() => {
 });
 
 describe("Composer 切换类动作失败必须可见", () => {
-  test("持续显示当前会话的权威 Goal 内容与状态", () => {
+  test("权威状态确认失败进入输出，不新增状态栏入口或错误块", () => {
+    installComposerEnvironment();
+    const state = appState([agent("default")]);
+    state.sessionExecutionSyncError = "工作区连接已断开";
+    const messages: string[] = [];
+    const renderer = mountComposer(state, baseActions(), message => messages.push(message));
+    expect(messages.some(message => message.includes("工作区连接已断开"))).toBe(true);
+    expect(renderer.root.findAllByProps({ "data-status-section": "sync" })).toHaveLength(0);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("工作区连接已断开");
+    act(() => renderer.unmount());
+  });
+
+  test("当前 Goal 在统一持续任务列表中展示，不再增加独立 Goal 入口", () => {
     installComposerEnvironment();
     const state = appState([agent("default")]);
     state.currentGoal = {
@@ -157,17 +177,40 @@ describe("Composer 切换类动作失败必须可见", () => {
       token_budget: null,
       tokens_used: 0,
       time_used_seconds: 0,
+      revision: 1,
+      control_revision: 1,
+      sync_version: 1,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     } satisfies SessionGoal;
     state.currentGoalSessionId = SESSION_ID;
-    const renderer = mountComposer(state, baseActions());
-
-    const currentGoal = renderer.root.findByProps({
-      "data-testid": "composer-current-goal",
+    const renderer = mountComposer(state, baseActions(), () => {}, {
+      items: [{ task_id: "goal_1", workspace_id: WORKSPACE_ID, application_type: "goal", application_version: "1",
+        revision: 1, definition_revision: 1, tokens_used: 0, time_used_seconds: 0, sync_version: 1,
+        configuration: undefined, lifecycle: "active", phase: "waiting_trigger",
+        recovering: false, goal: { ...state.currentGoal, token_budget: state.currentGoal.token_budget ?? undefined },
+        created_at: state.currentGoal.created_at, updated_at: state.currentGoal.updated_at }],
+      loaded: true, error: null, onAction: async () => {}, onManage() {},
     });
-    expect(currentGoal.props["aria-label"]).toContain("进行中");
+    expect(renderer.root.findAllByProps({ "data-status-section": "goal" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ "data-status-section": "tasks" }).props["aria-label"]).toBe("持续任务 1");
+    expect(renderer.root.findByProps({ "data-task-id": "goal_1" })).toBeDefined();
     expect(JSON.stringify(renderer.toJSON())).toContain("完成当前任务并验证结果");
+    act(() => renderer.unmount());
+  });
+
+  test("同一任务订阅错误只输出一次，不新增入口或错误详情卡片", () => {
+    installComposerEnvironment();
+    const state = appState([agent("default")]);
+    state.goalError = "HTTP 503 · task-stream";
+    const messages: string[] = [];
+    const renderer = mountComposer(state, baseActions(), message => messages.push(message), {
+      items: [], loaded: true, error: state.goalError, onAction: async () => {}, onManage() {},
+    });
+    expect(messages).toEqual(["持续任务: HTTP 503 · task-stream"]);
+    expect(renderer.root.findAllByType("button").filter(button => button.props["data-status-section"]))
+      .toHaveLength(0);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("HTTP 503");
     act(() => renderer.unmount());
   });
 
@@ -209,6 +252,7 @@ describe("Composer 切换类动作失败必须可见", () => {
       actions: Partial<Actions>;
       open: (renderer: ReactTestRenderer) => void;
       select: (renderer: ReactTestRenderer) => void;
+      pick?: (request: ModelPickerRequest) => Promise<void>;
     }> = [
       {
         name: "switchAgent",
@@ -254,38 +298,30 @@ describe("Composer 切换类动作失败必须可见", () => {
           },
         },
         open: (renderer) => {
-          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
         },
-        select: (renderer) => {
-          renderer.root
-            .findAllByProps({ role: "menuitemradio" })
-            .find((node) => node.props["aria-checked"] === false)
-            ?.props.onClick();
-        },
+        select: () => {},
       },
       {
-        name: "setWorkspaceDefaultProvider",
+        name: "setWorkspaceDefaultModel",
         expected: "设置工作区默认模型失败：provider pin 挂了",
         actions: {
-          setWorkspaceDefaultProvider: async () => {
+          setWorkspaceDefaultModel: async () => {
             throw new Error("provider pin 挂了");
           },
         },
         open: (renderer) => {
-          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
+          renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
         },
-        select: (renderer) => {
-          renderer.root
-            .findAllByProps({ className: "composer-workspace-default-button" })[0]
-            ?.props.onClick();
-        },
+        select: () => {},
+        pick: async request => request.onSetWorkspaceDefault((await request.loadModels())[0].model_ref),
       },
     ];
 
     for (const item of cases) {
       const renderer = mountComposer(
         appState([agent("default"), agent("reviewer")]),
-        baseActions(item.actions),
+        baseActions(item.actions), () => {}, undefined, item.pick,
       );
       // 先渲染出菜单，再点击条目：两次 act 分别对应 React 的两次提交。
       act(() => item.open(renderer));
@@ -358,14 +394,9 @@ describe("Composer 切换类动作失败必须可见", () => {
       }),
     );
 
-    act(() => {
-      renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick();
-    });
     await act(async () => {
-      renderer.root
-        .findAllByProps({ role: "menuitemradio" })
-        .find((node) => node.props["aria-checked"] === false)
-        ?.props.onClick();
+      renderer.root.findByProps({ className: "composer-model-pill" }).props.onClick({ currentTarget: {}, shiftKey: false });
+      await Promise.resolve();
       await Promise.resolve();
     });
 

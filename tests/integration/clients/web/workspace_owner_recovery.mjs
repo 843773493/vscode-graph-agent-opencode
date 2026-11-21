@@ -73,7 +73,7 @@ try {
     if (new URL(request.url()).pathname === '/api/gateway/search') responseReads.push(searchReceipt(request));
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), listing = await api('/api/gateway/workspaces');
   const targets = [...listing.data.items].sort((a, b) => Number(b.gateway_id === health.data.gateway_id) - Number(a.gateway_id === health.data.gateway_id));
   expect(targets).toHaveLength(2);

@@ -85,7 +85,7 @@ _DISPLAY_PROVENANCE_FIELDS = frozenset(
     }
 )
 GENERATED_RESULT_ANNOTATION_FIELDS = frozenset({
-    "structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id",
+    "structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_model",
 })
 
 def validate_generated_result_extensions(extensions: Mapping[str, object]) -> None:

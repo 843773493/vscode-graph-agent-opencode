@@ -72,17 +72,17 @@ test("存储错误不会伪装保存成功，当前输入继续可编辑", async
   } finally { writer.mockRestore(); }
 });
 
-test("未发送附件在卸载后从 IndexedDB 恢复，清空会删除记录", async () => {
+test.each([undefined, "uploading"] as const)("未发送附件在卸载后恢复，已中断上传转为失败待重试（%s）", async uploadState => {
   const key = composerDraftScopeKey("attachments", "session", "gateway", "a");
   let value: SelectedAttachment[] = [], update!: React.Dispatch<React.SetStateAction<SelectedAttachment[]>>;
   function Attachments() { [value, update] = useComposerAttachments(key, message => { throw new Error(message); }); return null; }
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(<Attachments />); await flush(); });
-  const attachment = { file_id: "file-draft", name: "图片.png", content_type: "image/png", data_url: "data:image/png;base64,AA==", mediaKind: "image", previewUrl: "data:image/png;base64,AA==" } as SelectedAttachment;
+  const attachment = { file_id: "file-draft", name: "图片.png", content_type: "image/png", data_url: "data:image/png;base64,AA==", mediaKind: "image", previewUrl: "data:image/png;base64,AA==", uploadState } as SelectedAttachment;
   await act(async () => { update([attachment]); await flush(); renderer.unmount(); });
   await act(async () => { renderer = create(<Attachments />); await flush(); });
   renderers.push(renderer);
-  expect(value).toEqual([attachment]);
+  expect(value).toEqual([{ ...attachment, uploadState: uploadState === "uploading" ? "failed" : undefined }]);
   await act(async () => { update([]); await flush(); });
   expect(await readBrowserView(`attachments:${key}`)).toBeUndefined();
 });

@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.abstractions.terminal.resources import (
     TerminalSnapshot,
+    TerminalTransport,
     TerminalWorkingDirectories,
 )
 from app.abstractions.workspace_resources import (
-    ResourceSessionReader,
+    ResourceChanges,
+    ResourceSessionAccess,
     ResourceThreadResolver,
-    ResourceTransport,
     RetentionScope,
 )
 from app.core.failures import failure_detail
@@ -36,12 +37,13 @@ from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 class TerminalResourceOwner(WorkspaceResourceOwner):
     kind = "terminal"
     lease_kind = "terminal"
+    _transport: TerminalTransport
 
     def __init__(
         self, *, file_paths: WorkspaceFilePaths,
         working_directories: TerminalWorkingDirectories | None,
-        sessions: ResourceSessionReader, threads: ResourceThreadResolver,
-        transport: ResourceTransport, leases: ExternalResourceLeaseLedger,
+        sessions: ResourceSessionAccess, threads: ResourceThreadResolver,
+        transport: TerminalTransport, leases: ExternalResourceLeaseLedger,
         thread_release_fence: Callable[[str, str, int], bool],
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -52,6 +54,23 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         )
         self._file_paths = file_paths
         self._working_directories = working_directories
+
+    async def _list_runtime_resources(self, resource_ids: frozenset[str] | None = None) -> list[TerminalSnapshot]:
+        return (await self._transport.list_resources() if resource_ids is None else
+                await self._transport.list_resources(resource_ids=resource_ids))
+
+    async def runtime_changes(self) -> AsyncIterator[ResourceChanges]:
+        connected = False
+        try:
+            async with aclosing(self._transport.changes()) as changes:
+                async for resource_ids in changes:
+                    connected = True
+                    self.notify_changed(resource_ids)
+                    yield resource_ids
+        finally:
+            # 只使真正断开的观察失效；停用或尚未建连的重试不是资源变化。
+            if connected:
+                self.notify_changed()
 
     def _resolve_workdir(self, cwd: str | None) -> str:
         """目录 URI 复用固定文件 owner；原生 Shell 路径保持目标平台语义。"""

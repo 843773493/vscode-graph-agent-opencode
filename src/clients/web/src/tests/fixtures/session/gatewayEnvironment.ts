@@ -91,25 +91,22 @@ export function installGatewayFetch(
         return apiSuccessResponse({ token });
       }
       const method = String(init?.method ?? "GET");
-      const response = await handler({
-        url,
-        path: parsed.pathname,
-        method,
-        init,
-      });
-      if (response !== undefined) return await response;
+      const response = await handler({ url, path: parsed.pathname, method, init });
+      if (response !== undefined) return response;
       const breadcrumbPrefix = "/api/v1/session-catalog/breadcrumb/";
       if (method === "GET" && parsed.pathname.startsWith(breadcrumbPrefix)) {
-        const sessionId = decodeURIComponent(parsed.pathname.slice(breadcrumbPrefix.length));
-        return sessionCatalogBreadcrumbResponse(sessionId);
+        return catalogReadResponse({ url, path: parsed.pathname, method, init }, {
+          revision: "catalog-revision-3", catalog_revision: 3,
+          items: [{ node_id: decodeURIComponent(parsed.pathname.slice(breadcrumbPrefix.length)), kind: "session",
+            session_id: decodeURIComponent(parsed.pathname.slice(breadcrumbPrefix.length)),
+            name: "会话", parent_node_id: null, has_children: false, node_revision: 2, state: "active", session: null }],
+        });
       }
       if (method === "GET" && parsed.pathname === "/api/v1/session-catalog/children") {
-        return catalogChildrenResponse(
-          "catalog-revision-4",
-          [],
-          parsed.searchParams.get("parent_node_id"),
-          4,
-        );
+        return catalogChildrenResponse("catalog-revision-4", [], parsed.searchParams.get("parent_node_id"), 4, {
+          gateway_id: new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")!,
+          workspace_id: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")!,
+        });
       }
       throw new Error(`测试收到未声明请求: ${method} ${parsed.pathname}`);
     },
@@ -117,22 +114,17 @@ export function installGatewayFetch(
   ) as typeof fetch;
 }
 
-function sessionCatalogBreadcrumbResponse(sessionId: string): Response {
-  return apiSuccessResponse({
-    revision: "catalog-revision-3",
-    catalog_revision: 3,
-    items: [{
-      node_id: sessionId,
-      kind: "session",
-      name: sessionId,
-      parent_node_id: null,
-      session_id: sessionId,
-      has_children: false,
-      node_revision: 2,
-      state: "active",
-      session: null,
-    }],
-  });
+/** 显式构造目录范围装具：由用例提供当前目录节点，按请求范围选取后装配公开 owner。 */
+export function catalogReadResponse(request: GatewayFetchRequest, data: Record<string, unknown>): Response {
+  const query = new URL(request.url, "http://localhost").searchParams;
+  const nodeIds = [...new Set(query.getAll("node_id"))].sort();
+  const headers = new Headers(request.init?.headers);
+  const sync = { gateway_id: headers.get("X-BoxTeam-Target-Gateway-Id"), workspace_id: headers.get("X-BoxTeam-Workspace-Id"), source: "authoritative", stale: false };
+  const scope = request.path.endsWith("/export") ? {
+    node_ids: nodeIds, complete: nodeIds.length === 0,
+    items: nodeIds.length ? (data.items as { node_id: string }[]).filter(node => nodeIds.includes(node.node_id)) : data.items,
+  } : request.path.includes("/breadcrumb/") ? { node_id: decodeURIComponent(request.path.split("/").at(-1)!) } : {};
+  return apiSuccessResponse({ sync, ...data, ...scope });
 }
 
 /** 将 fetch、window、document 还原到夹具加载时的形态，供 afterEach 调用。 */
@@ -172,8 +164,10 @@ export function catalogChildrenResponse(
   items: unknown[] = [],
   parentNodeId: string | null = null,
   catalogRevision = 3,
+  workspaceTarget: GatewayWorkspaceRequestTarget = TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
 ): Response {
   return apiSuccessResponse({
+    sync: { ...workspaceTarget, source: "authoritative", stale: false },
     revision,
     catalog_revision: catalogRevision,
     parent_node_id: parentNodeId,

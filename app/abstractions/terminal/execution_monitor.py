@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
+
+from app.abstractions.workspace_resources import ResourceChanges
 
 
 class TerminalMonitorOperation(Protocol):
@@ -16,6 +19,8 @@ class TerminalMonitorOperation(Protocol):
 
 
 class TerminalExecutionMonitorClientProtocol(Protocol):
+    def runtime_changes(self) -> AsyncIterator[ResourceChanges]: ...
+
     def operation(
         self, *, session_id: str, thread_id: str, holder_id: str, operation_id: str,
     ) -> AbstractAsyncContextManager[TerminalMonitorOperation]: ...
@@ -25,6 +30,7 @@ class TerminalExecutionMonitorClientProtocol(Protocol):
         self,
         *,
         session_id: str | None = None,
+        resource_ids: frozenset[str] | None = None,
     ) -> list[dict[str, object]]: ...
 
 __all__ = ["TerminalExecutionMonitorClientProtocol"]

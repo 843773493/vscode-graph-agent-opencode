@@ -132,6 +132,8 @@ export interface ConversationView {
   enqueueSequence?: number;
   waitingReason?: string | null;
   queueSnapshotVersion?: number;
+  queueThreadRevision?: number;
+  queueReorderable?: boolean;
   pendingPosition?: number;
   /** 后端 dispatch 快照直投的队列事实：排队 Job 数与含活动 Job 的待处理总数。 */
   queuedJobCount?: number;
@@ -204,6 +206,7 @@ export interface AppState {
   eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
   sessionTraceHistoryBySession: Map<string, SessionTraceHistoryState>;
   pendingConversations: Map<string, ConversationView[]>;
+  pendingQueueVersions: Map<string, Map<string, number>>;
   activeJobIdsBySession: Map<string, string>;
   unreadSessionKeys: Set<string>;
   status: string;
@@ -221,6 +224,9 @@ export interface AppState {
   lastCompactResult: SessionCompactResult | null;
   currentGoal: SessionGoal | null;
   currentGoalSessionId: string | null;
+  currentGoalControlRevision: number;
+  currentGoalSyncVersion: number;
+  sessionExecutionSyncError: string | null;
   goalLoading: boolean;
   goalError: string | null;
 }

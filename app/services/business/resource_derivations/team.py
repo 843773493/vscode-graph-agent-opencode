@@ -37,11 +37,7 @@ def team_facet_payload(
         for member in ledger["members"]:
             if member["state"] == "registering" or member["child_thread_id"] is None:
                 continue
-            team_id = (
-                json.loads(member["task_seed"])
-                .get("trusted_context", {})
-                .get("team_id")
-            )
+            team_id = member["team_id"]
             if isinstance(team_id, str):
                 members_by_team_id.setdefault(team_id, []).append(member)
     selected_boards = []

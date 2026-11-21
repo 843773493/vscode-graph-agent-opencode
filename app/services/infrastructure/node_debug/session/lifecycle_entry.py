@@ -107,12 +107,12 @@ class NodeDebugLifecycleEntryMixin:
             logger.error("Node 调试关闭任务失败: task=%s", task.get_name(),
                          exc_info=(type(error), error, error.__traceback__))
 
-    async def drain_session(self, session_id: str) -> None:
-        """删除物理隔离前排空该 Session 的全部 catalog 调试 owner。
+    async def drain_session(self, session_id: str, *, thread_id: str | None = None) -> None:
+        """统一停止流程排空 catalog 调试 owner，可限制到精确 Thread。
 
-        SessionSubtreeDeleteService 已在对应 SessionLifecycleGate exclusive
-        临界区内调用本方法。这里不走普通 mutation admission（catalog 已经
-        原子进入 ``deleting``），而是从 Session control thread catalog 读取
+        调用方已关闭执行准入并持有 SessionLifecycleGate exclusive；删除时
+        catalog 已进入 ``deleting``。这里不重入普通 mutation admission，
+        从 Session control thread catalog 读取
         main 与已发布 child owners，逐一验证 catalog 路径、停止在册 runtime，
         再核实并结清各自的 durable launch claim。任何 ``reconcile_required``
         或残留 active claim 都向上抛错，让共享删除流保持源目录和 deleting
@@ -127,6 +127,8 @@ class NodeDebugLifecycleEntryMixin:
         owners = await run_sync_shielded(self._session_store.session_thread_owners, session_id)
         # TODO(5.4)：原生I/O抢占、不合作取消及整次排空期限仍须单独核实。
         for owner in owners:
+            if thread_id is not None and owner[1] != thread_id:
+                continue
             async with self._owner_lock(owner):
                 runtime = self._runtimes.get(owner)
                 if runtime is not None:

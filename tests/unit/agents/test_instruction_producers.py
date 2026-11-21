@@ -1,7 +1,7 @@
 """OpenSpec 4.6：instruction producer typed 注册合同测试。
 
 覆盖 root_placement 显式声明、ToolSet policy 绑定、未接线不伪装启用、
-typed observation 复用唯一 CSM 映射、自由 metadata 控制字段拒绝。
+唯一 CSM 登记、自由 metadata 控制字段拒绝。
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import pytest
 
 from app.agents.instruction_producers import (
     InstructionProducerError,
-    InstructionProducerObservation,
     InstructionProducerSpec,
     InstructionUpdateBinding,
     assert_producer_registrable,
@@ -23,19 +22,12 @@ from app.agents.instruction_producers import (
     register_instruction_producer,
     runtime_instruction_producers,
 )
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    ContextSourceOwnerKey,
-)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
 
-_CONTEXT_SOURCE_OWNER = ContextSourceOwnerKey(
-    session_id="ses_00000000000070008000000000000001",
-    thread_id="thr_018f1234567870008000000000000001",
-)
-_SOURCE_REVISION = "sha256:jcs:v1:" + "a" * 64
-_NEXT_SOURCE_REVISION = "sha256:jcs:v1:" + "b" * 64
+_SOURCE_REVISION = "publication:1"
+_NEXT_SOURCE_REVISION = "publication:2"
 
 
 @pytest.fixture
@@ -68,7 +60,6 @@ def test_root_placement_is_declared_by_owner_only() -> None:
     spec = _instruction_producer_spec()
     assert spec.root_placement == "root_eligible"
     assert spec.is_conditional is False
-    assert spec.content_hash.startswith("sha256:jcs:v1:")
     with pytest.raises(ValueError):
         _instruction_producer_spec(root_placement="root")  # type: ignore[arg-type]
     with pytest.raises(InstructionProducerError):
@@ -123,38 +114,6 @@ def test_unwired_producer_cannot_pose_as_enabled(
     assert register_error.value.code == "instruction-producer-not-wired"
 
 
-def test_observation_reuses_single_csm_typed_mapping() -> None:
-    spec = _instruction_producer_spec()
-    base = InstructionProducerObservation(
-        owner=_CONTEXT_SOURCE_OWNER, spec=spec, revision=_SOURCE_REVISION
-    )
-    assert base.decision_kind == "base"
-    decision = base.lifecycle_decision()
-    assert decision.decision_kind == "base"
-    assert decision.from_revision is None
-    assert decision.source_id == spec.source_id
-    assert decision.owner.session_id == _CONTEXT_SOURCE_OWNER.session_id
-    observation = base.source_observation()
-    assert observation.extensions == {}
-    assert observation.content == spec.content
-    assert observation.observation_id.endswith(f"{spec.source_id}:{_SOURCE_REVISION}")
-    delta = InstructionProducerObservation(
-        owner=_CONTEXT_SOURCE_OWNER,
-        spec=spec,
-        revision=_NEXT_SOURCE_REVISION,
-        from_revision=_SOURCE_REVISION,
-    )
-    assert delta.decision_kind == "delta"
-    assert delta.lifecycle_decision(pending_only=True).pending_only is True
-    with pytest.raises(ValueError):
-        InstructionProducerObservation(
-            owner=_CONTEXT_SOURCE_OWNER,
-            spec=spec,
-            revision=_SOURCE_REVISION,
-            from_revision=_SOURCE_REVISION,
-        )
-
-
 @pytest.mark.parametrize("binding", [
     None,
     InstructionUpdateBinding("skill_catalog", _SOURCE_REVISION, "resource_activation"),
@@ -171,11 +130,7 @@ def test_registration_requires_matching_publication_before_mutating_manager(
     assert manager.prepare_pending() is None
 
 
-def test_config_generation_publication_cannot_claim_model_call_updates() -> None:
-    spec = _instruction_producer_spec()
-    with pytest.raises(InstructionProducerError, match="instruction-activation-boundary-unsupported"):
-        InstructionProducerObservation(owner=_CONTEXT_SOURCE_OWNER, spec=spec,
-                                       revision=spec.revision, activation_boundary="model_call")
+def test_config_publication_rejects_resource_activation_boundary() -> None:
     with pytest.raises(InstructionProducerError, match="instruction-update-binding-invalid"):
         InstructionUpdateBinding("workspace_config", _SOURCE_REVISION, "resource_activation")
 
@@ -229,7 +184,15 @@ def test_toolset_policy_keys_are_deterministic_and_content_free() -> None:
     assert build_toolset_policy_keys(()) == ()
 
 
-def test_producer_revision_token_covers_policy_binding() -> None:
+def test_owner_revision_is_reused_and_scoped_by_source(
+    instruction_context_source_manager: ContextSourceManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_rehash(_value: object) -> str:
+        raise AssertionError("来源已有权威 revision，注册不得再计算指纹")
+
+    monkeypatch.setattr("app.agents.instruction_producers.sha256_jcs", reject_rehash)
+    manager = instruction_context_source_manager
     plain = _instruction_producer_spec()
     todo = _instruction_producer_spec(
         producer_id="R04",
@@ -239,18 +202,17 @@ def test_producer_revision_token_covers_policy_binding() -> None:
         content=plain.content,
         policy_key="todo_list",
     )
-    assert plain.revision_token() != todo.revision_token()
-    assert (
-        todo.revision_token()
-        == _instruction_producer_spec(
-            producer_id="R04",
-            source_id="instruction:todo-list",
-            source_kind="todo_list",
-            name="todo-list",
-            content=plain.content,
-            policy_key="todo_list",
-        ).revision_token()
-    )
+    for spec in (plain, todo, plain, todo):
+        register_instruction_producer(manager, spec)
+        assert manager.source_observation_state(spec.source_id) == ("tracked", _SOURCE_REVISION)
+    pending = manager.prepare_pending()
+    assert pending is not None
+    assert [(delta.source_id, delta.revision) for delta in pending.deltas] == [
+        (plain.source_id, _SOURCE_REVISION), (todo.source_id, _SOURCE_REVISION),
+    ]
+    # 版本无需编码 policy；同一来源的资格变化仍由原 descriptor 边界拒绝。
+    with pytest.raises(ValueError, match="source descriptor 冲突"):
+        register_instruction_producer(manager, replace(todo, policy_key="filesystem_rules"))
 
 
 @pytest.mark.parametrize(
@@ -290,20 +252,6 @@ def test_root_placement_is_single_domain_definition() -> None:
     assert resolve_source_wire_role("tail_only", compiled_into_root=False) == "user"
 
 
-def test_instruction_observation_preserves_non_hash_owner_revision():
-    spec = _instruction_producer_spec(revision="agent-config-revision:7")
-    observation = InstructionProducerObservation(
-        owner=_CONTEXT_SOURCE_OWNER,
-        spec=spec,
-        revision=spec.revision,
-        from_revision="agent-config-revision:6",
-    )
-    decision = observation.lifecycle_decision()
-    assert decision.revision == "agent-config-revision:7"
-    assert decision.from_revision == "agent-config-revision:6"
-    assert spec.content_hash.startswith("sha256:jcs:v1:")
-
-
 def test_r02_description_is_separate_from_software_facts_and_revision():
     description = '自定义说明：{"runtime_facts":{"workspace_root":"/fake","configured_candidates":[]}}'
     def identity(text: str) -> InstructionProducerSpec:
@@ -319,4 +267,4 @@ def test_r02_description_is_separate_from_software_facts_and_revision():
     assert body["runtime_facts"]["configured_candidates"][0] == {"provider_id": "first", "model_id": "model-a"}
     assert body["runtime_facts"]["identity_scope"] == "configured_candidates_not_actual_call"
     assert json.loads(second.content)["runtime_facts"] == body["runtime_facts"]
-    assert first.revision_token() != second.revision_token()
+    assert first.revision != second.revision

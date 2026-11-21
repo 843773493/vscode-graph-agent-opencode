@@ -155,7 +155,13 @@ def test_migration_rollback_and_close_failures_keep_native_order_and_original_ro
             raise
 
     with monkeypatch.context() as fault:
-        fault.setattr(sqlite3, "connect", partial(original_connect, factory=FailedCleanup))
+        def connect_with_owner_fault(database, *args, **kwargs):
+            # 只向原迁移句柄注入清理失败；备份的只读源和目标仍逐一核实已关闭。
+            if database == sqlite_state.sqlite_file_uri(state_path):
+                kwargs["factory"] = FailedCleanup
+            return original_connect(database, *args, **kwargs)
+
+        fault.setattr(sqlite3, "connect", connect_with_owner_fault)
         with pytest.raises(sqlite3.OperationalError) as caught:
             sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=3, migrations=(*state_migrations, migrate))
     assert len(failures) == 1 + rollback_failure + close_failure
@@ -169,9 +175,10 @@ def test_migration_rollback_and_close_failures_keep_native_order_and_original_ro
         chain.append(current)
         current = current.__cause__ or current.__context__
     assert [error for error in reversed(chain) if error in failures] == failures
-    connection, = connections
-    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-        sqlite3.Connection.execute(connection, "SELECT 1")
+    assert len(connections) == 3
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            sqlite3.Connection.execute(connection, "SELECT 1")
     assert state_path.read_bytes() == before
     with sqlite_state.SQLiteStateDatabase(path=state_path, schema_version=2, migrations=state_migrations) as recovered:
         assert recovered.diagnostics().applied_migrations == (1, 2)

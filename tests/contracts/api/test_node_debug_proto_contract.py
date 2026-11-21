@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from boxteam.workspace.v2 import public_pb2
 from google.protobuf.descriptor import Descriptor
 
-from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 from app.protocol.openapi import assert_public_http_schemas
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2 import node_debug

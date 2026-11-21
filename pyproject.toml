@@ -5,6 +5,7 @@ dynamic = ["version"]
 description = "BoxTeam AI 编程助手后端"
 requires-python = ">=3.11"
 dependencies = [
+    "boxteam-plugin-sdk==0.0.2",
     "fastapi>=0.109.0",
     "httpx>=0.27.0",
     "httpx-sse>=0.4.3,<1",
@@ -32,7 +33,7 @@ dependencies = [
     "protobuf>=7.36.2,<8",
     "psutil>=5.9.0",
     "langchain-litellm==0.7.0",
-    "litellm>=1.100.0",
+    "litellm>=1.110.2",
     "langchain-community>=0.4.2",
     "langchain-mcp-adapters==0.3.0",
     "mcp>=1.27,<2",
@@ -51,6 +52,10 @@ dependencies = [
     "wcmatch>=10.1",
     "orjson>=3.11,<4",
     "jsonyx>=2.5,<3",
+    "cdifflib>=1.2.9,<2",
+    "readability-lxml>=0.9",
+    "markdownify>=1.2.4",
+    "lxml>=6.1.1",
 ]
 
 [project.optional-dependencies]
@@ -84,3 +89,6 @@ filterwarnings = [
     "ignore:module 'sre_parse' is deprecated:DeprecationWarning:lark.utils",
     "ignore:module 'sre_constants' is deprecated:DeprecationWarning:lark.utils",
 ]
+
+[tool.uv.sources]
+boxteam-plugin-sdk = { path = "sdk/python", editable = true }

@@ -37,8 +37,10 @@ from app.services.business.communication.addresses import (
     ResolvedMainTargetBinding,
 )
 from app.services.business.communication.wait import WaitSelector
-from app.services.business.session_context_projection import SessionContextReadSnapshot
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.projection import (
+    SessionContextReadSnapshot,
+)
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )
@@ -128,7 +130,7 @@ class _Sessions:
         assert session_id in {SOURCE_SESSION, TARGET_SESSION}
 
     @asynccontextmanager
-    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+    async def session_write_admission(self, session_id: str, *, new_operation: bool = False) -> AsyncIterator[None]:
         async with self.gate.exclusive(session_id):
             if session_id == TARGET_SESSION:
                 self.target_writes += 1

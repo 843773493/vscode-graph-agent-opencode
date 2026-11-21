@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { t } from '../../../shared/core/i18n/index.js';
 import ChatPanel from '../../../web/src/components/panels/ChatPanel.js';
-import ChatHistoryPageHeader from '../../../web/src/components/chat/ChatHistoryPageHeader.js';
+import ThreadStatusBar from '../../../web/src/components/composer/ThreadStatusBar.js';
 import { conversationFromTurn } from '../../../web/src/state/conversations/turnProjection.js';
 import type { SessionTurnTimeline } from '../../../web/src/state/session/turnTimeline.js';
 import type { ThreadOwner } from '../agentApi.js';
@@ -15,18 +15,24 @@ export function CachedThreadHistory({ owner, timeline, error, onRetry }: {
 }) {
   const conversations = useMemo(() => timeline.orderedTurnIds.map(id =>
     conversationFromTurn(timeline.turnsById[id], owner.threadId)), [timeline, owner.threadId]);
-  return <div className="native-thread-conversation native-thread-cached-history">
-    <div className="native-thread-status" role="status">{t(error ? 'thread.cache.syncIncomplete' : 'thread.cache.syncing')}</div>
-    {error ? <ChatHistoryPageHeader projectionState="ready" hasOlderMessages={false}
-      loadingOlderMessages={false} error={error} onRetry={onRetry} /> : null}
+  return <div className="native-thread-conversation native-thread-cached-history" aria-busy={!error}>
     <fieldset disabled className="native-thread-cached-content">
       <ChatPanel apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId} threadId={owner.threadId}
         conversations={conversations} internalExecutions={timeline.internalExecutions} expandDetails={false}
         hasActiveSession={false} hasNewerMessages={false} hasOlderMessages={timeline.hasBefore} loadingNewerMessages={false}
         loadingOlderMessages={false} historyLoading projectionState="ready" historyError={null}
-        onLoadAroundTurn={cachedOnly} onLoadNewerMessages={cachedOnly} onLoadOlderMessages={cachedOnly}
+        onLoadAroundTurn={cachedOnly} onLoadNewerMessages={cachedOnly} onLoadLatestMessages={cachedOnly} onLoadOlderMessages={cachedOnly}
         onLoadTurnDetails={cachedOnly} onLoadAgentStateMessageRawContent={unavailable}
         onRetryHistory={onRetry} onReplayTurn={unavailable} onRemovePending={unavailable} onChangePendingPolicy={unavailable} />
     </fieldset>
+    <ThreadStatusBar conversations={conversations} timeline={timeline} activeJobId={null} active
+      syncError={error} />
+    <div className="thread-history-sync panel-feedback" data-thread-history-sync role="status">
+      <span className={`codicon ${error ? "codicon-warning" : "codicon-sync codicon-modifier-spin"}`} aria-hidden="true" />
+      <span>{t(error ? "thread.status.syncFailed" : "thread.status.syncing")}</span>
+      <button type="button" disabled={!error} aria-label={t("thread.status.refresh")} title={t("thread.status.refresh")} onClick={onRetry}>
+        <span className="codicon codicon-refresh" aria-hidden="true" />
+      </button>
+    </div>
   </div>;
 }

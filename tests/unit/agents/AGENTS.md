@@ -11,7 +11,7 @@ tests/unit/agents/
 ├── conftest.py                  共享 Agent 测试依赖
 ├── policy/                      工具策略解析与分组
 ├── providers/                   Provider 请求、流式生命周期与上游追踪
-├── tooling/                     自定义工具配置与模型可见 schema
+├── tooling/                     默认／自定义工具装配与模型可见 schema
 ├── tools/                       内置工具执行与固定扩展工具入口
 └── 根目录测试（按职责检索）
     ├── Agent 组装与模型调用
@@ -22,7 +22,7 @@ tests/unit/agents/
     ├── Provider 配置（根目录）
     │   └── test_provider_api_mode_config.py
     ├── 上下文、checkpoint 与摘要
-    │   ├── test_checkpoint_recovery.py
+    │   ├── test_checkpoint_recovery.py、test_execution_checkpoint.py
     │   ├── test_context_source_boundary_audit.py
     │   └── test_*summarization*.py
     ├── 工具装配与调用中间件
@@ -37,7 +37,10 @@ tests/unit/agents/
     │   └── test_workspace_backend.py
     └── 指令与 Skill 生命周期
         ├── test_instruction_producers.py、test_middleware_prompts.py
-        └── test_skill_*.py
+        ├── test_skill_catalog.py    Skill 目录来源捕获、加载与不可变发布
+        ├── test_skill_context.py    Skill 目录展示、上下文登记与来源事件消费
+        ├── test_skill_catalog_layers.py    Skill 目录分层与遮蔽
+        └── test_skill_load_snapshot_binding.py    Skill 读取与封存来源绑定
 ```
 
 根目录目前有多个直接测试模块，新增独立职责时优先放入有明确边界的子目录并补齐本地 `AGENTS.md`；成组迁移现有测试时同步更新测试矩阵标识和镜像输出路径，避免只移动文件却留下旧归属。
@@ -46,7 +49,7 @@ tests/unit/agents/
 
 - Agent 组件的隔离测试与测试专用 fake。
 - `policy/`、`providers/`、`tools/` 等生产子模块对应的测试分区。
-- `tooling/` 自定义工具配置与模型可见 schema 合同。
+- `tooling/` 默认工具装配、自定义工具配置与模型可见 schema 合同。
 
 ## 不可修改内容
 

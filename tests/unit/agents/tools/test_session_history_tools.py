@@ -9,6 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from boxteam_plugin_sdk.request_context import (
+    reset_current_request_id,
+    set_current_request_id,
+)
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
@@ -19,9 +23,9 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
 )
 from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.session_history import (
     create_read_context_tool,
@@ -31,18 +35,13 @@ from app.core import failures
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
-    reset_current_request_id,
-    set_current_gateway_id,
-    set_current_request_id,
-)
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadResultDTO,
     SessionContextSearchResultDTO,
 )
 from app.schemas.search_federation import GatewayContextSearchResultDTO
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,
@@ -149,7 +148,7 @@ async def test_context_input_tool_keeps_typed_error_and_original_request_identit
     service = history_context.workspace_session_context_client if remote else history_context.session_context_query_service
     monkeypatch.setattr(service, "search_resource_context" if remote else "search_context", query)
     target = create_search_context_tool(history_context)
-    tool = (create_extension_tool_invoker_tool([target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]))
+    tool = (create_extension_tool_invoker_tool([target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]))
             if enveloped else target)
     arguments = {**_session_input(REMOTE_WORKSPACE if remote else WORKSPACE_ID), "query": "[", "match_mode": "regex"}
     token = set_current_request_id("req_invalid_context_regex")
@@ -228,7 +227,7 @@ async def test_context_identity_rejection_keeps_path_out_of_model_result_and_all
         valid["query"] = "needle"
     target = (create_read_context_tool if operation == "read" else create_search_context_tool)(history_context)
     tool = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     ) if enveloped else target
     invalid = {**valid, "resource_identity": identity}
     call = {"type": "tool_call", "id": "invalid-resource-identity", "name": tool.name,
@@ -292,7 +291,7 @@ async def test_identity_diagnostic_write_failure_preserves_rejection_and_next_ca
 async def test_custom_invoker_propagates_revision_conflict(history_context, communication_probe):
     communication_probe.error = SessionContextRevisionChangedError(expected_revision="old", actual_revision="new")
     target = create_read_context_tool(history_context)
-    invoker = create_extension_tool_invoker_tool([target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]))
+    invoker = create_extension_tool_invoker_tool([target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]))
     result = await invoker.ainvoke({"type": "tool_call", "id": "call_changed", "name": invoker.name,
                                   "args": {"tool_name": target.name, "arguments": {**_session_input(), "revision": "old"}}})
     assert isinstance(result, ToolMessage) and result.status == "error"
@@ -302,7 +301,7 @@ async def test_custom_invoker_propagates_revision_conflict(history_context, comm
 async def test_custom_invoker_exposes_observation_snapshot_error(history_context, communication_probe):
     communication_probe.error = RemoteObservationError("read-snapshot-mismatch")
     target = create_read_context_tool(history_context)
-    invoker = create_extension_tool_invoker_tool([target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]))
+    invoker = create_extension_tool_invoker_tool([target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]))
     result = await invoker.ainvoke({"type": "tool_call", "id": "call_stale_snapshot", "name": invoker.name,
                                   "args": {"tool_name": target.name, "arguments": _session_input()}})
     assert isinstance(result, ToolMessage) and result.status == "error"
@@ -322,7 +321,7 @@ async def test_context_tools_reject_unknown_arguments_before_owner_and_allow_cor
     communication_probe.read_result = SessionContextReadResultDTO.model_validate({**identity, "view": "overview", "revision": "frozen"})
     target = (create_read_context_tool if operation == "read" else create_search_context_tool)(history_context)
     tool = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     ) if enveloped else target
     # 合法参数继续沿用本地模型的数值转换与默认值，额外字段不应借此被丢弃。
     valid = {**identity, **({"limit": "7"} if operation == "read" else {"query": "needle", "max_results": "7"})}

@@ -28,11 +28,11 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_agent_production_context import (
     factory_context as factory_context,  # noqa: PLC0414 - 沿正式 factory 入口复用 fixture
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 工作区按本测试路径隔离
-)
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 
@@ -55,7 +55,7 @@ def outgoing_http(monkeypatch, request):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     requests = []
 
-    def send(_client, actual, **_kwargs):
+    def handle_request(_transport, actual):
         assert actual.url.path in {"/v1/chat/completions", "/v1/responses"}
         assert actual.headers["authorization"] == "Bearer factory-fixture-key"
         body = json.loads(actual.content)
@@ -65,7 +65,7 @@ def outgoing_http(monkeypatch, request):
         artifact.write_bytes(actual.content)
         raise _HTTPBoundaryReached()
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
     return requests
 
 

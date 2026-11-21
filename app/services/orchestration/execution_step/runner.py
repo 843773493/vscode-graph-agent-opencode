@@ -6,14 +6,20 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain_core.messages import HumanMessage
 
-from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
 from app.agents.checkpoint_recovery import (
     CheckpointRecoveryRejectedError,
     pending_tool_checkpoint,
 )
+from app.agents.execution_checkpoint import (
+    checkpoint_accepted_execution_input,
+    persist_final_assistant_checkpoint,
+)
 from app.agents.graph_binding import GraphBindingUnavailableError
+from app.agents.policy import parse_custom_tool_specs
+from app.agents.policy.tool_capability import metadata_for_custom_tool
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
     reset_current_execution_admission,
@@ -39,7 +45,7 @@ from app.core.model_delta_context import (
 from app.core.phase_observer import observe_phase
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
-from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
@@ -56,16 +62,11 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
-from app.runtime.agent_runtime import (
-    get_configured_custom_tool_names,
-)
+from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
-from app.services.business.reasoning_checkpoint_service import (
-    persist_standard_assistant_checkpoint,
-    persist_user_message_checkpoint,
-)
 from app.services.infrastructure.message_stream_store import (
     MessageStreamTerminalError,
     MessageStreamWriter,
@@ -82,22 +83,21 @@ from app.services.orchestration.execution_step.ports import (
     StepAgentRuntime,
     StepExecutionPorts,
 )
-from app.services.orchestration.execution_step.reminders import (
-    custom_tools_requested_by_message as _custom_tools_requested_by_message,
-)
 from app.services.orchestration.execution_step.retry import run_agent_with_retries
 from app.services.orchestration.execution_step.stream_bindings import (
     CanonicalItemSink,
     StepEventPublisher,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 from app.services.orchestration.resource_activation.contracts import (
     reset_current_execution_resource_activation,
     resource_activation_policy_from_config,
     set_current_execution_resource_activation,
 )
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 
 class StepRunner:
@@ -204,7 +204,7 @@ class StepRunner:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
         config_snapshot = self.ports.config_service.get_snapshot()
         with self.ports.config_service.use_snapshot(config_snapshot):
-            resolved_agent_id = resolve_agent_id(agent_id, self.ports.config_service)
+            resolved_agent_id = self.ports.config_service.resolve_agent_id(agent_id)
             agent_runtime_config = self.ports.config_service.get_agent_runtime_config(
                 resolved_agent_id
             )
@@ -310,18 +310,14 @@ class StepRunner:
             raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
 
         resolved_message_metadata = dict(message_metadata or {})
-        preferred_provider_id_value = resolved_message_metadata.get(
-            "boxteam_session_provider_id"
+        preferred_model_value = resolved_message_metadata.get(
+            "boxteam_session_model"
         )
         if isinstance(execution_binding, UserExecutionIdentity):
             resolved_message_metadata.pop(DISPLAY_CONTENT_METADATA_KEY, None)
-            resolved_message_metadata.pop("boxteam_session_provider_id", None)
-        if preferred_provider_id_value is not None and not isinstance(
-            preferred_provider_id_value,
-            str,
-        ):
-            raise TypeError("会话模型 provider id 必须是字符串")
-        preferred_provider_id = preferred_provider_id_value
+            resolved_message_metadata.pop("boxteam_session_model", None)
+        preferred_model = (ModelReferenceDTO.model_validate(preferred_model_value)
+                           if preferred_model_value is not None else None)
         read_input_message = getattr(
             checkpointer,
             "accepted_user_message" if isinstance(execution_binding, UserExecutionIdentity) else "accepted_internal_message",
@@ -378,7 +374,7 @@ class StepRunner:
         admission: ExecutionAdmission | None = None
         message_stream_writer: MessageStreamWriter | None = None
         message_stream_runtime: MessageStreamRuntime | None = None
-        admission_write_task: asyncio.Task[bool] | None = None
+        input_checkpoint_task: asyncio.Task[bool] | None = None
         admission_read_task: asyncio.Task[ExecutionAdmission] | None = None
         input_read_task: asyncio.Task[HumanMessage] | None = None
         stream_open_task: asyncio.Task[MessageStreamWriter] | None = None
@@ -421,7 +417,7 @@ class StepRunner:
             tasks = tuple(
                 task
                 for task in (
-                    admission_write_task,
+                    input_checkpoint_task,
                     admission_read_task,
                     input_read_task,
                     stream_open_task,
@@ -445,7 +441,7 @@ class StepRunner:
                 and runtime_acquire_task.exception() is None
             ):
                 runtime_lease = runtime_acquire_task.result()
-            if admission is None and (admission_write_task is not None or input_read_task is not None):
+            if admission is None and (input_checkpoint_task is not None or input_read_task is not None):
                 try:
                     admission = await asyncio.to_thread(
                         read_admission, session_id, thread_id=thread_id,
@@ -473,8 +469,8 @@ class StepRunner:
             ))
             next_input_messages = [await asyncio.shield(input_read_task)]
             if resume_checkpoint_id is None:
-                admission_write_task = asyncio.create_task(asyncio.to_thread(
-                    persist_user_message_checkpoint,
+                input_checkpoint_task = asyncio.create_task(asyncio.to_thread(
+                    checkpoint_accepted_execution_input,
                     checkpointer=checkpointer,
                     session_id=session_id,
                     thread_id=thread_id,
@@ -489,7 +485,7 @@ class StepRunner:
                     ),
                     checkpoint_ns=rollout_checkpoint_ns,
                 ))
-                await asyncio.shield(admission_write_task)
+                await asyncio.shield(input_checkpoint_task)
             admission_read_task = asyncio.create_task(asyncio.to_thread(
                 read_admission, session_id, thread_id=thread_id,
                 job_id=job_id, checkpoint_ns=rollout_checkpoint_ns,
@@ -564,22 +560,25 @@ class StepRunner:
             latest_model_content_blocks: tuple[dict[str, object], ...] = ()
             turn_token_usage_parts: list[ModelTokenUsagePayload] = []
             with self.ports.config_service.use_snapshot(config_snapshot):
-                configured_custom_tool_names = get_configured_custom_tool_names(
-                    agent_id=resolved_agent_id,
-                    config_service=self.ports.config_service,
-                )
+                tool_config = self.ports.config_service.get_agent_tool_config(resolved_agent_id)
+                policy_resolver = self.ports.config_service.get_tool_policy_resolver(resolved_agent_id)
+                policy_enabled_custom_tool_names = {
+                    spec.name
+                    for spec in parse_custom_tool_specs(
+                        tool_config.get("custom", []),
+                        context=f"agent {resolved_agent_id} 的 tools.custom",
+                    )
+                    if policy_resolver.resolve(metadata_for_custom_tool(spec)).execution_enabled
+                }
             tool_selection = self.ports.tool_selection_store.snapshot(resolved_agent_id)
             execution_overrides = tool_selection.execution_overrides
             model_visibility_overrides = tool_selection.model_visibility_overrides
-            configured_custom_tool_names = {
+            requested_custom_tool_names = {
                 tool_name
-                for tool_name in configured_custom_tool_names
+                for tool_name in policy_enabled_custom_tool_names
                 if execution_overrides.get(tool_name) is not False
+                and tool_name in message
             }
-            requested_custom_tool_names = _custom_tools_requested_by_message(
-                message,
-                configured_custom_tool_names,
-            )
             if progress_reporter is not None:
                 progress_reporter("agent_start")
             await event_publisher.publish(
@@ -617,7 +616,7 @@ class StepRunner:
                     agent_id=resolved_agent_id,
                     execution_overrides=execution_overrides,
                     model_visibility_overrides=model_visibility_overrides,
-                    preferred_provider_id=preferred_provider_id,
+                    preferred_model=preferred_model,
                     include_team_tools=include_team_tools,
                 )
             )
@@ -714,9 +713,8 @@ class StepRunner:
             assistant_message_created_at = datetime.now(UTC)
             settled.clear()
             assistant_write_task = asyncio.create_task(asyncio.to_thread(
-                persist_standard_assistant_checkpoint,
+                persist_final_assistant_checkpoint,
                 checkpointer=checkpointer,
-                session_id=session_id,
                 thread_id=thread_id,
                 turn_id=admission.turn_id,
                 content_blocks=latest_model_content_blocks,

@@ -10,7 +10,10 @@ from typing import Any
 import httpx
 import pytest
 
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import output_root_for_test
 from tests.support.processes.workspace import (
@@ -39,7 +42,7 @@ async def _send_agent_message(
 ) -> str:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": content},
             "run": {
                 "mode": "single_agent",
@@ -47,7 +50,7 @@ async def _send_agent_message(
                 "max_steps": 4,
                 "timeout_seconds": 180,
             },
-        },
+        }),
     )
     assert response.status_code == 200, response.text
     job_id = response.json()["data"]["job_id"]
@@ -182,10 +185,10 @@ async def test_backup_4_chatgpt_oauth_hits_prompt_cache_with_stable_session(
 
     provider_response = await client.patch(
         f"/api/v1/sessions/{session_id}",
-        json={"provider_id": "backup_4"},
+        json={"model": {"provider_id": "backup_4", "model_id": "default"}},
     )
     assert provider_response.status_code == 200, provider_response.text
-    assert provider_response.json()["data"]["current_provider_id"] == "backup_4"
+    assert provider_response.json()["data"]["current_model"] == {"provider_id": "backup_4", "model_id": "default"}
 
     stable_material = "\n".join(
         f"ChatGPT OAuth 缓存固定资料-{index:04d}：这一行必须保持原样。"

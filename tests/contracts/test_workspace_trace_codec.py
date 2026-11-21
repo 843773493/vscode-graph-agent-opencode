@@ -5,9 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from boxteam.workspace.v2 import trace_pb2
 
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
-from app.protocol.generated.boxteam.workspace.v2 import trace_pb2
 
 _OPTIONAL_FIELDS = ("part_id", "status", "tool_name", "step_id")
 

@@ -18,13 +18,11 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
-    ContextGrantTarget,
-    ForkGrantTarget,
-    GrantTarget,
     OperationKind,
-    ResourceNavigationGrantTarget,
-    TextMutationGrantTarget,
     decode_grant_target,
+)
+from app.schemas.gateway.federation_targets import (
+    FederationGrantTarget,
 )
 
 # 单次 discovery/operation fan-out 的总 deadline 上界；超时必须响亮失败。
@@ -130,7 +128,7 @@ def require_operation(request: dict[str, object]) -> OperationKind:
     return value
 
 
-def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget:
+def require_target(payload: dict[str, object]) -> FederationGrantTarget:
     return decode_grant_target(payload.get("target"))
 
 

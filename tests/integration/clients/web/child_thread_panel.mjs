@@ -1,9 +1,12 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { parseTaggedContextSources } from "../../../support/context_sources.mjs";
+import { openSessionThreads } from "../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -76,7 +79,7 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 
 async function openWorkbenchPage(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("workspace-navigation-root-drop-target")).toBeVisible({ timeout: 30_000 });
 }
 
 function isSessionMessageRequest(request) {
@@ -88,12 +91,6 @@ function streamKind(request) {
   const url = request.url();
   if (url.includes("/traces/stream")) return "trace";
   if (url.includes("/message-stream?")) return "message";
-  if (new URL(url).pathname === "/api/v1/workspace/observations/stream") {
-    const body = request.postDataJSON();
-    if (body?.subscriptions?.some((subscription) => subscription.kind === "session_trace")) {
-      return "trace";
-    }
-  }
   return null;
 }
 
@@ -185,14 +182,9 @@ async function waitForTurnFinalText(page, prompt, finalText) {
   return finalMessage.innerText();
 }
 
-/** 在精确 Thread 的资源区域进入运行与连接。 */
-async function openResourcesTab() {
-  const toggle = parentThread.getByRole("button", { name: "切换会话资源", exact: true });
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-  await parentThread.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  const panel = parentThread.locator(".child-thread-panel");
-  await expect(panel).toBeVisible();
-  return panel;
+/** 通过当前会话标签页的 Thread 子标签进入索引。 */
+async function openThreadNavigation() {
+  return openSessionThreads(page, { gatewayId: expectedGatewayId, workspaceId: expectedWorkspaceId, sessionId: result.sessionId });
 }
 
 /** 等待 ChildThreadPanel 渲染出委派 child 项（面板 5s 静默轮询，给足窗口）。 */
@@ -276,6 +268,12 @@ try {
     if (isExpectedBrowserAbort(request)) return;
     failedRequests.push({ url: request.url(), error: request.failure()?.errorText || "unknown" });
   });
+  observeRealtime(page, { headers(request, response) {
+    if (response.status === 200) {
+      const observed = { url: () => request.url };
+      if (streamKind(observed)) streamResponses.push(observed);
+    }
+  } });
   page.on("response", (response) => {
     if (response.status() === 200 && streamKind(response.request())) {
       streamResponses.push(response.request());
@@ -295,11 +293,13 @@ try {
   const updated = await api(page, `/api/v1/sessions/${result.sessionId}`, {
     method: "PATCH",
     headers: workspaceHeaders,
-    body: JSON.stringify({ provider_id: "primary" }),
+    body: JSON.stringify({ model: { provider_id: "primary", model_id: "default" } }),
   });
-  assert.equal(updated?.data?.current_provider_id, "primary", "Session 没有切换到 primary provider");
+  assert.deepEqual(updated?.data?.current_model, { provider_id: "primary", model_id: "default" }, "Session 没有切换到指定模型");
 
-  await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
+  await page.locator('.pane-header').filter({ has: page.locator('h3.title').filter({ hasText: /^会话$/ }) }).click({ button: 'right' });
+
+  await page.getByRole('menuitem', { name: '刷新资源树', exact: true }).click();
   await selectSession(page, result.sessionId, 1);
 
   // 第一轮：纯文本确认回复；child 使用独立的冻结 seed 请求及响应。
@@ -345,8 +345,8 @@ try {
     toolText: await completedTaskToolRow.innerText(),
   };
 
-  // 打开右侧侧边栏「运行与连接」标签，等待子会话线程面板渲染 child 项。
-  const panel = await openResourcesTab(page);
+  // 打开会话资源栏的 Thread 标签，等待索引渲染 child 项。
+  const panel = await openThreadNavigation();
   const item = await waitForChildThreadItem(panel);
   const title = (await item.locator(".child-thread-copy strong").innerText()).trim();
   const statusText = (await item.locator(".child-thread-status").innerText()).trim();
@@ -358,7 +358,11 @@ try {
   const childThreadId = (childThreadIdCopyLabel ?? "").replace(/^复制 child thread ID: /, "").trim();
   assert.match(title, /^委派：/, "child 项标题必须以「委派：」开头");
   assert.ok(title.includes(delegateDescription), `child 项标题缺少委派描述: ${title}`);
-  assert.equal(statusText, "运行中", "已启动的 child 项必须显示「运行中」");
+  const childState = (await api(page, `/api/v1/sessions/${result.sessionId}/child-threads`, { headers: workspaceHeaders }))
+    .data.items.find(child => child.thread_id === childThreadId);
+  assert.equal(childState?.report_status, "completed", "固定回放的子线程报告必须已完成");
+  assert.equal(childState.status, "completed", "子线程状态必须反映已完成的报告");
+  assert.equal(statusText, "已完成", "索引状态必须与后端报告终态一致");
   assert.ok(metaText.includes("general-purpose"), `child 项元信息缺少 subagent_type: ${metaText}`);
   result.childThread = {
     childThreadId,
@@ -388,7 +392,7 @@ try {
   // 再次打开已有 child 标签时，仍应选中调试，不能丢弃此次导航意图。
   await childThread.getByRole("tab", { name: "文件", exact: true }).click();
   await selectSession(page, result.sessionId, 1);
-  const reopenedPanel = await openResourcesTab();
+  const reopenedPanel = await openThreadNavigation();
   await reopenedPanel.getByRole("button", { name: `调试子线程：${childThreadId}`, exact: true }).click();
   await expect(childThread.getByRole("tab", { name: "调试", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(debugOwner).toBeVisible();
@@ -428,8 +432,8 @@ try {
   }
   const childMessages = childLogs[0].upstream.attempts[0].request.messages;
   assert.deepEqual(childMessages.map(message => message.role), ["system", "user"]);
-  const childSources = JSON.parse(childMessages[1].content);
-  assert.equal(childSources.protocol, "boxteam-context-sources:v2");
+  const childSources = parseTaggedContextSources(childMessages[1].content);
+  assert.equal(childSources.protocol, "boxteam-context-sources:v3");
   const seeds = childSources.sources.filter(source => source.source_kind === "thread_task_seed");
   assert.equal(seeds.length, 1, "子线程模型请求必须包含唯一冻结任务来源");
   assert.equal(seeds[0].root_placement, "tail_only");
@@ -445,10 +449,24 @@ try {
   // 回报使用安全文案；子线程的私有结果正文不能当作父 Thread 的用户输入显示。
   await expect(parentThread.locator(".chat-user-text").filter({ hasText: childFinalText })).toHaveCount(0);
   await expect(parentThread.locator(".chat-internal-execution-display")).not.toContainText(childFinalText);
-  const reportsPanel = await openResourcesTab();
+  const reportsPanel = await openThreadNavigation();
   await reportsPanel.locator(`.child-thread-item[data-thread-id="${childThreadId}"] .child-thread-report-link`).click();
   const report = reportsPanel.locator(`.child-thread-conversation[data-thread-id="${childThreadId}"] .child-thread-report`);
   await expect(report.getByText(childFinalText, { exact: true })).toBeVisible();
+  const conversation = reportsPanel.locator(`.child-thread-conversation[data-thread-id="${childThreadId}"]`);
+  const isChildHistory = (response) => new URL(response.url()).pathname ===
+    `/api/v1/sessions/${result.sessionId}/threads/${childThreadId}/history`;
+  const fullHistory = page.waitForResponse(response => isChildHistory(response)
+    && response.request().postDataJSON().include.includes("tool_result"));
+  await conversation.getByRole("button", { name: "最新对话", exact: true }).click();
+  assert.equal((await fullHistory).status(), 200);
+  const revisionRead = await page.waitForResponse(response => isChildHistory(response)
+    && response.request().postDataJSON().include.join(",") === "metadata");
+  assert.equal(revisionRead.status(), 200);
+  const revisionPage = await revisionRead.json();
+  assert.equal(revisionPage.data.thread_id, childThreadId);
+  assert.equal(revisionPage.request_id, revisionRead.headers()["x-request-id"]);
+  await expect(conversation.locator(".child-thread-conversation-history")).toContainText(childFinalText);
   const rolesOf = (item) => {
     const attempt = item?.upstream?.attempts?.[0];
     return (attempt?.request?.messages ?? []).map((message) => message.role);

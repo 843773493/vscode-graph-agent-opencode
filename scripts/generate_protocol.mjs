@@ -25,15 +25,22 @@ const stagingRoot = path.resolve(
 );
 const bufExecutable = createRequire(path.join(projectRoot, "package.json"))
   .resolve("@bufbuild/buf/bin/buf");
-const pythonOutputRoot = path.join(projectRoot, "app", "protocol", "generated");
+const pythonOutputRoot = path.join(projectRoot, "sdk", "python", "src", "boxteam");
 const generatedRoots = [
   {
     directory: pythonOutputRoot,
     extensions: [".py", ".pyi"],
+    guidance: true,
   },
   {
-    directory: path.join(projectRoot, "src", "workspace-services", "protocol", "generated"),
+    directory: path.join(projectRoot, "sdk", "node", "src", "generated"),
     extensions: [".js", ".d.ts"],
+    guidance: true,
+  },
+  {
+    directory: path.join(projectRoot, "sdk", "node", "src", "generated-json"),
+    extensions: [".ts"],
+    guidance: true,
   },
   {
     directory: path.join(projectRoot, "src", "clients", "web", "src", "types", "protocol_buf_generated"),
@@ -41,11 +48,7 @@ const generatedRoots = [
   },
   {
     directory: path.join(projectRoot, "src", "clients", "web", "src", "types", "protocol_generated"),
-    extensions: [".ts", ".json"],
-  },
-  {
-    directory: path.join(projectRoot, "src", "shared"),
-    files: ["sseRuntimeValidators.js", "sseRuntimeValidators.d.ts"],
+    extensions: [".ts"],
   },
 ];
 
@@ -86,7 +89,7 @@ async function generatedFiles(directory, root, relative = "") {
       for (const [key, value] of await generatedFiles(entryPath, root, name)) result.set(key, value);
       continue;
     }
-    if (root.files ? root.files.includes(name) : root.extensions.some((extension) => entry.name.endsWith(extension))) {
+    if ((root.guidance && entry.name === "AGENTS.md") || (root.files ? root.files.includes(name) : root.extensions.some((extension) => entry.name.endsWith(extension)))) {
       result.set(name, await readFile(entryPath));
     }
   }
@@ -108,6 +111,28 @@ async function addPythonPackageMarkers(directory) {
   }
 }
 
+async function addGeneratedGuidance(directory) {
+  await writeFile(path.join(directory, "AGENTS.md"), `# 目录用途
+
+存放插件 SDK 的协议生成产物及其子包。
+
+# 可修改内容
+
+仅由 bun run gen:protocol 从 proto/boxteam/ 及固定生成配置更新。
+
+# 不可修改内容
+
+不得手写 wire 类型、修改生成正文或导入产品业务实现。
+
+# 规范
+
+协议源码只有 proto/boxteam/ 一份；使用 bun run check:protocol 核对产物，包内不得建立平行协议。
+`);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await addGeneratedGuidance(path.join(directory, entry.name));
+  }
+}
+
 async function main() {
   await requirePathExists(path.join(projectRoot, "buf.yaml"));
   await requirePathExists(path.join(projectRoot, "buf.gen.yaml"));
@@ -123,21 +148,18 @@ async function main() {
   try {
     const descriptorSet = path.join(stagingDirectory, "protocol.binpb");
     await run(process.execPath, [bufExecutable, "build", "--as-file-descriptor-set", "--output", descriptorSet]);
-    const pythonExecutable = path.join(projectRoot, ".venv",
-      process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-    await run(pythonExecutable, ["-m", "scripts.export_openapi_snapshot", "--validate-only",
-      "--descriptor-set", descriptorSet]);
     // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
     await run(process.execPath, [bufExecutable, "generate", "--output", stagingDirectory]);
     await addPythonPackageMarkers(
       path.join(stagingDirectory, path.relative(projectRoot, pythonOutputRoot)),
     );
-    await run(process.execPath, [path.join(projectRoot, "scripts", "generate_sse_runtime.mjs"),
-      "--output-root", stagingDirectory, "--descriptor-set", descriptorSet]);
     const stagedRoots = generatedRoots.map((generatedRoot) => ({
       ...generatedRoot,
       generated: path.join(stagingDirectory, path.relative(projectRoot, generatedRoot.directory)),
     }));
+    for (const root of stagedRoots) {
+      if (root.guidance) await addGeneratedGuidance(root.generated);
+    }
     for (const { generated } of stagedRoots) {
       await access(generated, constants.R_OK);
     }

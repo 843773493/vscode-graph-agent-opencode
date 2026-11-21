@@ -27,6 +27,7 @@
 │   ├── catalog_session_bundle.py          catalog、物理节点和会话控制数据的统一播种
 │   ├── job_thread_fixture.py              Job测试的Thread与执行绑定
 │   └── rollout/                            canonical历史与视图场景装具
+│       ├── context_registry.py             正式Session、执行准入和registry数据库fixture
 │       ├── fixture_output.py               通过正式owner提交静态fixture输出
 │       ├── view_mutations.py                隔离注入view成员索引损坏
 │       └── web_boundary_seeding.py           Web历史边界场景数据
@@ -55,6 +56,8 @@
 │   └── crash_worker.py                     独立模型流故障执行入口
 ├── mcp/                                    MCP测试配置和协议替身
 │   ├── configuration.py                    MCP配置文件准备
+│   ├── frozen_catalog.py                   隔离工作区与真实Provider上下文封存fixture
+│   ├── tool_discovery.py                   工具发现的发布目录、结果存储与调用上下文fixture
 │   └── session_doubles.py                  MCP会话及工厂替身
 ├── 通信目标与故障
 │   └── communication/
@@ -64,6 +67,7 @@
 └── API等待、观察与断言
     ├── sealed_request_audit.py           Provider日志、真实transport与sealed registry/checkpoint只读核对
     ├── api_helpers.py / api_waiters.py    HTTP建会话、checkpoint样板与Job等待
+    ├── goal_control.py                   顺序Goal场景读取控制版本并冻结一次HTTP操作身份
     ├── session_navigation/
     │   ├── http_operations.py             真实HTTP导航operation提交及终态等待
     │   └── catalog_intents.py             直接调用catalog owner的intent准备与提交
@@ -113,7 +117,7 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 ### 进程、端口与HTTP就绪
 
-- `ports.py`将integration和e2e的文件快照依次排序，先分配8800–65535中的完整96端口块，耗尽后使用1024–7999；不使用特权端口或8000–8799开发服务段。总容量由两段范围推导，不再给两层预留固定配额。两层共用同一缓存快照，超出总容量时从首个分配就明确失败，不能循环复用端口；显式`tests_root`指包含两层的测试根。文件池不替代独占闸门或原生端口租约，也不支持测试运行中修改文件树。
+- `ports.py`将integration和e2e的文件快照依次排序，先分配8800–65535中的完整92端口块（偏移0–91），耗尽后使用1024–7999；不使用特权端口或8000–8799开发服务段。总容量由两段范围推导，不再给两层预留固定配额。两层共用同一缓存快照，超出总容量时从首个分配就明确失败，不能循环复用端口；显式`tests_root`指包含两层的测试根。文件池不替代独占闸门或原生端口租约，也不支持测试运行中修改文件树。
 - `TestFilePortBlock.port()` 同时校验偏移上限和块的实际末尾；调用方在本文件端口块内平移服务布局时不得延伸原末尾或重新分配到其他文件的范围。
 - `ensure_local_port_available`按显式`host`瞬时检查监听地址，缺省仍为IPv4回环；主机名逐一检查系统解析的地址，IPv6按Node默认双栈语义绑定。不预留端口或声明长期租约。Windows使用独占地址选项，避免REUSEADDR把重复绑定误报为空闲；Linux/macOS保留REUSEADDR处理已关闭连接。探针成功或冲突都关闭自己的socket，不能终止原监听者。
 - Workspace和Gateway启动装具在创建进程前持有日志文件，任何文件打开或创建进程失败都要立即关闭已打开的文件；创建成功后由返回的进程句柄接管，关闭进程时一并关闭日志。

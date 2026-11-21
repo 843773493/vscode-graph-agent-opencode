@@ -171,6 +171,17 @@ function resource(
 }
 
 describe("后台连接目录", () => {
+  test("刷新和读取失败时保留已展示的资源，错误仍可见", () => {
+    const snapshot = resource(1);
+    const renderer = renderPanel({ resources: [snapshot] });
+    updatePanel(renderer, { resources: [snapshot], loading: true });
+    expect(rowForPage(renderer, 1)).toBeDefined();
+    updatePanel(renderer, { resources: [snapshot], error: "HTTP 503：连接失败" });
+    expect(rowForPage(renderer, 1)).toBeDefined();
+    expect(nodeText(renderer.root.findByProps({ role: "alert" }).props.children)).toContain("HTTP 503：连接失败");
+    renderer.unmount();
+  });
+
   test("资源种类图标来自 resourceDisplay 唯一映射，面板分组标题与树行一致", () => {
     expect(resourceKindIcon("browser")).toBe("codicon-globe");
     expect(resourceKindIcon("terminal")).toBe("codicon-terminal");

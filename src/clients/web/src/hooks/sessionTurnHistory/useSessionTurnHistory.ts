@@ -7,6 +7,7 @@ import {
 } from "react";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
+import type { SessionTurnBootstrap } from "../../types/backend";
 import {
   dropTurn,
   writeTurnTimelineCache,
@@ -14,6 +15,7 @@ import {
 } from "../../state/session/turnTimeline";
 import { useTurnBootstrap } from "./bootstrap";
 import { useTurnDetailLoader } from "./details";
+import { useContextNoticeLoader } from "./contextNotices";
 import {
   useAroundTurnLoader,
   useInitialTurnLoader,
@@ -22,6 +24,7 @@ import {
 } from "./page";
 
 export function useSessionTurnHistory({
+  initialBootstrap,
   apiPort,
   sessionId,
   threadId,
@@ -31,6 +34,7 @@ export function useSessionTurnHistory({
   reloadNonce,
   setState,
 }: {
+  initialBootstrap?: Promise<SessionTurnBootstrap>;
   apiPort: number | null;
   sessionId: string | null;
   threadId?: string;
@@ -126,6 +130,7 @@ export function useSessionTurnHistory({
     onMissingTurn: refreshTurnHistory,
   });
   useTurnBootstrap({
+    initialBootstrap,
     apiPort,
     sessionId,
     threadId,
@@ -172,9 +177,13 @@ export function useSessionTurnHistory({
     requestSignal: requestScopeController.signal,
     setState,
   });
+  const loadMoreContext = useContextNoticeLoader({ apiPort, sessionId, threadId, workspaceId, sessionCacheKey,
+    getCurrentTimeline, generationRef, requestSignal: requestScopeController.signal, setState, refreshTurnHistory });
   return {
+    loadMoreContext,
     loadAroundTurn,
     loadNewerTurns,
+    loadLatestTurns: loadInitialTurns,
     loadOlderTurns,
     loadTurnDetails,
     refreshTurnHistory,

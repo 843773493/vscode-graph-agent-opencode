@@ -10,11 +10,16 @@ import {
   childThreadStatusLabel,
 } from "../../../state/childThreadDisplay";
 import ChildThreadPanel from "./ChildThreadPanel";
+import { ChatItemMenuContext, type ChatItemMenuRequest } from "../../chat/itemContextMenu";
 
-test("跨 Gateway 的子线程面板显示目标工作区和会话归属", () => {
-  const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} ownerLabel="gateway_remote · 目标工作区 · 目标会话" />);
-  expect(html).toContain("gateway_remote · 目标工作区 · 目标会话");
+test("会话展开后直接展示 Thread，不插入标题、计数、归属说明或空提示栏", () => {
+  const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} />);
   expect(html).toContain('data-child-owner-session="ses_parent"');
+  expect(html).toContain('data-thread-id="thr_main_canonical"');
+  for (const name of ["panel-header", "resource-total-count", "child-thread-notice-slot"]) {
+    expect(html).not.toContain(`class="${name}"`);
+  }
+  expect(html).not.toContain("刷新会话线程");
 });
 
 /** 递归提取 react-test-renderer 节点的全部文本。 */
@@ -47,24 +52,25 @@ function thread(
 
 function panelProps(overrides: {
   onRefresh?: () => void;
-  onSelectThread?: (threadId: string) => void;
+  onOpenMainThread?: () => void;
 } = {}) {
   return {
     threads: [] as ChildThreadSummary[],
     teams: [] as ChildThreadList["teams"],
-    total: 0,
     loading: false,
     error: null as string | null,
     loadedAt: "2026-09-15T12:30:00Z",
     sessionId: "ses_parent",
     mainThreadId: "thr_main_canonical",
-    ownerLabel: "本机 Gateway · 测试工作区 · 测试会话",
     activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
-    onSelectThread: overrides.onSelectThread ?? (() => {}),
+    onOpenThread: (_thread: ChildThreadSummary) => {},
+    onOpenMainThread: overrides.onOpenMainThread ?? (() => {}),
     conversation: {
       selectedThread: null,
+      owner: null,
       selectionIntent: null,
+      submissionRecovery: null,
       snapshot: { history: null, report: null, view: "history" as const, draft: "", loading: false, sending: false, error: null, accepted: null, paged: false },
       selectThread: () => {}, selectThreadForOwner: () => {}, close: () => {}, setDraft: () => {},
       refresh: async () => {}, openReport: async () => {}, loadEarlier: async () => {}, send: async () => {}, isUnread: () => false,
@@ -81,7 +87,7 @@ describe("子会话线程面板", () => {
     const props = panelProps();
     let renderer!: ReactTestRenderer;
     try {
-      act(() => { renderer = create(<ChildThreadPanel {...props} threads={children} total={2}
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={children}
         onOpenThread={value => opened.push(value)}
         onForkFromThread={(threadId, point) => forks.push({ threadId, point })}
         conversation={{ ...props.conversation, selectThread: id => selected.push(id) }} />); });
@@ -101,7 +107,7 @@ describe("子会话线程面板", () => {
     const props = panelProps();
     let renderer!: ReactTestRenderer;
     try {
-      act(() => { renderer = create(<ChildThreadPanel {...props} threads={[child]} total={1}
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={[child]}
         onOpenThread={value => opened.push(value)} conversation={{ ...props.conversation,
           selectThread: id => embedded.push(id),
         }} />); });
@@ -153,17 +159,29 @@ describe("子会话线程面板", () => {
     };
     const clicks: { threadId: string; point: ChildThreadForkPoint }[] = [];
     let renderer: ReactTestRenderer;
+    let menu: ChatItemMenuRequest | undefined;
+    const forkAt = (kind: string) => {
+      const node = renderer!.root.find(node => typeof node.type === "string" && (
+        kind === "user" ? node.props.className === "child-thread-user chat-user-text"
+          : typeof node.props["data-response-sources"] === "string"
+            && JSON.parse(node.props["data-response-sources"])[0].source.item_id === kind
+      ));
+      const source = { closest: () => null, getRootNode: () => ({}), ownerDocument: { getSelection: () => null } };
+      node.props.onKeyDown({ key: "ContextMenu", target: source, currentTarget: source, preventDefault() {}, stopPropagation() {} });
+      menu!.actions.find(action => action.id === "forkItem")!.run();
+    };
     act(() => {
-      renderer = create(<ChildThreadPanel {...props} threads={[selected]} conversation={conversation}
-        onForkFromThread={(threadId, point) => { clicks.push({ threadId, point }); }} />);
+      renderer = create(<ChatItemMenuContext.Provider value={request => { menu = request; }}>
+        <ChildThreadPanel {...props} threads={[selected]} conversation={conversation}
+          onForkFromThread={(threadId, point) => { clicks.push({ threadId, point }); }} />
+      </ChatItemMenuContext.Provider>);
     });
     const sources = () => renderer!.root.findAll((node) =>
       typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
     ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
     const expected = turn.response_parts!.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
     expect(sources()).toEqual([expected[1], expected[3]]);
-    const finalFork = renderer!.root.findByProps({ "data-fork-item-id": "child_item_final" });
-    act(() => { finalFork.props.onClick(); });
+    act(() => { forkAt("child_item_final"); });
     expect(clicks).toEqual([{ threadId: selected.thread_id, point: {
       sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_final",
     } }]);
@@ -171,7 +189,12 @@ describe("子会话线程面板", () => {
     await act(async () => { await toggle.props.onClick(); });
     expect(sources()).toEqual(expected);
     expect(renderer!.root.findAllByProps({ className: "chat-thinking-toggle" })).toHaveLength(1);
-    act(() => { renderer!.root.findByProps({ "data-fork-item-id": "child_item_after" }).props.onClick(); });
+    act(() => {
+      const item = renderer!.root.findByProps({ "data-chat-item-id": "child_after" });
+      const source = { closest: () => null, getRootNode: () => ({}), ownerDocument: { getSelection: () => null } };
+      item.props.onKeyDown({ key: "ContextMenu", target: source, currentTarget: source, preventDefault() {}, stopPropagation() {} });
+      menu!.actions.find(action => action.id === "forkItem")!.run();
+    });
     expect(clicks).toEqual([{ threadId: selected.thread_id, point: {
       sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, itemId: "child_item_final",
     } }, { threadId: selected.thread_id, point: {
@@ -179,11 +202,7 @@ describe("子会话线程面板", () => {
     } }]);
     await act(async () => { await toggle.props.onClick(); });
     expect(sources()).toEqual([expected[1], expected[3]]);
-    const userFork = renderer!.root.find((node) =>
-      typeof node.props.className === "string"
-        && node.props.className.split(" ").includes("child-thread-user"),
-    ).findByType("button");
-    act(() => { userFork.props.onClick(); });
+    act(() => { forkAt("user"); });
     expect(clicks[clicks.length - 1]).toEqual({ threadId: selected.thread_id, point: {
       sourceViewId: turn.source_view_id, sourceViewRevision: turn.source_view_revision, turnId: turn.turn_id,
     } });
@@ -197,12 +216,11 @@ describe("子会话线程面板", () => {
   test("团队投影展示同一 Session 的协调者、成员角色和任务状态", () => {
     const board: ChildThreadList["teams"][number] = {
       team_id: "team_owner", session_id: "ses_parent", name: "README 审查团队", coordinator_thread_id: "thr_main_canonical", version: 4,
-      created_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:30:00Z", recent_events: [],
       members: [
-        { thread_id: "thr_main_canonical", role: "coordinator", source: "coordinator", work_mode: "write", instructions: "协调", status: "active", joined_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:00:00Z" },
-        { thread_id: "thr_reviewer", role: "reviewer", source: "delegated", work_mode: "read_only", instructions: "审查", status: "active", joined_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:00:00Z" },
+        { thread_id: "thr_main_canonical", role: "coordinator", work_mode: "write" },
+        { thread_id: "thr_reviewer", role: "reviewer", work_mode: "read_only" },
       ],
-      tasks: [{ task_id: "ttask_review", title: "核对 README", description: "核对文件", phase: "review", cycle: 2, assignee_thread_id: "thr_reviewer", status: "blocked", depends_on_task_ids: [], summary: "等待正文确认", updated_by_thread_id: "thr_main_canonical", created_at: "2026-09-15T12:00:00Z", updated_at: "2026-09-15T12:30:00Z" }],
+      tasks: [{ task_id: "ttask_review", title: "核对 README", phase: "review", cycle: 2, assignee_thread_id: "thr_reviewer", status: "blocked", summary: "等待正文确认", error: undefined }],
     };
     const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} teams={[board]} />);
     for (const text of ["README 审查团队", "团队版本 4", "协调线程：thr_main_canonical", "coordinator", "reviewer", "核对 README", "受阻", "等待正文确认"]) expect(html).toContain(text);
@@ -228,7 +246,6 @@ describe("子会话线程面板", () => {
             status: "failed",
           }),
         ]}
-        total={3}
       />,
     );
 
@@ -248,8 +265,8 @@ describe("子会话线程面板", () => {
   });
 
   test("空态与错误态互斥展示", () => {
-    const emptyHtml = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} />);
-    expect(emptyHtml).toContain("当前会话还没有委托子会话");
+    const emptyHtml = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} mainThreadId={null} />);
+    expect(emptyHtml).toContain("当前会话还没有子 Thread");
 
     const errorHtml = renderToStaticMarkup(
       <ChildThreadPanel
@@ -257,17 +274,31 @@ describe("子会话线程面板", () => {
         error="请求失败 409 Conflict: 会话目录索引异常"
       />,
     );
-    expect(errorHtml).toContain("子会话线程加载失败");
+    expect(errorHtml).toContain("会话线程加载失败");
     expect(errorHtml).toContain("会话目录索引异常");
-    expect(errorHtml).not.toContain("当前会话还没有委托子会话");
+    expect(errorHtml).not.toContain("当前会话还没有子 Thread");
 
     const noSessionHtml = renderToStaticMarkup(
       <ChildThreadPanel {...panelProps()} sessionId="" />,
     );
-    expect(noSessionHtml).toContain("选择会话后查看其子会话线程");
+    expect(noSessionHtml).toContain("选择会话后查看其 Thread");
   });
 
-  test("刷新按钮触发 onRefresh，会话缺失时禁用", () => {
+  test("主 Thread 直接展示为列表项并打开对话", () => {
+    const opened: string[] = [];
+    const props = panelProps();
+    let tree!: ReactTestRenderer;
+    try {
+      act(() => { tree = create(<ChildThreadPanel {...props}
+        onOpenMainThread={() => opened.push(props.mainThreadId)} />); });
+      expect(tree.root.findAllByProps({ "data-thread-id": props.mainThreadId })).toHaveLength(1);
+      expect(tree.root.findAllByProps({ className: "empty-state" })).toHaveLength(0);
+      act(() => tree.root.findByProps({ "aria-label": "打开主 Thread 对话" }).props.onClick());
+      expect(opened).toEqual([props.mainThreadId]);
+    } finally { act(() => tree?.unmount()); }
+  });
+
+  test("只在加载失败时显示重试按钮，会话缺失时禁用", () => {
     let refreshes = 0;
     let renderer: ReactTestRenderer;
     act(() => {
@@ -275,12 +306,13 @@ describe("子会话线程面板", () => {
         <ChildThreadPanel
           {...panelProps({ onRefresh: () => { refreshes += 1; } })}
           threads={[thread(1)]}
+          error="请求失败"
         />,
       );
     });
 
     const refreshButton = renderer!.root.findByProps({
-      "aria-label": "刷新子会话线程",
+      "aria-label": "刷新会话线程",
     });
     act(() => refreshButton.props.onClick());
     expect(refreshes).toBe(1);
@@ -290,11 +322,11 @@ describe("子会话线程面板", () => {
     let disabledRenderer: ReactTestRenderer;
     act(() => {
       disabledRenderer = create(
-        <ChildThreadPanel {...panelProps()} sessionId="" />,
+        <ChildThreadPanel {...panelProps()} sessionId="" error="请求失败" />,
       );
     });
     const disabledButton = disabledRenderer!.root.findByProps({
-      "aria-label": "刷新子会话线程",
+      "aria-label": "刷新会话线程",
     });
     expect(disabledButton.props.disabled).toBe(true);
     disabledRenderer!.unmount();
@@ -307,7 +339,7 @@ describe("子会话线程面板", () => {
       renderer = create(
         <ChildThreadPanel
           {...panelProps({
-            onSelectThread: (threadId) => { selected.push(threadId); },
+            onOpenMainThread: () => { selected.push("thr_main_canonical"); },
           })}
           mainThreadId={null}
         />,
@@ -315,7 +347,7 @@ describe("子会话线程面板", () => {
     });
 
     const mainRow = renderer!.root.findByProps({
-      "aria-label": "切换到主线程调试",
+      "aria-label": "打开主 Thread 对话",
     });
     expect(mainRow.props.disabled).toBe(true);
     act(() => mainRow.props.onClick());
@@ -323,38 +355,39 @@ describe("子会话线程面板", () => {
     renderer!.unmount();
   });
 
-  test("点击 child 项回传 thread_id，并支持切回主线程", () => {
+  test("Thread 列表只提供对话打开及资源操作，不提供调试跳转", () => {
     const selected: string[] = [];
     let renderer: ReactTestRenderer;
     act(() => {
       renderer = create(
         <ChildThreadPanel
           {...panelProps({
-            onSelectThread: (threadId) => { selected.push(threadId); },
+            onOpenMainThread: () => { selected.push("thr_main_canonical"); },
           })}
           threads={[thread(1), thread(2)]}
           activeThreadId="thr_child_2"
+          onOpenThread={child => selected.push(child.thread_id)}
         />,
       );
     });
 
-    const rows = renderer!.root.findAllByType("button").filter(
-      (node) => String(node.props["aria-label"]).startsWith("调试子线程："),
-    );
+    const rows = renderer!.root.findAllByProps({ className: "child-thread-main" }).slice(1);
     expect(rows).toHaveLength(2);
+    expect(renderer!.root.findAllByProps({ className: "codicon codicon-debug" })).toHaveLength(0);
+    expect(renderer!.root.findAllByType("button").filter(node => String(node.props["aria-label"]).startsWith("调试子线程："))).toHaveLength(0);
     act(() => rows[0]!.props.onClick());
     const mainRow = renderer!.root.findByProps({
-      "aria-label": "切换到主线程调试",
+      "aria-label": "打开主 Thread 对话",
     });
     act(() => mainRow.props.onClick());
     expect(selected).toEqual(["thr_child_1", "thr_main_canonical"]);
-    // 执行状态独立展示；调试 owner 通过专用按钮表达。
+    // 打开对话仍保留真实执行状态与当前编辑器的选中态。
     const statuses = renderer!.root.findAll(
       (node) => typeof node.props.className === "string"
         && node.props.className.split(" ").includes("child-thread-status"),
     );
     expect(statuses.map((node) => textOf(node))).toEqual(["主线程", "运行中", "运行中"]);
-    expect(rows[1]!.props.title).toBe("当前调试 owner");
+    expect(rows[1]!.props["aria-current"]).toBe("page");
     renderer!.unmount();
   });
 
@@ -379,7 +412,7 @@ describe("子会话线程面板", () => {
         );
       });
       expect(
-        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+        renderer!.root.findAllByProps({ className: "child-thread-notice-slot" }),
       ).toHaveLength(0);
       const copyButton = renderer!.root.findByProps({
         "aria-label": "复制 child thread ID: thr_child_1",
@@ -403,7 +436,7 @@ describe("子会话线程面板", () => {
         renderer!.root.findByProps({ "aria-label": "关闭提示" }).props.onClick();
       });
       expect(
-        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+        renderer!.root.findAllByProps({ className: "child-thread-notice-slot" }),
       ).toHaveLength(0);
       renderer!.unmount();
     } finally {

@@ -91,6 +91,26 @@ async def test_list_is_workspace_transport_only_and_hides_direct_attach_url(
 
 
 @pytest.mark.asyncio
+async def test_selected_summaries_preserve_gateway_scope_and_send_resource_filter(
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [_terminal_record()]})
+
+    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.get_gateway_local_token", lambda: "test-token")
+    terminal_manager_client._http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    assert await terminal_manager_client.list_resources(resource_ids=frozenset({TERMINAL_ID})) == [_terminal_record()]
+    assert await terminal_manager_client.list_resources(resource_ids=frozenset()) == []
+    assert len(requests) == 1
+    assert requests[0].url.params.get_list("resource_id") == [TERMINAL_ID]
+    assert requests[0].url.params["workspace_id"] == WORKSPACE_ID
+    assert requests[0].url.params["package_version"] == "0.1.0"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("for_stop", [False, True])
 async def test_revision_and_one_use_grant_consume_internal_owner_transport(
     terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch, for_stop: bool,
@@ -181,3 +201,58 @@ async def test_current_config_binding_routes_through_gateway_without_rediscovery
         assert request.headers["x-boxteam-resource-owner"] == "workspace-terminal"
         assert request.headers["x-local-token"]
         assert request.extensions["timeout"]["read"] == 10
+
+
+@pytest.mark.asyncio
+async def test_changes_use_gateway_workspace_scope_and_ignore_heartbeat(
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+            content=(b': heartbeat\n\nevent: terminals_changed\ndata: {"resource_ids":null}\n\n'
+                + f'event: terminals_changed\ndata: {{"resource_ids":["{TERMINAL_ID}"]}}\n\n'.encode()
+                + b': heartbeat\n\n'))
+
+    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.get_gateway_local_token", lambda: "test-token")
+    terminal_manager_client._http_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    changes = terminal_manager_client.changes()
+    assert await anext(changes) is None
+    assert await anext(changes) == frozenset({TERMINAL_ID})
+    with pytest.raises(ConnectionError, match="已结束"):
+        await anext(changes)
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.url.path == "/api/gateway/service-plugins/boxteam.developer-tools/terminal/services/http/api/terminals/events"
+    assert request.url.params["workspace_id"] == WORKSPACE_ID
+    assert request.url.params["package_version"] == "0.1.0"
+    assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+    assert request.headers["X-Local-Token"] == "test-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", ['{}', '{"resource_ids":false}', '{"resource_ids":[1]}'])
+async def test_changes_reject_invalid_resource_identity(
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch, data: str,
+) -> None:
+    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.get_gateway_local_token", lambda: "test-token")
+    terminal_manager_client._http_client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"},
+            content=f"event: terminals_changed\ndata: {data}\n\n".encode())))
+    with pytest.raises(TypeError, match="resource_ids"):
+        await anext(terminal_manager_client.changes())
+
+
+@pytest.mark.asyncio
+async def test_changes_preserve_http_error_status(
+    terminal_manager_client: TerminalManagerClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.abstractions.terminal.resources import TerminalRequestError
+    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.get_gateway_local_token", lambda: "test-token")
+    terminal_manager_client._http_client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(503, json={"detail": "plugin stopped"})))
+    with pytest.raises(TerminalRequestError) as caught:
+        await anext(terminal_manager_client.changes())
+    assert caught.value.status == 503

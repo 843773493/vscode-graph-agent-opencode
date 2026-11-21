@@ -26,6 +26,10 @@ from app.domain.itemized.epoch.seal_binding import (
     AppliedSourceRevision,
     ContextSealBinding,
 )
+from app.domain.itemized.epoch.source_protocol import (
+    SOURCE_PROTOCOLS,
+    SourceProtocolVersion,
+)
 from app.domain.itemized.errors import ItemSchemaError
 
 
@@ -57,13 +61,13 @@ def _parent(value: object) -> ParentAssemblyRef | None:
     return ParentAssemblyRef(**raw)
 
 
-def _source_protocol(raw: Mapping[str, object]) -> Literal[1, 2] | None:
+def _source_protocol(raw: Mapping[str, object]) -> SourceProtocolVersion | None:
     if "source_protocol" not in raw:
         return None
     value = raw["source_protocol"]
-    if type(value) is not int or value not in {1, 2}:
+    if type(value) is not int or value not in SOURCE_PROTOCOLS:
         raise ItemSchemaError("未知 source_protocol")
-    return cast(Literal[1, 2], value)
+    return cast(SourceProtocolVersion, value)
 
 
 def _item_ref(value: object, version: Literal[1, 2, 3, 4]) -> AppendedItemRef:

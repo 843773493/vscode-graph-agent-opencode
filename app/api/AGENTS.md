@@ -4,10 +4,10 @@
 
 本目录只做请求解析、参数校验、依赖注入与响应封装，不承载业务规则：
 
-- `deps.py`：所有路由共享的 FastAPI 依赖提供者（从 `request.app.state.container` 取服务实例）与 `verify_local_token`；`get_request_id` 从 `app.core.trace_middleware` 重导出。
+- `deps.py`：所有路由共享的工作区服务依赖提供者与产品 `verify_local_token`；通过当前请求的挂载范围取得容器。请求身份依赖直接使用 `boxteam_plugin_sdk.http.get_request_id`，不在产品中重导出。
 - canonical `session_id` / `thread_id` 的 `Annotated` 校验类型由 `app.schemas.canonical_params` 唯一定义，并复用 `app.core.session_catalog_store` 的唯一校验器。
 - `sse_heartbeat.py`：把异步事件源包装成带空闲心跳的 SSE 流的统一实现。
-- `runtime_logging.py`：Backend 与 Gateway 共用的进程级内部日志控制路由；不按工作区挂载，不依赖工作区容器，不按工作区复制共享 Backend 的日志设置。入口只接受无浏览器来源头的 loopback 请求，并核对 Gateway 私有凭据；Backend 单服务未显式配置控制凭据时拒绝管理，不接受固定开发 token。
+- Backend 与 Gateway 的进程级内部日志控制路由由 `boxteam_plugin_sdk.logging` 提供；不按工作区挂载，不依赖工作区容器，不按工作区复制共享 Backend 的日志设置。入口只接受无浏览器来源头的 loopback 请求，并核对原控制凭据；未显式配置凭据时拒绝管理，不接受固定开发 token。
 - `workspace_file_response.py`：复用 Starlette 文件响应的 Range 与头部实现，协调延迟 I/O 错误、发头时点和临时下载清理；普通 raw 完整 GET 按稳定 owner／规范 URI／stat 生成弱 ETag，当前读取权限通过后才可304，下载、临时及Range仍no-store。文件解析与归档准备仍归 Workspace 文件 owner，stat校验器不代替保存CAS。
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 - `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。
@@ -19,7 +19,7 @@
 ```text
 app/api/
 ├── HTTP 公共边界
-│   ├── deps.py                 服务依赖与请求身份
+│   ├── deps.py                 工作区服务依赖与产品认证
 │   ├── errors.py               统一错误响应
 │   └── sse_heartbeat.py        SSE 空闲心跳
 ├── 会话与执行
@@ -36,7 +36,6 @@ app/api/
 │   └── artifacts.py            执行产物
 ├── 工作区能力
 │   ├── workspace.py            工作区信息与设置
-│   ├── workspace_observation.py 工作区观察事件
 │   ├── resources.py            可发布资源
 │   ├── tools.py                工具目录与选择
 │   └── mcp.py                  MCP 配置与状态
@@ -65,11 +64,12 @@ app/api/
 
 - 路由域文件名与 `APIRouter(prefix=..., tags=[...])` 的语义保持一致；新增路由域必须在 `app/main.py` 注册。
 - 统一使用 `APIResponse(data=..., request_id=request_id)` 封装响应；SSE 端点统一走 `sse_heartbeat.stream_sse_with_heartbeat`，空闲间隔取 `SSE_HEARTBEAT_INTERVAL_SECONDS`。
+- SSE 端点是领域事件 owner，页面由 Gateway `/api/gateway/realtime` 复用传输；新增常驻事件须同步 Gateway 允许列表与共享客户端，不要求页面直接建立 HTTP 长连接。快照／游标／权限仍归本领域，不新增跨领域聚合器。
 - 处理函数签名中的依赖参数应按仓库既有顺序排列：路径/查询参数、请求体、`Depends(verify_local_token)`、`Depends(get_request_id)`、服务依赖。
 - 失败必须显式抛出 `HTTPException` 或业务异常，禁止用虚假默认值或静默降级掩盖错误。
 - 本目录的单元测试放在 `tests/unit/api/`，公开协议契约测试放在 `tests/contracts/api/`。
 - 精确 thread 历史请求的 execution 选择器及游标合同归 DTO/history owner；API 只校验与转发，不建立第二历史投影、伪造 Turn 或唤醒 cold runtime。
 - 消息流 HTTP 快照、事件分页及 SSE 恢复快照在线程中执行原严格协议投影；SSE 普通增量沿原顺序直接编码，不为每片创建线程任务。
-- 持久任务运行历史在线程池中按接受序号读取有界摘要页，正文只走单条详情；SSE 初始与 gap 快照携带在途运行基线，普通更新传递当前 task 与单条 run 摘要，不读取已完成历史。
+- 持久任务管理查询及 SSE 的 SQLite 读取在线程池执行；运行历史按接受序号读取有界摘要页，正文只走单条详情。SSE 初始与 gap 快照携带在途运行基线，普通更新传递当前 task 与单条 run 摘要；会话关联只查询该 task 的原生成事实，不扫描其它任务历史。
 
 - `runtime_control.py` 共用本机控制凭据与 loopback 检查；隐藏进程关闭入口核 PID 和 Backend generation，拒绝浏览器来源，只调用原受管 HTTP server 的退出回调，不取得工作区服务图或声称已退出。

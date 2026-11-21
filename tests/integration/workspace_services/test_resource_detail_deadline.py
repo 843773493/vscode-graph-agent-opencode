@@ -69,8 +69,8 @@ async def test_real_detail_deadline_keeps_the_live_resource_and_original_lease_f
                     await lock.acquire()
                     entered.set()
 
-            async def receiving():
-                result = await listing()
+            async def receiving(**query):
+                result = await listing(**query)
                 if selected():
                     received.append(rid)
                     if stage == "receipt":

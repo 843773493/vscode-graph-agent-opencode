@@ -55,6 +55,9 @@ from app.services.infrastructure.config_service.config_agent_tools import (
     ConfigAgentToolsMixin,
 )
 from app.services.infrastructure.config_service.config_agents import ConfigAgentsMixin
+from app.services.infrastructure.config_service.config_llm_probe import (
+    ConfigLlmProbeMixin,
+)
 from app.services.infrastructure.config_service.config_public import ConfigPublicMixin
 from app.services.infrastructure.config_service.config_reload import ConfigReloadMixin
 from app.services.infrastructure.config_service.config_runtime_accessors import (
@@ -80,6 +83,7 @@ from configs.installer import resolve_config_resource_source
 
 class ConfigService(ConfigSourceLayersMixin,
     ConfigSourceEditMixin,
+    ConfigLlmProbeMixin,
     ConfigSnapshotMixin,
     ConfigRuntimeAccessorsMixin,
     ConfigReloadMixin,
@@ -206,7 +210,7 @@ class ConfigService(ConfigSourceLayersMixin,
         self._session_defaults = SessionDefaults(
             workspace_root=self._workspace_root,
             validate_agent_id=self.validate_agent_id,
-            resolve_agent_provider_id=self.resolve_agent_provider_id,
+            resolve_agent_model=self.resolve_agent_model,
             default_agent_id_provider=self.get_default_agent_id,
         )
 

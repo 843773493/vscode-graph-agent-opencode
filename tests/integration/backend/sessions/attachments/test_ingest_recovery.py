@@ -271,7 +271,7 @@ async def test_settlement_error_preserves_durable_published_subject(ingest_case,
         )
         case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
             execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=message.created_at.isoformat(),
         ))
     (ref,) = tuple(case.store._catalog.connection.execute("SELECT attachment_id FROM attachment_directories"))
@@ -321,14 +321,14 @@ async def test_recovery_releases_only_unaccepted_message_reference(
             execution_binding=InternalExecutionIntent(message_id=message.message_id,
                 execution_id=create_prefixed_id("intr"), admission_idempotency_key=create_prefixed_id("adm")),
         )
-        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
     else:
         queued_identity = UserExecutionIdentity(
             job_id=create_prefixed_id("job"), turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm"),
         )
         case.messages.accept_user_message(message, execution_identity=queued_identity, queue_input=ExecutionQueueInput(
             execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=message.created_at.isoformat(),
         ))
     with closing(case.control()) as control:

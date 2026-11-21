@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Never
 
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
@@ -26,52 +26,48 @@ from app.abstractions.session_context import (
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
-from app.agents.agent_tools import build_default_tools
-from app.agents.custom_tools import build_custom_tool_bundle
-from app.agents.deep_agent_stack import (
-    build_deep_agent_middleware,
-)
-from app.agents.graph_binding import (
-    DEEP_AGENT_GRAPH_BINDING,
-    GRAPH_FACTORY_REGISTRY,
-    GraphBindingOwnerKey,
-    GraphBindingStorePort,
-    resolve_graph_binding,
-)
+from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
+from app.agents.default_tools import build_default_tools
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
     InstructionUpdateBinding,
     register_instruction_producer,
-    runtime_instruction_producers,
 )
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
+from app.agents.middleware_assembly import (
+    build_deep_agent_middleware,
+    build_deep_agent_tool_middleware,
+)
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.model_call_graph import create_model_call_agent
 from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
-    build_provider_model_candidate,
 )
 from app.agents.policy import (
+    ParsedCustomToolSpec,
+    ToolCapabilityPolicy,
     ToolMetadata,
-    ToolPolicyResolver,
-    catalog_group_for_tool,
-    custom_tool_spec_names,
-    parse_custom_tool_specs,
     validate_tool_dependencies,
 )
-from app.agents.policy.tool_capability import metadata_for_tool
-from app.agents.provider_api_mode import ProviderApiMode, parse_provider_api_mode
-from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
+from app.agents.policy.tool_capability import (
+    metadata_for_custom_tool,
+    metadata_for_tool,
+)
 from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
 )
-from app.agents.skill_runtime import (
-    append_skill_middlewares,
-)
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
-from app.agents.tool_identity import TOOL_DISCOVERY_NAME, tool_definition_name
+from app.agents.summarization.tool_middleware import (
+    create_compact_conversation_tool,
+    create_read_compaction_history_tool,
+)
+from app.agents.tool_identity import (
+    TOOL_DISCOVERY_NAME,
+    ToolDefinitionLike,
+    tool_definition_name,
+)
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
@@ -79,26 +75,24 @@ from app.agents.tool_invocation_context import (
 )
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.tool_set_producer import RegisteredToolSetProducer
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.agents.workspace_backend import build_workspace_backend
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.failures import (
-    execution_failure_message,
     mark_public_failure,
-    public_failure_message,
-    report_failure,
 )
-from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
+from app.runtime.agent_runtime import (
+    AGENT_GRAPH_RECURSION_LIMIT,
+    AgentAssemblyMode,
+)
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -106,25 +100,26 @@ from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
     ContextSourceEventPublisher,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
-    McpCatalogResourcePublisher,
-    extension_dispatch_from_activation,
-)
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.catalog_publication import (
+    McpCatalogResourcePublisher,
+)
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     ExtensionCatalogUnavailableError,
     ExtensionTargetBinding,
     ExtensionTargetResolutionError,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    FrozenToolCatalog,
+    restore_frozen_extension_dispatch,
 )
 from app.services.infrastructure.mcp.invocation import (
     ExtensionExecutionTarget,
     McpResourceUse,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
-    FrozenToolCatalog,
-    FrozenToolDefinition,
     SkillToolSource,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -160,228 +155,22 @@ from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
     from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+    from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
+    from app.services.orchestration.event_stream.contracts import AgentEventSource
 
 
-AGENT_GRAPH_RECURSION_LIMIT = 9999
-PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers", "no_proxy"}
-
-
-def _resolve_tool_policy(
-    resolver: ToolPolicyResolver,
-    tool: BaseTool,
+def assemble_deep_agent(
     *,
-    origin: str,
-    execution_overrides: Mapping[str, bool],
-    model_visibility_overrides: Mapping[str, bool],
-    group_id: str | None = None,
-):
-    return resolver.resolve(
-        metadata_for_tool(tool, origin=origin, group_id=group_id),
-        execution_override=execution_overrides.get(tool.name),
-        model_visibility_override=model_visibility_overrides.get(tool.name),
-    )
-
-
-def _validate_provider_configuration(
-    provider: dict[str, Any],
-) -> tuple[ProviderApiMode, dict[str, Any]]:
-    """列表与执行共用本地配置和凭据校验，不导入或构造模型 SDK。"""
-    api_mode = parse_provider_api_mode(provider)
-    custom_llm_provider = provider.get("custom_llm_provider")
-    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
-        raise ValueError(
-            f"provider {provider.get('id') or provider.get('model')!r} "
-            "缺少 llm.providers[].custom_llm_provider 配置"
-        )
-
-    if custom_llm_provider == "chatgpt":
-        from app.runtime.chatgpt_auth import (
-            configure_litellm_chatgpt_auth_directory,
-            ensure_chatgpt_oauth_ready,
-            is_chatgpt_oauth_provider,
-        )
-
-        if not is_chatgpt_oauth_provider(provider):
-            raise ValueError(
-                "ChatGPT provider 必须配置 auth.type='oauth' 和 "
-                "auth.method='chatgpt'"
-            )
-        if api_mode.protocol != "responses":
-            raise ValueError(
-                "ChatGPT OAuth provider 必须配置 api_mode.protocol='responses'"
-            )
-        token_dir = configure_litellm_chatgpt_auth_directory()
-        ensure_chatgpt_oauth_ready(token_dir)
-    elif api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
-        raise ValueError(
-            "Anthropic Messages provider 必须配置 "
-            "custom_llm_provider='anthropic'"
-        )
-
-    return api_mode, _get_provider_request_options(provider)
-
-
-def build_model_from_provider(
-    provider: dict[str, Any],
-    runtime_config: dict[str, Any],
-    *,
-    prompt_cache_key: str | None = None,
-    invocation_purpose: ProviderInvocationPurpose = "agent",
-) -> Any:
-    """从 provider 构建模型；SDK 初始化与构造错误只在执行入口报告。"""
-    api_mode, request_options = _validate_provider_configuration(provider)
-    if provider["custom_llm_provider"] == "chatgpt":
-        from app.runtime.chatgpt_auth import ensure_litellm_chatgpt_model_capabilities
-
-        ensure_litellm_chatgpt_model_capabilities(provider["model"])
-
-    if api_mode.protocol == "responses":
-        from app.agents.providers.openai_responses import build_openai_responses_model
-
-        model = build_openai_responses_model(
-            provider=provider,
-            runtime_config=runtime_config,
-            request_options=request_options,
-            prompt_cache_key=prompt_cache_key,
-            invocation_purpose=invocation_purpose,
-        )
-    else:
-        from app.agents.providers.litellm_chat import build_litellm_chat_model
-
-        model = build_litellm_chat_model(
-            provider=provider,
-            runtime_config=runtime_config,
-            request_options=request_options,
-            prompt_cache_key=prompt_cache_key,
-            invocation_purpose=invocation_purpose,
-        )
-    if api_mode.model_info.max_input_tokens is not None:
-        # 容量属于模型元数据，不向上游发送，也不据此设置输出上限。
-        model.profile = {
-            **(model.profile or {}),
-            "max_input_tokens": api_mode.model_info.max_input_tokens,
-        }
-    return model
-
-
-def provider_configuration_error(
-    provider: dict[str, Any],
-) -> str | None:
-    """返回本地配置及必要凭据错误；SDK 可构造性留到实际执行时校验。"""
-    try:
-        _validate_provider_configuration(provider)
-    except Exception as error:  # noqa: BLE001 - 配置错误需要逐 provider 隔离展示
-        return _provider_build_failure(provider, error)
-    return None
-
-
-def _provider_build_failure(provider: Mapping[str, object], error: Exception) -> str:
-    """原生错误先分离诊断，再由列表或首选模型入口发布，保留业务拒绝说明。"""
-    if (message := public_failure_message(error)) is not None:
-        return message
-    error.add_note(f"模型配置构建失败: provider_id={provider.get('id') or provider.get('model') or '<unknown>'}")
-    return report_failure(error, detail=execution_failure_message(error) or type(error).__name__)
-
-
-def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
-    """读取 provider 级请求选项，并在拼错字段时直接报错。"""
-    request_options = provider.get("request_options") or {}
-    if not isinstance(request_options, dict):
-        raise TypeError("provider.request_options 必须是对象")
-
-    unknown_keys = sorted(set(request_options) - PROVIDER_REQUEST_OPTION_KEYS)
-    if unknown_keys:
-        raise ValueError(f"provider.request_options 包含不支持的字段: {', '.join(unknown_keys)}")
-
-    overrides = request_options.get("overrides") or {}
-    if not isinstance(overrides, dict):
-        raise TypeError("provider.request_options.overrides 必须是对象")
-    default_headers = request_options.get("default_headers") or {}
-    if not isinstance(default_headers, dict):
-        raise TypeError("provider.request_options.default_headers 必须是对象")
-    no_proxy = request_options.get("no_proxy", False)
-    if not isinstance(no_proxy, bool):
-        raise TypeError("provider.request_options.no_proxy 必须是布尔值")
-    return {
-        "overrides": dict(overrides),
-        "default_headers": dict(default_headers),
-        "no_proxy": no_proxy,
-    }
-
-
-def build_runtime_for_agent(
-    agent_id: str,
-    config_service: ConfigService | None = None,
-    *,
-    prompt_cache_key: str | None = None,
-    preferred_provider_id: str | None = None,
-) -> dict[str, Any]:
-    if config_service is None:
-        raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
-    service = config_service
-    runtime_config = service.get_agent_runtime_config(
-        agent_id,
-        preferred_provider_id=preferred_provider_id,
-    )
-    providers = runtime_config["providers"]
-
-    candidates = []
-    for index, provider in enumerate(providers):
-        try:
-            model = build_model_from_provider(
-                provider,
-                runtime_config,
-                prompt_cache_key=prompt_cache_key,
-            )
-        except Exception as error:
-            provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
-            detail = _provider_build_failure(provider, error)
-            if index == 0:
-                raise RuntimeError(
-                    f"当前选择的模型配置不可用: provider_id={provider_id}; {detail}"
-                ) from error
-            continue
-        candidates.append(
-            build_provider_model_candidate(provider=provider, model=model)
-        )
-
-    if not candidates:
-        raise RuntimeError("未能构建任何模型实例")
-
-    return {
-        "model": candidates[0].model,
-        "model_routing": CapabilityRoutingMiddleware(candidates),
-        "instruction_producers": runtime_instruction_producers(
-            agent_id=agent_id, content=runtime_config["system_prompt"],
-            config_revision=service.get_revision(),
-            runtime_identity_description=runtime_config["runtime_identity_description"],
-            provider_candidates=[
-                (candidate.provider_id, candidate.model_id)
-                for candidate in candidates
-            ],
-        ),
-    }
-
-
-def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None = None) -> str:
-    if config_service is None:
-        raise RuntimeError("resolve_agent_id 需要显式传入 ConfigService")
-    service = config_service
-    return service.resolve_agent_id(agent_id)
-
-
-# 编译函数只装配一个 generation 的图与纯 thread 依赖；复用与释放归 tracker 所有。
-
-def create_my_deep_agent(
-    *,
-    model: BaseChatModel,
+    model: BaseChatModel | None,
     instruction_producers: Sequence[InstructionProducerSpec],
     tool_selection_reader: ToolSelectionReader,
     checkpointer: BaseCheckpointSaver | None = None,
@@ -393,8 +182,8 @@ def create_my_deep_agent(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    custom_tool_specs: Sequence[object] | None = None,
-    tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
+    custom_tool_specs: Sequence[ParsedCustomToolSpec] = (),
+    tools: Sequence[ToolDefinitionLike] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
     skill_catalog: PublishedSkillCatalog | None = None,
@@ -406,10 +195,11 @@ def create_my_deep_agent(
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
-    background_message_bus: BackgroundMessageBus | None = None,
+    background_mailbox: BackgroundMailbox | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
     goal_service: SessionGoalService | None = None,
+    user_question_service: UserQuestionService | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
@@ -435,27 +225,28 @@ def create_my_deep_agent(
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
     include_team_tools: bool = False,
-    owns_thread: bool = True,
-) -> Any:
+    assembly_mode: AgentAssemblyMode = "execution",
+) -> AgentEventSource | list[ToolDefinitionLike]:
+    """按 assembly_mode 装配执行图或管理目录工具；目录模式不创建 Thread owner。"""
     if checkpointer is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 checkpointer")
     if config_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 ConfigService")
     if session_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionService")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
     resolved_execution_overrides = dict(execution_overrides or {})
     resolved_model_visibility_overrides = dict(model_visibility_overrides or {})
 
-    policy_resolver = config_service.get_tool_policy_resolver(agent_id)
+    capability_resolver = config_service.get_tool_policy_resolver(agent_id)
     thread_binding = (
         ThreadRuntimeBinding(
             session_id=session_id,
             thread_id=thread_id,
         )
-        if owns_thread
+        if assembly_mode == "execution"
         else None
     )
     tool_invocation_context = ToolInvocationContext(
@@ -464,31 +255,31 @@ def create_my_deep_agent(
     )
 
     if background_task_registry is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundTaskRegistry")
-    if background_message_bus is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundMessageBus")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 BackgroundTaskRegistry")
+    if background_mailbox is None:
+        raise RuntimeError("assemble_deep_agent 需要显式传入 BackgroundMailbox")
     if job_event_bus is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 JobEventBus")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 JobEventBus")
     if message_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 MessageService")
     if session_orchestrator is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionMessageOrchestrator")
     if session_subagent_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionSubagentService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 TeamCoordinationService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 JobService")
     if session_context_query_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionContextQueryService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionContextQueryService")
     if workspace_session_context_client is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 WorkspaceSessionContextClient")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 WorkspaceSessionContextClient")
 
     workspace_root = workspace_root.resolve()
 
     # 合成工具目录只构建固定 schema；只有真实 thread 消费 Skill catalog。
     resolved_skills = None
-    if owns_thread:
+    if assembly_mode == "execution":
         resolved_skills = (
             build_workspace_skill_catalog(
                 workspace_root,
@@ -506,7 +297,7 @@ def create_my_deep_agent(
 
     def read_artifact(file_id: str, max_bytes: int) -> ResourceFileContent:
         binding = tool_invocation_context.thread_binding
-        if not owns_thread or binding is None:
+        if assembly_mode == "tool_catalog" or binding is None:
             error = PermissionError("产物读取缺少当前 Agent SessionThread")
             raise mark_public_failure(error, str(error))
         parsed = parse_session_artifact_uri(file_id)
@@ -553,7 +344,7 @@ def create_my_deep_agent(
     # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
     # 来源确认事件只在真实 Saver seal 成功后发布。
     context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
-    if owns_thread and workspace_file_resource_registry is not None:
+    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
         context_source_event_sink = ContextSourceEventPublisher(
             event_service=(
                 workspace_file_resource_registry.observation_channel.event_service
@@ -571,7 +362,7 @@ def create_my_deep_agent(
     # 订阅必须随 agent 生命周期释放；调用方没有提供 scope 时在代码内留 TODO，
     # 不允许在这里新建第二套 dispose 抽象。
     context_source_reactor: ContextSourceReactor | None = None
-    if owns_thread and workspace_file_resource_registry is not None:
+    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
         if reactor_lifetime_scope is None:
             raise RuntimeError(
                 "启用事件驱动 context source reaction 时必须提供 "
@@ -585,13 +376,9 @@ def create_my_deep_agent(
         )
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
-    extension_policies: dict[str, object] = {}
+    extension_policies: dict[str, ToolCapabilityPolicy] = {}
     custom_metadata: dict[str, ToolMetadata] = {}
-    custom_specs_by_name = {
-        spec.name: spec for spec in parse_custom_tool_specs(
-            custom_tool_specs or [], context=f"agent {agent_id} 的 tools.custom",
-        )
-    }
+    custom_specs_by_name = {spec.name: spec for spec in custom_tool_specs}
     custom_skill_bindings = {
         name: spec.skills for name, spec in custom_specs_by_name.items() if spec.skills
     }
@@ -605,12 +392,10 @@ def create_my_deep_agent(
         显式 ``tools`` 与默认工具集两条来源只在「是否过滤 denylist、是否跳过
         非 BaseTool 项」上不同，策略准入与登记必须共用这一条实现。
         """
-        policy = _resolve_tool_policy(
-            policy_resolver,
-            tool,
-            origin="builtin",
-            execution_overrides=resolved_execution_overrides,
-            model_visibility_overrides=resolved_model_visibility_overrides,
+        policy = capability_resolver.resolve(
+            metadata_for_tool(tool, origin="builtin"),
+            execution_override=resolved_execution_overrides.get(tool.name),
+            model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
         )
         if not policy.execution_enabled:
             return
@@ -628,76 +413,60 @@ def create_my_deep_agent(
     else:
         if browser_resource_owner is None:
             raise RuntimeError(
-                "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
+                "assemble_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
             )
         visible_tools = build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
-            sender_agent_id=resolved_sender_agent_id,
             background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
-            job_event_bus=job_event_bus,
-            job_service=job_service,
+            background_mailbox=background_mailbox,
             goal_service=goal_service,
-            message_service=message_service,
-            session_service=session_service,
-            session_orchestrator=session_orchestrator,
+            user_question_service=user_question_service,
+            user_facing=assembly_mode == "tool_catalog" or session_service is not None and session_service.path_resolver.main_thread_id(session_id) == thread_id,
             session_subagent_service=session_subagent_service,
             team_service=team_service,
-            config_service=config_service,
             terminal_resource_owner=terminal_resource_owner,
             invocation_context=tool_invocation_context,
-            workspace_root=workspace_root,
             session_communication_service=session_communication_service,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
             filesystem_permissions=permissions,
             text_mutations=text_mutations,
         )
-        custom_tool_bundle = build_custom_tool_bundle(
-            custom_tool_specs or [],
-            session_id=session_id,
-            agent_id=agent_id,
-            sender_agent_id=resolved_sender_agent_id,
-            workspace_root=workspace_root,
-            background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
-            job_event_bus=job_event_bus,
-            job_service=job_service,
-            session_context_query_service=session_context_query_service,
-            workspace_session_context_client=workspace_session_context_client,
-            session_communication_service=session_communication_service,
-            session_orchestrator=session_orchestrator,
-            config_service=config_service,
-            terminal_resource_owner=terminal_resource_owner,
-            browser_resource_owner=browser_resource_owner,
-            invocation_context=tool_invocation_context,
-            node_debug_service=node_debug_service,
-            mcp_connection_service=mcp_connection_service,
+        declared_custom_tools = build_custom_tools(
+            custom_tool_specs,
+            context=CustomToolFactoryContext(
+                session_id=session_id,
+                agent_id=agent_id,
+                sender_agent_id=resolved_sender_agent_id,
+                workspace_root=workspace_root,
+                background_task_registry=background_task_registry,
+                background_message_bus=background_mailbox,
+                job_event_bus=job_event_bus,
+                job_service=job_service,
+                session_context_query_service=session_context_query_service,
+                workspace_session_context_client=workspace_session_context_client,
+                session_communication_service=session_communication_service,
+                session_orchestrator=session_orchestrator,
+                config_service=config_service,
+                terminal_resource_owner=terminal_resource_owner,
+                browser_resource_owner=browser_resource_owner,
+                invocation_context=tool_invocation_context,
+                node_debug_service=node_debug_service,
+                mcp_connection_service=mcp_connection_service,
+            ),
         )
         custom_tools = []
-        for tool in custom_tool_bundle.tools:
+        for tool in declared_custom_tools:
             if tool.name in resolved_tool_denylist:
                 continue
-            spec = custom_specs_by_name.get(tool.name)
-            group_id = None
-            if spec is not None:
-                module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
-                known_group = catalog_group_for_tool(tool.name)
-                group_id = (
-                    known_group.group_id
-                    if known_group.kind != "default"
-                    else f"extension:{module_name}"
-                )
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="custom",
-                group_id=group_id,
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
+            metadata = metadata_for_custom_tool(custom_specs_by_name[tool.name])
+            custom_metadata[tool.name] = metadata
+            policy = capability_resolver.resolve(
+                metadata,
+                execution_override=resolved_execution_overrides.get(tool.name),
+                model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
             )
-            custom_metadata[tool.name] = metadata_for_tool(tool, origin="custom", group_id=group_id)
             extension_policies[tool.name] = policy
             custom_tools.append(tool)
             if policy.execution_enabled and policy.confirmation_required:
@@ -706,12 +475,10 @@ def create_my_deep_agent(
         for tool in mcp_tools or []:
             if tool.name in resolved_tool_denylist:
                 continue
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="mcp",
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
+            policy = capability_resolver.resolve(
+                metadata_for_tool(tool, origin="mcp"),
+                execution_override=resolved_execution_overrides.get(tool.name),
+                model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
             )
             extension_policies[tool.name] = policy
             mcp_tools_for_agent.append(tool)
@@ -735,13 +502,13 @@ def create_my_deep_agent(
     def discovery_catalog_resolver() -> FrozenToolCatalog:
         raise ExtensionCatalogUnavailableError("search_tools 需要调用所属的冻结完整目录")
 
-    def extension_context_policies(metadata: Sequence[ToolMetadata]):
+    def resolve_extension_capabilities(metadata: Sequence[ToolMetadata]) -> dict[str, ToolCapabilityPolicy]:
         selection = tool_selection_reader.snapshot(agent_id)
         execution_overrides = selection.execution_overrides
         visibility_overrides = selection.model_visibility_overrides
         policies = {}
         for entry in metadata:
-            policy = policy_resolver.resolve(
+            policy = capability_resolver.resolve(
                 entry, execution_override=execution_overrides.get(entry.tool_id),
                 model_visibility_override=visibility_overrides.get(entry.tool_id),
             )
@@ -760,7 +527,7 @@ def create_my_deep_agent(
             metadata = target.metadata or {}
             origin = "mcp" if metadata.get("mcp_server_id") else "custom"
             group_id = custom_metadata[target.name].group_id if target.name in custom_metadata else None
-            return extension_context_policies((metadata_for_tool(
+            return resolve_extension_capabilities((metadata_for_tool(
                 target, origin=origin, group_id=group_id,
             ),))[target.name].execution_enabled
 
@@ -778,7 +545,7 @@ def create_my_deep_agent(
         )
         publisher = McpCatalogResourcePublisher(
             registry=resource_registry, custom_tools=custom_tools,
-            policy_resolver=extension_context_policies, custom_metadata=custom_metadata,
+            policy_resolver=resolve_extension_capabilities, custom_metadata=custom_metadata,
             custom_skill_bindings=custom_skill_bindings,
             skill_sources=published_skill_sources,
             gateway_id=resolved_skills.gateway_id if resolved_skills is not None else None,
@@ -829,7 +596,7 @@ def create_my_deep_agent(
             parents = tuple(binding for binding in snapshot.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
             if len(parents) != 1:
                 raise ExtensionTargetResolutionError("MCP 封存资格缺少唯一冻结目录")
-            dispatch = extension_dispatch_from_activation(
+            dispatch = restore_frozen_extension_dispatch(
                 snapshot=snapshot, binding=parents[0], model_call_id=model_call_id,
                 payload=checkpointer.read_resource_activation_payload(
                     snapshot, parents[0], storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
@@ -864,7 +631,7 @@ def create_my_deep_agent(
         target_resolver = resolve_target
         permission_check = enabled_extension
     else:
-        resolve_catalog = seal_extension_catalog_binding_from_tools(extension_tools)
+        resolve_catalog = create_extension_catalog_resolver_from_tools(extension_tools)
         permission_check = lambda target: bool(
             getattr(extension_policies.get(target.name), "execution_enabled", False)
         )
@@ -877,21 +644,14 @@ def create_my_deep_agent(
     )
     resolved_tools.append(extension_invoker)
 
-    def discovery_policies(catalog: FrozenToolCatalog):
-        return extension_context_policies(tuple(definition.metadata for definition in catalog.definitions))
-
-    async def write_discovered_definition(definition: FrozenToolDefinition, entry: dict[str, object]):
-        call_id = tool_invocation_context.require_tool_call_id()
-        return await asyncio.to_thread(
-            tool_output_store.materialize, session_id=session_id, tool_name=TOOL_DISCOVERY_NAME,
-            tool_call_id=call_id, text=canonical_json_bytes(entry).decode("utf-8"),
-            output_key=f"{call_id}:{definition.provenance.resource_id}:{definition.provenance.revision}",
-        )
+    def resolve_discovery_capabilities(catalog: FrozenToolCatalog) -> dict[str, ToolCapabilityPolicy]:
+        return resolve_extension_capabilities(tuple(definition.metadata for definition in catalog.definitions))
 
     discovery_tool = create_search_tools_tool(
-        catalog_resolver=discovery_catalog_resolver, policy_resolver=discovery_policies,
-        definition_writer=write_discovered_definition,
-        response_byte_limit=min(tool_output_store.inline_byte_limit, policy_resolver.resolve(
+        catalog_resolver=discovery_catalog_resolver, policy_resolver=resolve_discovery_capabilities,
+        tool_output_store=tool_output_store, session_id=session_id,
+        invocation_context=tool_invocation_context,
+        response_byte_limit=min(tool_output_store.inline_byte_limit, capability_resolver.resolve(
             ToolMetadata(TOOL_DISCOVERY_NAME, "builtin", "default", "default"),
         ).max_result_bytes),
     )
@@ -932,6 +692,27 @@ def create_my_deep_agent(
         resolved_tool_names,
         context=f"agent {agent_id} 的运行时工具策略",
     )
+    if assembly_mode == "tool_catalog":
+        # 目录到工具注册即结束；不创建模型、压缩引擎或编译执行图。
+        def require_execution_context(*_args: object) -> Never:
+            raise RuntimeError("工具目录没有 SessionThread 执行上下文")
+
+        tool_middleware = build_deep_agent_tool_middleware(
+            backend=backend, workspace_root=workspace_root,
+            resource_navigation=resource_navigation, text_mutations=text_mutations,
+            artifact_reader=read_artifact, permissions=permissions,
+            resolved_tool_denylist=resolved_tool_denylist,
+        )
+        return [
+            *(tool for item in tool_middleware if item is not None for tool in item.tools),
+            *(tool for tool in (
+                create_compact_conversation_tool(require_execution_context, require_execution_context),
+                create_read_compaction_history_tool(require_execution_context, require_execution_context),
+            ) if tool.name not in resolved_tool_denylist),
+            *resolved_tools,
+        ]
+    if model is None:
+        raise RuntimeError("Agent 执行需要真实模型")
     for producer in instruction_producers:
         register_instruction_producer(context_source_manager, producer)
     team_policy_revision = sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT})
@@ -944,12 +725,7 @@ def create_my_deep_agent(
         update_binding=InstructionUpdateBinding("software_release", team_policy_revision, "epoch"),
     ))
 
-    runtime_middleware: list[AgentMiddleware] = []
-    append_skill_middlewares(
-        runtime_middleware,
-        catalog=None,
-    )
-    runtime_middleware.extend(
+    runtime_middleware: list[AgentMiddleware] = (
         list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
     )
     if enabled_runtime_middleware_names is not None:
@@ -977,9 +753,7 @@ def create_my_deep_agent(
         execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
         context_source_manager=context_source_manager,
-        source_registry=(
-            workspace_file_resource_registry if owns_thread else None
-        ),
+        source_registry=workspace_file_resource_registry,
         context_source_reactor=context_source_reactor,
         resolved_tool_denylist=resolved_tool_denylist,
         interrupt_on=resolved_interrupt_on,
@@ -998,13 +772,10 @@ def create_my_deep_agent(
     ]
     tool_set_producer = RegisteredToolSetProducer(
         agent_id=agent_id, selection_reader=tool_selection_reader,
-        policy_resolver=policy_resolver, tools=registered_tools,
+        policy_resolver=capability_resolver, tools=registered_tools,
         metadata={
-            tool_definition_name(tool): ToolMetadata(
-                tool_id=tool_definition_name(tool), origin="builtin",
-                kind=catalog_group_for_tool(tool_definition_name(tool)).kind,
-                group_id=catalog_group_for_tool(tool_definition_name(tool)).group_id,
-            ) for tool in registered_tools
+            tool_definition_name(tool): metadata_for_tool(tool, origin="builtin")
+            for tool in registered_tools
         },
     )
     # routing 和所有 request producer 的真实 attempt 直接调用唯一执行 owner。
@@ -1013,7 +784,7 @@ def create_my_deep_agent(
         context_source_manager=context_source_manager,
         source_message_grouping_supplier=config_service.get_source_message_grouping,
         tool_set_producer=tool_set_producer,
-        extension_policy_resolver=extension_context_policies,
+        extension_policy_resolver=resolve_extension_capabilities,
         extension_call_scope=extension_call_scope,
         resource_activation=resource_activation,
         context_read_admission=lambda: session_service.session_read_admission(session_id),
@@ -1037,184 +808,23 @@ def create_my_deep_agent(
         cache=None,
     )
 
-    if hasattr(agent, "with_config"):
-        runtime_agent = agent.with_config(
-            {
-                "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
-                "metadata": {
-                    "ls_integration": "deepagents",
-                    "versions": {"deepagents": "custom"},
-                    "lc_agent_name": name,
-                },
-            }
-        )
-    else:
-        runtime_agent = agent
+    runtime_agent = agent.with_config(
+        {
+            "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
+            "metadata": {
+                "ls_integration": "deepagents",
+                "versions": {"deepagents": "custom"},
+                "lc_agent_name": name,
+            },
+        }
+    )
 
     # 仅记录真实构建对象的进程内身份；compiled graph 不进入业务库或 trace。
     observe_phase_sync(thread_id, "agent.graph.compiled", details={
-        "session_id": session_id, "thread_id": thread_id, "owns_thread": owns_thread,
+        "session_id": session_id, "thread_id": thread_id, "owns_thread": assembly_mode == "execution",
         "compiled_graph_object_id": id(agent),
         "compiled_graph_type": f"{type(agent).__module__}.{type(agent).__qualname__}",
         "agent_object_id": id(runtime_agent),
         "scope_object_id": id(reactor_lifetime_scope) if reactor_lifetime_scope is not None else None,
     })
     return runtime_agent
-
-
-# OpenSpec 8.4：代码内闭集注册 deep-agent graph family（不提供运行时可配置的
-# 注册扩展点）。resolve 命中即返回本 factory callable；进程重启后 runtime 以
-# 持久化 binding 重新解析到同一 callable，再以精确 thread generation 的
-# ThreadRuntimeBinding 注入归属；factory 不捕获 invocation admission。
-GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, create_my_deep_agent)
-
-
-def create_runtime_deep_agent_for_session(
-    *,
-    session_id: str,
-    thread_id: str,
-    agent_id: str,
-    tool_selection_reader: ToolSelectionReader,
-    config_service: ConfigService | None = None,
-    background_task_registry: BackgroundTaskRegistry | None = None,
-    background_message_bus: BackgroundMessageBus | None = None,
-    job_event_bus: JobEventBusProtocol | None = None,
-    job_service: JobServiceProtocol | None = None,
-    goal_service: SessionGoalService | None = None,
-    message_service: MessageService | None = None,
-    session_service: SessionService | None = None,
-    session_orchestrator: object | None = None,
-    session_subagent_service: SessionSubagentProtocol | None = None,
-    team_service: TeamCoordinationProtocol | None = None,
-    sender_agent_id: str | None = None,
-    enabled_tool_names: set[str] | None = None,
-    enabled_runtime_middleware_names: set[str] | None = None,
-    tool_denylist: set[str] | None = None,
-    execution_overrides: Mapping[str, bool] | None = None,
-    model_visibility_overrides: Mapping[str, bool] | None = None,
-    checkpointer: BaseCheckpointSaver | None = None,
-    terminal_resource_owner: TerminalResourceOwner | None = None,
-    browser_resource_owner: BrowserResourceOwner | None = None,
-    node_debug_service: NodeDebugService | None = None,
-    session_context_query_service: SessionContextQueryProtocol | None = None,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol
-    | None = None,
-    session_communication_service: SessionCommunicationProtocol | None = None,
-    mcp_tools: Sequence[BaseTool] | None = None,
-    mcp_catalog_owner: McpCatalogOwner | None = None,
-    mcp_connection_service: McpConnectionService | None = None,
-    name: str | None = None,
-    override_model: Any = None,
-    response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
-    model_routing_enabled: bool = True,
-    preferred_provider_id: str | None = None,
-    tool_timeout_seconds: float | None = None,
-    workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
-    reactor_lifetime_scope: LifetimeScope | None = None,
-    skill_catalog: PublishedSkillCatalog | None = None,
-    resource_registry: ResourceRegistry,
-    resource_activation: ResourceActivationCoordinator | None,
-    workspace_root: Path,
-    include_team_tools: bool = False,
-    graph_binding_store: GraphBindingStorePort,
-    resource_navigation: ResourceNavigation,
-    text_mutations: WorkspaceTextMutationOwner,
-    owns_thread: bool = True,
-):
-    if config_service is None:
-        raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
-    service = config_service
-    runtime = build_runtime_for_agent(
-        agent_id=agent_id,
-        config_service=service,
-        prompt_cache_key=session_id,
-        preferred_provider_id=preferred_provider_id,
-    )
-    tool_config = service.get_agent_tool_config(agent_id)
-    tool_policy = service.resolve_agent_tool_policy(agent_id)
-    confirmation_tool_names = (
-        service.resolve_agent_confirmation_tool_names(agent_id)
-        & tool_policy.enabled_names
-    )
-    custom_tool_specs = list(tool_config.get("custom", []))
-    configured_custom_tool_names = custom_tool_spec_names(
-        custom_tool_specs,
-        context=f"agent {agent_id} 的 tools.custom",
-    )
-    custom_tool_confirmation_names = (
-        confirmation_tool_names & configured_custom_tool_names
-    )
-    direct_confirmation_tool_names = (
-        confirmation_tool_names - configured_custom_tool_names
-    )
-    if session_service is None:
-        raise RuntimeError(
-            "create_runtime_deep_agent_for_session 需要显式传入 SessionService"
-        )
-
-    model = override_model if override_model is not None else runtime["model"]
-
-    # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
-    binding = (
-        resolve_graph_binding(
-            store=graph_binding_store,
-            owner=GraphBindingOwnerKey(session_id, thread_id),
-        )
-        if owns_thread
-        else DEEP_AGENT_GRAPH_BINDING
-    )
-    builder = GRAPH_FACTORY_REGISTRY.resolve(binding)
-    return builder(
-        model=model,
-        response_format=response_format,
-        instruction_producers=runtime["instruction_producers"],
-        tool_selection_reader=tool_selection_reader,
-        checkpointer=checkpointer,
-        session_id=session_id,
-        thread_id=thread_id,
-        agent_id=agent_id,
-        model_routing_middleware=runtime["model_routing"]
-        if model_routing_enabled and override_model is None
-        else None,
-        sender_agent_id=sender_agent_id,
-        enabled_tool_names=enabled_tool_names,
-        enabled_runtime_middleware_names=enabled_runtime_middleware_names,
-        tool_denylist=set(tool_denylist or set()),
-        execution_overrides=execution_overrides,
-        model_visibility_overrides=model_visibility_overrides,
-        custom_tool_specs=custom_tool_specs,
-        name=name or agent_id,
-        background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        goal_service=goal_service,
-        message_service=message_service,
-        session_service=session_service,
-        session_orchestrator=session_orchestrator,
-        session_subagent_service=session_subagent_service,
-        team_service=team_service,
-        terminal_resource_owner=terminal_resource_owner,
-        browser_resource_owner=browser_resource_owner,
-        node_debug_service=node_debug_service,
-        session_context_query_service=session_context_query_service,
-        workspace_session_context_client=workspace_session_context_client,
-        session_communication_service=session_communication_service,
-        mcp_tools=mcp_tools,
-        mcp_catalog_owner=mcp_catalog_owner,
-        mcp_connection_service=mcp_connection_service,
-        tool_timeout_seconds=tool_timeout_seconds,
-        workspace_file_resource_registry=workspace_file_resource_registry,
-        reactor_lifetime_scope=reactor_lifetime_scope,
-        skill_catalog=skill_catalog,
-        resource_registry=resource_registry,
-        resource_activation=resource_activation,
-        include_team_tools=include_team_tools,
-        resource_navigation=resource_navigation,
-        text_mutations=text_mutations,
-        interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
-        custom_tool_confirmation_names=custom_tool_confirmation_names,
-        config_service=service,
-        workspace_root=workspace_root,
-        owns_thread=owns_thread,
-    )

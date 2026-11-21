@@ -7,6 +7,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, join, relative, dirname, basename, extname, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
+import { gzipSync } from 'node:zlib';
 
 const root = resolve(import.meta.dirname, '..');
 await writeActionTitleProjection(root, actionTitleKeys);
@@ -21,6 +22,16 @@ const pinned = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 if (commit !== pinned) throw new Error(`上游版本不匹配：${commit}，要求 ${pinned}`);
 const product = JSON.parse(await readFile(join(upstream, 'product.json'), 'utf8'));
 const upstreamPackage = JSON.parse(await readFile(join(upstream, 'package.json'), 'utf8'));
+const repository = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' }).trim();
+const softwarePackage = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
+// 原上游版本继续用于构建核验；嵌入宿主通过原 productConfiguration 提供本产品身份。
+const productIdentity = {
+  nameShort: softwarePackage.displayName,
+  nameLong: softwarePackage.displayName,
+  version: softwarePackage.version,
+  commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
+  date: execFileSync('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
+};
 const englishPath = join(root, '../shared/core/i18n/messages/en.json');
 const chinesePath = join(root, '../shared/core/i18n/messages/zh-cn.json');
 const englishCatalog = await readFile(englishPath);
@@ -136,7 +147,7 @@ const options = {
   alias: { react: join(root, 'node_modules/react'), 'react-dom': join(root, 'node_modules/react-dom') },
   loader: { '.ttf': 'file', '.svg': 'file', '.png': 'file', '.sh': 'file', '.wasm': 'file' },
   assetNames: 'media/[name]-[hash]', plugins: [inject], logLevel: 'info',
-  define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(nlsManifestPath) },
+  define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(nlsManifestPath), __BOXTEAM_PRODUCT__: JSON.stringify(productIdentity) },
 };
 async function recordAssets() {
   // esbuild 生成的内容地址资源仅落在这两个目录；NLS manifest 等固定名字资源不缓存为 immutable。
@@ -162,6 +173,8 @@ for (const entry of workers) {
   await build({ ...options, entryPoints: [join(upstream, 'src', `${entry}.ts`)], outfile: join(dist, 'out', `${entry}.js`) });
   await recordAssets();
 }
+await build({ ...options, entryPoints: [join(root, 'src/search/openModelSearchWorker.ts')],
+  outfile: join(dist, 'out/boxteam/openModelSearchWorker.js') });
 const translationFile = parseUniqueJson(translationPath, translationSource.toString('utf8'));
 const extensionTranslations = {};
 for (const id of extensionIds) {
@@ -232,10 +245,23 @@ async function copyResources(folder) {
   }
 }
 await copyResources(join(upstream, 'src/vs'));
+await mkdir(join(dist, 'out/branding'), { recursive: true });
+for (const name of ['icon.png', 'favicon.png', 'icon.ico', 'icon.icns']) {
+  await cp(join(repository, 'resources/branding', name), join(dist, 'out/branding', name));
+}
 // AMD 和 WASM 加载器使用独立 Web 依赖的原始发行文件。
 for (const name of Object.keys(JSON.parse(await readFile(join(upstream, 'remote/web/package.json'), 'utf8')).dependencies)) {
   await cp(join(root, 'node_modules', name), join(dist, 'node_modules', name), { recursive: true, dereference: true });
 }
+// 此发行版将 CPU 后端拆成 Node require chunk；静态合并唯一分块，保留原 AMD 与模型加载合同。
+const detectionLibrary = join(dist, 'node_modules/@vscode/vscode-languagedetection/dist/lib');
+const detectionIndex = await readFile(join(detectionLibrary, 'index.js'), 'utf8');
+const cpuBackend = await readFile(join(detectionLibrary, '979.js'), 'utf8');
+const cpuChunkImport = 'require("./"+r.u(e))';
+if (detectionIndex.split(cpuChunkImport).length !== 2) throw new Error('语言检测 CPU 分块与固定依赖不匹配');
+await writeFile(join(detectionLibrary, 'index.js'), detectionIndex.replace(cpuChunkImport,
+  () => `(()=>{const exports={};${cpuBackend}\nreturn exports;})()`));
+await rm(join(detectionLibrary, '979.js'));
 await cp(join(root, 'index.html'), join(dist, 'index.html'));
 // 私有回调与 Web 共用唯一源文件，不加载 Workbench 或第三方资源。
 await cp(join(root, '../web/mcp-oauth-callback.html'), join(dist, 'mcp-oauth-callback.html'));
@@ -246,6 +272,7 @@ const upstreamLocalization = await readFile(join(root, 'resources/localization/z
 await writeFile(join(dist, 'version.json'), JSON.stringify({
   commit,
   version: upstreamPackage.version,
+  product: productIdentity,
   extensions: extensions.length,
   localization: {
     source: 'microsoft/vscode-loc',
@@ -257,5 +284,15 @@ await writeFile(join(dist, 'version.json'), JSON.stringify({
     nlsAssets: languageAssets,
   },
 }));
+// 内容地址资源在构建时压缩；请求只选择已有表示，不重复压缩大型模块。
+for (const asset of [...immutableAssets]) {
+  if (!/\.(js|css|json|svg)$/.test(asset)) continue;
+  const source = await readFile(join(dist, asset));
+  if (source.length < 1024) continue;
+  const compressed = gzipSync(source);
+  if (compressed.length >= source.length) continue;
+  await writeFile(join(dist, `${asset}.gz`), compressed);
+  immutableAssets.add(`${asset}.gz`);
+}
 await writeFile(join(dist, 'immutable-assets.json'), JSON.stringify([...immutableAssets].sort()));
 console.log(`${values['assets-only'] ? 'Workbench 开发资源' : '完整 Workbench'}构建完成：${commit}，${extensions.length} 个内置 Web 扩展`);

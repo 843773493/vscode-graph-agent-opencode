@@ -19,6 +19,7 @@ import {
   workspacePathSearchParts,
 } from "../../../utils/selection/workspaceDirectorySelection";
 import { errorMessage } from "../../../utils/errorMessage";
+import { HttpRequestError } from "../../../api/http";
 import {
   buildWorkspaceAddGatewayChoices,
   type WorkspaceAddGatewayChoice,
@@ -100,9 +101,9 @@ export default function WorkspaceAddDialogContent({
       } catch (loadError) {
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(null);
-        setError(
-          errorMessage(loadError),
-        );
+        const message = loadError instanceof HttpRequestError && loadError.requestId
+          ? `${errorMessage(loadError)} · request_id=${loadError.requestId}` : errorMessage(loadError);
+        setError(t("gateway.workspaceDetails.directoryFailed", gateway.name, gateway.connectionId ?? "local", message));
       } finally {
         if (directoryRequestRef.current === requestNumber) setLoading(false);
       }
@@ -219,9 +220,9 @@ export default function WorkspaceAddDialogContent({
       });
       onClose();
     } catch (submitError) {
-      setError(
-        errorMessage(submitError),
-      );
+      const message = submitError instanceof HttpRequestError && submitError.requestId
+        ? `${errorMessage(submitError)} · request_id=${submitError.requestId}` : errorMessage(submitError);
+      setError(t("gateway.workspaceDetails.directoryFailed", selectedGateway.name, selectedGateway.connectionId ?? "local", message));
     } finally {
       setSubmitting(false);
     }
@@ -446,9 +447,7 @@ export default function WorkspaceAddDialogContent({
               {!loading && !error && filteredDirectories.length === 0 ? (
                 <div className="workspace-add-state">{t("gateway.workspaceAdd.noSubdirectories")}</div>
               ) : null}
-              {loading && listing ? (
-                <div className="workspace-add-state">{t("gateway.workspaceAdd.directoryLoading")}</div>
-              ) : null}
+
             </>
           )}
         </div>

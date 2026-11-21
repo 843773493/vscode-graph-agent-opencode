@@ -36,8 +36,8 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.workspace_files import paths as workspace_paths
@@ -466,9 +466,9 @@ async def test_native_directory_http_edit_shortcut_and_operation_restart(native_
         resolver.initialize()
         session_id = "ses_01900000000070008000000000000002"
         seed_catalog_session_bundle(case.workspace / ".boxteam/sessions", session_id, title="目录重开")
-        settings = FileTreeSettingsService(workspace_root=case.workspace, path_resolver=resolver,
+        shortcut_store = FileTreeShortcutStore(workspace_root=case.workspace, path_resolver=resolver,
                                            file_paths=case.service.file_paths)
-        shortcut = await asyncio.to_thread(settings.add_session_shortcut, session_id,
+        shortcut = await asyncio.to_thread(shortcut_store.add_session_shortcut, session_id,
                                            path=str(case.external), label="未注册")
         assert shortcut.effective_shortcuts[0].path == uri
         listing = (await client.get("/api/v1/workspace/files", params={"path": uri})).json()["data"]
@@ -494,7 +494,7 @@ async def test_native_directory_http_edit_shortcut_and_operation_restart(native_
         assert case.registry.targets() == registered
         case.service = case.make_service()
         await case.service.start()
-        reopened = await client.get("/api/v1/workspace/files/content", params={"path": settings.get(session_id).effective_shortcuts[0].path + "/created.txt"})
+        reopened = await client.get("/api/v1/workspace/files/content", params={"path": shortcut_store.read_session_shortcuts(session_id).effective_shortcuts[0].path + "/created.txt"})
         assert reopened.status_code == 200, reopened.text
         assert case.service.file_operations.status([operation_id], actor="local").operations[0] == receipt
         assert not (case.external / ".boxteam").exists()

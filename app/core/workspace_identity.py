@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.failures import report_failure
+from app.core.identifier import create_uuid_hex
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
 
@@ -97,7 +98,7 @@ def read_workspace_id(workspace_root: Path) -> str:
 
 
 def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -> str:
-    workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(uuid4())
+    workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(UUID(create_uuid_hex(namespace="workspace")))
     temporary_path = native_io_path(identity_path.with_name(f".{identity_path.name}.{uuid4().hex}.tmp"))
     try:
         descriptor = os.open(

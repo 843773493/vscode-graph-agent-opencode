@@ -96,7 +96,9 @@ class RegistryRoutesMixin:
                     owner.assert_healthy()
                 elif members[0].managed:
                     raise RuntimeError("受管 Backend 缺少唯一原 registry owner")
-                if any(member.connection_error is not None for member in members) or not base_url:
+                # 启动合同已绑定新进程，旧连接错误需等健康验证后才清除；不能阻断认证配置交接。
+                starting = allow_starting and owner is not None and owner.starting_contract is not None
+                if not base_url or (not starting and any(member.connection_error is not None for member in members)):
                     raise LookupError("所选 Backend 管理路由不可用")
                 leases = []
                 for member in members:

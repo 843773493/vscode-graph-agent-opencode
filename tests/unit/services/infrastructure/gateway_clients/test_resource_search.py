@@ -9,14 +9,13 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
-
-from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.core.trace_middleware import (
-    reset_current_gateway_id,
+from boxteam_plugin_sdk.request_context import (
     reset_current_request_id,
-    set_current_gateway_id,
     set_current_request_id,
 )
+
+from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.gateway.routes.search import _encode_search_sse
 from app.schemas.gateway.search import GatewaySearchScopeResolutionDTO
 from app.schemas.search_federation import (
@@ -24,7 +23,7 @@ from app.schemas.search_federation import (
     FederatedSearchRequest,
     GatewayContextSearchRequest,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     workspace_session_inventory_identity,

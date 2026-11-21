@@ -12,7 +12,7 @@ import pytest
 
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
@@ -40,14 +40,12 @@ def activity_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    primary_provider = next(
-        provider for provider in config["llm"]["providers"] if provider["id"] == "primary"
-    )
-    primary_provider.update(
+    primary_provider = config["llm"]["providers"]["primary"]
+    primary_provider["models"]["default"]["model"] = "e2e-stub-model"
+    primary_provider["defaults"].update(
         {
             "endpoint": "https://opencode.ai/zen/v1",
-            "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key",
+            "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
@@ -60,7 +58,7 @@ def activity_backend(
         port=port_block.port(0),
         log_name="session-activity-backend",
         asgi_app="tests.support.e2e_control.backend_app:app",
-        env_overrides=activity_replay.environment,
+        env_overrides={**activity_replay.environment, "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key"},
     )
     try:
         yield f"http://127.0.0.1:{backend.port}", workspace_root
@@ -87,10 +85,10 @@ async def _run_message(
 ) -> dict[str, object]:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": message},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200, response.text
     return await _wait_for_job_terminal(client, str(response.json()["data"]["job_id"]))

@@ -9,7 +9,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )

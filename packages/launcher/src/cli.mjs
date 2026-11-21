@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 const SUPPORTED_COMMANDS = new Set([
@@ -149,8 +150,9 @@ export async function main(args) {
   if (unknownArgs.length > 0) {
     throw new Error(`未知 start 参数: ${unknownArgs.join(", ")}`);
   }
+  const applicationRequire = createRequire(path.join(runtime.applicationRoot, "package.json"));
   const [
-    { acquireLauncherLock },
+    { acquireLauncherLock, readLauncherLock, processIsAlive },
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
     { loadRuntimeLogContract, createRuntimeLogger, registerRuntimeLogSink },
@@ -159,10 +161,19 @@ export async function main(args) {
     import("./instance-lock.mjs"),
     import("./logging/service-log.mjs"),
     import("./gateway/supervisor.mjs"),
-    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLogging.mjs")).href),
-    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeControl.mjs")).href),
+    import(pathToFileURL(applicationRequire.resolve("@boxteam/plugin-sdk/logging")).href),
+    import(pathToFileURL(applicationRequire.resolve("@boxteam/plugin-sdk/control")).href),
   ]);
-  const logContract = loadRuntimeLogContract(runtime.applicationRoot);
+  const logContract = loadRuntimeLogContract();
+  const current = readLauncherLock(boxteamHome);
+  if (current && processIsAlive(current.value.pid)) {
+    // 只为已识别的升级自动停止原实例；同版本重复 start 仍沿原实例冲突合同。
+    const { stopLauncherForSupportedUpgrade } = await import("./config-bootstrap.mjs");
+    const stopped = await stopLauncherForSupportedUpgrade({
+      runtime, environment: { ...environment, BOXTEAM_HOME: boxteamHome }, targetLock: current,
+    });
+    if (stopped) process.stdout.write(`BoxTeam 升级前已停止旧实例: pid=${String(stopped.pid)}\n`);
+  }
   const lock = acquireLauncherLock({
     boxteamHome,
     runtime,

@@ -3,11 +3,11 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 按当前测试文件隔离正式工作区
-)
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 复用真实 prepare fixture
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)

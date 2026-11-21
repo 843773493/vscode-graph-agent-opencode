@@ -345,7 +345,10 @@ class E2ETestControlHarness:
             self._phase_matches[cast(str, request["barrier_id"])].barrier.released.set()
             return None
         if action == "acknowledged":
-            self.acknowledged(cast(str, request["operation_id"]), cast(str, request["phase"]))
+            self.acknowledged(
+                cast(str, request["operation_id"]), cast(str, request["phase"]),
+                timeout=cast(float, request.get("timeout", 30)),
+            )
             return None
         if action == "release":
             self.release(cast(str, request["operation_id"]), cast(str, request["phase"]))
@@ -353,11 +356,12 @@ class E2ETestControlHarness:
         if action == "plan_chat":
             from app.testing.model_stream import build_cassette, chat_completion_frames
 
+            model = cast(str, request.get("model", "big-pickle"))
             interactions = [build_cassette(
-                asset_id="planned-chat", model="big-pickle",
-                url="https://opencode.ai/zen/v1/chat/completions",
+                asset_id="planned-chat", model=model,
+                url=cast(str, request.get("url", "https://opencode.ai/zen/v1/chat/completions")),
                 frames=chat_completion_frames(
-                    response_id=cast(str, response["response_id"]), model="big-pickle",
+                    response_id=cast(str, response["response_id"]), model=model,
                     deltas=cast(list[dict[str, object]], response["deltas"]),
                     finish_reason=cast(str, response["finish_reason"]),
                     usage=cast(dict[str, int] | None, response.get("usage")),

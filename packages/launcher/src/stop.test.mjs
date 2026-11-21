@@ -38,6 +38,16 @@ function stoppingFixture() {
 }
 
 describe("Launcher 停止", () => {
+  test("升级预检后的新实例不能被旧停止请求结束", async () => {
+    const { state, options } = stoppingFixture();
+    await expect(stopLauncher({ ...options, expectedToken: "previous-instance" }))
+      .rejects.toThrow("升级预检后 Launcher 已被其它实例替换");
+    expect(state.signals).toEqual([]);
+    expect(state.waits).toEqual([]);
+    expect(state.removed).toEqual([]);
+    expect(state.lock).toEqual(activeLock());
+  });
+
   test("Windows 停止先交认证控制请求，仍等待原 PID 退出", async () => {
     const { state, options } = stoppingFixture();
     options.platform = "win32";

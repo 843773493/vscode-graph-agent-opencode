@@ -6,11 +6,12 @@ import { IInstantiationService } from '../upstream/src/vs/platform/instantiation
 import { gateway, type ThreadOwner } from './agentApi.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { workspaceContext } from './workspaceContext.js';
+import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from '../../web/src/api/workspaceIdentity.js';
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
-import type { WebUiLayoutSettings } from '../../web/src/types/backend.js';
+import type { GatewayWorkspace, WebUiLayoutSettings } from '../../web/src/types/backend.js';
 import type { TurnAttachmentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
-export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 'debug';
+export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 'threads' | 'debug';
 interface ThreadViewState {
   resourcesVisible: boolean;
   resourceTab: ThreadResourceTab;
@@ -27,6 +28,10 @@ interface StoredThread {
   target: ThreadTarget;
   title: string;
   viewState: ThreadViewState;
+}
+interface ResolvedThreadOwner {
+  owner: ThreadOwner;
+  workspaces: GatewayWorkspace[];
 }
 
 /** 缺失归属的旧展示记录仍可关闭／移除，不向当前 Gateway 猜测请求。 */
@@ -49,7 +54,7 @@ export class ThreadInput extends EditorInput {
   resourceRatio = 0.42;
   filePreviewLayout: WebUiLayoutSettings = {};
   fileTreeExpandedPaths: string[] = [];
-  private resolving?: Promise<ThreadOwner>;
+  private resolving?: Promise<ResolvedThreadOwner>;
   constructor(readonly owner: ThreadOwner) {
     super();
     this.resource = URI.from({ scheme: 'boxteam-thread', authority: owner.gatewayId,
@@ -63,7 +68,7 @@ export class ThreadInput extends EditorInput {
     input.restoreViewState(viewState);
     return input;
   }
-  async resolveOwner(): Promise<ThreadOwner> {
+  async resolveOwner(): Promise<ResolvedThreadOwner> {
     if (!this.resolving) {
       const controller = new AbortController();
       let gatewayId = workspaceContext.getSnapshot().gatewayId;
@@ -75,10 +80,10 @@ export class ThreadInput extends EditorInput {
         if (gatewayId && current !== gatewayId) invalidate();
         else gatewayId = current;
       });
-      this.resolving = gateway.resolveWorkspace(this.owner, controller.signal).then(workspaceKey => {
+      this.resolving = gateway.workspaces(false, controller.signal).then(({ items }) => {
         controller.signal.throwIfAborted();
-        this.owner.workspaceKey = workspaceKey;
-        return this.owner;
+        this.owner.workspaceKey = gatewayWorkspaceKey(requireGatewayWorkspaceRequestTarget(items, this.owner));
+        return { owner: this.owner, workspaces: items };
       }).finally(() => { releaseToken(); releaseGateway(); this.resolving = undefined; });
     }
     return this.resolving;

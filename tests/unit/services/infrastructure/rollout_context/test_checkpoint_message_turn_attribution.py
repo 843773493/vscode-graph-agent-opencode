@@ -664,11 +664,14 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
         thread_id,
         "SELECT item_id, execution_id FROM item_catalog",
     ) == []
+    prompt = internal_message_factory.build(
+        kind="checkpoint_reminder", control="准备验证 checkpoint 消息投影失败的事务回滚。",
+    )
     internal_notice = HumanMessage(
-        content="准备验证 checkpoint 消息投影失败的事务回滚。",
+        content=prompt.content,
         id="rollback-admission-notice",
         response_metadata={
-            "internal": True,
+            "message_metadata": prompt.metadata,
             "message_id": "rollback-admission-notice",
             "created_at": "2026-10-04T12:00:00+00:00",
         },

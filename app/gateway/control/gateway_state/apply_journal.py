@@ -394,27 +394,6 @@ class ConfigApplyJournalMixin:
             raise RuntimeError("Gateway 补偿记录提交后无法读取")
         return result
 
-    def recover_config_apply_journals(
-        self,
-        *,
-        config_domain: str,
-    ) -> tuple[ConfigApplyJournalRecord, ...]:
-        journals = self.list_config_apply_journals(
-            config_domain=config_domain,
-            states=("applying",),
-        )
-        for journal in journals:
-            self.update_config_apply_journal(
-                apply_id=journal.apply_id,
-                expected_state="applying",
-                state="recovery_required",
-                last_error="进程恢复发现未完成的外部 apply journal",
-            )
-        return self.list_config_apply_journals(
-            config_domain=config_domain,
-            states=("recovery_required",),
-        )
-
     def begin_config_apply(
         self,
         *,

@@ -17,6 +17,11 @@ from app.domain.itemized.identity.item_projection import (
     ItemProvenanceRelation,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.prompting import validate_internal_message
+from app.prompting.validation import internal_prompt_metadata
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    message_annotations,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     MessageBatch,
 )
@@ -68,6 +73,10 @@ def prepare_compaction(
     summary_id = strict_text(data.get("id"), field="compaction summary_message.id")
     text = strict_text(data.get("content"), field="compaction summary_message.content")
     metadata = data.get("response_metadata", {})
+    validate_internal_message(text, metadata)
+    structured = internal_prompt_metadata(metadata)
+    if structured is None or structured["structured_prompt_kind"] != "compaction_summary":
+        raise ValueError("新 compaction summary 必须使用 compaction_summary 封装")
     relations = metadata.get("provenance_relations", []) if isinstance(metadata, Mapping) else []
     if not isinstance(relations, list):
         raise TypeError("compaction summary provenance_relations 必须是 typed array")
@@ -89,6 +98,7 @@ def prepare_compaction(
         producer_ref={"producer_kind": "runtime", "producer_id": checkpoint_id,
                       "invocation_id": admission.execution_id},
         payload=payload, created_at=timestamp, wire_role="user",
+        extensions=message_annotations(metadata),
         projection_identity=ItemProjectionIdentity(projection_message_id=summary_id),
         provenance_relations=tuple(ItemProvenanceRelation.from_dict(relation) for relation in relations),
         turn_id=admission.turn_id,

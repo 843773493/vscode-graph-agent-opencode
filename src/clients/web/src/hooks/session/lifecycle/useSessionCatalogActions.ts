@@ -261,6 +261,9 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
             apiPort,
             workspaceRequestTarget(workspaceIdForRequest),
             parentNodeId,
+            null,
+            { minimumCatalogRevision: operation.committed_catalog_revision ?? breadcrumb.catalog_revision,
+              knownRevision: breadcrumb.revision },
           );
           const committedRevision = operation.committed_catalog_revision;
           if (operation.state === "committed" && committedRevision === null) {

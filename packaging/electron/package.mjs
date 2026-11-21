@@ -20,6 +20,8 @@ await mkdir(join(output, 'tmp'), { recursive: true });
 const bundles = await packager({
   dir: appRoot, out: join(output, 'bundles'), name: 'BoxTeam',
   appVersion: product.version, electronVersion,
+  icon: join(appRoot, 'renderer/out/branding/icon'),
+  win32metadata: { CompanyName: product.productName },
   platform: process.platform, arch: process.arch,
   asar: true, overwrite: true, prune: false,
   download: { checksums, cacheRoot: join(output, 'downloads') },

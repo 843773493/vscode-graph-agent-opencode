@@ -45,15 +45,28 @@ export function dispatchToConversationProjection(
   };
 }
 
-/** 把后端 dispatch 的活动 Job 写回会话级运行态镜像；dispatch 未给出活动 Job 时保持现状。 */
+/** dispatch 推进原队列水位；终态只清理同一 Job 的活动镜像。 */
 export function writeDispatchActiveJob(
   activeJobMap: Map<string, string>,
   dispatch: JobDispatchSnapshot,
   mapKey: string,
+  queueVersions: Map<string, Map<string, number>>,
 ): void {
+  if (!confirmQueueVersion(queueVersions, mapKey, dispatch.thread_id, dispatch.queue_snapshot_version)) return;
   if (dispatch.active_job_id) {
     activeJobMap.set(mapKey, dispatch.active_job_id);
+  } else if (["completed", "failed", "cancelled", "timed_out"].includes(dispatch.job_status)
+    && activeJobMap.get(mapKey) === dispatch.job_id) {
+    activeJobMap.delete(mapKey);
   }
+}
+
+function confirmQueueVersion(versions: Map<string, Map<string, number>>, scope: string, threadId: string, version: number | undefined): boolean {
+  if (!threadId || typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) throw new Error("队列快照缺少精确 Thread 或有效水位");
+  const current = versions.get(scope);
+  if (version < (current?.get(threadId) ?? 0)) return false;
+  versions.set(scope, new Map(current).set(threadId, version));
+  return true;
 }
 
 export function pendingSnapshotToConversations(
@@ -69,7 +82,7 @@ export function pendingSnapshotToConversations(
     throw new Error("主视图待处理快照包含范围之外的消息");
   }
   const orderedRequests = [...pendingRequests].sort(
-    (left, right) => left.enqueue_sequence - right.enqueue_sequence,
+    (left, right) => left.position - right.position,
   );
   const conversations: ConversationView[] = [];
   for (const request of orderedRequests) {
@@ -112,6 +125,8 @@ export function pendingSnapshotToConversations(
       enqueueSequence: request.enqueue_sequence,
       waitingReason: request.waiting_reason,
       queueSnapshotVersion: snapshot.snapshot_version,
+      queueThreadRevision: snapshot.thread_revision ?? undefined,
+      queueReorderable: request.reorderable,
       pendingPosition: request.position,
       source: "pending",
     });
@@ -123,7 +138,8 @@ export function writePendingSnapshot(
   pendingMap: Map<string, ConversationView[]>,
   activeJobMap: Map<string, string>,
   snapshot: PendingRequestList,
-  mapKey: string = snapshot.session_id,
+  mapKey: string,
+  queueVersions: Map<string, Map<string, number>>,
 ) {
   const incomingConversations = pendingSnapshotToConversations(snapshot);
   const existingPending = pendingMap.get(mapKey) ?? [];
@@ -133,16 +149,7 @@ export function writePendingSnapshot(
   )) {
     throw new Error("待处理快照与既有 live 对话的 Session/thread 范围不一致");
   }
-  let existingSnapshotVersion = 0;
-  for (const conversation of existingPending) {
-    existingSnapshotVersion = Math.max(
-      existingSnapshotVersion,
-      conversation.queueSnapshotVersion ?? 0,
-    );
-  }
-  if ((snapshot.snapshot_version ?? 0) < existingSnapshotVersion) {
-    return;
-  }
+  if (!confirmQueueVersion(queueVersions, mapKey, snapshot.thread_id ?? "", snapshot.snapshot_version)) return;
   const existingPendingByJobId = new Map<string, ConversationView>();
   for (const conversation of existingPending) {
     if (conversation.jobId && !existingPendingByJobId.has(conversation.jobId)) {
@@ -170,10 +177,10 @@ export function writePendingSnapshot(
       ...conversation,
       assistantMessages: live.assistantMessages,
       events: live.events,
-      status: terminal ? live.status
+      status: terminal || live.status === "running" ? live.status
         : conversation.jobId === snapshot.active_job_id ? "running" : conversation.status,
       pending: !terminal,
-      activeJobOverlay: !terminal && conversation.jobId === snapshot.active_job_id,
+      activeJobOverlay: !terminal && (live.activeJobOverlay || conversation.jobId === snapshot.active_job_id),
     });
   }
   const existingActiveConversation = snapshot.active_job_id
@@ -209,6 +216,7 @@ export function writePendingSnapshot(
     }
   }
   for (const conversation of existingPending) {
+    if (conversation.pendingSubmissionId && !conversation.jobId) retainIfUnmatched(conversation);
     if (
       conversation.pending
       && conversation.source === "pending"
@@ -240,7 +248,8 @@ export function writePendingSnapshot(
   );
   if (snapshot.active_job_id) {
     activeJobMap.set(mapKey, snapshot.active_job_id);
-  } else {
+  } else if (!snapshotConversations.some(conversation => conversation.jobId === activeJobMap.get(mapKey)
+    && conversation.status === "running")) {
     activeJobMap.delete(mapKey);
   }
 }

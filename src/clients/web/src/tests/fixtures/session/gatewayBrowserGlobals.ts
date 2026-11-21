@@ -6,7 +6,7 @@ export function installGatewayTestWindow(port: number): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      location: { port: String(port) },
+      location: { port: String(port), origin: `http://127.0.0.1:${port}` },
       setTimeout: globalThis.setTimeout.bind(globalThis),
       clearTimeout: globalThis.clearTimeout.bind(globalThis),
       setInterval: globalThis.setInterval.bind(globalThis),

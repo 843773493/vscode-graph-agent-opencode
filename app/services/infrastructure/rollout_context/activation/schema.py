@@ -10,6 +10,9 @@ from app.services.infrastructure.rollout_context.activation.common import (
     SCHEMA_UNAVAILABLE_CODE,
     ResourceActivationStoreError,
 )
+from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
+    execute_atomic_schema_sql,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
@@ -78,7 +81,8 @@ def create_resource_activation_schema(connection: sqlite3.Connection) -> None:
         raise ResourceActivationStoreError(
             SCHEMA_CONFLICT_CODE, "fresh activation 初始化发现既有实验对象"
         )
-    connection.executescript(RESOURCE_ACTIVATION_SCHEMA_SQL)
+    # 沿用 rollout 初始化事务，不能用 executescript 提前提交已建立的 schema。
+    execute_atomic_schema_sql(connection, RESOURCE_ACTIVATION_SCHEMA_SQL)
     connection.execute(
         "INSERT INTO resource_activation_schema_state "
         "(singleton_id, activation_schema_version, updated_at) VALUES (1, ?, ?)",

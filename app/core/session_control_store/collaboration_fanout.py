@@ -50,6 +50,22 @@ class CollaborationFanoutRecord:
 class CollaborationFanoutMixin:
     """board、成员 publication 与逐 recipient 状态复用同一 control owner。"""
 
+    def collaboration_board_summaries(self) -> tuple[str, ...]:
+        """在 SQLite 投影列表字段，不把任务输入、说明和事件正文送入列表链路。"""
+        self._ensure_open()
+        return tuple(row[0] for row in self._connection.execute(
+            "SELECT json_object('team_id',team_id,'name',json_extract(board_json,'$.name'),"
+            "'session_id',json_extract(board_json,'$.session_id'),"
+            "'coordinator_thread_id',json_extract(board_json,'$.coordinator_thread_id'),"
+            "'version',json_extract(board_json,'$.version'),'tasks',json(("
+            "SELECT json_group_array(json_object('task_id',json_extract(value,'$.task_id'),"
+            "'title',json_extract(value,'$.title'),'status',json_extract(value,'$.status'),"
+            "'assignee_thread_id',json_extract(value,'$.assignee_thread_id'),"
+            "'phase',json_extract(value,'$.phase'),'cycle',json_extract(value,'$.cycle'),"
+            "'summary',json_extract(value,'$.summary'),'error',json_extract(value,'$.error'))) "
+            "FROM json_each(board_json,'$.tasks')))) FROM collaboration_boards ORDER BY team_id"
+        ))
+
     def _freeze_collaboration_change_transaction(
         self, connection: sqlite3.Connection, *, session_id: str,
         event: dict[str, object], wakeup: dict[str, object] | None = None,
@@ -64,22 +80,17 @@ class CollaborationFanoutMixin:
         if bump_revision:
             connection.execute("UPDATE collaboration_ledger SET revision=revision+1 WHERE id=1")
         revision = self.get_collaboration_ledger_revision()
-        member_rows = connection.execute(
-            "SELECT m.*, i.state AS admission_state FROM collaboration_members m "
-            "LEFT JOIN thread_execution_intents i ON i.thread_id=m.child_thread_id "
-            "ORDER BY m.registered_at,m.delegation_id",
-        ).fetchall()
+        member_rows = self.list_collaboration_member_summaries(coordinator_session_id=session_id)
         members = []
         for row in member_rows:
             if cancelled_member_snapshot is not None and row["delegation_id"] == cancelled_member_snapshot["delegation_id"]:
                 continue
-            validate_collaboration_member(connection, row)
             members.append(dict(row))
         if cancelled_member_snapshot is not None:
             if event != {"type": "member.cancelled", "delegation_id": cancelled_member_snapshot["delegation_id"]}:
                 raise RuntimeError("取消快照只能冻结原 member.cancelled 事件")
             validate_collaboration_member(connection, cancelled_member_snapshot)
-            members.append(cancelled_member_snapshot)
+            members.append({key: value for key, value in cancelled_member_snapshot.items() if key != "task_seed"})
             members.sort(key=lambda member: (member["registered_at"], member["delegation_id"]))
         boards = [json.loads(row[0]) for row in connection.execute(
             "SELECT board_json FROM collaboration_boards ORDER BY team_id",
@@ -130,6 +141,8 @@ class CollaborationFanoutMixin:
         if len(matches) != 1:
             raise RuntimeError("取消成员的原 registered fanout 缺少唯一 member snapshot")
         member = matches[0]
+        # 历史快照不复制任务输入；取消用原 creation 的冻结输入作完整核验。
+        member["task_seed"] = creation["task_seed"]
         if (original.session_id, member["creation_idempotency_key"], member["child_thread_id"],
             member["membership_preimage_hash"], member["registered_revision"], member["state"]) != (
                 member["coordinator_session_id"], creation["thread_creation_idempotency_key"],

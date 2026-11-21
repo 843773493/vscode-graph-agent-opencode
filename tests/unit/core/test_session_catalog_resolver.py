@@ -35,6 +35,7 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import (
     session_id_for_name_at,
     thread_id_at,
@@ -63,7 +64,7 @@ def make_metadata(**overrides: object) -> dict[str, object]:
         "delegation": None,
         "generation_origin": None,
         "current_agent_id": "default",
-        "current_provider_id": "default_provider",
+        "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
         "context_source_session_id": None,
     }
     metadata.update(overrides)
@@ -466,6 +467,17 @@ class TestReadMethods:
             created_at=JUNE_1,
         )
         assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
+        main_id = resolver.main_thread_id(session_id)
+        with resolver.thread_resolution_scope():
+            assert resolver.resolve_thread_nodes(session_id, [main_id, thread_id]) == {
+                main_id: session_dir / "threads" / main_id,
+                thread_id: thread_dir,
+            }
+            shutil.rmtree(thread_dir)
+            assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
+        # 同一同步操作可以复用；后续操作必须再次验证本次读取的目录。
+        with pytest.raises(RuntimeError, match="冻结 locator 缺失"):
+            resolver.resolve_thread_nodes(session_id, [main_id, thread_id])
 
     @pytest.mark.asyncio
     async def test_resolve_thread_node_non_main_missing_threads_root_fail_closed(

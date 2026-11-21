@@ -1,14 +1,15 @@
 import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Action2, MenuId, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
-import { manageDefaultAgentSource } from './defaultAgent.js';
-import { configureServicePlugin } from './pluginConfiguration.js';
+import { createManagementTargetLifecycle, managementGateway, managementWorkspace, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
+import { inspectDefaultAgentSource } from './defaultAgent.js';
+import { configureServicePlugin, type PluginConfigurationTarget } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
@@ -18,6 +19,7 @@ import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/co
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import type { ITextEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
 import type { TargetSettingsLocation } from './scope.js';
 import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
@@ -25,6 +27,22 @@ import { configSourceFiles, configSourceScheme } from './sourceEditor.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import type { ConfigSourceLayer } from '../../../web/src/types/protocol.js';
+import type { DefinitionEditorOptions } from './entities.js';
+import { manageSecrets } from './secrets.js';
+import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
+import { IStorageService } from '../../upstream/src/vs/platform/storage/common/storage.js';
+import './gatewayCommands.js';
+
+registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: 'boxteam.settings.secrets', title: { value: t('settings.secrets.manage'), original: 'Manage API Keys' }, f1: true });
+  }
+  async run(accessor: ServicesAccessor, target?: GatewayRequestTarget): Promise<void> {
+    const quick = accessor.get(IQuickInputService), dialogs = accessor.get(IDialogService);
+    await workspaceContext.ensureReady();
+    await manageSecrets(target ?? managementGateway('settings', workspaceContext.getSnapshot().gatewayId!), quick, dialogs, accessor.get(IStorageService));
+  }
+});
 
 function commandTitle(key: keyof typeof actionTitles): { value: string; original: string } {
   return { value: t(key), original: actionTitles[key] };
@@ -52,7 +70,7 @@ registerAction2(class extends Action2 {
     super({ id: 'boxteam.settings.pluginParameters', title: commandTitle('workbench.settings.openPluginParameters'),
       category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true });
   }
-  run(accessor: ServicesAccessor): Promise<void> { return configureServicePlugin(accessor); }
+  run(accessor: ServicesAccessor, target?: PluginConfigurationTarget): Promise<void> { return configureServicePlugin(accessor, target); }
 });
 
 registerAction2(class extends Action2 {
@@ -60,15 +78,18 @@ registerAction2(class extends Action2 {
     super({ id: defaultAgentSourceCommand, title: commandTitle('workbench.settings.openDefaultAgentSource'),
       category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true });
   }
-  async run(accessor: ServicesAccessor, explicit?: WorkspaceOwner): Promise<void> {
+  async run(accessor: ServicesAccessor, explicit?: WorkspaceOwner | TargetSettingsLocation): Promise<void> {
     const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
+    const commandService = accessor.get(ICommandService);
     const initial = workspaceContext.getSnapshot();
     if (initial.loading || initial.error || !initial.gatewayId) throw new Error(initial.error ?? t('workbench.settings.gatewayPending'));
+    const explicitLocation = explicit && 'source_key' in explicit ? parseSettingsLocation(explicit) : undefined;
+    const explicitOwner = explicit && 'workspaceId' in explicit ? explicit : undefined;
     const controller = new AbortController(), cancellation = new CancellationTokenSource();
     const invalidate = () => { controller.abort(new Error(t('workbench.settings.identityChanged'))); cancellation.cancel(); };
     const release = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
-    let selected: WorkspaceOwner | undefined;
+    let selected: WorkspaceOwner | undefined = explicitLocation ? { gatewayId: explicitLocation.gateway_id, workspaceId: explicitLocation.workspace_id! } : undefined;
     const check = () => {
       if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
       controller.signal.throwIfAborted();
@@ -77,8 +98,8 @@ registerAction2(class extends Action2 {
       }
     };
     try {
-      const target = managementGateway('settings', explicit?.gatewayId);
-      selected = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
+      const target = managementGateway('settings', explicitLocation?.gateway_id ?? explicitOwner?.gatewayId);
+      selected ??= explicitOwner ? { ...explicitOwner } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
         label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
         owner: gatewayWorkspaceOwner(workspace),
       })), { title: t('workbench.settings.pickTarget'), prompt: t('workbench.settings.targetPrompt', managementTargetDisplayName(target), target.gateway_id),
@@ -86,7 +107,24 @@ registerAction2(class extends Action2 {
       if (!selected) return;
       check();
       const workspace = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, selected);
-      await manageDefaultAgentSource(workspace, workspace.name, quickInput, notifications, check, controller.signal);
+      if (workspace.status !== 'ready') throw new Error(t('workbench.settings.targetOffline'));
+      if (explicitLocation) {
+        await inspectDefaultAgentSource(explicitLocation, quickInput, notifications, check, controller.signal);
+        return;
+      }
+      const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id,
+        gateway_connection_id: target.gateway_connection_id, workspace_id: workspace.workspace_id });
+      const listed = await owner.list(controller.signal);
+      check();
+      const source = await quickInput.pick(listed.sources.filter(item => item.source_key).map(item => ({
+        label: item.source_key!, description: t('settings.editor.layerPresencePriority', item.layer, item.presence, item.precedence),
+        detail: item.uri ?? undefined, source_key: item.source_key!,
+      })), { title: t('settings.editor.chooseDefaultAgentSource'), prompt: t('settings.editor.defaultAgentOwner', workspace.name,
+        target.gateway_id, workspace.workspace_id), placeHolder: t('settings.editor.defaultAgentAccess') }, cancellation.token);
+      check();
+      if (!source) return;
+      const location: TargetSettingsLocation = { ...owner.target, version: 2, source_key: source.source_key, name: workspace.name };
+      await commandService.executeCommand('boxteam.settings.agents', location);
     } finally { release(); releaseContext(); cancellation.dispose(); controller.abort(); }
   }
 });
@@ -152,12 +190,51 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.settings.openTarget', title: commandTitle('workbench.settings.openTarget'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id?: string; source_key?: string; source_layer?: 'user' | 'workspace' }, options?: DefinitionEditorOptions): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
-    const cancellation = new CancellationTokenSource();
+    const groups = accessor.get(IEditorGroupsService), groupId = groups.activeGroup.id;
+    const frozen = { ...(target ?? managementGateway('settings')) };
+    const explicit = scope ? { ...scope } : undefined;
+    const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
     try {
-      const captured = await captureSettingsLocation(parent, cancellation.token);
-      if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
-    } finally { cancellation.dispose(); }
+      const captured = await captureSettingsLocation(parent, lifecycle.token, frozen, explicit);
+      lifecycle.check();
+      if (!captured) return;
+      if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { ...options, pinned: true }, groupId);
+    } finally { lifecycle.dispose(); }
+  }
+});
+
+// 两个实体入口只选择原 Settings 输入的内容，不建立专用输入或另一份配置草稿。
+for (const kind of ['providers', 'agents'] as const) registerAction2(class extends Action2 {
+  constructor() { super({ id: kind === 'providers' ? 'boxteam.settings.modelsProviders' : 'boxteam.settings.agents',
+    title: kind === 'providers' ? commandTitle('workbench.settings.modelsProviders') : commandTitle('workbench.settings.agents'),
+    category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
+  async run(accessor: ServicesAccessor, location?: TargetSettingsLocation | WorkspaceOwner, definitionId?: string, definitionModelId?: string): Promise<void> {
+    const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
+    const groups = accessor.get(IEditorGroupsService);
+    const groupId = groups.activeGroup.id;
+    const frozen = location && 'source_key' in location ? parseSettingsLocation(location) : undefined;
+    if (frozen && !frozen.workspace_id) throw new Error(t('configuration.entities.workspaceRequired'));
+    const explicitOwner = location && 'workspaceId' in location ? { ...location } : undefined;
+    const target = frozen ?? managementGateway('settings', explicitOwner?.gatewayId);
+    const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
+    try {
+      await workspaceContext.ensureReady();
+      lifecycle.check();
+      // 全局入口直接进入后端默认来源；精确来源和会话入口保持原归属。
+      const workspace = frozen?.workspace_id ? frozen : explicitOwner ? { workspace_id: explicitOwner.workspaceId }
+        : managementWorkspace('settings', target);
+      if (!workspace) throw new Error(t('plugins.noWorkspaces'));
+      const captured = await captureSettingsLocation(parent, lifecycle.token, target, { workspace_id: workspace.workspace_id,
+        source_key: frozen?.source_key, source_layer: explicitOwner ? 'workspace' : 'user' });
+      lifecycle.check();
+      if (!captured) return;
+      if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
+      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, definitionKind: kind, definitionId, definitionModelId };
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document),
+        options, groupId);
+    } finally { lifecycle.dispose(); }
   }
 });

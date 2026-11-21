@@ -12,7 +12,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.abstractions.session_changes import (
-    FileEditSnapshot,
+    ObservedFileEdit,
     StoredFileEdit,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -20,13 +20,19 @@ from app.agents.tool_result_text import declared_tool_payload_status
 from app.services.infrastructure.workspace_files.text_journal import (
     load_text_mutation_snapshots,
 )
-from app.services.orchestration.agent_stream_helpers import (
-    normalize_tool_args,
-)
 from app.services.orchestration.event_stream.contracts import ToolEventDisplayContext
 
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", "apply_patch"}
 SUBAGENT_TOOL_NAMES = frozenset({"task"})
+
+
+def normalize_tool_args(value: object) -> dict[str, Any]:
+    """将事件中的工具输入转为展示字典，工具 schema 校验由执行入口负责。"""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    return {"input": value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,12 +109,12 @@ def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
     }
 
 
-def text_mutation_snapshots_from_result(
+def file_edits_from_text_mutation_result(
     *,
     result_text: str,
     workspace_root: Path,
-) -> list[FileEditSnapshot]:
-    snapshots: list[FileEditSnapshot] = []
+) -> list[ObservedFileEdit]:
+    edits: list[ObservedFileEdit] = []
     result = json.loads(result_text)
     changed = {item["path"] for item in result["files"] if item["state"] in {"published", "unknown"}}
     for raw_snapshot in load_text_mutation_snapshots(
@@ -135,16 +141,16 @@ def text_mutation_snapshots_from_result(
             raise RuntimeError(f"文本修改 journal 快照 {file_path} 缺少后件或观察错误")
         if not isinstance(after_exists, bool) or not isinstance(after_content, str):
             raise TypeError(f"文本修改 journal 快照 {file_path} 的后件无效")
-        snapshots.append(
-            FileEditSnapshot(
+        edits.append(
+            ObservedFileEdit(
                 file_path=file_path,
-                existed=before_exists,
-                content=before_content,
+                before_exists=before_exists,
+                before_content=before_content,
                 after_exists=after_exists,
                 after_content=after_content,
             )
         )
-    return snapshots
+    return edits
 
 
 def build_tool_display_context(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from deepagents.backends.state import StateBackend
@@ -9,9 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.agent_tools import build_default_tools
-from app.agents.deep_agent_stack import build_deep_agent_middleware
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+from app.agents.default_tools import build_default_tools
+from app.agents.middleware_assembly import build_deep_agent_middleware
 from app.agents.policy import (
     DEFAULT_AGENT_TOOL_NAMES,
     build_agent_tool_universe,
@@ -24,6 +23,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.tool_discovery import create_search_tools_tool
 
 
@@ -153,25 +153,19 @@ def test_policy_default_names_match_actual_agent_graph_tools(
     direct_tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root),
         session_id="ses_policy_consistency",
         background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
-        job_event_bus=MagicMock(),
-        job_service=MagicMock(),
-        message_service=MagicMock(),
-        session_service=MagicMock(),
-        session_orchestrator=MagicMock(),
+        background_mailbox=MagicMock(),
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
-        config_service=MagicMock(),
         terminal_resource_owner=MagicMock(),
         invocation_context=invocation_context,
-        workspace_root=workspace_root,
         session_communication_service=communication_probe,
         include_team_tools=True,
     )
     # 发现入口由 Agent factory 在基础工具之后注册；本测试只组合工具面，不读取目录。
     direct_tools.append(create_search_tools_tool(
         catalog_resolver=MagicMock(), policy_resolver=MagicMock(),
-        definition_writer=AsyncMock(), response_byte_limit=32768,
+        tool_output_store=MagicMock(), session_id="ses_policy_consistency",
+        invocation_context=invocation_context, response_byte_limit=32768,
     ))
     model = FakeListChatModel(responses=["ok"])
     middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(workspace_root),

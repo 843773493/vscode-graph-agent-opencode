@@ -2,19 +2,6 @@ export interface SseErrorDTO {
   message: string;
 }
 
-export interface SessionExecutionSseDTO {
-  event: {
-    event_id: string;
-    session_id: string;
-    job_id?: string | null;
-    time: string;
-    type: string;
-    payload: Record<string, unknown>;
-  };
-  raw_type: string;
-  raw_payload?: Record<string, unknown>;
-}
-
 export interface TraceEventDTO {
   event_id: string;
   part_id?: string | null;
