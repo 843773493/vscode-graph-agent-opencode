@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -73,7 +73,7 @@ export function buildPluginSdk({ projectRoot, language, outputRoot = path.join(p
       // 构建只读取冻结输入；临时依赖链接用于标准解析，归档前移除。
       symlinkSync(path.join(sdkRoot, "node_modules"), path.join(source, "node_modules"), process.platform === "win32" ? "junction" : "dir");
       run(nodeExecutable, [path.join(source, "build.mjs"), ...(development ? [] : ["--release"])], stage);
-      rmSync(path.join(source, "node_modules"));
+      unlinkSync(path.join(source, "node_modules"));
       normalizePermissions(path.join(source, "dist"));
       const manifestPath = path.join(source, "package.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
