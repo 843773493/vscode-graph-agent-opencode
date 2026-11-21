@@ -33,7 +33,7 @@ for (const language of args.filter(argument => argument !== "--check")) {
   generated.push([path.join(root, resource, "runtime-contract.json"),
     readFileSync(path.join(root, "resources/logging/runtime-contract.json"), "utf8")]);
   for (const [file, content] of generated) {
-    if (existsSync(file) && readFileSync(file, "utf8") === content) continue;
+    if (existsSync(file) && readFileSync(file, "utf8").replaceAll("\r\n", "\n") === content.replaceAll("\r\n", "\n")) continue;
     if (check) throw new Error(`SDK 配置或生成资源过期: ${path.relative(root, file)}；先运行 prepare-product-sdk.mjs ${language}`);
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, content);
