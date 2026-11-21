@@ -1195,6 +1195,32 @@ class JobControlResponseDTO(_message.Message):
     thread_id: str
     def __init__(self, job_id: _Optional[str] = ..., status: _Optional[str] = ..., control_state: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
+class ThreadExecutionControlRequest(_message.Message):
+    __slots__ = ("action", "expected_execution_id")
+    ACTION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    action: str
+    expected_execution_id: str
+    def __init__(self, action: _Optional[str] = ..., expected_execution_id: _Optional[str] = ...) -> None: ...
+
+class ThreadExecutionControlDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "job_id", "execution_id", "state", "advancement_paused", "can_resume")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    ADVANCEMENT_PAUSED_FIELD_NUMBER: _ClassVar[int]
+    CAN_RESUME_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    thread_id: str
+    job_id: str
+    execution_id: str
+    state: str
+    advancement_paused: bool
+    can_resume: bool
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., job_id: _Optional[str] = ..., execution_id: _Optional[str] = ..., state: _Optional[str] = ..., advancement_paused: _Optional[bool] = ..., can_resume: _Optional[bool] = ...) -> None: ...
+
 class JobDTO(_message.Message):
     __slots__ = ("created_at", "updated_at", "job_id", "message_id", "session_id", "mode", "status", "entry_agent", "progress", "current_step", "error_message", "metadata", "ended_at", "thread_id")
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
@@ -4948,7 +4974,7 @@ class WorkspaceMessageSearchResultsDTO(_message.Message):
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceMessageMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_sessions: _Optional[int] = ..., scanned_threads: _Optional[int] = ..., scanned_items: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
 class TurnHistoryLoadRequest(_message.Message):
-    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result", "context_cursor")
+    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result", "context_cursor", "execution_item_ids")
     DIRECTION_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TURN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -4962,6 +4988,7 @@ class TurnHistoryLoadRequest(_message.Message):
     ANCHOR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_ITEM_IDS_FIELD_NUMBER: _ClassVar[int]
     direction: str
     cursor: str
     anchor_turn_id: str
@@ -4975,7 +5002,8 @@ class TurnHistoryLoadRequest(_message.Message):
     anchor_message: TurnMessageReferenceDTO
     anchor_tool_result: str
     context_cursor: str
-    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ..., context_cursor: _Optional[str] = ...) -> None: ...
+    execution_item_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ..., context_cursor: _Optional[str] = ..., execution_item_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ContextNoticeBatchDTO(_message.Message):
     __slots__ = ("owner_id", "owner_kind", "parts")

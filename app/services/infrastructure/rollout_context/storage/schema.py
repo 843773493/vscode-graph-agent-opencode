@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 28
+ROLLOUT_SCHEMA_VERSION = 29
 ITEM_CATALOG_LOCATOR_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_locator_index.sql")
 COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "migrations/catalog/commit_idempotency_index.sql")
 ITEM_CATALOG_MODEL_TOOL_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_model_tool_index.sql")
@@ -30,6 +30,7 @@ CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL = load_sql(__package__, "migrations/cont
 SOURCE_OVERLAY_LOCATOR_INDEXES_SQL = load_sql(__package__, "migrations/context_sources/source_overlay_locator_indexes.sql")
 TOOL_CALLS_MESSAGE_INDEX_SQL = load_sql(__package__, "migrations/catalog/tool_calls_message_index.sql")
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "migrations/execution/execution_queue.sql")
+EXECUTION_PAUSE_SCHEMA_SQL = load_sql(__package__, "migrations/execution/v28_sqlite_to_v29_sqlite.sql")
 EXECUTION_SCHEDULING_MIGRATION_SQL = load_sql(__package__, "migrations/execution/execution_queue_026_027.sql")
 TEAM_OBSERVATIONS_MIGRATION_SQL = load_sql(__package__, "migrations/context_sources/team_observations_027_028.sql")
 SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "migrations/context_sources/skill_selection_024_025.sql")
@@ -107,6 +108,7 @@ def initialize_rollout_schema(
         + VIEW_MEMBERSHIP_SCHEMA_SQL
         + EXECUTION_QUEUE_SCHEMA_SQL
         + EXECUTION_SCHEDULING_MIGRATION_SQL
+        + EXECUTION_PAUSE_SCHEMA_SQL
     )
 
     ensure_query_indexes(connection)

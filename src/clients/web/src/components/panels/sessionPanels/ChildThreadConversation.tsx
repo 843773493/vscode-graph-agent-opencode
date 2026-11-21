@@ -1,6 +1,11 @@
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { memo, useMemo } from "react";
-import type { ChildThreadSummary, InternalExecutionHistory, TurnDetail, TurnHistoryPage } from "../../../types/backend";
+import { memo, useCallback, useMemo } from "react";
+import { Virtuoso } from "react-virtuoso";
+import { chatTranscriptItems } from "../../chat/transcriptItems";
+import { useTurnBodyWindow } from "../../chat/useTurnBodyWindow";
+import type { ExecutionItemReference } from "../../../state/session/internalExecutionHistory";
+import type { ChildThreadHistoryPage } from "../../../state/childThreadDisplay";
+import type { ChildThreadSummary, TurnDetail } from "../../../types/backend";
 import type { useChildThreadConversation } from "../../../hooks/sessionTurnHistory/useChildThreadConversation";
 import type { ChatTurnHandlers } from "../../chat/turn/types";
 import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
@@ -11,7 +16,6 @@ import { TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
 import { ChatItemOwnerContext, copyItemAction, useChatItemMenu } from "../../chat/itemContextMenu";
 import MessageSubmissionRecovery from "../../composer/MessageSubmissionRecovery";
 import ContextNotice from "../../chat/ContextNotice";
-import { responsePartsToTimelineItems } from "../../../state/timeline/responseParts";
 
 import { childExecutionStatusLabel } from "../../../state/childThreadDisplay";
 
@@ -19,23 +23,6 @@ type Conversation = ReturnType<typeof useChildThreadConversation>;
 type ChatTurnForkPoint = Parameters<NonNullable<ChatTurnHandlers["onForkConversation"]>>[0];
 export type ChildThreadForkPoint = Partial<Pick<ChatTurnForkPoint,
   "sourceViewId" | "sourceViewRevision" | "turnId" | "itemId">>;
-
-const Report = memo(function Report({ execution }: { execution: InternalExecutionHistory }) {
-  const textParts = useMemo(
-    () => execution.response_parts.filter((part) => part.kind === "text" || part.kind === "final_text"),
-    [execution.response_parts],
-  );
-  return (
-    <article className="child-thread-report" data-execution-id={execution.execution_id}>
-      <strong>{t("child.reportStatus", childExecutionStatusLabel(execution.status))}</strong>
-      {responsePartsToTimelineItems(execution.response_parts).map(item => item.kind === "context_event"
-        ? <ContextNotice key={item.id} notices={item.notices} /> : null)}
-      {execution.display_parts.map((part) => <MarkdownContent key={part.item_id} value={part.text} />)}
-      {textParts.map((part) => <MarkdownContent key={part.part_id} value={part.text ?? ""} />)}
-      {execution.display_parts.length === 0 && execution.response_parts.length === 0 ? <p>{t("child.noReport")}</p> : null}
-    </article>
-  );
-});
 
 type ForkPoint = (point: ChildThreadForkPoint) => void;
 
@@ -71,49 +58,46 @@ const ChildTurn = memo(function ChildTurn({ turn, threadId, onFork }: { turn: Tu
   );
 });
 
-function firstVisibleOrdinalForExecution(execution: InternalExecutionHistory): number {
-  let firstOrdinal = Infinity;
-  for (const part of execution.display_parts) {
-    firstOrdinal = Math.min(firstOrdinal, part.logical_item_ordinal);
-  }
-  for (const part of execution.response_parts) {
-    firstOrdinal = Math.min(firstOrdinal, part.source.logical_item_ordinal ?? Infinity);
-  }
-  return firstOrdinal;
-}
-
 const ChildConversationTimeline = memo(function ChildConversationTimeline({
-  page,
-  threadId,
-  loading,
-  onFork,
+  page, threadId, loading, onFork, scopeKey, retainBodies, onError,
 }: {
-  page: TurnHistoryPage | null;
+  page: ChildThreadHistoryPage | null;
   threadId: string;
   loading: boolean;
   onFork?: ForkPoint;
+  scopeKey: string;
+  retainBodies: (turnIds: string[], items?: ExecutionItemReference[]) => Promise<void>;
+  onError: (error: unknown) => void;
 }) {
-  const entries = useMemo(() => [
-    ...(page?.internal_executions ?? []).map((execution) => ({
-      ordinal: firstVisibleOrdinalForExecution(execution),
-      key: execution.execution_id,
-      node: <Report execution={execution} />,
-    })),
-    ...(page?.items ?? []).map((turn) => ({
-      ordinal: turn.root_logical_item_ordinal,
-      key: turn.turn_id,
-      node: <ChildTurn turn={turn} threadId={threadId} onFork={onFork} />,
-    })),
-  ].sort((left, right) => left.ordinal - right.ordinal), [onFork, page, threadId]);
-
-  return (
-    <div className="child-thread-conversation-history">
-      {entries.map((entry) => <div key={entry.key}>{entry.node}</div>)}
-      {page && page.items.length === 0 && (page.internal_executions ?? []).length === 0 && !loading
-        ? <p>{t("child.emptyHistory")}</p>
-        : null}
-    </div>
-  );
+  const items = useMemo(() => chatTranscriptItems(
+    (page?.items ?? []).map(turn => conversationFromTurn(turn, threadId)),
+    page?.internal_executions ?? [], true,
+  ), [page, threadId]);
+  const rendered = useCallback(() => {}, []);
+  const { heights, itemsRendered } = useTurnBodyWindow({ items, scopeKey,
+    retain: retainBodies, onError, onRendered: rendered });
+  if (items.length === 0) return <div className="child-thread-conversation-history">
+    {page && !loading ? <p>{t("child.emptyHistory")}</p> : null}
+  </div>;
+  return <Virtuoso className="child-thread-conversation-history" style={{ height: 420 }}
+    data={items} initialItemCount={Math.min(items.length, 4)} computeItemKey={(_, item) => item.key} itemsRendered={itemsRendered}
+    itemContent={(_, item) => {
+      if (item.kind === "turn") {
+        const turn = page?.items.find(turn => turn.turn_id === item.conversation.turnId);
+        return turn ? <ChildTurn turn={turn} threadId={threadId} onFork={onFork} /> : null;
+      }
+      if (item.kind === "context_event") return <ContextNotice notices={item.notices} />;
+      if (item.kind === "execution_header") return <article className="child-thread-report" data-execution-id={item.executionId}>
+        <strong>{t("child.reportStatus", childExecutionStatusLabel(item.status))}</strong>
+        {item.empty ? <p>{t("child.noReport")}</p> : null}
+      </article>;
+      const evicted = item.kind === "internal_execution" ? item.displayPart.bodyEvicted : item.bodyEvicted;
+      if (evicted) return <div style={{ height: heights.get(item.key) }} aria-busy="true" role="status">{t("chat.turn.loadingFull")}</div>;
+      return item.kind === "internal_execution"
+        ? <MarkdownContent value={item.displayPart.text} />
+        : <>{item.parts.filter(part => part.kind === "text" || part.kind === "final_text")
+          .map(part => <MarkdownContent key={part.part_id} value={part.text ?? ""} />)}</>;
+    }} />;
 });
 
 /** 主窗口右侧侧边栏中的精确子线程对话；不修改主线程聊天选择。 */
@@ -136,7 +120,9 @@ export default function ChildThreadConversation({ thread, conversation, onFork }
 
 
       <ChatItemOwnerContext.Provider value={conversation.owner}>
-        <ChildConversationTimeline page={page} threadId={thread.thread_id} loading={snapshot.loading} onFork={onFork} />
+        <ChildConversationTimeline page={page} threadId={thread.thread_id} loading={snapshot.loading} onFork={onFork}
+          scopeKey={JSON.stringify([conversation.owner, snapshot.view])} retainBodies={conversation.retainExecutionBodies}
+          onError={conversation.reportHistoryError} />
       </ChatItemOwnerContext.Provider>
       {conversation.submissionRecovery && <MessageSubmissionRecovery {...conversation.submissionRecovery}
         onAccepted={() => { void conversation.refresh(); }} />}

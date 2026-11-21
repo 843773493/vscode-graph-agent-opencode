@@ -81,7 +81,6 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
     clearGoal: async () => undefined,
-    interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
     refreshAgents: async () => [],

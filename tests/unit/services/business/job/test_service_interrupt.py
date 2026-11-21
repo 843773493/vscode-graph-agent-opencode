@@ -30,7 +30,6 @@ from tests.support.job_thread_fixture import (
     job_fixture_thread_id,
 )
 from tests.support.message_service import build_message_service
-from tests.unit.services.business.job.ports import enqueue_job
 
 
 class _DummyJobExecutor:
@@ -140,124 +139,89 @@ async def test_delete_tombstone_blocks_new_session_writes(job_service_factory,
 
 
 @pytest.mark.asyncio
-async def test_job_control_pause_cancels_running_task(job_service_factory,
-    monkeypatch, session_lifecycle_guard
+async def test_pause_resume_preserves_current_job_and_execution(
+    job_service_factory, session_lifecycle_guard, boundary_executor,
 ):
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
-    service._jobs = {}
-
-    job = JobState(
-        job_id="job_test_pause",
-        session_id="session_test",
-        message="pause me",
-        message_id="msg_pause",
-        message_created_at="2026-07-14T00:00:00+00:00",
-        agent_id="default",
-        status=JobStatus.running,
-        task=DummyTask(), execution_binding=job_fixture_execution_binding("job_test_pause"), thread_id=job_fixture_thread_id("session_test"),
-    )
-    service._jobs[job.job_id] = job
-
-    result = await service.control(
-        job.job_id,
-        JobControlRequest(action=ControlAction.pause),
-    )
-
-    assert job.status == JobStatus.paused
-    assert result.status == JobStatus.paused
-    assert job.task.cancel_called is True
-
-
-@pytest.mark.asyncio
-async def test_job_control_resume_waits_for_paused_task_to_finish(job_service_factory,
-    session_lifecycle_guard,
-) -> None:
-    started = asyncio.Event()
-
-    class _BlockingJobExecutor:
-        async def run(self, job):
-            del job
-            started.set()
-            await asyncio.Future()
-
     service = job_service_factory(
-        job_event_bus=JobEventBus(),
-        job_executor=_BlockingJobExecutor(),
+        job_event_bus=JobEventBus(), job_executor=boundary_executor,
         session_lifecycle_guard=session_lifecycle_guard,
+        job_timeout_seconds=0.1, job_startup_timeout_seconds=0.1,
     )
     session_id = "session_pause_resume"
-    job = JobState(
-        job_id="job_pause_resume",
-        session_id=session_id,
-        message="pause and resume",
-        message_id="msg_pause_resume",
-        message_created_at="2026-08-09T00:00:00+00:00",
-        agent_id="default",
-        status=JobStatus.queued,
-        delivery_policy="after_turn", execution_binding=job_fixture_execution_binding("job_pause_resume"), thread_id=job_fixture_thread_id(session_id),
+    thread_id = job_fixture_thread_id(session_id)
+    dispatch = await service.start_job(
+        session_id, "暂停后继续同一执行", thread_id=thread_id,
+        message_id="msg_pause_resume", message_created_at=datetime.now(UTC).isoformat(),
     )
-    service._jobs[job.job_id] = job
-    enqueue_job(service, job, "after_turn")
-    assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id), boundary="idle") is True
-    await started.wait()
+    job = service._jobs[dispatch.job_id]
+    await boundary_executor.started.wait()
+    original_task, original_execution = job.task, job.execution_task
+    execution_id = job.queue_record.cursor.admission.execution_id
+    try:
+        with pytest.raises(ValueError, match="执行已变化"):
+            await service.control_thread_advancement(
+                session_id, thread_id, action="pause", expected_execution_id="stale-execution",
+            )
+        assert not job.execution_pause.requested
+        result = await service.control(job.job_id, JobControlRequest(action=ControlAction.pause))
+        assert result.status == job.status == JobStatus.running
+        assert result.control_state == "pausing"
+        assert not original_task.done() and not original_execution.done()
+        boundary_executor.finish_first.set()
+        await boundary_executor.first_finished.wait()
+        snapshot = await service.thread_control_snapshot(session_id, thread_id)
+        assert snapshot.state == "paused"
+        assert snapshot.job_id == job.job_id
+        assert snapshot.execution_id == execution_id
+        assert snapshot.advancement_paused and snapshot.can_resume
+        assert not boundary_executor.continued.is_set()
+        assert boundary_executor.runtimes[0].execution_pause is job.execution_pause
+        await asyncio.sleep(0.15)
+        assert not original_task.done() and not original_execution.done()
 
-    await service.control(
-        job.job_id,
-        JobControlRequest(action=ControlAction.pause),
-    )
-    result = await service.control(
-        job.job_id,
-        JobControlRequest(action=ControlAction.resume),
-    )
-
-    assert result.status == JobStatus.running
-    assert job.status == JobStatus.running
-    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == job.job_id
-    assert job.task is not None
-    resumed_task = job.task
-
-    await service.control(
-        job.job_id,
-        JobControlRequest(action=ControlAction.cancel),
-    )
-    await asyncio.gather(resumed_task, return_exceptions=True)
+        result = await service.control_thread_advancement(
+            session_id, thread_id, action="resume", expected_execution_id=execution_id,
+        )
+        await boundary_executor.continued.wait()
+        assert result.state == "running"
+        assert job.task is original_task and job.execution_task is original_execution
+        assert len(boundary_executor.runtimes) == 1
+        assert job.queue_record.cursor.admission.execution_id == execution_id
+        boundary_executor.finish_job.set()
+        await original_task
+        assert job.status == JobStatus.completed
+    finally:
+        if not original_task.done():
+            await service.control(job.job_id, JobControlRequest(action=ControlAction.cancel))
+            await original_task
 
 
 @pytest.mark.asyncio
-async def test_job_control_resume_restarts_completed_pause(job_service_factory,
-    monkeypatch, session_lifecycle_guard
+async def test_idle_thread_pause_blocks_new_job_dispatch_until_resume(
+    job_service_factory, session_lifecycle_guard,
 ):
-    service = create_job_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
-    service._jobs = {}
-
-    job = JobState(
-        job_id="job_test_resume",
-        session_id="session_test",
-        message_id="msg_resume",
-        message_created_at="2026-07-14T00:00:00+00:00",
-        agent_id="default",
-        status=JobStatus.paused,
-        task=DummyTask(done=True),
-        message="resume me", execution_binding=job_fixture_execution_binding("job_test_resume"), thread_id=job_fixture_thread_id("session_test"),
+    service = create_job_service(
+        session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory,
     )
-    service._jobs[job.job_id] = job
-
-    started_jobs: list[str] = []
-
-    def fake_start_job_task(target_job):
-        started_jobs.append(target_job.job_id)
-        target_job.task = DummyTask()
-
-    monkeypatch.setattr(service, "_start_job_task", fake_start_job_task)
-
-    result = await service.control(
-        job.job_id,
-        JobControlRequest(action=ControlAction.resume, params={"reason": "continue"}),
+    session_id = "session_idle_pause"
+    thread_id = job_fixture_thread_id(session_id)
+    snapshot = await service.control_thread_advancement(
+        session_id, thread_id, action="pause", expected_execution_id=None,
     )
-
-    assert job.status == JobStatus.running
-    assert result.status == JobStatus.running
-    assert started_jobs == [job.job_id]
+    assert snapshot.state == "paused" and snapshot.job_id is None
+    dispatch = await service.start_job(
+        session_id, "暂停时入队", thread_id=thread_id,
+        message_id="msg_idle_pause", message_created_at=datetime.now(UTC).isoformat(),
+    )
+    job = service._jobs[dispatch.job_id]
+    assert job.status == JobStatus.queued and job.task is None
+    assert not await service._start_next_pending(session_id, thread_id=thread_id)
+    snapshot = await service.control_thread_advancement(
+        session_id, thread_id, action="resume", expected_execution_id=None,
+    )
+    await job.task
+    assert job.status == JobStatus.completed
+    assert not snapshot.advancement_paused and not snapshot.can_resume
 
 
 @pytest.mark.asyncio
@@ -450,7 +414,9 @@ async def test_job_control_rejects_pause_for_interrupt_pending_job(job_service_f
     )
     service._jobs[job.job_id] = job
 
-    with pytest.raises(ValueError, match="只有 running、streaming 或 waiting_input"):
+    service._thread_current_job[(job.session_id, job.thread_id)] = job.job_id
+
+    with pytest.raises(ValueError, match="当前 Job 状态不能暂停: interrupt_pending"):
         await service.control(
             job.job_id,
             JobControlRequest(action=ControlAction.pause),

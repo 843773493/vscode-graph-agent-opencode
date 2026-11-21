@@ -31,6 +31,12 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
 )
 
+_CANDIDATES_SQL = load_sql(
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/candidates.sql",
+)
+_POINT_CANDIDATES_SQL = load_sql(
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/point_candidates.sql",
+)
 _CARRIERS_SQL = load_sql(
     "app.services.infrastructure.rollout_context.storage", "migrations/history/carriers.sql",
 ) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/history/content_carrier_replacements.sql")
@@ -288,6 +294,7 @@ class InternalExecutionHistoryMixin:
         limit: int,
         snapshot_upper_logical_item_ordinal: int | None,
         execution_id: str | None = None,
+        item_ids: tuple[str, ...] | None = None,
     ) -> InternalExecutionHistoryPage:
         """按显式 display-only membership ordinal 做有界 keyset page。"""
         view_id = strict_text(view_id, field="context_views.view_id")
@@ -321,47 +328,63 @@ class InternalExecutionHistoryMixin:
         if upper_logical_item_ordinal is None or snapshot_upper is None:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
 
-        # 替代范围只冻结 view/execution/快照上界，不随当前页的 anchor/window 缩小。
-        # 同次查询展开一次替代关系并计算前一成员；不跨 snapshot 缓存或缩小页外范围。
+        if connection.execute(
+            "SELECT 1 FROM executions WHERE turn_id IS NULL AND execution_origin='internal' "
+            + ("AND execution_id=? " if execution_id is not None else "") + "LIMIT 1",
+            (execution_id,) if execution_id is not None else (),
+        ).fetchone() is None:
+            if item_ids is not None:
+                raise ValueError("internal execution item 不属于当前可见历史或已被替代")
+            return InternalExecutionHistoryPage(entries=(), has_more=False)
+
+        # 先定位本页候选，只按这些 item 的身份读取必要替代载体。
+        # 替代载体仍冻结于整个 view/execution/snapshot，不能被页 anchor 截断。
         parameters: dict[str, object] = {
-            "view_id": view_id,
-            "snapshot_upper": snapshot_upper,
+            "view_id": view_id, "snapshot_upper": snapshot_upper,
             "execution_id": strict_text(execution_id, field="execution_id") if execution_id is not None else None,
             "upper": min(upper_logical_item_ordinal, snapshot_upper),
-            "limit": limit + 1,
+            "candidate_limit": limit + 1,
         }
-        if connection.execute(_CARRIERS_SQL + _INVALID_SCOPE_SQL, parameters).fetchone() is not None:
-            raise ValueError("最终 content part carrier 缺少唯一 typed model-call scope")
-        predicates = [
-            "membership.logical_item_ordinal <= :upper",
-            _SURVIVOR_SQL,
-        ]
+        predicates = []
+        if item_ids is not None:
+            if execution_id is None or not 1 <= len(item_ids) <= 4 or len(set(item_ids)) != len(item_ids):
+                raise ValueError("internal item 定点读取要求同一 execution 的 1 到 4 个唯一 ID")
+            predicates.append("item.item_id IN (" + ",".join(f":item_{index}" for index in range(len(item_ids))) + ")")
+            parameters.update({f"item_{index}": strict_text(value, field="item_id") for index, value in enumerate(item_ids)})
         if lower_logical_item_ordinal is not None:
             predicates.append("membership.logical_item_ordinal >= :lower")
             parameters["lower"] = lower_logical_item_ordinal
-        if anchor_logical_item_ordinal is not None:
-            operator = "<" if direction == "before" else ">"
-            predicates.append(f"membership.logical_item_ordinal {operator} :anchor")
-            parameters["anchor"] = anchor_logical_item_ordinal
+        operator = "<" if direction == "before" else ">"
         order = "DESC" if direction == "before" else "ASC"
-        # elapsed 沿同 view、同 execution 的前一 visible/display_only 逻辑成员，
-        # 即使前项不在本页也沿用它的原时间；没有前项才以 execution.created_at 起算。
-        rows = connection.execute(
-            _CARRIERS_SQL +
-            "SELECT item.item_sequence, item.item_id, execution.execution_id, "
-            "execution.job_id, execution.outcome, execution.created_at, "
-            "execution.updated_at, membership.logical_item_ordinal, "
-            "COALESCE(membership.previous_created_at, execution.created_at), "
-            "execution.session_id, execution.thread_id "
-            "FROM carriers AS membership "
-            "JOIN item_catalog AS item ON item.item_id = membership.item_id "
-            "JOIN executions AS execution "
-            "ON execution.execution_id = item.execution_id "
-            "WHERE "
-            + " AND ".join(predicates)
-            + f" ORDER BY membership.logical_item_ordinal {order} LIMIT :limit",
-            parameters,
-        ).fetchall()
+        rows = []
+        anchor = anchor_logical_item_ordinal
+        while len(rows) <= limit:
+            page_predicates = list(predicates)
+            if anchor is not None:
+                page_predicates.append(f"membership.logical_item_ordinal {operator} :anchor")
+                parameters["anchor"] = anchor
+            carriers = ((_POINT_CANDIDATES_SQL if item_ids is not None else _CANDIDATES_SQL) + _CARRIERS_SQL).format(
+                page_predicates="".join(f" AND {predicate}" for predicate in page_predicates), order=order,
+            )
+            candidates = connection.execute(
+                carriers +
+                "SELECT item.item_sequence,item.item_id,execution.execution_id,execution.job_id,"
+                "execution.outcome,execution.created_at,execution.updated_at,membership.logical_item_ordinal,"
+                "execution.created_at,execution.session_id,execution.thread_id,"
+                + _SURVIVOR_SQL + ", (" + _INVALID_SCOPE_SQL.rstrip().rstrip(";") + "), membership.block_ordinal "
+                "FROM page_candidates AS membership "
+                "JOIN item_catalog AS item ON item.item_id=membership.item_id "
+                "JOIN executions AS execution ON execution.execution_id=item.execution_id "
+                f"ORDER BY membership.block_ordinal {order},membership.logical_item_ordinal {order}",
+                parameters,
+            ).fetchall()
+            if any(row[12] is not None for row in candidates):
+                raise ValueError("最终 content part carrier 缺少唯一 typed model-call scope")
+            rows.extend((*row[:11], row[13]) for row in candidates if row[11])
+            if len(candidates) < limit + 1 or item_ids is not None:
+                break
+            anchor = candidates[-1][7]
+        rows = rows[:limit + 1]
         validated_owners: set[tuple[str, str]] = set()
         for row in rows:
             execution_owner = (
@@ -376,6 +399,8 @@ class InternalExecutionHistoryMixin:
                 validated_owners.add(execution_owner)
         has_more = len(rows) > limit
         selected = rows[:limit]
+        if item_ids is not None and {row[1] for row in selected} != set(item_ids):
+            raise ValueError("internal execution item 不属于当前可见历史或已被替代")
         if direction == "before":
             selected.reverse()
         # keyset 只消费本页坐标；全 view 的缺失、重复及 source_kind 由完整校验负责。
@@ -396,6 +421,20 @@ class InternalExecutionHistoryMixin:
         items_by_id = {item.item_id: item for item in items}
         if len(items_by_id) != len(item_ids):
             raise RuntimeError("internal history page item locator 不完整")
+        # elapsed 的前驱是同 execution 的前一 visible/display_only 成员，
+        # 包括已被替代的载体；只为本页返回项点读，不对全历史做 LAG。
+        previous_times = {}
+        for row in selected:
+            previous = connection.execute(
+                "SELECT item.created_at FROM context_view_item_blocks AS refs "
+                "CROSS JOIN context_membership_items AS member ON member.block_id=refs.block_id "
+                "CROSS JOIN item_catalog AS item ON item.item_id=member.item_id "
+                "WHERE refs.view_id=? AND member.visible=1 AND member.source_kind='display_only' "
+                "AND item.execution_id=? AND item.turn_id IS NULL AND refs.block_ordinal<=? AND member.logical_item_ordinal<? "
+                "ORDER BY refs.block_ordinal DESC,member.logical_item_ordinal DESC LIMIT 1",
+                (view_id, row[2], row[11], row[7]),
+            ).fetchone()
+            previous_times[row[1]] = previous[0] if previous is not None else row[8]
         entries = tuple(
             InternalExecutionHistoryEntry(
                 execution_id=strict_text(
@@ -413,7 +452,7 @@ class InternalExecutionHistoryMixin:
                 # notice 是执行的输入锚点，可能早于准入；它自身不是计时活动。
                 elapsed_ms=0 if items_by_id[strict_text(row[1], field="item_catalog.item_id")].semantic_kind == "runtime_notice" else _item_elapsed_ms(
                     items_by_id[strict_text(row[1], field="item_catalog.item_id")].created_at,
-                    row[8],
+                    previous_times[row[1]],
                 ),
                 item=items_by_id[
                     strict_text(row[1], field="item_catalog.item_id")

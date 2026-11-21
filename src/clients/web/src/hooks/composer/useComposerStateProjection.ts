@@ -28,7 +28,7 @@ export function useComposerStateProjection({
   currentSessionCacheKey,
   latestStateRef,
   setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
-  interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
+  switchAgent, switchModel, refreshAgents, switchContentView,
   setWorkspaceDefaultAgent, setWorkspaceDefaultModel,
   createSession, renameSession, updateUiSettings,
 }: ComposerStateProjectionInput): ComposerStateProjection {
@@ -69,12 +69,12 @@ export function useComposerStateProjection({
     state: composerState,
     getLatestAssistantContent,
     setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
-    interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
+    switchAgent, switchModel, refreshAgents, switchContentView,
     setWorkspaceDefaultAgent, setWorkspaceDefaultModel,
     createSession, renameSession, updateUiSettings,
   }), [
     composerState, getLatestAssistantContent, setStatus, sendMessage, refreshTurnHistory,
-    compactSession, refreshGoal, updateGoal, clearGoal, interruptSession,
+    compactSession, refreshGoal, updateGoal, clearGoal,
     switchAgent, switchModel, refreshAgents, switchContentView, createSession,
     setWorkspaceDefaultAgent, setWorkspaceDefaultModel, renameSession,
     updateUiSettings,

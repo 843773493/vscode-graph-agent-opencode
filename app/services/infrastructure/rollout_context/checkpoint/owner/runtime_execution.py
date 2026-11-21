@@ -23,6 +23,7 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.execution_queue import (
     ExecutionCompletionPage,
     ExecutionQueueInput,
+    ExecutionQueuePause,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
 )
@@ -68,6 +69,15 @@ if TYPE_CHECKING:
 
 class RuntimeExecutionOwnerMixin:
     _storage: RolloutContextStore
+
+    def execution_queue_pause(self, session_id: str, thread_id: str) -> ExecutionQueuePause | None:
+        return self._storage.executions.execution_queue_pause(session_id, thread_id)
+
+    def pause_execution_queue(self, session_id: str, thread_id: str, *, execution_id: str | None) -> ExecutionQueuePause:
+        return self._storage.executions.pause_execution_queue(session_id, thread_id, execution_id=execution_id)
+
+    def resume_execution_queue(self, session_id: str, thread_id: str, *, pause_id: str, continuation_job_id: str | None = None) -> None:
+        self._storage.executions.resume_execution_queue(session_id, thread_id, pause_id=pause_id, continuation_job_id=continuation_job_id)
 
     def message_submission(self, session_id: str, thread_id: str, operation_id: str) -> ExecutionQueueRecord | None:
         return self._storage.executions.message_submission(session_id, thread_id, operation_id)

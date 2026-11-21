@@ -31,6 +31,79 @@ afterEach(() => {
   restoreTurnHistoryTestGlobals();
 });
 
+test("execution 正文按最多四项补读，旧 revision 明确报错且手动 reload 恢复权威正文", async () => {
+  installWindow(0);
+  let current = appState();
+  let history!: ReturnType<typeof useSessionTurnHistory>;
+  const batches: string[][] = [];
+  let pageRevision = 1;
+  let updateState!: React.Dispatch<React.SetStateAction<ReturnType<typeof appState>>>;
+  const execution = { execution_id: "execution-window", job_id: "execution-job", session_id: SESSION_ID,
+    thread_id: THREAD_ID, status: "completed", created_at: "2026-07-28T00:00:00Z", updated_at: "2026-07-28T00:00:01Z",
+    display_parts: Array.from({ length: 6 }, (_, index) => ({ kind: "generated_session_result", text: `report-${index}`,
+      item_id: `execution-item-${index}`, item_sequence: index + 1, logical_item_ordinal: index,
+      created_at: "2026-07-28T00:00:00Z", provenance: {} })), response_parts: [] };
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
+    if (path.endsWith("/local-credential")) return Response.json({ data: { token: "execution-body-window" } });
+    if (path.endsWith("/pending-requests")) return emptyPendingResponse();
+    if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "body-bootstrap", data: bootstrap("ready", 1) });
+    if (!path.endsWith("/history")) throw new Error(`未声明的请求: ${path}`);
+    const request = JSON.parse(String(args[1]?.body));
+    const ids: string[] | undefined = request.execution_item_ids;
+    if (ids) {
+      expect(request.execution_id).toBe(execution.execution_id);
+      expect(request.cursor).toBeUndefined();
+      batches.push(ids);
+    }
+    return Response.json({ code: 0, message: "ok", request_id: "body-history", data: { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING,
+      source_view_revision: pageRevision, projection_epoch: 1, items: [], internal_executions: [{ ...execution,
+        display_parts: ids ? execution.display_parts.filter(part => ids.includes(part.item_id)) : execution.display_parts }],
+      before_cursor: ids ? null : "frozen-older", has_before: !ids } });
+  }, { preconnect: originalFetch.preconnect });
+  const getTimeline = () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null;
+  function Harness() {
+    [current, updateState] = React.useState(appState);
+    history = useSessionTurnHistory({ apiPort: 0, sessionId: SESSION_ID, threadId: THREAD_ID,
+      workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY, reloadNonce: 0,
+      getCurrentTimeline: getTimeline, setState: updateState });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => { renderer = create(<Harness />); await wait(60); });
+    await act(async () => { await history.retainTurnBodies([], []); });
+    expect(current.turnTimelinesBySession.get(SCOPE_KEY)!.internalExecutions[0].display_parts.every(part => part.bodyEvicted)).toBe(true);
+    await act(async () => { await history.retainTurnBodies([], execution.display_parts.map(part => ({
+      executionId: execution.execution_id, itemId: part.item_id }))); });
+    expect(batches.map(ids => ids.length)).toEqual([4, 2]);
+    const timeline = current.turnTimelinesBySession.get(SCOPE_KEY)!;
+    expect(timeline.beforeCursor).toBe("frozen-older");
+    expect(timeline.internalExecutions[0].display_parts.map(part => part.text)).toEqual(execution.display_parts.map(part => part.text));
+    await act(async () => { await history.retainTurnBodies([], []); });
+    await act(async () => { updateState(previous => {
+      const timelines = new Map(previous.turnTimelinesBySession);
+      timelines.set(SCOPE_KEY, { ...timelines.get(SCOPE_KEY)!, historyViewRevision: 2 });
+      return { ...previous, turnTimelinesBySession: timelines };
+    }); });
+    const window = execution.display_parts.map(part => ({ executionId: execution.execution_id, itemId: part.item_id }));
+    await act(async () => { await history.retainTurnBodies([], window); });
+    const stale = getTimeline()!;
+    expect(stale.error).toContain("正文补读未应用");
+    expect(stale.internalExecutions[0].display_parts.every(part => part.bodyEvicted)).toBe(true);
+    expect(stale.beforeCursor).toBe("frozen-older");
+    const readsBeforeReload = batches.length;
+    pageRevision = 2;
+    await act(async () => { history.refreshTurnHistory(); await wait(60); });
+    const refreshed = getTimeline()!;
+    expect(refreshed.generation).toBeGreaterThan(stale.generation);
+    expect(refreshed.historyViewRevision).toBe(2);
+    expect(refreshed.error).toBeNull();
+    expect(refreshed.internalExecutions[0].display_parts.map(part => part.text)).toEqual(execution.display_parts.map(part => part.text));
+    expect(batches).toHaveLength(readsBeforeReload);
+  } finally { act(() => renderer?.unmount()); }
+});
+
 describe("useSessionTurnHistory partial bootstrap", () => {
   test("详情超时保留已初始化时间线的订阅资格，后续详情成功可清除错误", async () => {
     installWindow(0);

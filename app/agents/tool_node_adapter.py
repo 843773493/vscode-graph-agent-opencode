@@ -7,17 +7,26 @@ from typing import Any, Literal
 
 from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.prebuilt.tool_node import ToolCallRequest, ToolNode
+from langgraph.prebuilt.tool_node import ToolCallRequest, ToolNode, ToolRuntime
 from langgraph.types import Command
 
 from app.agents.tool_confirmation_middleware import (
     approved_tool_call,
     complete_tool_approval_results,
 )
+from app.core.execution_pause import execution_pause_boundary
 
 
 class AgentToolNode(ToolNode):
     """沿用框架调度，应用审批覆盖、保留原调用配对和完整内容块。"""
+
+    async def _arun_one(
+        self, call: ToolCall, input_type: Literal["list", "dict", "tool_calls"],
+        tool_runtime: ToolRuntime,
+    ) -> ToolMessage | Command | list[Command | ToolMessage]:
+        # 暂停等待发生在所有工具中间件之前，尚未准入时不创建局部超时 scope。
+        async with execution_pause_boundary():
+            return await super()._arun_one(call, input_type, tool_runtime)
 
     def _apply_tool_approval(self, request: ToolCallRequest) -> ToolCallRequest:
         approved_call = approved_tool_call(request.state, request.tool_call)

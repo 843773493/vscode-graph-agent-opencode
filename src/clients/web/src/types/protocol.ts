@@ -569,11 +569,6 @@ export type SessionInformationSnapshot = Omit<WorkspaceProtocol.SessionInformati
   };
   recent_errors?: WorkspaceProtocol.SessionInformationErrorDTO[];
 };
-export type InterruptSessionResult = Omit<WorkspaceProtocol.SessionInterruptResultDTO, "tool_name" | "interrupted_at"> & {
-  tool_name?: string | null;
-  interrupted_at?: string;
-};
-
 export type SessionResource = Omit<WorkspaceProtocol.SessionResourceDTO, "kind" | "created_at" | "updated_at" | "started_at" | "ended_at" | "available_actions" | "metadata"> & {
   kind: "background_task" | "terminal" | "browser";
   created_at: string;
@@ -629,8 +624,9 @@ export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "u
   items?: TraceEventDTO[];
   activity_stats?: TurnActivityStats;
 };
-export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "tool_call_ids" | "include"> & {
+export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "execution_item_ids" | "tool_call_ids" | "include"> & {
   turn_ids?: string[] | null;
+  execution_item_ids?: string[] | null;
   tool_call_ids?: string[] | null;
   include?: string[];
 };

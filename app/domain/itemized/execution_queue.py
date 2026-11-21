@@ -106,9 +106,21 @@ class ExecutionQueueRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionQueuePause:
+    """Thread 暂停意图；原执行终态仍从 executions 读取。"""
+
+    session_id: str
+    thread_id: str
+    pause_id: str
+    execution_id: str | None
+    outcome: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionQueueSnapshot:
     records: tuple[ExecutionQueueRecord, ...]
     revision: int
+    pause: ExecutionQueuePause | None = None
 
 
 @dataclass(frozen=True, slots=True)

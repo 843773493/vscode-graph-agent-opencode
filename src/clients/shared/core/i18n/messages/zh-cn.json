@@ -4458,5 +4458,13 @@
   "configuration.protocol.chat_completions": "OpenAI 兼容（Chat Completions）",
   "configuration.protocol.responses": "OpenAI Responses",
   "configuration.protocol.anthropic_messages": "Anthropic Messages",
-  "configuration.probe.options": "测试选项"
+  "configuration.probe.options": "测试选项",
+  "composer.execution.menu": "执行控制",
+  "composer.execution.pause": "暂停推进",
+  "composer.execution.interrupt": "打断当前执行",
+  "composer.execution.stop": "完全打断整个会话",
+  "composer.execution.resume": "继续执行",
+  "composer.execution.default": "默认停止方式",
+  "composer.execution.recommended": "（推荐）",
+  "composer.execution.recoveryFailed": "{0}；重新读取执行状态失败：{1}"
 }

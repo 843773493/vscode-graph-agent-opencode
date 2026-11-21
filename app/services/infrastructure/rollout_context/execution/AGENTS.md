@@ -15,3 +15,4 @@
 所有变更必须保持 v2-only、事务原子性、幂等键和显式状态转移；源码注释使用中文，跨 owner 访问通过稳定 port 或 RolloutStorage 方法完成。
 
 - `admission_reads.py` 只读取并校验 acceptance/internal admission、冻结请求与因果游标；`internal_admission.py` 只拥有 internal 准入及其 SQLite/JSONL 事务。两者由 `store.py` 组合为同一执行 owner，调用方不得另建 writer 或沿旧模块转发。
+- `queue.py` 同时拥有 Thread 暂停意图；只保存稳定 pause_id 和原 execution_id，终态联查 executions，不复制正文或执行结果。继续时以 pause_id CAS 清除意图，并在同一事务中将 continuation 放到普通待处理输入之前。

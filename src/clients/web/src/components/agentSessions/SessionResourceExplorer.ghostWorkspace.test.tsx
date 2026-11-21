@@ -91,7 +91,7 @@ async function renderExplorer(options: {
   searchOpen?: boolean;
   searchQuery?: string;
   onActivateWorkspace?: (workspaceId: string) => Promise<void>;
-}): Promise<{ html: string; tree: ReactTestRenderer; diagnostics: Array<{ title: string; detail: string }> }> {
+}) {
   const diagnostics: Array<{ title: string; detail: string }> = [];
   installGatewayTestWindow(8014);
   installGatewayFetch((request) => {

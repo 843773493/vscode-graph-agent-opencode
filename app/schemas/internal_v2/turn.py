@@ -377,6 +377,7 @@ class TurnHistoryLoadRequest(BaseModel):
     anchor_tool_result: str | None = Field(default=None, min_length=1, max_length=256)
     turn_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     execution_id: str | None = Field(default=None, min_length=1, max_length=256)
+    execution_item_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     # 只用于单个 Turn 内的 ToolRow 定点补载；不允许退化成整轮工具详情读取。
     tool_call_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     turns: int | None = Field(default=None, ge=1, le=256)
@@ -392,7 +393,7 @@ class TurnHistoryLoadRequest(BaseModel):
         if self.context_cursor is not None:
             if self.direction != "tail" or any(value is not None for value in (
                 self.cursor, self.anchor_turn_id, self.anchor_message, self.anchor_tool_result,
-                self.turn_ids, self.execution_id, self.tool_call_ids, self.turns,
+                self.turn_ids, self.execution_id, self.execution_item_ids, self.tool_call_ids, self.turns,
                 self.before_turns, self.after_turns, self.include,
             )):
                 raise ValueError("上下文元数据续读不能混用历史页选择器")
@@ -414,7 +415,16 @@ class TurnHistoryLoadRequest(BaseModel):
                 raise ValueError("execution_id 详情只支持 tail 与 before 续读")
             if self.include is not None and "internal" not in self.include:
                 raise ValueError("execution_id 详情必须包含 internal")
+            if self.execution_item_ids is not None:
+                if self.direction != "tail" or self.cursor is not None:
+                    raise ValueError("execution_item_ids 定点补读不能混用分页游标")
+                if len(set(self.execution_item_ids)) != len(self.execution_item_ids) or any(
+                    not item_id.strip() or len(item_id) > 256 for item_id in self.execution_item_ids
+                ):
+                    raise ValueError("execution_item_ids 必须是非空且不重复的 canonical item ID")
             return self
+        if self.execution_item_ids is not None:
+            raise ValueError("execution_item_ids 必须提供 execution_id")
         if self.turn_ids is not None:
             if len(set(self.turn_ids)) != len(self.turn_ids):
                 raise ValueError("turn_ids 不能重复")

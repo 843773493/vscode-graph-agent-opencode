@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from "react";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as executionApi from "../../api/jobs";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { ComposerContext, type ComposerContextType } from "../../hooks/app/appContext";
 import {
@@ -16,7 +17,7 @@ import { installComposerTestGlobals } from "./composerTestFixtures";
 import type { ComposerTasks } from "./ComposerTaskList";
 import type { ModelPickerRequest } from "../../state/modelPicker";
 
-const WORKSPACE_ID = "workspace";
+const WORKSPACE_ID = JSON.stringify(["gateway", "workspace"]);
 const SESSION_ID = "session";
 const SCOPE_KEY = "workspace::session";
 
@@ -96,7 +97,6 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
     clearGoal: async () => undefined,
-    interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
     refreshAgents: async () => [agent("default"), agent("reviewer")],
@@ -150,7 +150,9 @@ function installComposerEnvironment(): void {
 afterEach(() => {
   restoreComposerGlobals();
   restoreComposerGlobals = () => {};
+  executionMocks.splice(0).forEach(restore => restore());
 });
+const executionMocks: Array<() => void> = [];
 
 describe("Composer 切换类动作失败必须可见", () => {
   test("权威状态确认失败进入输出，不新增状态栏入口或错误块", () => {
@@ -406,10 +408,15 @@ describe("Composer 切换类动作失败必须可见", () => {
     act(() => renderer.unmount());
   });
 
-  test("interruptSession 失败不产生未处理 rejection 且界面可见", async () => {
+  test("暂停控制失败不产生未处理 rejection 且界面可见", async () => {
     installComposerEnvironment();
     const state = appState([agent("default")]);
     state.activeJobIdsBySession.set(SCOPE_KEY, "job_running");
+    state.currentSession!.thread_id = "main";
+    const read = spyOn(executionApi, "getThreadExecutionControl").mockResolvedValue({ session_id: SESSION_ID,
+      thread_id: "main", job_id: "job_running", execution_id: "execution_running", state: "running", advancement_paused: false, can_resume: false });
+    const control = spyOn(executionApi, "controlThreadExecution").mockRejectedValue(new Error("暂停执行器崩溃"));
+    executionMocks.push(() => read.mockRestore(), () => control.mockRestore());
     let rejectionSeen: unknown = null;
     const onUnhandled = (event: unknown) => {
       rejectionSeen = (event as { reason?: unknown })?.reason ?? event;
@@ -418,14 +425,8 @@ describe("Composer 切换类动作失败必须可见", () => {
       addEventListener?: (type: string, handler: (event: unknown) => void) => void;
     };
     globalWithEvents.addEventListener?.("unhandledrejection", onUnhandled);
-    const renderer = mountComposer(
-      state,
-      baseActions({
-        interruptSession: async () => {
-          throw new Error("请求失败 500 : 中断执行器崩溃");
-        },
-      }),
-    );
+    const renderer = mountComposer(state, baseActions());
+    await act(async () => { await Promise.resolve(); });
 
     await act(async () => {
       renderer.root.findByProps({ id: "interruptButton" }).props.onClick();
@@ -436,7 +437,33 @@ describe("Composer 切换类动作失败必须可见", () => {
     // 未处理 rejection 会让 bun test 以 Unhandled error 终止本文件；这里额外断言
     // 没有事件冒泡，作为第二重证据。
     expect(rejectionSeen).toBeNull();
-    expect(JSON.stringify(renderer.toJSON())).toContain("中断生成失败：请求失败 500 : 中断执行器崩溃");
+    expect(control.mock.calls[0]?.[2].execution_id).toBe("execution_running");
+    expect(control.mock.calls[0]?.[3]).toBe("pause");
+    expect(JSON.stringify(renderer.toJSON())).toContain("暂停执行器崩溃");
+    act(() => renderer.unmount());
+  });
+
+  test("空输入 Enter 继续原执行，有正文 Enter 仍发送消息", async () => {
+    installComposerEnvironment();
+    const state = appState([agent("default")]);
+    state.currentSession!.thread_id = "main";
+    const paused = { session_id: SESSION_ID, thread_id: "main", job_id: "job_running", execution_id: "execution_running",
+      state: "paused" as const, advancement_paused: true, can_resume: true };
+    const read = spyOn(executionApi, "getThreadExecutionControl").mockResolvedValue(paused);
+    const control = spyOn(executionApi, "controlThreadExecution").mockResolvedValue({ ...paused, state: "running", advancement_paused: false, can_resume: false });
+    executionMocks.push(() => read.mockRestore(), () => control.mockRestore());
+    const sent: string[] = [];
+    const renderer = mountComposer(state, baseActions({ sendMessage: async content => { sent.push(content); } }));
+    await act(async () => { await Promise.resolve(); });
+    const input = () => renderer.root.findByProps({ id: "input" });
+    await act(async () => { input().props.onKeyDown({ key: "Enter", preventDefault() {} }); });
+    expect(control.mock.calls[0]?.[3]).toBe("resume");
+    expect(control.mock.calls[0]?.[2].execution_id).toBe("execution_running");
+    expect(sent).toEqual([]);
+    act(() => input().props.onChange({ target: { value: "正常正文" } }));
+    await act(async () => { input().props.onKeyDown({ key: "Enter", preventDefault() {} }); });
+    expect(sent).toEqual(["正常正文"]);
+    expect(control).toHaveBeenCalledTimes(1);
     act(() => renderer.unmount());
   });
 });

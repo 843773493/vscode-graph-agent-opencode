@@ -1,6 +1,8 @@
 import { t } from "../../../shared/core/i18n/index.js";
-import type { ChildThreadStatus, InternalExecutionHistory, TurnHistoryPage } from "../types/protocol";
-import { compareInternalResponseParts } from "./timeline/responseParts";
+import type { ChildThreadStatus, TurnHistoryPage } from "../types/protocol";
+import { mergeInternalExecutions, type InternalExecutionRecord } from "./session/internalExecutionHistory";
+
+export type ChildThreadHistoryPage = Omit<TurnHistoryPage, "internal_executions"> & { internal_executions?: InternalExecutionRecord[] };
 
 const STATUS_LABELS: Record<ChildThreadStatus, string> = {
   idle: t("child.idle"),
@@ -38,50 +40,16 @@ export function childThreadStatusClass(status: ChildThreadStatus): string {
   return STATUS_CLASSES[status];
 }
 
-function mergeDisplayParts(
-  previous: InternalExecutionHistory["display_parts"],
-  page: InternalExecutionHistory["display_parts"],
-): InternalExecutionHistory["display_parts"] {
-  const parts = new Map<string, InternalExecutionHistory["display_parts"][number]>();
-  for (const part of previous) parts.set(part.item_id, part);
-  for (const part of page) parts.set(part.item_id, part);
-  return [...parts.values()].sort(
-    (left, right) => left.logical_item_ordinal - right.logical_item_ordinal,
-  );
-}
-
-function mergeResponseParts(
-  previous: InternalExecutionHistory["response_parts"],
-  page: InternalExecutionHistory["response_parts"],
-): InternalExecutionHistory["response_parts"] {
-  const parts = new Map<string, InternalExecutionHistory["response_parts"][number]>();
-  for (const part of previous) parts.set(part.part_id, part);
-  for (const part of page) parts.set(part.part_id, part);
-  return [...parts.values()].sort(compareInternalResponseParts);
-}
-
 /** 同一冻结历史游标的续页只合并展示成员，每个权威对象使用最新完整投影。 */
-export function mergeChildThreadHistory(previous: TurnHistoryPage | null, page: TurnHistoryPage): TurnHistoryPage {
+export function mergeChildThreadHistory(previous: ChildThreadHistoryPage | null, page: TurnHistoryPage): ChildThreadHistoryPage {
   if (!previous || previous.projection_epoch !== page.projection_epoch) return page;
   const turns = new Map<string, TurnHistoryPage["items"][number]>();
   for (const turn of previous.items) turns.set(turn.turn_id, turn);
   for (const turn of page.items) turns.set(turn.turn_id, turn);
-  const executions = new Map<string, InternalExecutionHistory>();
-  for (const execution of previous.internal_executions ?? []) {
-    executions.set(execution.execution_id, execution);
-  }
-  for (const execution of page.internal_executions ?? []) {
-    const prior = executions.get(execution.execution_id);
-    const merged: InternalExecutionHistory = prior ? {
-      ...execution,
-      display_parts: mergeDisplayParts(prior.display_parts, execution.display_parts),
-      response_parts: mergeResponseParts(prior.response_parts, execution.response_parts),
-    } : execution;
-    executions.set(execution.execution_id, merged);
-  }
   return {
     ...page,
     items: [...turns.values()].sort((left, right) => left.ordinal - right.ordinal),
-    internal_executions: [...executions.values()].sort((left, right) => left.created_at.localeCompare(right.created_at)),
+    internal_executions: mergeInternalExecutions(previous.internal_executions ?? [], page.internal_executions ?? [])
+      .sort((left, right) => left.created_at.localeCompare(right.created_at)),
   };
 }

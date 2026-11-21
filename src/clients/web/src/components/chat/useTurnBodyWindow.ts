@@ -1,12 +1,13 @@
 import React from "react";
 import type { ListItem } from "react-virtuoso";
 import type { ChatTranscriptItem } from "./transcriptItems";
+import type { ExecutionItemReference } from "../../state/session/internalExecutionHistory";
 
 /** 复用虚拟列表实际挂载范围和测量高度，正文释放不折叠历史滚动空间。 */
 export function useTurnBodyWindow({ items, scopeKey, retain, onError, onRendered }: {
   items: readonly ChatTranscriptItem[];
   scopeKey: string;
-  retain?: (turnIds: string[]) => Promise<void>;
+  retain?: (turnIds: string[], executionItems?: ExecutionItemReference[]) => Promise<void>;
   onError: (error: unknown) => void;
   onRendered: () => void;
 }) {
@@ -23,7 +24,9 @@ export function useTurnBodyWindow({ items, scopeKey, retain, onError, onRendered
     latest.current.onRendered();
     if (!latest.current.retain || rendered.length === 0) return;
     for (const item of rendered) {
-      if (item.data?.kind === "turn" && !item.data.conversation.bodyEvicted && item.size > 0) {
+      if (item.size > 0 && (item.data?.kind === "turn" && !item.data.conversation.bodyEvicted
+        || item.data?.kind === "internal_execution" && !item.data.displayPart.bodyEvicted
+        || item.data?.kind === "execution_response" && !item.data.bodyEvicted)) {
         heights.set(item.data.key, item.size);
       }
     }
@@ -33,15 +36,19 @@ export function useTurnBodyWindow({ items, scopeKey, retain, onError, onRendered
     if (first < 0) return;
     let last = first;
     for (let index = first; index < all.length; index++) if (keys.has(all[index].key)) last = index;
-    const ids = all.slice(Math.max(0, first - 2), last + 3).flatMap(item =>
+    const window = all.slice(Math.max(0, first - 2), last + 3);
+    const ids = window.flatMap(item =>
       item.kind === "turn" && item.conversation.turnId ? [item.conversation.turnId] : []);
-    const identity = JSON.stringify(ids);
+    const executionItems = window.flatMap(item => item.kind === "internal_execution"
+      ? [{ executionId: item.executionId, itemId: item.displayPart.item_id }]
+      : item.kind === "execution_response" ? [{ executionId: item.executionId, itemId: item.itemId }] : []);
+    const identity = JSON.stringify([ids, executionItems]);
     if (identity === previousWindow.current) return;
     previousWindow.current = identity;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
-      void latest.current.retain?.(ids).catch(latest.current.onError);
+      void latest.current.retain?.(ids, executionItems).catch(latest.current.onError);
     });
   }, [heights]);
   return { heights, itemsRendered };

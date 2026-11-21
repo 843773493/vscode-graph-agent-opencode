@@ -2977,6 +2977,73 @@ export declare type JobControlResponseDTO = Message<"boxteam.workspace.v2.JobCon
 export declare const JobControlResponseDTOSchema: GenMessage<JobControlResponseDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ThreadExecutionControlRequest
+ */
+export declare type ThreadExecutionControlRequest = Message<"boxteam.workspace.v2.ThreadExecutionControlRequest"> & {
+  /**
+   * @generated from field: string action = 1;
+   */
+  action: string;
+
+  /**
+   * @generated from field: optional string expected_execution_id = 2;
+   */
+  expectedExecutionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadExecutionControlRequest.
+ * Use `create(ThreadExecutionControlRequestSchema)` to create a new message.
+ */
+export declare const ThreadExecutionControlRequestSchema: GenMessage<ThreadExecutionControlRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadExecutionControlDTO
+ */
+export declare type ThreadExecutionControlDTO = Message<"boxteam.workspace.v2.ThreadExecutionControlDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: optional string job_id = 3;
+   */
+  jobId?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_id = 4;
+   */
+  executionId?: string | undefined;
+
+  /**
+   * @generated from field: string state = 5;
+   */
+  state: string;
+
+  /**
+   * @generated from field: bool advancement_paused = 6;
+   */
+  advancementPaused: boolean;
+
+  /**
+   * @generated from field: bool can_resume = 7;
+   */
+  canResume: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadExecutionControlDTO.
+ * Use `create(ThreadExecutionControlDTOSchema)` to create a new message.
+ */
+export declare const ThreadExecutionControlDTOSchema: GenMessage<ThreadExecutionControlDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.JobDTO
  */
 export declare type JobDTO = Message<"boxteam.workspace.v2.JobDTO"> & {
@@ -12890,6 +12957,13 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: optional string context_cursor = 13;
    */
   contextCursor?: string | undefined;
+
+  /**
+   * 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。
+   *
+   * @generated from field: repeated string execution_item_ids = 14;
+   */
+  executionItemIds: string[];
 };
 
 /**

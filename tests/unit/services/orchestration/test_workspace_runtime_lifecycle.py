@@ -132,6 +132,9 @@ class EmptyExecutionQueueService:
             delivery_policy="after_turn",
         )
 
+    async def pauses(self):
+        return ()
+
     async def records(self):
         return tuple(self._records)
 

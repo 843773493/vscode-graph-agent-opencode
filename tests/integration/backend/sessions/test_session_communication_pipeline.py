@@ -63,7 +63,7 @@ async def _plan_communication_calls(
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    endpoint = config["llm"]["providers"]["primary"]["defaults"]["endpoint"]
     interactions = [build_cassette(
         asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
         frames=chat_completion_frames(

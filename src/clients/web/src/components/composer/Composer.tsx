@@ -6,6 +6,7 @@ import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerAttachments, useComposerDraft, writeComposerAttachments, type ComposerDraftController } from "../../hooks/composer/useComposerDraft";
 import { useSkillUntrackCommand } from "../../hooks/composer/useSkillUntrackCommand";
+import { useExecutionControls } from "../../hooks/composer/useExecutionControls";
 import {
   composerDraftScopeKey,
   composerDraftExceedsLimit,
@@ -90,7 +91,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     refreshGoal,
     updateGoal,
     clearGoal,
-    interruptSession,
     switchAgent,
     switchModel,
     refreshAgents,
@@ -109,7 +109,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
   >([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
-  const [stopPendingFor, setStopPendingFor] = useState<string | null>(null);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
@@ -184,7 +183,14 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
-  const showInterrupt = Boolean(state.currentActiveJobId);
+  const executionControls = useExecutionControls({
+    apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT, workspaceId: currentWorkspaceId,
+    sessionId: currentSessionId, threadId: threadId ?? state.currentSession?.thread_id ?? null,
+    activityKey: JSON.stringify([state.currentActiveJobId, state.queuedPendingCount]),
+    active: status?.active ?? true,
+  });
+  const showInterrupt = Boolean(executionControls.snapshot?.job_id);
+  useEffect(() => { if (executionControls.error) reportDiagnostic(executionControls.error); }, [executionControls.error, reportDiagnostic]);
 
   useEffect(() => {
     resizeTextarea(textareaRef.current);
@@ -660,19 +666,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     setComposerNotice("");
   };
 
-  const handleInterrupt = () => {
-    if (!showInterrupt || stopPendingFor === currentSessionCacheKey) {
-      return;
-    }
-
-    setAttachmentError("");
-    const scopeKey = currentSessionCacheKey;
-    setStopPendingFor(scopeKey);
-    void interruptSession().catch((error: unknown) => {
-      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.interruptFailed", errorMessage(error)));
-    }).finally(() => setStopPendingFor(current => current === scopeKey ? null : current));
-  };
-
   const handleViewSelect = (view: ConversationContentView) => {
     setViewMenuOpen(false);
     void switchContentView(view);
@@ -791,6 +784,10 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
     }
 
     e.preventDefault();
+    if (!hasContent) {
+      if (executionControls.snapshot?.can_resume && !executionControls.pending) void executionControls.control("resume");
+      return;
+    }
     if (e.altKey && showInterrupt) {
       handleSend(nextDeliveryPolicy(defaultDeliveryPolicy));
       return;
@@ -837,7 +834,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
               />
               <ComposerAttachmentTray
                 attachments={attachments}
-                error={attachmentError}
+                error={[attachmentError, executionControls.error].filter(Boolean).join("\n")}
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
                 onRetry={fileId => {
@@ -930,9 +927,14 @@ function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, 
                     hasContent={hasContent}
                     sendBlocked={!slashCommandMode && attachments.some(attachment => Boolean(attachment.uploadState))}
                     showInterrupt={showInterrupt}
-                    stopPending={stopPendingFor !== null && stopPendingFor === currentSessionCacheKey}
+                    stopPending={executionControls.pending}
+                    pausing={executionControls.snapshot?.state === "pausing"}
+                    controlReady={executionControls.snapshot !== null}
+                    canResume={executionControls.snapshot?.can_resume ?? false}
+                    advancementPaused={executionControls.snapshot?.advancement_paused ?? false}
                     onClear={handleClear}
-                    onInterrupt={handleInterrupt}
+                    onControl={action => { void executionControls.control(action); }}
+                    onRefreshControl={() => { void executionControls.refresh().catch(() => {}); }}
                     onSend={() => handleSend(defaultDeliveryPolicy)}
                     onAlternate={() => handleSend(nextDeliveryPolicy(defaultDeliveryPolicy))}
                     defaultDeliveryPolicy={defaultDeliveryPolicy}

@@ -1,15 +1,19 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
 import { MessageSubmissionRejectedError, MessageSubmissionUnknownError, reconcileMessageSubmissions, sendUserMessage } from "../../api/session/sessionMessages";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { ChildThreadSummary, MessageRunAccepted, TurnHistoryPage } from "../../types/backend";
+import { compactInternalExecutionBodies } from "../../state/session/turnBodyRetention";
+import { mergeInternalExecutions, type ExecutionItemReference } from "../../state/session/internalExecutionHistory";
+import type { ChildThreadHistoryPage } from "../../state/childThreadDisplay";
 import { mergeChildThreadHistory } from "../../state/childThreadDisplay";
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface ChildThreadConversationSnapshot {
-  history: TurnHistoryPage | null;
-  report: TurnHistoryPage | null;
+  history: ChildThreadHistoryPage | null;
+  report: ChildThreadHistoryPage | null;
+  bodyWindow?: Partial<Record<"history" | "report", string[]>>;
   view: "history" | "report";
   draft: string;
   loading: boolean;
@@ -35,6 +39,12 @@ function subscribeReportReads(listener: () => void) {
     reportReadListeners.delete(listener);
     if (reportReadListeners.size === 0) readReports = {};
   };
+}
+
+function retainPageBodies(page: ChildThreadHistoryPage, retainedIds?: string[]): ChildThreadHistoryPage {
+  return retainedIds ? { ...page,
+    internal_executions: compactInternalExecutionBodies(page.internal_executions ?? [], retainedIds),
+  } : page;
 }
 
 function sameHistoryRevision(previous: TurnHistoryPage | null, next: TurnHistoryPage): boolean {
@@ -165,7 +175,7 @@ export function useChildThreadConversation({
         || !sameHistoryRevision(current[view], page)
       ) {
         update(key, (prior) => ({
-          ...prior, [view]: older ? mergeChildThreadHistory(prior[view], page) : page,
+          ...prior, [view]: retainPageBodies(older ? mergeChildThreadHistory(prior[view], page) : page, prior.bodyWindow?.[view]),
           view, loading: false, error: null, paged: view === "history" && older,
         }));
       }
@@ -212,6 +222,60 @@ export function useChildThreadConversation({
     }, 2500);
     return () => globalThis.clearInterval(timer);
   }, [enabled, read, threadId]);
+
+  const bodyController = useMemo(() => new AbortController(), [apiPort, key, selectionToken, snapshot.view]);
+  useEffect(() => () => bodyController.abort(), [bodyController]);
+  const bodyLoads = useRef(new Map<string, Promise<void>>());
+  const executionBodyWindow = useRef<readonly string[]>([]);
+  const retainExecutionBodies = useCallback(async (_turnIds: string[], items: ExecutionItemReference[] = []) => {
+    if (!key || !sessionId || !threadId || bodyController.signal.aborted) return;
+    const view = latestRef.current.view;
+    const token = selectionTokenRef.current;
+    const page = latestRef.current[view];
+    const retainedIds = items.map(item => item.itemId);
+    executionBodyWindow.current = retainedIds;
+    update(key, prior => ({ ...prior, [view]: prior[view] ? retainPageBodies(prior[view], retainedIds) : null,
+      bodyWindow: { ...prior.bodyWindow, [view]: retainedIds } }));
+    const missing = new Map<string, string[]>();
+    for (const item of items) {
+      const execution = page?.internal_executions?.find(execution => execution.execution_id === item.executionId);
+      if (!execution?.display_parts.some(part => part.item_id === item.itemId && part.bodyEvicted)
+        && !execution?.response_parts.some(part => part.source.item_id === item.itemId && part.bodyEvicted)) continue;
+      const ids = missing.get(item.executionId) ?? [];
+      if (!ids.includes(item.itemId)) ids.push(item.itemId);
+      missing.set(item.executionId, ids);
+    }
+    for (const [executionId, ids] of missing) for (let index = 0; index < ids.length; index += 4) {
+      if (bodyController.signal.aborted) return;
+      const selected = ids.slice(index, index + 4).filter(id => executionBodyWindow.current.includes(id));
+      if (!selected.length) continue;
+      const identity = JSON.stringify([token, view, executionId, selected]);
+      let pending = bodyLoads.current.get(identity);
+      if (!pending) {
+        pending = (async () => {
+          const response = await loadSessionHistory(apiPort, sessionId, { execution_id: executionId,
+            execution_item_ids: selected, include: [...INCLUDE] }, workspaceId, bodyController.signal, threadId);
+          if (bodyController.signal.aborted || selectionTokenRef.current !== token) return;
+          update(key, prior => {
+            const current = prior[view];
+            if (!current) return prior;
+            if (!sameHistoryRevision(current, response)) return { ...prior,
+              error: "历史视图已更新，正文补读未应用，请刷新历史或重新打开报告" };
+            return { ...prior, [view]: retainPageBodies({ ...current,
+              internal_executions: mergeInternalExecutions(current.internal_executions ?? [], response.internal_executions ?? []),
+            }, prior.bodyWindow?.[view]) };
+          });
+        })();
+        bodyLoads.current.set(identity, pending);
+      }
+      try { await pending; }
+      catch (error) { if (!bodyController.signal.aborted) throw error; }
+      finally { bodyLoads.current.delete(identity); }
+    }
+  }, [apiPort, bodyController, key, sessionId, threadId, update, workspaceId]);
+  const reportHistoryError = useCallback((error: unknown) => {
+    if (key) update(key, prior => ({ ...prior, error: errorMessage(error) }));
+  }, [key, update]);
 
   const send = useCallback(async () => {
     if (!sessionId || !threadId || !key || sendingRef.current.has(key)) return;
@@ -261,7 +325,7 @@ export function useChildThreadConversation({
   }, []);
 
   return {
-    selectedThread, selectionIntent, snapshot,
+    selectedThread, selectionIntent, snapshot, retainExecutionBodies, reportHistoryError,
     owner: sessionId && threadId ? { sessionId, threadId } : null,
     submissionRecovery: enabled && workspaceId && sessionId && threadId
       ? { port: apiPort, owner: { workspaceKey: workspaceId, sessionId, threadId } } : null,

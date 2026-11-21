@@ -601,7 +601,7 @@ async def test_resource_cleanup_reads_deleting_session_before_physical_isolation
         sessions=ObservingSessionService(), jobs=ObservingJobService(),
         resources=ObservingProviderRegistry(), interrupt=None, policy=None,
         debug=SimpleNamespace(drain_session=AsyncMock()),
-        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(), advancement_changed=lambda: None, pause_automations=AsyncMock(), resume_execution=AsyncMock(),
     )
 
     async def composite_drain(session_id: str) -> None:

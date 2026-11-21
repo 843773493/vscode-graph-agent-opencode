@@ -398,6 +398,7 @@ class RolloutContextReader:
         snapshot_upper_logical_item_ordinal: int | None,
         limit: int,
         execution_id: str | None = None,
+        item_ids: tuple[str, ...] | None = None,
     ) -> InternalExecutionHistoryPage:
         """同一 view/snapshot 在 SQL 中择一，再读取有界元数据与正文页。"""
         return self._storage.storage.read_internal_execution_history_page(
@@ -410,6 +411,7 @@ class RolloutContextReader:
             snapshot_upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
             limit=limit,
             execution_id=execution_id,
+            item_ids=item_ids,
         )
 
     def decode_message(

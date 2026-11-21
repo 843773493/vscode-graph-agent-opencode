@@ -54,6 +54,7 @@ app/core/
 - `turn_execution_scope.py`：Turn 注册表持有原 scope／inbox 直到资源与控制文件清理成功；失败或等待者取消保留同一身份供重试，迟到关闭须核对象身份，不得删除后继登记或文件。inbox 经异步 open 加载，控制文件读写及删除交既有受保护 worker，提交结算后才在事件循环发布命令；控制提交与关闭沿原锁串行，不新增写入链。清理执行与重试由 `boxteam_plugin_sdk.lifecycle.LifetimeScope` 单点拥有，不新增关闭任务表。
 - 后台任务与邮箱的纯数据合同位于 `app/domain/background_work.py`，handler 端口位于 `app/abstractions/background_task_registry.py`，执行与恢复位于 `app/services/orchestration/background_work/`；不在 core 中增加第二套后台工作实现。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供生命周期原语与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
+- `execution_pause.py`：原协程的进程内安全边界准入；只扣除没有在途模型/工具的静止暂停时间。Thread 调度、控制 API 和持久任务状态仍归各自 owner，不在此实现崩溃恢复或另一套状态存储。
 - `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，已知文件 I/O 的目标与原因可以进入执行诊断；SQLite、内部 Pydantic／canonical 领域校验及上游异常正文继续按来源保护，明确的本地业务说明保持原合同。SQLite 只生成原异常类别和适用错误码，内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。
 - `sqlite_state.py` 的运行时拒绝复用 `failure_detail`；路径、VFS、进程锁与 schema 规则的原原因保留位置及日志次错，普通错误保留逻辑 artifact、阶段、SQLite 版本与系统码。不得为日志故障改变锁、连接或迁移顺序，也不补建损坏账本声明的表。
 - `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。

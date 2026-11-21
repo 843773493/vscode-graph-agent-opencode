@@ -4,11 +4,9 @@ import { loadMessageSubmissions, messageSubmissionKey } from "../../state/messag
 import { mergeSubmissionConversation, submissionConversation } from "../../state/messageSubmissions/projection";
 import { subscribeBrowserViews } from "../../state/browserViewStore";
 import { createSnapshotReadCoordinator, SnapshotReadSupersededError } from "../../../../shared/core/syncState";
-import { HttpRequestError } from "../../api/http";
 import {
   compactSessionContext as apiCompactSessionContext,
   DEFAULT_SESSION_TITLE,
-  interruptSession as apiInterruptSession,
   replayMessageTurn as apiReplayMessageTurn,
   sendUserMessage as apiSendMessage,
 } from "../../api";
@@ -21,12 +19,10 @@ import type {
   SessionCompactResult,
 } from "../../types/backend";
 import type { AppState, ConversationContentView, ConversationView } from "../../types/frontend";
-import { listThreadPendingRequests as apiListThreadPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
 import {
   dispatchToConversationProjection,
   writeDispatchActiveJob,
-  writePendingSnapshot,
 } from "../../state/conversations";
 import { appendFrontendEvent } from "../../state/traceEvents";
 import { errorMessage } from "../../utils/errorMessage";
@@ -453,109 +449,6 @@ export function useSessionRunActions({
     setState,
   ]);
 
-  const interruptSession = useCallback(async () => {
-    const session = currentSession;
-    if (!session) {
-      throw new Error("当前没有可中断的会话");
-    }
-    const targetThreadId = currentThreadId ?? session.thread_id;
-    if (!targetThreadId) {
-      throw new Error("当前会话缺少权威 main Thread 身份，无法中断");
-    }
-
-    setState((prev) => ({ ...prev, status: "正在中断生成..." }));
-    try {
-      const result = await apiInterruptSession(
-        apiPort,
-        session.session_id,
-        targetThreadId,
-        currentSessionGatewayWorkspaceId,
-      );
-      setState((prev) => {
-        // 会话已切走时，旧会话的中断结果不得改写新会话状态栏。
-        if (!isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
-          return prev;
-        }
-        const terminalStatuses = [
-          "completed",
-          "failed",
-          "interrupted",
-        ];
-        const status = result.status === "cancelling"
-          ? "已请求中断，正在收尾"
-          : terminalStatuses.includes(result.status)
-            ? `已停止: ${result.status}`
-            : `中断状态未确认: ${result.status}`;
-        return { ...prev, status };
-      });
-    } catch (error) {
-      const sessionCacheKey = currentSessionCacheKey ?? sessionScopeKey(currentSessionGatewayWorkspaceId, session.session_id);
-      if (!(error instanceof HttpRequestError) || error.status !== 404) {
-        // 中断失败说明后端任务很可能仍在运行，不能在这里乐观清掉前端运行态；
-        // 但要重新拉取待处理队列快照，让 activeJobIds 与后端真值保持一致。
-        const message = errorMessage(error);
-        let notice = `中断生成失败: ${message}`;
-        try {
-          const snapshot = await apiListThreadPendingRequests(
-            apiPort,
-            session.session_id,
-            currentSessionGatewayWorkspaceId,
-            undefined,
-            currentThreadId,
-          );
-          setState((prev) => {
-            const next = {
-              ...prev,
-              pendingConversations: new Map(prev.pendingConversations),
-              pendingQueueVersions: new Map(prev.pendingQueueVersions),
-              activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
-            };
-            writePendingSnapshot(
-              next.pendingConversations,
-              next.activeJobIdsBySession,
-              snapshot,
-              sessionCacheKey,
-              next.pendingQueueVersions,
-            );
-            // 队列快照按会话作用域写回；失败文案只在仍停留在发起会话时才写。
-            if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
-              next.status = notice;
-            }
-            return next;
-          });
-        } catch (recoveryError) {
-          const recoveryMessage = errorMessage(recoveryError);
-          notice = `${notice}；重新读取运行状态也失败: ${recoveryMessage}`;
-          setState((prev) => {
-            if (!isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
-              return prev;
-            }
-            return { ...prev, status: notice };
-          });
-          throw new Error(`${message}；重新读取运行状态也失败: ${recoveryMessage}`, { cause: error });
-        }
-        throw error;
-      }
-      // 后端已确认没有运行中的任务，清掉因重连/丢 SSE 残留的前端运行态，
-      // 并触发一次历史 bootstrap 读取已提交的终态。
-      setState((prev) => {
-        const next = {
-          ...prev,
-          pendingConversations: new Map(prev.pendingConversations),
-          pendingQueueVersions: new Map(prev.pendingQueueVersions),
-          activeJobIdsBySession: new Map(prev.activeJobIdsBySession),
-        };
-        next.activeJobIdsBySession.delete(sessionCacheKey);
-        next.pendingConversations.delete(sessionCacheKey);
-        next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
-        if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
-          next.status = "运行任务已结束，正在同步会话历史";
-        }
-        return next;
-      });
-    }
-  }, [apiPort, currentSession, currentThreadId, currentSessionCacheKey, currentSessionGatewayWorkspaceId, setState]);
-
   const replayTurn = useCallback(async (
     targetMessageId: string,
     action: MessageReplayRequest["action"],
@@ -657,7 +550,7 @@ export function useSessionRunActions({
       const message = errorMessage(error);
       // 轮次回放失败只是当前会话的一次动作失败，不属于「工作区初始化失败」；
       // 只写 status，绝不能写 error —— 那是初始化失败出口的专属状态。
-      // 这里也不做待处理队列重取：与 sendMessage/interruptSession 不同，replay
+      // 这里也不做待处理队列重取：与 sendMessage 不同，replay
       // 没有任何乐观的本地 pending/运行态可失配——乐观回放态只在 apiReplayMessageTurn
       // 成功后才写入，失败发生在请求阶段时前端从未改动队列或 activeJob。后端 replay
       // 是「移除目标消息之后上下文 + 新建替换消息 + 创建新 Job」的多步非原子流程，
@@ -689,7 +582,6 @@ export function useSessionRunActions({
 
   return {
     compactSession,
-    interruptSession,
     ...pendingRequestActions,
     replayTurn,
     sendMessage,

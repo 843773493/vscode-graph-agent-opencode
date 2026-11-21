@@ -462,7 +462,7 @@ class PersistentTaskStore(TaskGoals, TaskProgress):
             ))
             return self._run(connection.execute("SELECT * FROM persistent_task_runs WHERE run_id=?", (run_id,)).fetchone())
 
-    def schedule_due(self, now: datetime) -> list[tuple[str, str]]:
+    def schedule_due(self, now: datetime, *, excluded_task_ids: frozenset[str] | set[str] = frozenset()) -> list[tuple[str, str]]:
         """计划触发和游标一次提交；中断只会保留两者或两者均不保留。"""
         changed: list[tuple[str, str]] = []
         with self._transaction() as connection:
@@ -472,6 +472,8 @@ class PersistentTaskStore(TaskGoals, TaskProgress):
             ).fetchall()
             for row in rows:
                 task_id = row["task_id"]
+                if task_id in excluded_task_ids:
+                    continue
                 task = self._task(connection, task_id)
                 schedule = task.configuration.trigger.schedule()
                 if schedule is None or row["definition_revision"] != task.definition_revision:
@@ -499,8 +501,8 @@ class PersistentTaskStore(TaskGoals, TaskProgress):
                                    (following.isoformat(), task_id))
         return changed
 
-    def next_schedule_at(self) -> datetime | None:
-        tasks = [task for task in self.list_automations() if task.lifecycle == "active"
+    def next_schedule_at(self, *, excluded_task_ids: frozenset[str] | set[str] = frozenset()) -> datetime | None:
+        tasks = [task for task in self.list_automations() if task.task_id not in excluded_task_ids and task.lifecycle == "active"
                  and task.next_run_at is not None]
         return min((task.next_run_at for task in tasks if task.next_run_at is not None), default=None)
 

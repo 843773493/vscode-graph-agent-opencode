@@ -8,7 +8,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     UserExecutionIdentity,
 )
-from app.domain.itemized.execution_queue import ExecutionQueueRecord
+from app.domain.itemized.execution_queue import ExecutionQueuePause, ExecutionQueueRecord
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -16,6 +16,7 @@ from app.schemas.internal_v2.job import (
     JobDTO,
     StepDTO,
 )
+from app.schemas.internal_v2.execution_control import ThreadExecutionControlDTO
 
 T = TypeVar("T")
 from app.schemas.internal_v2.message import AttachmentRef
@@ -29,6 +30,18 @@ from app.schemas.internal_v2.pending_request import (
 
 @runtime_checkable
 class JobServiceProtocol(Protocol):
+    def advancement_paused(self, session_id: str, thread_id: str) -> bool: ...
+
+    async def thread_control_snapshot(self, session_id: str, thread_id: str) -> ThreadExecutionControlDTO: ...
+
+    async def control_thread_advancement(
+        self, session_id: str, thread_id: str, *, action: str,
+        expected_execution_id: str | None,
+        resume_execution: Callable[[ExecutionQueuePause], Awaitable[str]] | None = None,
+    ) -> ThreadExecutionControlDTO: ...
+
+    def restore_paused_threads(self, pauses: tuple[ExecutionQueuePause, ...]) -> None: ...
+
     def assert_accepting_jobs(self) -> None: ...
 
     async def drain_preparations(self, session_ids: list[str] | None = None) -> None: ...
@@ -93,6 +106,7 @@ class JobServiceProtocol(Protocol):
     async def stop_session_jobs(
         self, session_id: str, *, thread_id: str | None = None,
         delete_records: bool = True, discard_pending: bool = True,
+        pause_pending: bool = False,
     ) -> int: ...
 
     async def settle_jobs(self, job_ids: list[str]) -> None: ...

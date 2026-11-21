@@ -10,6 +10,8 @@ from typing import Literal, TypeVar
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.domain.session_stop import DELETE_SESSION_POLICY, SessionStopPolicy
+from app.domain.itemized.execution_queue import ExecutionQueuePause
+from app.schemas.internal_v2.execution_control import ThreadExecutionControlDTO, ThreadExecutionControlRequest
 from app.schemas.internal_v2.session import (
     SessionControlResultDTO,
     SessionInterruptResultDTO,
@@ -34,6 +36,9 @@ class SessionStopService:
         pause_goal: Callable[[str, str | None], Awaitable[None]],
         close_runtime: Callable[[str, str | None], Awaitable[None]],
         holders: tuple[OperationHolderGate, ...],
+        advancement_changed: Callable[[], None],
+        pause_automations: Callable[[str, str | None], Awaitable[None]],
+        resume_execution: Callable[[ExecutionQueuePause], Awaitable[str]],
     ) -> None:
         self._sessions = sessions
         self._jobs = jobs
@@ -45,28 +50,64 @@ class SessionStopService:
         self._pause_goal = pause_goal
         self._close_runtime = close_runtime
         self._holders = holders
+        self._advancement_changed = advancement_changed
+        self._pause_automations = pause_automations
+        self._resume_execution = resume_execution
+
+    async def execution_control_snapshot(self, session_id: str, thread_id: str) -> ThreadExecutionControlDTO:
+        async with self._sessions.session_read_admission(session_id):
+            await self._sessions.resolve_thread(session_id, thread_id)
+            return await self._jobs.thread_control_snapshot(session_id, thread_id)
+
+    async def control_execution(
+        self, session_id: str, thread_id: str, payload: ThreadExecutionControlRequest,
+    ) -> ThreadExecutionControlDTO:
+        # 身份校验不唤醒 runtime，执行 CAS 由 Job 调度锁保护。
+        async with self._sessions.session_read_admission(session_id):
+            await self._sessions.resolve_thread(session_id, thread_id)
+        if payload.action in {"pause", "resume"}:
+            async with self._jobs.thread_input_admission(session_id, thread_id):
+                result = await self._jobs.control_thread_advancement(
+                    session_id, thread_id, action=payload.action,
+                    expected_execution_id=payload.expected_execution_id,
+                    resume_execution=self._resume_execution,
+                )
+            self._advancement_changed()
+            return result
+        expected = (thread_id, payload.expected_execution_id)
+        if payload.action == "interrupt":
+            await self.interrupt(session_id, thread_id=thread_id, expected=expected)
+        else:
+            await self.stop(session_id, expected=expected, preserve_pending=True)
+        self._advancement_changed()
+        return await self.execution_control_snapshot(session_id, thread_id)
+
+    async def _check_expected(self, session_id: str, expected: tuple[str, str | None] | None) -> None:
+        if expected is not None:
+            snapshot = await self._jobs.thread_control_snapshot(session_id, expected[0])
+            if snapshot.execution_id != expected[1]:
+                raise ValueError("执行已变化，请刷新控制状态后重试")
 
     async def interrupt(
         self, session_id: str, *, thread_id: str | None = None,
+        expected: tuple[str, str | None] | None = None,
     ) -> SessionInterruptResultDTO:
         policy = self._policy("interrupt")
 
         async def run() -> SessionInterruptResultDTO:
+            await self._check_expected(session_id, expected)
             result = await self._interrupt.interrupt(
                 session_id, thread_id=thread_id,
             )
             target_thread = result.thread_id if policy.scope == "thread" else None
             if policy.goal == "pause":
                 await self._pause_goal(session_id, target_thread)
-            # 每个策略都等待真实执行根；普通 interrupt 不加载和改写其它队列项。
-            if policy.scope == "session" or policy.jobs != "interrupt" or policy.pending_messages != "continue" or self._has_resources(policy):
-                await self._jobs.stop_session_jobs(
-                    session_id, thread_id=target_thread,
-                    delete_records=policy.jobs == "delete",
-                    discard_pending=policy.pending_messages == "discard",
-                )
-            else:
-                await self._jobs.settle_jobs([result.job_id])
+            await self._jobs.stop_session_jobs(
+                session_id, thread_id=target_thread,
+                delete_records=policy.jobs == "delete",
+                discard_pending=policy.pending_messages == "discard",
+                pause_pending=policy.pending_messages == "keep",
+            )
             await self._drain_active_resources(session_id, policy, target_thread)
             return result
 
@@ -78,8 +119,14 @@ class SessionStopService:
             )
         return result
 
-    async def stop(self, session_id: str) -> SessionControlResultDTO:
+    async def stop(
+        self, session_id: str, *, expected: tuple[str, str | None] | None = None,
+        preserve_pending: bool = False,
+    ) -> SessionControlResultDTO:
         policy = self._policy("stop")
+        if preserve_pending:
+            # Composer 的完全打断覆盖整个会话，但不隐含删除用户的排队输入。
+            policy = policy.model_copy(update={"scope": "session", "jobs": "cancel", "pending_messages": "keep"})
         async with self._sessions.session_read_admission(session_id):
             await self._sessions.get(session_id)
             target_thread = (
@@ -88,12 +135,15 @@ class SessionStopService:
             )
 
         async def run() -> SessionControlResultDTO:
+            await self._check_expected(session_id, expected)
+            await self._pause_automations(session_id, target_thread)
             if policy.goal == "pause":
                 await self._pause_goal(session_id, target_thread)
             await self._jobs.stop_session_jobs(
                 session_id, thread_id=target_thread,
                 delete_records=policy.jobs == "delete",
                 discard_pending=policy.pending_messages == "discard",
+                pause_pending=policy.pending_messages == "keep",
             )
             await self._drain_active_resources(session_id, policy, target_thread)
             return SessionControlResultDTO(session_id=session_id, action="stop", status="stopped")

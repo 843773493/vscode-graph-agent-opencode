@@ -97,7 +97,6 @@ export interface AppContextType {
     agentId: string,
     model: ModelReference,
   ) => Promise<void>;
-  interruptSession: () => Promise<void>;
   selectSession: (sessionId: string) => void;
   selectWorkspaceSession: (
     workspaceId: string,
@@ -216,7 +215,6 @@ type ComposerContextActions = Pick<
   | "refreshGoal"
   | "updateGoal"
   | "clearGoal"
-  | "interruptSession"
   | "switchAgent"
   | "switchModel"
   | "refreshAgents"

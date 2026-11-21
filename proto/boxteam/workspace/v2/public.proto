@@ -674,6 +674,21 @@ message JobControlResponseDTO {
   string thread_id = 5;
 }
 
+message ThreadExecutionControlRequest {
+  string action = 1;
+  optional string expected_execution_id = 2;
+}
+
+message ThreadExecutionControlDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  optional string job_id = 3;
+  optional string execution_id = 4;
+  string state = 5;
+  bool advancement_paused = 6;
+  bool can_resume = 7;
+}
+
 message JobDTO {
   google.protobuf.Timestamp created_at = 1;
   google.protobuf.Timestamp updated_at = 2;
@@ -2955,6 +2970,8 @@ message TurnHistoryLoadRequest {
   optional TurnMessageReferenceDTO anchor_message = 11;
   optional string anchor_tool_result = 12;
   optional string context_cursor = 13;
+  // 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。
+  repeated string execution_item_ids = 14;
 }
 
 message ContextNoticeBatchDTO {

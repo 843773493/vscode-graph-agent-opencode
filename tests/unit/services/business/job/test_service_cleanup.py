@@ -102,3 +102,35 @@ async def test_stop_session_jobs_removes_running_and_queued_jobs(job_service_fac
     assert other_job.job_id in service._jobs
     assert all(key[0] != session_id for key in service._thread_current_job)
     assert service._pending_queue.queued_job_ids(session_id) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_paused", [False, True])
+async def test_stop_keeps_queue_paused_until_explicit_resume(
+    job_service_factory, session_lifecycle_guard, boundary_executor, already_paused,
+):
+    service = job_service_factory(job_event_bus=FakeJobEventBus(), job_executor=boundary_executor,
+                                  session_lifecycle_guard=session_lifecycle_guard)
+    session_id = "ses_keep_queue"
+    thread_id = job_fixture_thread_id(session_id)
+    async def submit(message_id):
+        return await service.start_job(session_id, message_id, thread_id=thread_id,
+                                       message_id=message_id, message_created_at="2026-11-21T00:00:00+00:00")
+    await submit("msg_first")
+    await asyncio.wait_for(boundary_executor.started.wait(), timeout=1)
+    queued = await submit("msg_queued")
+    if already_paused:
+        snapshot = await service.thread_control_snapshot(session_id, thread_id)
+        await service.control_thread_advancement(session_id, thread_id, action="pause",
+                                                  expected_execution_id=snapshot.execution_id)
+    await service.run_session_control_operation(session_id, lambda: service.stop_session_jobs(
+        session_id, delete_records=False, discard_pending=False, pause_pending=True,
+    ), deadline=asyncio.get_running_loop().time() + 5)
+    pending = await service.list_pending(session_id, thread_id=thread_id)
+    assert [item.job_id for item in pending.requests] == [queued.job_id]
+    assert service._jobs[queued.job_id].task is None
+    snapshot = await service.thread_control_snapshot(session_id, thread_id)
+    assert snapshot.state == "paused" and snapshot.can_resume and snapshot.execution_id is None
+    await service.control_thread_advancement(session_id, thread_id, action="resume", expected_execution_id=None)
+    await asyncio.wait_for(service._jobs[queued.job_id].task, timeout=1)
+    assert service._jobs[queued.job_id].status == JobStatus.completed

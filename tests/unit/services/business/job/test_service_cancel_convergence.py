@@ -25,9 +25,9 @@ class _InstantExecutor:
         self.ran = 0
 
     async def run(self, job):
-        del job
-        self.ran += 1
-        return "done"
+        async with job.execution_pause.boundary():
+            self.ran += 1
+            return "done"
 
 
 async def _wait_slot_cleared(service: JobService, session_id: str) -> None:
@@ -184,40 +184,46 @@ async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard, monke
 
 
 @pytest.mark.asyncio
-async def test_pause_before_task_body_runs_resumes_cleanly(job_service_factory,
-    session_lifecycle_guard,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_pause_before_task_body_preserves_original_task(
+    job_service_factory, session_lifecycle_guard, monkeypatch,
 ) -> None:
-    """同一未启动任务的 pause 变体：任务已死但语义未终结，resume 后须继续。"""
+    service, executor = _make_service(
+        session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory,
+    )
+    original = service._run_job_background
+    release_body = asyncio.Event()
 
-    service, executor = _make_service(session_lifecycle_guard=session_lifecycle_guard, job_service_factory=job_service_factory)
-    _hold_first_task_before_body(service, monkeypatch)
+    async def held_body(*args):
+        await release_body.wait()
+        return await original(*args)
+
+    monkeypatch.setattr(service, "_run_job_background", held_body)
     session_id = "session_pause_before_start"
     dispatch = await service.start_job(
-        session_id,
-        "第一条",
-        message_id="msg_pause",
+        session_id, "第一条", message_id="msg_pause",
         message_created_at=datetime.now(UTC).isoformat(),
         thread_id=job_fixture_thread_id(session_id),
     )
     job = service._jobs[dispatch.job_id]
-
-    await service.control(
-        dispatch.job_id,
-        JobControlRequest(action=ControlAction.pause),
-    )
-    await asyncio.sleep(0.02)
-    assert job.status == JobStatus.paused
-
-    result = await service.control(
-        dispatch.job_id,
-        JobControlRequest(action=ControlAction.resume),
-    )
-    assert result.status == JobStatus.running
-    await _wait_slot_cleared(service, session_id)
-
-    assert job.status == JobStatus.completed
-    assert executor.ran == 1
+    original_task = job.task
+    try:
+        response = await service.control(job.job_id, JobControlRequest(action=ControlAction.pause))
+        release_body.set()
+        await asyncio.sleep(0.02)
+        assert response.control_state == "paused"
+        assert job.status == JobStatus.running
+        assert job.task is original_task and not original_task.done()
+        assert executor.ran == 0
+        await service.control(job.job_id, JobControlRequest(action=ControlAction.resume))
+        await original_task
+        assert job.status == JobStatus.completed
+        assert executor.ran == 1
+        assert job.task is original_task
+    finally:
+        release_body.set()
+        if not original_task.done():
+            await service.control(job.job_id, JobControlRequest(action=ControlAction.cancel))
+            await asyncio.gather(original_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -265,107 +271,73 @@ async def test_cancel_after_task_body_started_keeps_task_path_terminal(job_servi
     assert executor.ran == 1
 
 
-async def _wait_job_task_done(service: JobService, job_id: str) -> None:
-    for _ in range(200):
-        task = service._jobs[job_id].task
-        if task is not None and task.done():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError(f"Job 执行任务未结束: job_id={job_id}")
-
-
-class _BlockFirstThenFast:
-    """第一条阻塞（模拟长任务），后续消息立即完成。"""
-
-    def __init__(self) -> None:
-        self.started = asyncio.Event()
-        self.first_job_id: str | None = None
-
-    async def run(self, job):
-        if self.first_job_id is None:
-            self.first_job_id = job.job_id
-        if job.job_id == self.first_job_id:
-            self.started.set()
-            await asyncio.Future()
-        return "ok"
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wait_for_paused_task", [False, True])
-async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(job_service_factory,
-    session_lifecycle_guard, wait_for_paused_task: bool,
+async def test_cancel_paused_drains_terminal_owner_and_keeps_queued_job_paused(
+    job_service_factory, session_lifecycle_guard, boundary_executor, terminal_writer,
 ) -> None:
-    """P-1 回归：暂停后等执行任务彻底结束再取消，槽必须释放且 FIFO 队首被唤醒。
-
-    暂停时任务体的 finally 已跑完并调用过调度（当时是 paused，被早退跳过），
-    之后再取消一个已 done 的任务不会重跑 finally。因此「取消 paused」必须自己
-    在写入终态的同一条链路上释放活动槽，否则会话 FIFO 队首永久停在 queued。
-    """
-
-    executor = _BlockFirstThenFast()
     service = job_service_factory(
-        job_event_bus=JobEventBus(),
-        job_executor=executor,
-        session_lifecycle_guard=session_lifecycle_guard,
+        job_event_bus=JobEventBus(), job_executor=boundary_executor,
+        session_lifecycle_guard=session_lifecycle_guard, terminal_status_writer=terminal_writer,
     )
     session_id = "session_paused_cancel_fifo"
+    thread_id = job_fixture_thread_id(session_id)
     first = await service.start_job(
-        session_id,
-        "第一条",
-        message_id="msg_first",
-        message_created_at=datetime.now(UTC).isoformat(),
-        thread_id=job_fixture_thread_id(session_id),
+        session_id, "第一条", message_id="msg_first",
+        message_created_at=datetime.now(UTC).isoformat(), thread_id=thread_id,
     )
+    job = service._jobs[first.job_id]
     queue = await service._bus.subscribe(first.job_id, subscriber_kind="test_cancel")
-    await executor.started.wait()
+    await boundary_executor.started.wait()
+    original_task, original_execution = job.task, job.execution_task
     second = await service.start_job(
-        session_id,
-        "第二条",
-        message_id="msg_second",
-        message_created_at=datetime.now(UTC).isoformat(),
-        thread_id=job_fixture_thread_id(session_id),
+        session_id, "第二条", message_id="msg_second",
+        message_created_at=datetime.now(UTC).isoformat(), thread_id=thread_id,
     )
-    assert service._jobs[second.job_id].status == JobStatus.queued
+    queued = service._jobs[second.job_id]
+    try:
+        await service.control(first.job_id, JobControlRequest(action=ControlAction.pause))
+        boundary_executor.finish_first.set()
+        await boundary_executor.first_finished.wait()
+        assert job.execution_pause.state == "paused"
+        assert not original_task.done() and not original_execution.done()
+        assert not await service._start_next_pending(session_id, thread_id=thread_id)
+        assert queued.status == JobStatus.queued and queued.task is None
+        terminal_writer.mark_job_terminal_status.assert_not_called()
 
-    await service.control(
-        first.job_id,
-        JobControlRequest(action=ControlAction.pause),
-    )
-    if wait_for_paused_task:
-        await _wait_job_task_done(service, first.job_id)
-    else:
-        assert not service._jobs[first.job_id].task.done()
+        await service.control(first.job_id, JobControlRequest(action=ControlAction.cancel))
+        await service.settle_jobs([first.job_id])
+        assert job.status == JobStatus.cancelled
+        assert original_task.done() and original_execution.done()
+        terminal_writer.mark_job_terminal_status.assert_called_once_with(
+            session_id=session_id, thread_id=thread_id, job_id=first.job_id, status="cancelled",
+        )
+        assert queued.status == JobStatus.queued and queued.task is None
+        snapshot = await service.thread_control_snapshot(session_id, thread_id)
+        assert snapshot.state == "paused" and snapshot.execution_id is None
+        events = [queue.get_nowait() for _ in range(queue.qsize())]
+        assert [event.type for event in events].count("job_cancelled") == 1
 
-    response = await service.control(
-        first.job_id,
-        JobControlRequest(action=ControlAction.cancel),
-    )
-
-    assert response.status == service._jobs[first.job_id].status == JobStatus.cancelled
-    # paused 被取消后活动槽必须立刻让位：要么空队列时清空，要么直接交给
-    # 下一条 FIFO 队首；绝不允许仍停留在已终态的 first.job_id。
-    assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) != first.job_id, (
-        "取消 paused Job 后活动槽仍停留在已终态 Job（终态与槽释放未在同一链路）"
-    )
-
-    for _ in range(200):
-        if service._jobs[second.job_id].status == JobStatus.completed:
-            break
-        await asyncio.sleep(0.005)
-    assert service._jobs[second.job_id].status == JobStatus.completed, (
-        f"FIFO 队首未被唤醒: {service._jobs[second.job_id].status.value}"
-    )
-    await _wait_slot_cleared(service, session_id)
-    events = [queue.get_nowait() for _ in range(queue.qsize())]
-    assert [event.type for event in events].count("job_cancelled") == 1
+        await service.control_thread_advancement(
+            session_id, thread_id, action="resume", expected_execution_id=None,
+        )
+        await queued.task
+        assert queued.status == JobStatus.completed
+        await _wait_slot_cleared(service, session_id)
+        assert [runtime.job_id for runtime in boundary_executor.runtimes] == [first.job_id, second.job_id]
+    finally:
+        if not original_task.done():
+            await service.control(first.job_id, JobControlRequest(action=ControlAction.cancel))
+            await service.settle_jobs([first.job_id])
+        if queued.task is not None:
+            await queued.task
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("empty_workspace_scope")
-async def test_force_interrupt_paused_releases_slot(job_service_factory, session_lifecycle_guard) -> None:
+async def test_force_interrupt_paused_releases_slot(job_service_factory, session_lifecycle_guard, boundary_executor) -> None:
     """P2 变体：运行期排空作用于 paused Job 时也必须释放活动槽。"""
 
-    executor = _BlockFirstThenFast()
+    executor = boundary_executor
     service = job_service_factory(
         job_event_bus=JobEventBus(),
         job_executor=executor,
@@ -385,7 +357,9 @@ async def test_force_interrupt_paused_releases_slot(job_service_factory, session
         first.job_id,
         JobControlRequest(action=ControlAction.pause),
     )
-    await _wait_job_task_done(service, first.job_id)
+    executor.finish_first.set()
+    await executor.first_finished.wait()
+    assert service._jobs[first.job_id].execution_pause.state == "paused"
 
     drained = await service.force_interrupt_active(reason="runtime_restart")
 

@@ -11,12 +11,19 @@ import type {
   SessionCatalogSearchResultDTO,
   SessionCatalogSearchResultsDTO,
   SessionCatalogExportDTO,
+  ThreadExecutionControlDTO as ProtocolThreadExecutionControlDTO,
 } from "./protocol_generated/boxteam/workspace/v2/public";
 import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from "./protocol";
 
 export type {
   LLMRequestLogSummaryDTO,
 } from "./protocol_generated/boxteam/workspace/v2/public";
+
+export type ThreadExecutionControlDTO = Omit<ProtocolThreadExecutionControlDTO, "job_id" | "execution_id" | "state"> & {
+  job_id: string | null;
+  execution_id: string | null;
+  state: "idle" | "running" | "pausing" | "paused";
+};
 
 export type {
   ToolApproval,
@@ -68,7 +75,6 @@ export type {
   SessionForkResourceChoice,
   SessionForkOwnerReference,
   SessionInformationSnapshot,
-  InterruptSessionResult,
   InternalDisplayProvenance,
   InternalExecutionDisplayPart,
   InternalExecutionHistory,

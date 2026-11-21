@@ -32,7 +32,7 @@ const noop = () => {};
 const tool = {tool_id:'read_file', name:'用户工具', description:'原始工具说明', execution_enabled:true,
   model_visible:false, test_supported:false, execution_locked:false, model_visibility_locked:false};
 const actions = renderToStaticMarkup(React.createElement(Actions, {hasContent:true, showInterrupt:true,
-  defaultDeliveryPolicy:'after_turn', onClear:noop, onInterrupt:noop, onSend:noop, onAlternate:noop, onToggleDefault:noop}));
+  defaultDeliveryPolicy:'after_turn', onClear:noop, onControl:noop, onRefreshControl:noop, onSend:noop, onAlternate:noop, onToggleDefault:noop}));
 const model = renderToStaticMarkup(React.createElement(Model, {onOpen:noop,
   models:[{model_ref: { provider_id: 'provider-raw', model_id: "default" }, model:'模型原名', custom_llm_provider:'openai', available:false,
     configuration_error:"Cannot find module '/home/alice/missing.js'"}], currentModel:{provider_id:'provider-raw',model_id:'default'},

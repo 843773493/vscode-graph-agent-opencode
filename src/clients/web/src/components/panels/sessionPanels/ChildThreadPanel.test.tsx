@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -11,6 +11,19 @@ import {
 } from "../../../state/childThreadDisplay";
 import ChildThreadPanel from "./ChildThreadPanel";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../../chat/itemContextMenu";
+import { VirtuosoMockContext } from "react-virtuoso";
+import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
+
+let animationFrameDescriptors: [PropertyDescriptor | undefined, PropertyDescriptor | undefined] | null = null;
+const animationFrames = new Set<number>();
+afterEach(() => {
+  if (!animationFrameDescriptors) return;
+  for (const id of animationFrames) clearTimeout(id);
+  animationFrames.clear();
+  restoreGlobalDescriptor("requestAnimationFrame", animationFrameDescriptors[0]);
+  restoreGlobalDescriptor("cancelAnimationFrame", animationFrameDescriptors[1]);
+  animationFrameDescriptors = null;
+});
 
 test("会话展开后直接展示 Thread，不插入标题、计数、归属说明或空提示栏", () => {
   const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} />);
@@ -74,6 +87,7 @@ function panelProps(overrides: {
       snapshot: { history: null, report: null, view: "history" as const, draft: "", loading: false, sending: false, error: null, accepted: null, paged: false },
       selectThread: () => {}, selectThreadForOwner: () => {}, close: () => {}, setDraft: () => {},
       refresh: async () => {}, openReport: async () => {}, loadEarlier: async () => {}, send: async () => {}, isUnread: () => false,
+      retainExecutionBodies: async () => {}, reportHistoryError: () => {},
     },
   };
 }
@@ -128,6 +142,16 @@ describe("子会话线程面板", () => {
   });
 
   test("子线程对话单次展开按原序展示压缩前后正文", async () => {
+    animationFrameDescriptors = [Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame"),
+      Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame")];
+    Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: (callback: FrameRequestCallback) => {
+      const id = Number(setTimeout(() => { animationFrames.delete(id); callback(0); }, 0));
+      animationFrames.add(id);
+      return id;
+    } });
+    Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: (id: number) => {
+      animationFrames.delete(id); clearTimeout(id);
+    } });
     const selected = thread(1);
     const turn: TurnDetail = {
       turn_id: "turn_child_order", job_id: "job_child_order", session_id: "ses_parent",
@@ -171,10 +195,14 @@ describe("子会话线程面板", () => {
       menu!.actions.find(action => action.id === "forkItem")!.run();
     };
     act(() => {
-      renderer = create(<ChatItemMenuContext.Provider value={request => { menu = request; }}>
+      renderer = create(<VirtuosoMockContext.Provider value={{ viewportHeight: 420, itemHeight: 100 }}><ChatItemMenuContext.Provider value={request => { menu = request; }}>
         <ChildThreadPanel {...props} threads={[selected]} conversation={conversation}
           onForkFromThread={(threadId, point) => { clicks.push({ threadId, point }); }} />
-      </ChatItemMenuContext.Provider>);
+      </ChatItemMenuContext.Provider></VirtuosoMockContext.Provider>, { createNodeMock: () => ({
+        offsetHeight: 420, offsetWidth: 400, scrollHeight: 420, scrollTop: 0, style: {},
+        addEventListener: () => {}, removeEventListener: () => {},
+        getBoundingClientRect: () => ({ width: 400, height: 420 }),
+      }) });
     });
     const sources = () => renderer!.root.findAll((node) =>
       typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",

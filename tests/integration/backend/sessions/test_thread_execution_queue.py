@@ -8,12 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import JobEventBus
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
@@ -225,6 +228,36 @@ async def test_delete_cancels_durable_entries_before_discarding_jobs(queue_case:
         assert identity.job_id not in case.jobs._jobs
     assert case.executor.started.empty()
     assert not case.jobs._thread_current_job
+
+
+async def test_stop_keeps_user_input_but_cancels_accepted_internal_continuation(queue_case: QueueCase) -> None:
+    case = queue_case
+    await case.jobs.control_thread_advancement(case.session_id, case.thread_id, action="pause", expected_execution_id=None)
+    intent = InternalExecutionIntent(create_prefixed_id("msg"), create_prefixed_id("exec"), create_prefixed_id("admission"))
+    job_id = case.jobs.reserve_internal_job_id()
+    now = datetime.now(UTC).isoformat()
+    prepared = internal_message_factory.build(kind="execution_resume", control="已接受但尚未释放暂停门的旧继续任务",
+        sections=(PromptSection("control_context", {"previous_execution_id": "exec_lost"}),))
+    case.saver.admit_internal_execution(
+        case.session_id, thread_id=case.thread_id, job_id=job_id, intent=intent,
+        queue_input=ExecutionQueueInput(intent, intent.message_id, "default", None, "after_turn", None, None, now),
+        message=HumanMessage(id=intent.message_id, content=prepared.content,
+            response_metadata={"message_id": intent.message_id, "created_at": now, "message_metadata": prepared.metadata}),
+    )
+    _, user = case.accept("完全打断仍须保留的用户输入")
+    await case.jobs.run_session_control_operation(case.session_id, lambda: case.jobs.stop_session_jobs(
+        case.session_id, delete_records=False, discard_pending=False, pause_pending=True,
+    ), deadline=asyncio.get_running_loop().time() + 5)
+    # 冷读原 owner，确认取消真正落盘，而非仅移除内存队列。
+    cold = RolloutCheckpointSaver(sessions_dir=case.workspace.sessions_root)
+    cancelled = cold.execution_queue_record(case.session_id, case.thread_id, job_id)
+    assert (cancelled.phase, cancelled.outcome) == ("terminal", "cancelled")
+    pending = cold.execution_queue_snapshot(case.session_id, case.thread_id)
+    assert [row.cursor.admission.job_id for row in pending.records] == [user.job_id]
+    assert pending.pause is not None and pending.pause.execution_id is None
+    await case.jobs.control_thread_advancement(case.session_id, case.thread_id, action="resume", expected_execution_id=None)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == user.job_id
+    assert case.executor.started.empty()
 
 
 async def test_delete_queue_write_failure_keeps_active_task_and_remaining_fifo(

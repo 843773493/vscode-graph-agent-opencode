@@ -44,6 +44,8 @@ async def test_prepared_target_validation_preserves_control_and_original_fork(
 ) -> None:
     context = _production_fork_context(production_fork_container)
     source = fork_execution_source
+    source_thread = context.sessions.path_resolver.main_thread_id(source.session_id)
+    pause = context.saver.pause_execution_queue(source.session_id, source_thread, execution_id=None)
     request = await _fork_request(
         context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy",
     )
@@ -140,6 +142,8 @@ async def test_prepared_target_validation_preserves_control_and_original_fork(
         result = await context.forks.fork(request)
     assert result.session.session_id == record.session_id
     assert result.thread_id == record.main_thread_id
+    assert context.saver.execution_queue_pause(result.session.session_id, result.thread_id) is None
+    assert context.saver.execution_queue_pause(source.session_id, source_thread) == pause
     assert catalog.get_creation_record(key).state == "published"
     assert await context.forks.fork(request) == result
     assert canonical.read_bytes() == source_bytes

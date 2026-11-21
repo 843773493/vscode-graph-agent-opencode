@@ -6,6 +6,7 @@
 
 - Session Turn bootstrap 的 generation、取消和 partial 轮询。
 - 可视 Turn detail 批量水合及旧页分页加载。
+- 主时间线与子线程报告的可视 execution item 沿同一 history reader 按最多四个 ID 定点回补，不推进分页游标。
 - 聚焦 hook 之间的轻量编排。
 - `useChildThreadConversation.ts` 编排选定 child 的冷历史、execution 报告续读、直接消息、独立草稿及迟到响应隔离；消息准入事实只来自后端，历史仍调用唯一 API reader。
 

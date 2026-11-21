@@ -3,7 +3,6 @@ import "fake-indexeddb/auto";
 import {
   getLLMRequestLogs,
   getSessionAttachmentTextPreview,
-  interruptSession,
   listMessages,
   replayMessageTurn,
   sendUserMessage,
@@ -159,31 +158,6 @@ describe("会话附件文本预览按需读取", () => {
     const expected = ["", "a", "a", "a🙂", "a🙂尾"][maxCodeUnits];
     await expect(getSessionAttachmentTextPreview(48_317, "ses_preview", "file_preview", WORKSPACE_KEY,
       { maxCodeUnits })).resolves.toEqual({ text: expected, truncated: maxCodeUnits < 4 });
-  });
-});
-
-describe("中断请求只作用于明确的 Thread", () => {
-  const result = { session_id: "ses_interrupt", thread_id: "thr_main", job_id: "job_interrupt", status: "cancelling", phase: "tool", interrupt_request_id: "intr_exact" };
-
-  test("传递精确 Thread 并保留后端完整回执", async () => {
-    const requests: string[] = [];
-    installSessionApiFetchMock(({ url, method }) => {
-      expect(method).toBe("POST");
-      requests.push(url);
-      return Response.json({ data: result, request_id: "req-interrupt" });
-    });
-    expect(await interruptSession(48_311, result.session_id, result.thread_id, WORKSPACE_KEY)).toEqual(result);
-    expect(requests).toHaveLength(1);
-    expect(new URL(requests[0], "http://localhost").searchParams.get("thread_id")).toBe(result.thread_id);
-  });
-
-  test.each([
-    { ...result, session_id: "ses_other" },
-    { ...result, thread_id: "thr_child" },
-    { ...result, thread_id: undefined },
-  ])("拒绝错位或缺失的回执身份 %j", async (response) => {
-    installFetchMock(() => Response.json({ data: response, request_id: "req-interrupt-bad-owner" }));
-    await expect(interruptSession(48_311, result.session_id, result.thread_id, WORKSPACE_KEY)).rejects.toThrow("中断响应归属不匹配");
   });
 });
 

@@ -1,9 +1,9 @@
 , replaced_messages AS MATERIALIZED (
     SELECT DISTINCT json_extract(relation.target_ref, '$.target_id') AS message_id
-    FROM item_relations AS relation
-    WHERE relation.canonical_item_id IS NOT NULL AND relation.relation = 'replaces'
+    FROM carriers AS carrier
+    CROSS JOIN item_relations AS relation ON relation.canonical_item_id = carrier.item_id
+    WHERE relation.relation = 'replaces'
         AND json_extract(relation.target_ref, '$.target_kind') = 'projection_message'
-        AND EXISTS (SELECT 1 FROM carriers AS carrier WHERE carrier.item_id = relation.canonical_item_id)
 ), replaced_parts AS MATERIALIZED (
     SELECT DISTINCT carrier.part_scope,
         json_extract(part.value, '$.index') AS block_index,

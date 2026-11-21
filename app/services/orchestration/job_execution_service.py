@@ -8,6 +8,7 @@ from boxteam_plugin_sdk.request_context import (
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
+from app.core.execution_pause import bind_execution_pause
 from app.core.failures import execution_failure_message, report_failure
 from app.core.job_event_bus import EventType
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
@@ -59,44 +60,45 @@ class JobExecutionService:
         # 不继承请求级上下文，因此必须随 job 携带，MUST NOT 在此补造第二个 ID。
         request_id_token = set_current_request_id(getattr(job, "request_id", None))
 
-        try:
+        with bind_execution_pause(job.execution_pause):
             try:
-                title_message = session_title_message(job.message, job.message_metadata)
-                if title_message is not None:
-                    await self._session_title_service.maybe_auto_title_before_first_message(
-                        session_id=job.session_id,
+                try:
+                    title_message = session_title_message(job.message, job.message_metadata)
+                    if title_message is not None:
+                        await self._session_title_service.maybe_auto_title_before_first_message(
+                            session_id=job.session_id,
+                            job_id=job.job_id,
+                            user_message=title_message,
+                        )
+                except Exception as error:  # noqa: BLE001 - 标题诊断失败不取代原执行。
+                    failure_message = report_failure(error, detail=execution_failure_message(error))
+                    await self._bus.publish(
                         job_id=job.job_id,
-                        user_message=title_message,
+                        event_type=EventType.ERROR,
+                        payload={
+                            "error": f"会话自动命名失败: {failure_message}",
+                            "phase": "session_auto_title",
+                        },
+                        agent_id="session_title_service",
                     )
-            except Exception as error:  # noqa: BLE001 - 标题诊断失败不取代原执行。
-                failure_message = report_failure(error, detail=execution_failure_message(error))
-                await self._bus.publish(
+                result = await self._agent_execution_service.run_step(
+                    job.session_id,
+                    job.message,
+                    thread_id=job.thread_id,
+                    agent_id=job.agent_id,
                     job_id=job.job_id,
-                    event_type=EventType.ERROR,
-                    payload={
-                        "error": f"会话自动命名失败: {failure_message}",
-                        "phase": "session_auto_title",
-                    },
-                    agent_id="session_title_service",
+                    message_id=job.message_id,
+                    execution_binding=job.execution_binding,
+                    resume_checkpoint_id=job.resume_checkpoint_id,
+                    attachments=job.attachments,
+                    message_created_at=job.message_created_at,
+                    message_metadata=job.message_metadata,
+                    progress_reporter=getattr(job, "progress_reporter", None),
+                    protected_operations_settled=job.protected_operations_settled,
                 )
-            result = await self._agent_execution_service.run_step(
-                job.session_id,
-                job.message,
-                thread_id=job.thread_id,
-                agent_id=job.agent_id,
-                job_id=job.job_id,
-                message_id=job.message_id,
-                execution_binding=job.execution_binding,
-                resume_checkpoint_id=job.resume_checkpoint_id,
-                attachments=job.attachments,
-                message_created_at=job.message_created_at,
-                message_metadata=job.message_metadata,
-                progress_reporter=getattr(job, "progress_reporter", None),
-                protected_operations_settled=job.protected_operations_settled,
-            )
-        finally:
-            reset_current_gateway_id(gateway_token)
-            reset_current_request_id(request_id_token)
+            finally:
+                reset_current_gateway_id(gateway_token)
+                reset_current_request_id(request_id_token)
 
         result_text = result if isinstance(result, str) else str(result)
 

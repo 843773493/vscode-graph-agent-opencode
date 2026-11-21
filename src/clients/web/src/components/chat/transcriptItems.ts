@@ -1,13 +1,14 @@
 import type { ConversationView } from "../../types/frontend";
 import type {
   InternalExecutionDisplayPart,
-  InternalExecutionHistory,
 } from "../../types/backend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
 import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
 import type { TurnResponsePart } from "../../types/backend";
+import type { InternalExecutionRecord } from "../../state/session/internalExecutionHistory";
 
 export type ChatTranscriptItem =
+  | { kind: "execution_header"; key: string; executionId: string; status: InternalExecutionRecord["status"]; empty: boolean }
   | { kind: "context_event"; key: string; notices: TurnResponsePart[] }
   | {
       kind: "turn";
@@ -18,7 +19,15 @@ export type ChatTranscriptItem =
       kind: "internal_execution";
       key: string;
       executionId: string;
-      displayPart: InternalExecutionDisplayPart;
+      displayPart: InternalExecutionDisplayPart & { bodyEvicted?: true };
+    }
+  | {
+      kind: "execution_response";
+      key: string;
+      executionId: string;
+      itemId: string;
+      parts: InternalExecutionRecord["response_parts"];
+      bodyEvicted: boolean;
     };
 
 function logicalItemOrdinal(value: number | undefined, field: string): number {
@@ -37,7 +46,8 @@ function turnOrdinal(value: number | undefined): number {
 
 export function chatTranscriptItems(
   conversations: readonly ConversationView[],
-  executions: readonly InternalExecutionHistory[],
+  executions: readonly InternalExecutionRecord[],
+  includeExecutionResponses = false,
 ): ChatTranscriptItem[] {
   const historyTurns: Extract<ChatTranscriptItem, { kind: "turn" }>[] = [];
   const otherTurns: Extract<ChatTranscriptItem, { kind: "turn" }>[] = [];
@@ -92,6 +102,15 @@ export function chatTranscriptItems(
   const displayItemIds = new Set<string>();
   const displayItemSequences = new Set<number>();
   for (const execution of executions) {
+    if (includeExecutionResponses) {
+      let firstOrdinal = Infinity;
+      for (const part of execution.display_parts) firstOrdinal = Math.min(firstOrdinal, part.logical_item_ordinal);
+      for (const part of execution.response_parts) firstOrdinal = Math.min(firstOrdinal,
+        (part.kind === "context_notice" ? part.context_anchor_ordinal : part.source.logical_item_ordinal) ?? Infinity);
+      orderedHistory.push({ item: { kind: "execution_header", key: `execution:${execution.execution_id}`,
+        executionId: execution.execution_id, status: execution.status,
+        empty: execution.display_parts.length === 0 && execution.response_parts.length === 0 }, ordinal: firstOrdinal });
+    }
     for (const event of responsePartsToTimelineItems(execution.response_parts)) {
       if (event.kind !== "context_event") continue;
       orderedHistory.push({ item: { kind: "context_event", key: event.id, notices: event.notices },
@@ -134,6 +153,23 @@ export function chatTranscriptItems(
         },
         ordinal,
       });
+    }
+    if (includeExecutionResponses) {
+      const partsByItem = new Map<string, InternalExecutionRecord["response_parts"]>();
+      for (const part of execution.response_parts) {
+        if (part.kind === "context_notice") continue;
+        const itemId = part.source.item_id;
+        if (!itemId) throw new Error("internal execution response part 缺少 canonical item_id");
+        const parts = partsByItem.get(itemId) ?? [];
+        parts.push(part);
+        partsByItem.set(itemId, parts);
+      }
+      for (const [itemId, parts] of partsByItem) {
+        if (!parts.some(part => part.kind === "text" || part.kind === "final_text")) continue;
+        orderedHistory.push({ item: { kind: "execution_response", key: `response:${itemId}`,
+          executionId: execution.execution_id, itemId, parts, bodyEvicted: parts.some(part => part.bodyEvicted) },
+          ordinal: logicalItemOrdinal(parts[0].source.logical_item_ordinal, "response_part.logical_item_ordinal") });
+      }
     }
   }
   orderedHistory.sort((left, right) => left.ordinal - right.ordinal);

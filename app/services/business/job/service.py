@@ -19,6 +19,7 @@ from app.abstractions.execution_queue import (
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol, JobInputOwnerProtocol
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
+from app.core.execution_pause import ExecutionPause
 from app.core.failures import execution_failure_message, report_failure
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
@@ -35,9 +36,11 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
+    ExecutionQueuePause,
     ExecutionQueueRecord,
 )
 from app.schemas.internal_v2.common import JobStatus, RunMode
+from app.schemas.internal_v2.execution_control import ThreadExecutionControlDTO
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -126,6 +129,7 @@ class JobState:
     ended_at: datetime | None = None
     task: asyncio.Task | None = None
     execution_task: asyncio.Task | None = None
+    execution_pause: ExecutionPause = field(default_factory=ExecutionPause)
     steps: list[StepDTO] = field(default_factory=list)
     delivery_policy: DeliveryPolicy | None = None
     queue_record: ExecutionQueueRecord | None = None
@@ -133,6 +137,7 @@ class JobState:
     delivery_boundary: DeliveryBoundary | None = None
     internal_reservation: bool = False
     cancellation_reason: str | None = None
+    preserve_pause_on_exit: bool = False
     started_dispatch: JobDispatchSnapshotDTO | None = None
 
 
@@ -219,7 +224,7 @@ class JobService:
             pending_queue=self._pending_queue,
             pending_requests=self._pending_requests,
             dispatch_lock=self._dispatch_lock,
-            start_job_task=lambda job: self._start_job_task(job),
+            schedule_after_resume=self._resume_thread_dispatch,
             schedule_after_cancel=self._finalize_cancelled_without_task_body,
             persist_terminal_status=self._persist_terminal_execution_status,
         )
@@ -363,6 +368,11 @@ class JobService:
                 job = self._jobs.get(blocker.job_id)
                 if job is None or self._is_terminal_status(job.status):
                     continue
+                if self.advancement_paused(job.session_id, job.thread_id):
+                    if job.status in {JobStatus.accepted, JobStatus.queued}:
+                        continue
+                    # 运行时关闭不等于用户放弃暂停任务；仍结算协程，保留后续执行依据。
+                    job.preserve_pause_on_exit = True
                 active_blockers.append(blocker)
                 job.cancellation_reason = reason
                 if job.status in {JobStatus.accepted, JobStatus.queued}:
@@ -636,11 +646,32 @@ class JobService:
         job_id: str,
         control_request: JobControlRequest,
     ) -> JobControlResponseDTO:
-        job = self._jobs.get(job_id)
-        if not job:
-            raise ValueError(f"Job {job_id} not found")
-
         return await self._control_service.control(job_id, control_request)
+
+    def advancement_paused(self, session_id: str, thread_id: str) -> bool:
+        return self._control_service.advancement_paused(session_id, thread_id)
+
+    async def thread_control_snapshot(self, session_id: str, thread_id: str) -> ThreadExecutionControlDTO:
+        return await self._control_service.snapshot(session_id, thread_id)
+
+    async def control_thread_advancement(
+        self, session_id: str, thread_id: str, *, action: str,
+        expected_execution_id: str | None,
+        resume_execution: Callable[[ExecutionQueuePause], Awaitable[str]] | None = None,
+    ) -> ThreadExecutionControlDTO:
+        if action not in {"pause", "resume"}:
+            raise ValueError(f"不是推进控制动作: {action}")
+        return await self._control_service.change_advancement(
+            session_id, thread_id, action=action, expected_execution_id=expected_execution_id,
+            resume_execution=resume_execution,
+        )
+
+    def restore_paused_threads(self, pauses: tuple[ExecutionQueuePause, ...]) -> None:
+        self._control_service.restore_pauses(pauses)
+
+    async def _resume_thread_dispatch(self, session_id: str, thread_id: str) -> None:
+        await self._ensure_pending_loaded(session_id)
+        await self._start_next_pending(session_id, thread_id=thread_id)
 
     async def list_pending(
         self, session_id: str, *, thread_id: str | None = None,
@@ -730,15 +761,19 @@ class JobService:
     async def stop_session_jobs(
         self, session_id: str, *, thread_id: str | None = None,
         delete_records: bool = True, discard_pending: bool = True,
+        pause_pending: bool = False,
     ) -> int:
         """准入关闭后结算目标执行；停止、队列丢弃和删除内存记录独立选择。"""
         await self._load_pending_records(
             session_id, await self._pending_requests.load(session_id), deleting=True,
         )
         async with self._dispatch_lock:
+            # keep 仅保留用户排队输入，旧的内部工作须结算，不能在再次继续时复活。
             jobs = [job for job in self._jobs.values() if job.session_id == session_id
                     and (thread_id is None or job.thread_id == thread_id)
-                    and (discard_pending or job.status not in {JobStatus.accepted, JobStatus.queued})]
+                    and (discard_pending
+                         or pause_pending and isinstance(job.execution_binding, InternalExecutionIntent)
+                         or job.status not in {JobStatus.accepted, JobStatus.queued})]
             # 排队项逐条提交并移除镜像；全部成功后才取消活任务。
             # 后续落盘失败不能把仍运行的任务留在 cancelling。
             for job in jobs:
@@ -764,6 +799,13 @@ class JobService:
                 await job.queue_claim.close()
                 job.queue_claim = None
         async with self._dispatch_lock:
+            if pause_pending and not discard_pending:
+                targets = {self._jobs[job_id].thread_id for job_id in self._pending_queue.queued_job_ids(session_id, thread_id)}
+                targets.update(self._control_service.paused_threads(session_id, thread_id))
+                for target in targets:
+                    await self._control_service.pause_pending_thread(session_id, target)
+            else:
+                await self._control_service.clear_advancement(session_id, thread_id)
             for job in jobs:
                 if delete_records:
                     self._jobs.pop(job.job_id, None)
@@ -1044,6 +1086,9 @@ class JobService:
         writer = self._terminal_status_writer
         if writer is None:
             return False
+        runtime = self._jobs.get(job.job_id)
+        if status == "cancelled" and runtime is not None and runtime.preserve_pause_on_exit:
+            status = "execution_lost"
         persisted = False
 
         async def converge() -> None:
@@ -1144,14 +1189,9 @@ class JobService:
         其它情况一律不写：
 
         - 已进入任务体的取消由权威写入点负责，此处看到终态后跳过；
-        - ``paused`` 是用户可 resume 显式持有的非终态，任务结束但语义未
-          终结，交由 ``_resume_job_locked`` 重启，不在此转成 cancelled；
-        - ``job.task is not task`` 说明该任务已被 resume 换掉，跳过以免
-          误伤正在运行的新任务。
+        - ``job.task is not task`` 说明该句柄已不再持有当前任务，跳过。
         """
         if job.task is not task:
-            return
-        if job.status == JobStatus.paused:
             return
         if self._is_terminal_status(job.status):
             return
@@ -1367,6 +1407,7 @@ class JobService:
                 gateway_id=job.gateway_id,
                 request_id=job.request_id,
                 resume_checkpoint_id=job.resume_checkpoint_id,
+                execution_pause=job.execution_pause,
                 status=job.status,
                 progress=job.progress,
                 current_step=job.current_step,
@@ -1419,11 +1460,11 @@ class JobService:
 
             execution_task.add_done_callback(release_execution)
             timeout_task = asyncio.create_task(
-                asyncio.sleep(job_timeout_seconds),
+                job.execution_pause.sleep_active(job_timeout_seconds),
                 context=contextvars.Context(),
             )
             startup_timeout_task = asyncio.create_task(
-                asyncio.sleep(self._job_startup_timeout_seconds),
+                job.execution_pause.sleep_active(self._job_startup_timeout_seconds),
                 context=contextvars.Context(),
             )
             startup_ready_task = asyncio.create_task(startup_ready.wait())
@@ -1498,27 +1539,20 @@ class JobService:
             job.progress = 100
             job.current_step = None
         except asyncio.CancelledError:
-            if job.status == JobStatus.paused:
-                transition_job_status(
-                    job,
-                    JobStatus.paused,
-                    error_message="任务已暂停",
+            transition_job_status(job, JobStatus.cancelling)
+            await self._persist_terminal_execution_status(job, "cancelled")
+            transition_job_status(
+                job,
+                JobStatus.cancelled,
+                error_message=job.cancellation_reason or "任务被用户取消",
+            )
+            if self._bus is not None:
+                await self._bus.publish(
+                    job_id=job_id,
+                    event_type=EventType.JOB_CANCELLED,
+                    payload={"session_id": session_id},
+                    agent_id="job_service",
                 )
-            else:
-                transition_job_status(job, JobStatus.cancelling)
-                await self._persist_terminal_execution_status(job, "cancelled")
-                transition_job_status(
-                    job,
-                    JobStatus.cancelled,
-                    error_message=job.cancellation_reason or "任务被用户取消",
-                )
-                if self._bus is not None:
-                    await self._bus.publish(
-                        job_id=job_id,
-                        event_type=EventType.JOB_CANCELLED,
-                        payload={"session_id": session_id},
-                        agent_id="job_service",
-                    )
         except (JobExecutionTimeoutError, JobStartupTimeoutError) as error:
             await self._persist_terminal_execution_status(job, "timed_out")
             transition_job_status(
@@ -1613,10 +1647,14 @@ class JobService:
             current_step,
             finalization_grace_seconds,
         )
-        done, _ = await asyncio.wait(
-            {execution_task},
-            timeout=finalization_grace_seconds,
-        )
+        timer = asyncio.create_task(job.execution_pause.sleep_active(finalization_grace_seconds))
+        try:
+            done, _ = await asyncio.wait(
+                {execution_task, timer}, return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            timer.cancel()
+            await asyncio.gather(timer, return_exceptions=True)
         if execution_task in done:
             return execution_task.result()
 
@@ -1895,7 +1933,7 @@ class JobService:
             stale_internal_jobs: list[JobState] = []
             stale_parent_job_id: str | None = None
             async with self._dispatch_lock:
-                if session_id in self._closed_sessions:
+                if session_id in self._closed_sessions or self.advancement_paused(session_id, thread_id):
                     return False
                 current_job_id = self._thread_current_job.get((session_id, thread_id))
                 current_job = self._jobs.get(current_job_id) if current_job_id else None
@@ -1954,7 +1992,8 @@ class JobService:
             await self._pending_requests.refresh_version(session_id)
             async with self._dispatch_lock:
                 if (
-                    self._thread_current_job.get((session_id, thread_id)) != next_job.job_id
+                    self.advancement_paused(session_id, thread_id)
+                    or self._thread_current_job.get((session_id, thread_id)) != next_job.job_id
                     or not self._pending_dispatch_unstarted(next_job)
                 ):
                     return False

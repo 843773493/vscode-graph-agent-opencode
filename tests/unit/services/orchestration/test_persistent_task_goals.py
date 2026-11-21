@@ -15,6 +15,8 @@ from boxteam_plugin_sdk.request_context import (
 from langchain_core.messages import HumanMessage
 
 from app.core.exceptions import NotFoundError
+from app.core.identifier import create_prefixed_id
+from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import (
     get_current_gateway_id,
     reset_current_gateway_id,
@@ -24,6 +26,11 @@ from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionProgress,
 )
 from app.schemas.internal_v2.goal import GoalStatus
+from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskCheckRequest,
+    PersistentTaskConfigurationDTO,
+    PersistentTaskCreateRequest,
+)
 from app.schemas.internal_v2.task_usage import (
     TaskExecutionReferenceDTO,
     TaskJobAccountingDTO,
@@ -35,6 +42,8 @@ from app.services.business.persistent_tasks.goal import (
 )
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.mapping.message_content import is_user_visible_message
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from app.services.orchestration.persistent_tasks.goal import GoalWork
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 
@@ -112,18 +121,22 @@ class _Store:
     def list_automations(self):
         return []
 
-    def schedule_due(self, now):
+    def schedule_due(self, now, *, excluded_task_ids=frozenset()):
         return []
 
-    def next_schedule_at(self):
+    def next_schedule_at(self, *, excluded_task_ids=frozenset()):
         return None
 
 
 class _Jobs:
+    def advancement_paused(self, session_id, thread_id):
+        return (session_id, thread_id) in self.paused_threads
+
     def __init__(self):
         self.job = None
         self.items = []
         self.pending = []
+        self.paused_threads = set()
 
     async def list(self, session_id=None):
         return list(self.items)
@@ -249,6 +262,7 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     goal_service: SessionGoalService,
     goal_runtime: PersistentTaskRuntime,
     session_orchestrator: _Orchestrator,
+    job_service: _Jobs,
 ) -> None:
     created = await goal_service.set("sess_1", objective="完成目标")
     # Goal 只属于 main thread：thread_id 由 resolve_main_thread 解析，必须与
@@ -256,7 +270,13 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     assert created.thread_id == "thr_sess_1"
     assert (await goal_service.get("sess_1")).thread_id == "thr_sess_1"
 
-    await goal_runtime.request_goal("sess_1")
+    job_service.paused_threads.add(("sess_1", created.thread_id))
+    await asyncio.wait_for(goal_runtime.request_goal("sess_1"), timeout=1)
+    await asyncio.sleep(0)
+    assert session_orchestrator.calls == []
+    assert (await goal_service.get("sess_1")).status == GoalStatus.active
+    job_service.paused_threads.clear()
+    goal_runtime.advancement_changed()
     await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0][2]["internal"] is True
@@ -283,6 +303,76 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
     await goal_service.set("sess_1", status=GoalStatus.active)
     await goal_runtime.request_goal("sess_1")
     assert len(session_orchestrator.calls) == 2
+
+
+async def test_goal_request_accepts_pause_after_enqueue_and_processes_same_work_on_resume(
+    goal_runtime, goal_service, job_service, session_orchestrator, monkeypatch,
+):
+    goal = await goal_service.set("sess_1", objective="暂停竞态中的目标")
+    original_queue = goal_runtime._queue_goal
+
+    def queue_then_pause(work, done=None):
+        original_queue(work, done)
+        job_service.paused_threads.add((goal.session_id, goal.thread_id))
+
+    monkeypatch.setattr(goal_runtime, "_queue_goal", queue_then_pause)
+    await asyncio.wait_for(goal_runtime.request_goal(goal.session_id, objective=goal), 1)
+    assert not session_orchestrator.calls
+    queued = goal_runtime._application_work[f"goal:{goal.session_id}"]
+    assert len(queued) == 1 and queued[0][0].goal is goal
+    monkeypatch.setattr(goal_runtime, "_queue_goal", original_queue)
+    job_service.paused_threads.clear()
+    goal_runtime.advancement_changed()
+    async with asyncio.timeout(1):
+        while goal_runtime._application_work or goal_runtime._inflight:
+            await asyncio.sleep(0)
+    goal_runtime.assert_healthy()
+    assert len(session_orchestrator.calls) == 1
+    assert "暂停竞态中的目标" in session_orchestrator.calls[0][1]
+
+
+@pytest.fixture
+def edited_automation(goal_runtime, job_service, empty_workspace_scope):
+    workspace_id, root = empty_workspace_scope
+    session_id, paused_thread, active_thread = (create_prefixed_id(prefix) for prefix in ("ses", "thr", "thr"))
+    configuration = PersistentTaskConfigurationDTO.model_validate({
+        "name": "编辑前的运行", "trigger": {"type_id": "builtin.manual", "version": "1"},
+        "condition": {"type_id": "builtin.always", "version": "1"},
+        "context": {"type_id": "builtin.literal", "version": "1", "content": "保留原输入"},
+        "action": {"type_id": "builtin.runtime_source", "version": "1", "delivery_mode": "context_only",
+                   "target_uri": thread_resource_uri(workspace_id, session_id, paused_thread)},
+    })
+    with WorkspaceStateStore(workspace_root=root) as state:
+        store = PersistentTaskStore(state, workspace_id=workspace_id)
+        goal_runtime.store = store
+        goal_runtime._dispatcher.context_published.return_value = None
+        job_service.paused_threads.add((session_id, paused_thread))
+        task = store.create(PersistentTaskCreateRequest(idempotency_key="edited-task", configuration=configuration), goal_runtime.clock())
+        yield store, task, active_thread
+
+
+@pytest.mark.parametrize("phase", ["pending", "checking", "delivering"])
+async def test_worker_suppresses_stale_run_instead_of_requeueing_its_paused_target(
+    goal_runtime, edited_automation, phase,
+):
+    store, task, active_thread = edited_automation
+    run = store.trigger(task.task_id, PersistentTaskCheckRequest(
+        expected_revision=task.revision, idempotency_key="old-run"), goal_runtime.clock(), request_id=None)
+    if phase != "pending":
+        store.advance(run, phase=phase, now=goal_runtime.clock())
+    configuration = task.configuration
+    action = configuration.action
+    updated = configuration.model_copy(update={"action": action.model_copy(update={
+        "target_uri": action.target_uri.replace(action.target_uri.rsplit("/", 1)[1], active_thread),
+    })})
+    store.update(task.task_id, expected_revision=task.revision, configuration=updated, now=goal_runtime.clock())
+    goal_runtime.notify(task.task_id)
+    async with asyncio.timeout(1):
+        while store.run(task.task_id, run.run_id).phase != "suppressed" or goal_runtime._inflight:
+            await asyncio.sleep(0)
+    goal_runtime.assert_healthy()
+    assert not store.runs(task.task_id, pending_only=True)
+    assert "变化" in store.run(task.task_id, run.run_id).error
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text
+from app.core.identifier import create_prefixed_id
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
@@ -17,6 +18,7 @@ from app.domain.itemized.execution_queue import (
     ExecutionCompletion,
     ExecutionCompletionPage,
     ExecutionQueueInput,
+    ExecutionQueuePause,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
     QueueOrderConflictError,
@@ -204,9 +206,57 @@ class RolloutExecutionQueueMixin:
                     (checkpoint_ns,),
                 ).fetchall()
                 records = tuple(self._execution_queue_record(connection, session_id, thread_id, checkpoint_ns, row[0]) for row in ids)
-                return ExecutionQueueSnapshot(records, revision[0])
+                return ExecutionQueueSnapshot(records, revision[0], self._read_queue_pause(connection, session_id, thread_id, checkpoint_ns))
         except RolloutNotMaterializedError:
             return ExecutionQueueSnapshot((), 0)
+
+    @staticmethod
+    def _read_queue_pause(connection: sqlite3.Connection, session_id: str, thread_id: str,
+                          checkpoint_ns: str) -> ExecutionQueuePause | None:
+        row = connection.execute(
+            "SELECT p.pause_id,p.execution_id,e.outcome FROM execution_queue_pause p "
+            "LEFT JOIN executions e ON e.execution_id=p.execution_id WHERE p.checkpoint_ns=?",
+            (checkpoint_ns,),
+        ).fetchone()
+        return None if row is None else ExecutionQueuePause(session_id, thread_id, *row)
+
+    def execution_queue_pause(self, session_id: str, thread_id: str) -> ExecutionQueuePause | None:
+        try:
+            with self._storage.read_connection(session_id, thread_id) as connection:
+                return self._read_queue_pause(connection, session_id, thread_id, "")
+        except RolloutNotMaterializedError:
+            return None
+
+    def pause_execution_queue(self, session_id: str, thread_id: str, *,
+                              execution_id: str | None) -> ExecutionQueuePause:
+        with self._storage.write_connection(session_id, thread_id) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO execution_queue_pause(checkpoint_ns,pause_id,execution_id) VALUES('',?,?) "
+                "ON CONFLICT(checkpoint_ns) DO UPDATE SET execution_id=excluded.execution_id",
+                (create_prefixed_id("pause"), execution_id),
+            )
+            pause = self._read_queue_pause(connection, session_id, thread_id, "")
+            self._storage._commit_connection(connection)
+            return pause
+
+    def resume_execution_queue(self, session_id: str, thread_id: str, *, pause_id: str,
+                               continuation_job_id: str | None = None) -> None:
+        with self._storage.write_connection(session_id, thread_id) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("DELETE FROM execution_queue_pause WHERE checkpoint_ns='' AND pause_id=?", (pause_id,)).rowcount != 1:
+                raise QueueOrderConflictError("Thread 暂停意图已变化")
+            if continuation_job_id is not None:
+                # 恢复原任务先于旧排队输入；不改原接受身份和其余项的相对顺序。
+                changed = connection.execute(
+                    "UPDATE execution_queue SET queue_position=(SELECT COALESCE(MIN(queue_position),1)-1 "
+                    "FROM execution_queue WHERE checkpoint_ns='' AND phase='queued' AND priority=0) "
+                    "WHERE checkpoint_ns='' AND job_id=? AND phase='queued' AND priority=0",
+                    (continuation_job_id,),
+                ).rowcount
+                if changed != 1:
+                    raise QueueOrderConflictError("继续执行尚未进入原 Thread 等待队列")
+            self._storage._commit_connection(connection)
 
     def update_execution_queue_policy(
         self, session_id: str, thread_id: str, *, job_id: str, policy: str,

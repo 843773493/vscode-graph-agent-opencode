@@ -87,7 +87,6 @@ export {
   getLLMRequestLogs,
   getSessionAttachmentBlob,
   getSessionAttachmentTextPreview,
-  interruptSession,
   listMessages,
   replayMessageTurn,
   sendMessage,

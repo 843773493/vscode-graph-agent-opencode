@@ -111,6 +111,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 execution_id=binding.execution_id,
+                **({"item_ids": tuple(request.execution_item_ids)} if request.execution_item_ids is not None else {}),
             )
             before_cursor = self._indexed_before_cursor(
                 session_id, indexed, binding=binding, stage=0, turn_ordinal=None,
@@ -491,6 +492,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
         snapshot_upper_logical_item_ordinal: int | None,
         limit: int = _INTERNAL_HISTORY_PAGE_LIMIT,
         execution_id: str | None = None,
+        item_ids: tuple[str, ...] | None = None,
     ) -> InternalExecutionHistoryPage:
         if "internal" not in include or upper_logical_item_ordinal is None:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
@@ -504,6 +506,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             snapshot_upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
             limit=limit,
             execution_id=execution_id,
+            **({"item_ids": item_ids} if item_ids is not None else {}),
         )
 
     @staticmethod

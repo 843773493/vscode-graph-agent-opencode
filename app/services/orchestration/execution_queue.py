@@ -21,6 +21,7 @@ from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
+    ExecutionQueuePause,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
     QueueOrderConflictError,
@@ -136,6 +137,19 @@ class ExecutionQueueService:
         snapshots = (await self._workspace_snapshots() if session_id is None
                      else await asyncio.to_thread(self._snapshots, session_id))
         return tuple(record for _owner, snapshot in snapshots for record in snapshot.records)
+
+    async def pauses(self) -> tuple[ExecutionQueuePause, ...]:
+        return tuple(snapshot.pause for _owner, snapshot in await self._workspace_snapshots() if snapshot.pause is not None)
+
+    async def pause_state(self, session_id: str, thread_id: str) -> ExecutionQueuePause | None:
+        return await run_sync_shielded(self._owner.execution_queue_pause, session_id, thread_id)
+
+    async def pause(self, session_id: str, thread_id: str, *, execution_id: str | None) -> ExecutionQueuePause:
+        return await run_sync_shielded(self._owner.pause_execution_queue, session_id, thread_id, execution_id=execution_id)
+
+    async def resume(self, session_id: str, thread_id: str, *, pause_id: str, continuation_job_id: str | None = None) -> None:
+        await run_sync_shielded(self._owner.resume_execution_queue, session_id, thread_id,
+                                pause_id=pause_id, continuation_job_id=continuation_job_id)
 
     async def snapshot_version(self, session_id: str) -> int:
         snapshots = await asyncio.to_thread(self._snapshots, session_id)

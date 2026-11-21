@@ -189,7 +189,6 @@ function replayResponse(): Response {
 const PENDING_PATH = `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`;
 const MESSAGES_PATH = `/api/v1/sessions/${SESSION_ID}/threads/thr_run_actions/messages`;
 const SUBMISSION_QUERY_PREFIX = `/api/v1/sessions/${SESSION_ID}/threads/thr_run_actions/message-submissions/`;
-const INTERRUPT_PATH = `/api/v1/sessions/${SESSION_ID}/interrupt`;
 const REPLAY_PATH = `/api/v1/sessions/${SESSION_ID}/messages/msg_original/replay`;
 const COMPACT_PATH = `/api/v1/sessions/${SESSION_ID}/compact`;
 
@@ -383,119 +382,6 @@ describe("发送消息状态更新", () => {
     ).toBe("msg_send_regression");
   });
 
-  test("后端已无运行任务时中断会清掉残留前端运行态并触发历史同步", async () => {
-    const currentSession = session();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) {
-        return apiErrorResponse(
-          404,
-          `Session ${SESSION_ID} 当前没有正在运行的任务`,
-        );
-      }
-      return undefined;
-    }, { token: "test-interrupt-token" });
-
-    const mounted = runActions(
-      currentSession,
-      stateWithActiveJob(currentSession, "job_stale_running"),
-    );
-    await mounted.actions.interruptSession();
-
-    expect(mounted.state().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
-    expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
-    expect(mounted.state().status).toBe("运行任务已结束，正在同步会话历史");
-  });
-
-  test("缺少 main Thread 身份时不发送中断请求", async () => {
-    let requests = 0;
-    installGatewayFetchMock(() => { requests += 1; throw new Error("不应发送请求"); });
-    const mounted = runActions({ ...session(), thread_id: undefined });
-    await expect(mounted.actions.interruptSession()).rejects.toThrow("缺少权威 main Thread 身份");
-    expect(requests).toBe(0);
-  });
-
-  test("中断返回 cancelling 时显示已请求收尾而不是已停止", async () => {
-    const currentSession = session();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) {
-        return apiSuccessResponse({
-          session_id: SESSION_ID,
-          job_id: "job_interrupt_cancelling",
-          status: "cancelling",
-          thread_id: currentSession.thread_id,
-          interrupt_request_id: "intr_cancelling",
-          phase: "text",
-        });
-      }
-      return undefined;
-    }, { token: "test-interrupt-cancelling-token" });
-
-    const mounted = runActions(currentSession);
-    await mounted.actions.interruptSession();
-
-    expect(mounted.state().status).toBe("已请求中断，正在收尾");
-  });
-
-  test("producer 不会输出的终态值保留为未确认状态", async () => {
-    for (const status of ["succeeded", "cancelled", "timed_out"]) {
-      installGatewayFetch(({ path }) => {
-        if (path === INTERRUPT_PATH) {
-          return apiSuccessResponse({
-            session_id: SESSION_ID,
-            job_id: `job_interrupt_${status}`,
-            status,
-            thread_id: session().thread_id,
-            interrupt_request_id: `intr_${status}`,
-            phase: "text",
-          });
-        }
-        return undefined;
-      }, { token: `test-interrupt-${status}-token` });
-
-      const mounted = runActions(session());
-      await mounted.actions.interruptSession();
-
-      expect(mounted.state().status).toBe(`中断状态未确认: ${status}`);
-    }
-  });
-
-  test("中断遇到非 404 失败会恢复后端运行态并写入可见失败", async () => {
-    const currentSession = session();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) {
-        return apiErrorResponse(500, "中断执行器崩溃");
-      }
-      // 后端真值：任务仍在运行。前端必须校准回这个 job，而不是乐观清空。
-      if (path === PENDING_PATH) {
-        return pendingRequestsResponse({ active_job_id: "job_backend_running" });
-      }
-      return undefined;
-    }, { token: "test-interrupt-token" });
-
-    const mounted = runActions(
-      currentSession,
-      stateWithActiveJob(currentSession, "job_stale_running"),
-    );
-
-    let thrown: unknown = null;
-    try {
-      await mounted.actions.interruptSession();
-    } catch (error) {
-      thrown = error;
-    }
-
-    // 失败仍向上抛出，调用方必须接住；但状态与运行态已经收敛。
-    expect(errorMessage(thrown)).toContain("中断执行器崩溃");
-    expect(mounted.state().status).toContain("中断生成失败");
-    expect(mounted.state().status).toContain("中断执行器崩溃");
-    // 后端仍在运行：activeJobId 必须回到后端真值，而不是被乐观清空。
-    expect(mounted.state().activeJobIdsBySession.get(CACHE_KEY)).toBe(
-      "job_backend_running",
-    );
-    // 非 404 失败不得触发「任务已结束」的历史重载。
-    expect(mounted.state().sessionHistoryReloadNonce).toBe(0);
-  });
-
   test("重新生成成功后保留可见的乐观运行回合", async () => {
     const currentSession = session();
     installGatewayFetch(({ path }) => {
@@ -587,29 +473,6 @@ describe("发送消息状态更新", () => {
     expect(conversation?.blockedByJobId).toBeUndefined();
     expect(conversation?.queuedJobCount).toBe(0);
     expect(conversation?.pendingJobCount).toBe(1);
-  });
-
-  test("中断失败且运行状态重取也失败时，两条原因都要拼进可见失败文案", async () => {
-    const currentSession = session();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return apiErrorResponse(500, "中断执行器崩溃");
-      if (path === PENDING_PATH) {
-        // 补偿重取也失败：用户必须同时看到「中断失败」和「重取失败」两条事实。
-        return apiErrorResponse(503, "队列服务不可用");
-      }
-      return undefined;
-    }, { token: "test-interrupt-recovery-token" });
-
-    const mounted = runActions(currentSession);
-
-    await expect(mounted.actions.interruptSession())
-      .rejects.toThrow("中断执行器崩溃；重新读取运行状态也失败: 请求失败 503 : 队列服务不可用");
-
-    // 两条事实必须同时可见：中断失败本身 + 补偿重取也失败。
-    expect(mounted.state().status).toBe(
-      "中断生成失败: 请求失败 500 : 中断执行器崩溃"
-      + "；重新读取运行状态也失败: 请求失败 503 : 队列服务不可用",
-    );
   });
 
   test("发送结果未知时显示原始原因并保留冻结操作，不发起队列猜测", async () => {
@@ -737,14 +600,6 @@ describe("发送消息状态更新", () => {
     expect(createCalls).toBe(1);
     expect(observed.sentSessionId).toBe("ses_created_on_send");
     expect(mounted.state().currentSession?.session_id).toBe("ses_created_on_send");
-  });
-
-  test("未选中会话时中断必须显式失败，不能静默成功", async () => {
-    installGatewayFetchMock(() => undefined, { token: "test-no-session-interrupt-token" });
-    const mounted = runActions(null);
-
-    await expect(mounted.actions.interruptSession())
-      .rejects.toThrow("当前没有可中断的会话");
   });
 });
 
@@ -968,38 +823,6 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     expect(mirror.current().status).not.toContain("已压缩上下文");
   });
 
-  test("中断在途切走后，迟到的成功结果不得改写新会话状态栏", async () => {
-    const started = session();
-    const { promise: interruptResponse, release: releaseInterrupt } =
-      createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return interruptResponse;
-      return undefined;
-    }, { token: "test-run-actions-session-switch-interrupt" });
-
-    const { mirror, actions, switchAway } = mountWithSessionSwitch({
-      startedSession: started,
-      switchedSession: otherSession(),
-    });
-
-    const interrupting = actions.interruptSession().catch(() => undefined);
-    switchAway();
-    expect(mirror.current().currentSession?.session_id).toBe(OTHER_SESSION_ID);
-
-    releaseInterrupt(apiSuccessResponse({
-      status: "cancelling",
-      phase: "text",
-      session_id: started.session_id,
-      thread_id: started.thread_id,
-      job_id: "job_switched_away",
-      interrupt_request_id: "intr_switched_away",
-    }));
-    await interrupting;
-
-    // 旧会话的中断结果属于旧会话事实，不得写进新会话状态栏。
-    expect(mirror.current().status).toBe("正在中断生成...");
-  });
-
   test("轮次回放失败发生在切走之后时，不得把失败原因写进新会话状态栏", async () => {
     const started = session();
     const { promise: replayResponsePromise, release: releaseReplay } =
@@ -1026,119 +849,6 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     // 旧会话的回放失败属于旧会话事实，不得写进新会话状态栏。
     expect(mirror.current().status).not.toContain("上下文窗口已失效");
     expect(mirror.current().status).not.toContain("轮次操作失败");
-  });
-
-  test("同 Session ID 切到另一工作区后，中断成功结果不得覆盖新 owner 状态", async () => {
-    const started = session();
-    const { promise: interruptResponse, release: releaseInterrupt } =
-      createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return interruptResponse;
-      return undefined;
-    }, { token: "test-run-actions-same-id-interrupt-success" });
-
-    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
-    const interrupting = actions.interruptSession();
-    switchAway();
-    expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
-    expect(mirror.current().currentSessionWorkspaceId).toBe(WORKSPACE_B);
-
-    releaseInterrupt(apiSuccessResponse({
-      session_id: started.session_id,
-      job_id: "job_interrupt_other_owner",
-      status: "cancelling",
-      thread_id: started.thread_id,
-      interrupt_request_id: "intr_other_owner",
-      phase: "text",
-    }));
-    await interrupting;
-
-    expect(mirror.current().status).toBe("新 owner 状态");
-  });
-
-  test("同 Session ID 切到另一工作区后，中断失败仍校准旧 owner 队列但不改新状态", async () => {
-    const started = session();
-    const { promise: interruptResponse, release: releaseInterrupt } =
-      createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return interruptResponse;
-      if (path === PENDING_PATH) {
-        return pendingRequestsResponse({ active_job_id: "job_backend_running" });
-      }
-      return undefined;
-    }, { token: "test-run-actions-same-id-interrupt-failure" });
-
-    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
-    const interrupting = actions.interruptSession().catch(() => undefined);
-    switchAway();
-    releaseInterrupt(apiErrorResponse(500, "中断执行器崩溃"));
-    await interrupting;
-
-    expect(mirror.current().status).toBe("新 owner 状态");
-    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_backend_running");
-    expect(mirror.current().activeJobIdsBySession.has(
-      sessionScopeKey(WORKSPACE_B, started.session_id),
-    )).toBe(false);
-  });
-
-  test("同 Session ID 切到另一工作区后，中断和运行态重取都失败时不改新状态", async () => {
-    const started = session();
-    const { promise: interruptResponse, release: releaseInterrupt } =
-      createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return interruptResponse;
-      if (path === PENDING_PATH) return apiErrorResponse(503, "队列服务不可用");
-      return undefined;
-    }, { token: "test-run-actions-same-id-interrupt-recovery-failure" });
-
-    const { mirror, actions, switchAway } = mountWithSameSessionInOtherWorkspace(started);
-    const interrupting = actions.interruptSession().catch(() => undefined);
-    switchAway();
-    releaseInterrupt(apiErrorResponse(500, "中断执行器崩溃"));
-    await interrupting;
-
-    expect(mirror.current().status).toBe("新 owner 状态");
-  });
-
-  test("同 Session ID 切到另一工作区后，404仍清理来源运行态但不改新状态", async () => {
-    const started = session();
-    const initialState = state(started);
-    initialState.activeJobIdsBySession.set(CACHE_KEY, "job_old_owner");
-    initialState.pendingConversations.set(CACHE_KEY, [{
-      conversationId: "msg_old_owner",
-      displayMode: "live",
-      sessionId: started.session_id,
-      userMessage: null,
-      assistantMessages: [],
-      events: [],
-      status: "running",
-      jobId: "job_old_owner",
-      pending: true,
-      activeJobOverlay: true,
-      source: "pending",
-    }]);
-    const { promise: interruptResponse, release: releaseInterrupt } =
-      createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
-      if (path === INTERRUPT_PATH) return interruptResponse;
-      return undefined;
-    }, { token: "test-run-actions-same-id-interrupt-404" });
-
-    const { mirror, actions, switchAway } = mountWithSessionSwitch({
-      startedSession: started,
-      switchedSession: sameSessionInOtherWorkspace(started),
-      switchedWorkspaceId: WORKSPACE_B,
-      initialState,
-    });
-    const interrupting = actions.interruptSession();
-    switchAway();
-    releaseInterrupt(apiErrorResponse(404, `Session ${started.session_id} 当前没有正在运行的任务`));
-    await interrupting;
-
-    expect(mirror.current().status).toBe("新 owner 状态");
-    expect(mirror.current().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
-    expect(mirror.current().pendingConversations.has(CACHE_KEY)).toBe(false);
-    expect(mirror.current().sessionHistoryReloadNonce).toBe(1);
   });
 
   test("同 Session ID 切到另一工作区后，压缩成功保留来源事件但不改新状态", async () => {
@@ -1234,7 +944,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
   });
 });
 
-test("显式子 Thread 发送与停止失败重读始终冻结目标，不改写主线程 metadata", async () => {
+test("显式子 Thread 发送始终冻结目标，不改写主线程 metadata", async () => {
   const child = "thr_explicit_child";
   const cacheKey = JSON.stringify([WORKSPACE_A, SESSION_ID, child]);
   const mirror = createAppStateMirror(state(session()));
@@ -1256,20 +966,13 @@ test("显式子 Thread 发送与停止失败重读始终冻结目标，不改写
       session_id: SESSION_ID, thread_id: child, message_id: "msg_child", job_id: "job_child", turn_id: "turn_child", status: "running",
       dispatch: { ...dispatchFacts({ job_id: "job_child", active_job_id: "job_child" }), thread_id: child },
     });
-    if (path.endsWith("/interrupt")) return apiErrorResponse(409, "精确线程停止冲突");
-    if (path.endsWith("/pending-requests")) return apiSuccessResponse({
-      session_id: SESSION_ID, thread_id: child, snapshot_version: 3, active_job_id: "job_child", requests: [], queue: [],
-    });
   });
   renderToStaticMarkup(<Harness />);
   await actions.sendMessage("只发送给子线程");
   expect(mirror.current().pendingConversations.get(cacheKey)?.[0]?.threadId).toBe(child);
   expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");
-  await expect(actions.interruptSession()).rejects.toThrow("精确线程停止冲突");
   expect(requests).toEqual([
     `POST /api/v1/sessions/${SESSION_ID}/threads/${child}/messages`,
-    `POST /api/v1/sessions/${SESSION_ID}/interrupt?thread_id=${child}`,
-    `GET /api/v1/sessions/${SESSION_ID}/pending-requests?thread_id=${child}`,
   ]);
   expect(mirror.current().activeJobIdsBySession.get(cacheKey)).toBe("job_child");
   expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");

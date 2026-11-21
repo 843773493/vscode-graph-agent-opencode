@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.core.execution_pause import ExecutionPause
 from app.domain.itemized.execution_admission import ExecutionBinding
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
@@ -38,6 +39,7 @@ class JobRuntimeStateProtocol(Protocol):
     ended_at: datetime | None
     progress_reporter: Callable[[str], None] | None
     protected_operations_settled: asyncio.Event
+    execution_pause: ExecutionPause
 
 
 class JobExecutorProtocol(Protocol):

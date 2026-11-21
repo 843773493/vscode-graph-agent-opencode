@@ -195,3 +195,95 @@ async def test_real_agent_recovers_original_fifo_after_queue_process_loss(
             control_request(json.loads(control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
                 "action": "release_match", "barrier_id": barrier,
             })
+
+
+@pytest.mark.asyncio
+async def test_interrupt_paused_execution_continues_queued_input(communication_case: CommunicationCase) -> None:
+    case = communication_case
+    session = await create_session(case.client, "暂停后打断")
+    first_call, queued_call = await case.plan(session, [{"content": "当前请求"}, {"content": "排队输入结果"}])
+    control = case.replay.control
+    control.arm(first_call, "model.response_ready")
+    try:
+        first = await _send(case, session, "先暂停再打断")
+        await asyncio.to_thread(control.acknowledged, first_call, "model.response_ready", 60)
+        query = {"session_id": session, "thread_id": first["thread_id"]}
+        snapshot = (await case.client.get("/api/v1/jobs/control", params=query)).json()["data"]
+        paused = await case.client.post("/api/v1/jobs/control", params=query,
+            json={"action": "pause", "expected_execution_id": snapshot["execution_id"]})
+        assert paused.status_code == 200, paused.text
+        queued = await _send(case, session, "按默认打断策略继续处理")
+        interrupted = await case.client.post("/api/v1/jobs/control", params=query,
+            json={"action": "interrupt", "expected_execution_id": snapshot["execution_id"]})
+        assert interrupted.status_code == 200, interrupted.text
+        assert not interrupted.json()["data"]["advancement_paused"]
+        await _completed(case.client, queued["job_id"])
+        with sqlite3.connect(case.main_thread_node(session) / "rollout/index.sqlite") as connection:
+            assert connection.execute("SELECT COUNT(*) FROM execution_queue_pause").fetchone() == (0,)
+            assert connection.execute("SELECT outcome FROM executions WHERE job_id=?", (first["job_id"],)).fetchone() == ("cancelled",)
+        idle = (await case.client.get("/api/v1/jobs/control", params=query)).json()["data"]
+        assert idle["state"] == "idle" and not idle["can_resume"]
+        assert [event["operation_id"] for event in control.events if event["phase"] == "model.response_ready"] == [first_call, queued_call]
+    finally:
+        control.release(first_call, "model.response_ready")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("graceful", [False, True])
+async def test_paused_execution_survives_process_loss_and_continues_before_pending_input(
+    communication_case: CommunicationCase, graceful: bool,
+) -> None:
+    case = communication_case
+    session = await create_session(case.client, "跨重启暂停继续")
+    first_call, continued_call, queued_call = await case.plan(session, [
+        {"content": "退出前未完成"}, {"content": "继续原任务"}, {"content": "处理排队输入"},
+    ])
+    control = case.replay.control
+    control.arm(first_call, "model.response_ready")
+    try:
+        first = await _send(case, session, "保存上下文后等待继续")
+        await asyncio.to_thread(control.acknowledged, first_call, "model.response_ready", 60)
+        query = {"session_id": session, "thread_id": first["thread_id"]}
+        response = await case.client.get("/api/v1/jobs/control", params=query)
+        original = response.json()["data"]["execution_id"]
+        paused = await case.client.post("/api/v1/jobs/control", params=query,
+                                       json={"action": "pause", "expected_execution_id": original})
+        assert paused.status_code == 200, paused.text
+        queued = await _send(case, session, "之后处理的输入")
+        if graceful:
+            for endpoint in ("/api/v1/runtime/drain", "/api/v1/runtime/drain/force"):
+                shutdown = await case.client.post(endpoint)
+                assert shutdown.status_code == 200, shutdown.text
+        await case.hard_restart()
+        recovered = await case.client.get("/api/v1/jobs/control", params=query)
+        assert recovered.status_code == 200, recovered.text
+        state = recovered.json()["data"]
+        assert (state["state"], state["execution_id"], state["job_id"], state["can_resume"]) == ("paused", original, None, True)
+        pending = await case.client.get(f"/api/v1/sessions/{session}/pending-requests")
+        assert [row["job_id"] for row in pending.json()["data"]["requests"]] == [queued["job_id"]]
+        assert not (case.replay.artifacts / (continued_call + ".json")).exists()
+        stale = await case.client.post("/api/v1/jobs/control", params=query,
+                                      json={"action": "resume", "expected_execution_id": "stale"})
+        assert stale.status_code == 409, stale.text
+        resumed = await case.client.post("/api/v1/jobs/control", params=query,
+                                        json={"action": "resume", "expected_execution_id": original})
+        assert resumed.status_code == 200, resumed.text
+        assert not resumed.json()["data"]["advancement_paused"]
+        await _completed(case.client, queued["job_id"])
+        with sqlite3.connect(case.main_thread_node(session) / "rollout/index.sqlite") as connection:
+            executions = connection.execute("SELECT execution_id,execution_origin,outcome FROM executions ORDER BY execution_ordinal").fetchall()
+            assert len(executions) == 3
+            assert executions[0] == (original, "user_turn", "execution_lost")
+            assert [row[2] for row in executions[1:]] == ["completed", "completed"]
+            assert connection.execute("SELECT COUNT(*) FROM turn_acceptances").fetchone() == (2,)
+            assert connection.execute("SELECT COUNT(*) FROM execution_queue_pause").fetchone() == (0,)
+        wire = json.dumps(case.request(continued_call)["messages"], ensure_ascii=False)
+        assert original in wire and "保存上下文后等待继续" in wire
+        assert "之后处理的输入" not in wire
+        assert [event["operation_id"] for event in control.events if event["phase"] == "model.response_ready"] == [first_call, continued_call, queued_call]
+        await case.hard_restart()
+        idle = (await case.client.get("/api/v1/jobs/control", params=query)).json()["data"]
+        assert idle["state"] == "idle" and not idle["can_resume"]
+        case.record("durable-pause", {"recovered": state, "executions": executions, "idle_after_second_restart": idle})
+    finally:
+        control.release(first_call, "model.response_ready")

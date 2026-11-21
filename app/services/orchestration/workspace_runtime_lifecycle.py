@@ -167,6 +167,9 @@ class WorkspaceRuntimeLifecycleService:
         resumed_job_ids: set[str] = set()
         job_owners = await run_sync_shielded(self._read_trace_job_owners)
 
+        # 先恢复门，再装载任何队列或启动自动化；暂停意图不因原协程丢失而消失。
+        self._job_service.restore_paused_threads(await self._execution_queue_service.pauses())
+
         records = await self._execution_queue_service.records()
         for record in records:
             admission = record.cursor.admission
@@ -198,9 +201,11 @@ class WorkspaceRuntimeLifecycleService:
                     created_at=request.created_at, updated_at=request.updated_at, delivery_policy=request.delivery_policy,
                     queue_record=claim.record, queue_claim=claim,
                 )
-                if not await self._execution_queue_service.before_dispatch(claim.record):
+                paused = self._job_service.advancement_paused(admission.session_id, admission.thread_id)
+                if paused or not await self._execution_queue_service.before_dispatch(claim.record):
                     try:
-                        job.resume_checkpoint_id = await self._pending_tool_checkpoint_id(job)
+                        if not paused:
+                            job.resume_checkpoint_id = await self._pending_tool_checkpoint_id(job)
                     except CheckpointRecoveryRejectedError as error:
                         self._startup_reconciliation_errors.append({
                             "session_id": job.session_id, "job_id": job.job_id,

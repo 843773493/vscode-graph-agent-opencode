@@ -4458,5 +4458,13 @@
   "configuration.protocol.chat_completions": "OpenAI Compatible (Chat Completions)",
   "configuration.protocol.responses": "OpenAI Responses",
   "configuration.protocol.anthropic_messages": "Anthropic Messages",
-  "configuration.probe.options": "Test Options"
+  "configuration.probe.options": "Test Options",
+  "composer.execution.menu": "Execution controls",
+  "composer.execution.pause": "Pause advancement",
+  "composer.execution.interrupt": "Interrupt current execution",
+  "composer.execution.stop": "Stop the entire session",
+  "composer.execution.resume": "Resume execution",
+  "composer.execution.default": "Default stop action",
+  "composer.execution.recommended": "(recommended)",
+  "composer.execution.recoveryFailed": "{0}; failed to reload execution state: {1}"
 }

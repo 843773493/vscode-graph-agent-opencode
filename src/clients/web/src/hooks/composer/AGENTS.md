@@ -14,6 +14,7 @@ composer/
 ├── useComposerStateProjection.test.tsx    快照身份、会话隔离和更新边界
 ├── useSkillUntrackCommand.ts              停止跟踪 Skill 的后端命令
 ├── useSkillUntrackCommand.test.tsx        命令回执与失败状态
+├── useExecutionControls.ts               精确 Thread 执行控制快照、安全暂停和继续
 └── composerContext.test.tsx               Composer React 上下文和状态边界
 ```
 

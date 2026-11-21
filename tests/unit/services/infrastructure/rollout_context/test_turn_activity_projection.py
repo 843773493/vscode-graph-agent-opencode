@@ -491,6 +491,8 @@ def internal_content_carrier_case(source_seal_case, request):
         "provenance_relations": [{"relation": "replaces", "target_kind": "projection_message",
                                  "target_id": checkpoint_id, "target_model_call_id": model_call_id}],
     })
+    if getattr(request, "param", None) == "relation_scope":
+        final_message.response_metadata.pop("model_call_id")
     final_items = codec.items_for_message(
         final_message, item_sequence=1, message_id=final_message.id, turn_id=None, execution_id=admission.execution_id,
         timestamp=(stamp + timedelta(seconds=7)).isoformat(),
@@ -511,7 +513,7 @@ def internal_content_carrier_case(source_seal_case, request):
             block_index=number + 10,
         ),
         payload=f"独立输出 {number}", created_at=(stamp + timedelta(seconds=6)).isoformat(),
-    ) for number in range(getattr(request, "param", 0)))
+    ) for number in range(request.param if isinstance(getattr(request, "param", None), int) else 0))
     with (
         session_thread_owner_scope(MutationIntentOwner(owner.session_id, owner.thread_id), langgraph_thread_id=owner.thread_id),
         execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
@@ -565,7 +567,7 @@ def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
         anchor = None
         statements = []
         snapshot.connection.set_trace_callback(
-            lambda sql: statements.append(sql) if sql.startswith("WITH carriers") else None
+            lambda sql: statements.append(sql) if sql.startswith("WITH page_candidates") else None
         )
         while True:
             progress_ticks = 0
@@ -598,7 +600,7 @@ def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
                 break
             anchor = page.entries[0].logical_item_ordinal
         snapshot.connection.set_trace_callback(None)
-        print({"query_plan": snapshot.connection.execute("EXPLAIN QUERY PLAN " + statements[1]).fetchall()})
+        print({"query_plan": snapshot.connection.execute("EXPLAIN QUERY PLAN " + statements[0]).fetchall()})
         assert len(seen) == len(set(seen)) == len(expected)
         assert set(seen) == expected
         assert seen[-1] == final.item_id
@@ -740,6 +742,7 @@ def test_internal_content_hidden_or_other_source_replacement_cannot_hide_visible
     assert len([entry for entry in page.entries if entry.item.semantic_kind == "assistant_output"]) == 4
 
 
+@pytest.mark.parametrize("internal_content_carrier_case", [0, "relation_scope"], indirect=True)
 def test_internal_content_cold_history_and_provider_keep_one_final_with_reasoning(
     internal_content_carrier_case,
 ):
@@ -748,6 +751,17 @@ def test_internal_content_cold_history_and_provider_keep_one_final_with_reasonin
     page = restarted.load_history(admission.session_id, admission.thread_id,
         TurnHistoryLoadRequest(execution_id=admission.execution_id,
                                include=["internal", "final_response", "reasoning_detail"]))
+    point = restarted.load_history(admission.session_id, admission.thread_id,
+        TurnHistoryLoadRequest(execution_id=admission.execution_id,
+            execution_item_ids=[independent[0].item_id, final.item_id],
+            include=["internal", "text", "final_response", "reasoning_detail"]))
+    assert point.next_cursor is None and not point.has_more
+    assert {part.source.item_id for execution in point.internal_executions for part in execution.response_parts
+            if part.kind != "context_notice"} == {independent[0].item_id, final.item_id}
+    with pytest.raises(ValueError, match="不属于当前可见历史或已被替代"):
+        restarted.load_history(admission.session_id, admission.thread_id,
+            TurnHistoryLoadRequest(execution_id=admission.execution_id,
+                execution_item_ids=["item-lc_run--internal-content-model"], include=["internal", "text"]))
     assert len(page.internal_executions) == 1
     internal = page.internal_executions[0]
     assert internal.status == "completed"

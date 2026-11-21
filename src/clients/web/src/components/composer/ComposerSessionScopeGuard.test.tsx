@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from "react";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as executionApi from "../../api/jobs";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { ComposerContext, type ComposerContextType } from "../../hooks/app/appContext";
 import {
@@ -13,7 +14,7 @@ import type { Agent } from "../../types/backend";
 import Composer from "./Composer";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 
-const WORKSPACE_ID = "workspace";
+const WORKSPACE_ID = JSON.stringify(["gateway", "workspace"]);
 const SESSION_A = "session_a";
 const SESSION_B = "session_b";
 const SCOPE_KEY = "workspace::session_a";
@@ -81,7 +82,6 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
     clearGoal: async () => undefined,
-    interruptSession: async () => undefined,
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
     refreshAgents: async () => [],
@@ -141,7 +141,9 @@ function installComposerEnvironment(): void {
 afterEach(() => {
   restoreComposerGlobals();
   restoreComposerGlobals = () => {};
+  executionMocks.splice(0).forEach(restore => restore());
 });
+const executionMocks: Array<() => void> = [];
 
 function inputValue(renderer: ReactTestRenderer): string {
   return renderer.root.findByProps({ id: "input" }).props.value;
@@ -152,10 +154,15 @@ describe("Composer 会话作用域守卫：在途提交只回写发起它的会�
     installComposerEnvironment();
     let state = appState(SESSION_A);
     state.activeJobIdsBySession.set(SCOPE_KEY, "job-a");
+    state.currentSession!.thread_id = "main";
     let reject!: (error: Error) => void;
-    const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
-    const { renderer, element } = mountComposer(() => state,
-      baseActions({ interruptSession: () => pending }));
+    const read = spyOn(executionApi, "getThreadExecutionControl").mockImplementation(async (_port, _workspace, session, thread) => ({
+      session_id: session, thread_id: thread, job_id: "job-a", execution_id: "execution-a", state: "running", advancement_paused: false, can_resume: false,
+    }));
+    const control = spyOn(executionApi, "controlThreadExecution").mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    executionMocks.push(() => read.mockRestore(), () => control.mockRestore());
+    const { renderer, element } = mountComposer(() => state, baseActions());
+    await act(async () => { await Promise.resolve(); });
     try {
       act(() => renderer.root.findByProps({ id: "interruptButton" }).props.onClick());
       state = appState(SESSION_B);

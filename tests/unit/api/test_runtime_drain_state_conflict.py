@@ -80,6 +80,9 @@ def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoin
 
 
 class _EmptyQueueStore:
+    async def pauses(self):
+        return ()
+
     async def records(self):
         return ()
 

@@ -30,7 +30,6 @@ const noopActions = {
   refreshGoal: async () => undefined,
   updateGoal: async () => undefined,
   clearGoal: async () => undefined,
-  interruptSession: async () => undefined,
   switchAgent: async () => undefined,
   switchModel: async () => undefined,
   refreshAgents: async () => [],

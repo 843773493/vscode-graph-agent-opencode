@@ -701,7 +701,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         resources=_provider_registry(
             task_registry=registry, terminal_owner=terminal_owner, browser_owner=browser_owner,
         ), debug=SimpleNamespace(drain_session=AsyncMock()), policy=None,
-        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(), advancement_changed=lambda: None, pause_automations=AsyncMock(), resume_execution=AsyncMock(),
     )
 
     assert await service.drain_for_deletion(session_id) is None

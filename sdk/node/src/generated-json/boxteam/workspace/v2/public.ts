@@ -696,6 +696,21 @@ export interface JobControlResponseDTO {
   thread_id: string;
 }
 
+export interface ThreadExecutionControlRequest {
+  action: string;
+  expected_execution_id?: string | undefined;
+}
+
+export interface ThreadExecutionControlDTO {
+  session_id: string;
+  thread_id: string;
+  job_id?: string | undefined;
+  execution_id?: string | undefined;
+  state: string;
+  advancement_paused: boolean;
+  can_resume: boolean;
+}
+
 export interface JobDTO {
   created_at: string | undefined;
   updated_at: string | undefined;
@@ -3009,7 +3024,11 @@ export interface TurnHistoryLoadRequest {
   tool_call_ids: string[];
   anchor_message?: TurnMessageReferenceDTO | undefined;
   anchor_tool_result?: string | undefined;
-  context_cursor?: string | undefined;
+  context_cursor?:
+    | string
+    | undefined;
+  /** 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。 */
+  execution_item_ids: string[];
 }
 
 export interface ContextNoticeBatchDTO {
@@ -8653,6 +8672,111 @@ export const JobControlResponseDTO: MessageFns<JobControlResponseDTO> = {
     message.control_state = object.control_state ?? "";
     message.session_id = object.session_id ?? "";
     message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
+function createBaseThreadExecutionControlRequest(): ThreadExecutionControlRequest {
+  return { action: "", expected_execution_id: undefined };
+}
+
+export const ThreadExecutionControlRequest: MessageFns<ThreadExecutionControlRequest> = {
+  fromJSON(object: any): ThreadExecutionControlRequest {
+    return {
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      expected_execution_id: isSet(object.expected_execution_id)
+        ? globalThis.String(object.expected_execution_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ThreadExecutionControlRequest): unknown {
+    const obj: any = {};
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.expected_execution_id !== undefined) {
+      obj.expected_execution_id = message.expected_execution_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadExecutionControlRequest>, I>>(base?: I): ThreadExecutionControlRequest {
+    return ThreadExecutionControlRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadExecutionControlRequest>, I>>(
+    object: I,
+  ): ThreadExecutionControlRequest {
+    const message = createBaseThreadExecutionControlRequest();
+    message.action = object.action ?? "";
+    message.expected_execution_id = object.expected_execution_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseThreadExecutionControlDTO(): ThreadExecutionControlDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    job_id: undefined,
+    execution_id: undefined,
+    state: "",
+    advancement_paused: false,
+    can_resume: false,
+  };
+}
+
+export const ThreadExecutionControlDTO: MessageFns<ThreadExecutionControlDTO> = {
+  fromJSON(object: any): ThreadExecutionControlDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      advancement_paused: isSet(object.advancement_paused) ? globalThis.Boolean(object.advancement_paused) : false,
+      can_resume: isSet(object.can_resume) ? globalThis.Boolean(object.can_resume) : false,
+    };
+  },
+
+  toJSON(message: ThreadExecutionControlDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.job_id !== undefined) {
+      obj.job_id = message.job_id;
+    }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.advancement_paused !== false) {
+      obj.advancement_paused = message.advancement_paused;
+    }
+    if (message.can_resume !== false) {
+      obj.can_resume = message.can_resume;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadExecutionControlDTO>, I>>(base?: I): ThreadExecutionControlDTO {
+    return ThreadExecutionControlDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadExecutionControlDTO>, I>>(object: I): ThreadExecutionControlDTO {
+    const message = createBaseThreadExecutionControlDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.job_id = object.job_id ?? undefined;
+    message.execution_id = object.execution_id ?? undefined;
+    message.state = object.state ?? "";
+    message.advancement_paused = object.advancement_paused ?? false;
+    message.can_resume = object.can_resume ?? false;
     return message;
   },
 };
@@ -22967,6 +23091,7 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     anchor_message: undefined,
     anchor_tool_result: undefined,
     context_cursor: undefined,
+    execution_item_ids: [],
   };
 }
 
@@ -22992,6 +23117,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
         : undefined,
       anchor_tool_result: isSet(object.anchor_tool_result) ? globalThis.String(object.anchor_tool_result) : undefined,
       context_cursor: isSet(object.context_cursor) ? globalThis.String(object.context_cursor) : undefined,
+      execution_item_ids: globalThis.Array.isArray(object?.execution_item_ids)
+        ? object.execution_item_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -23036,6 +23164,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.context_cursor !== undefined) {
       obj.context_cursor = message.context_cursor;
     }
+    if (message.execution_item_ids?.length) {
+      obj.execution_item_ids = message.execution_item_ids;
+    }
     return obj;
   },
 
@@ -23059,6 +23190,7 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       : undefined;
     message.anchor_tool_result = object.anchor_tool_result ?? undefined;
     message.context_cursor = object.context_cursor ?? undefined;
+    message.execution_item_ids = object.execution_item_ids?.map((e) => e) || [];
     return message;
   },
 };

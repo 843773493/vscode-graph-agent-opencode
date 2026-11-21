@@ -1083,6 +1083,9 @@ def _build_app_container(
         policy=config_service.get_session_stop_policy,
         drain_collaboration=drain_session_collaboration, pause_goal=goal_service.pause_for_stop,
         close_runtime=close_session_runtime, holders=stop_holders,
+        advancement_changed=persistent_task_runtime.advancement_changed,
+        pause_automations=persistent_task_runtime.pause_for_stop,
+        resume_execution=runtime_source_dispatcher.resume_execution,
     )
     if isinstance(session_path_resolver, SessionCatalogPathResolver):
         # 子树删除沿统一停止入口依次结算 Job、调试和资源 owner。该回调在每个

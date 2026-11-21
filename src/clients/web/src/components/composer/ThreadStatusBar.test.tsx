@@ -223,15 +223,45 @@ test("边界切换失败只标记原消息，保留原边界，详细原因交�
 });
 
 test("停止请求只改变原停止按钮的忙碌状态，不增加菜单或提示块", () => {
-  const callbacks = { onClear() {}, onInterrupt() {}, onSend() {}, onAlternate() {}, onToggleDefault() {} };
+  const callbacks = { onClear() {}, onControl() {}, onRefreshControl() {}, onSend() {}, onAlternate() {}, onToggleDefault() {} };
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<Actions {...callbacks} hasContent={false} showInterrupt stopPending defaultDeliveryPolicy="after_turn" />); });
+  act(() => { renderer = create(<Actions {...callbacks} hasContent={false} showInterrupt controlReady stopPending defaultDeliveryPolicy="after_turn" />); });
   const stop = renderer.root.findByProps({ id: "interruptButton" });
   expect(stop.props.disabled).toBe(true);
   expect(stop.props["aria-busy"]).toBe(true);
   expect(stop.props.title).toBe("正在请求停止");
   expect(renderer.root.findAllByProps({ "data-status-section": "execution" })).toHaveLength(0);
-  act(() => renderer.update(<Actions {...callbacks} hasContent={false} showInterrupt defaultDeliveryPolicy="after_turn" />));
+  act(() => renderer.update(<Actions {...callbacks} hasContent={false} showInterrupt controlReady defaultDeliveryPolicy="after_turn" />));
   expect(renderer.root.findByProps({ id: "interruptButton" }).props.disabled).toBe(false);
+  act(() => renderer.unmount());
+});
+
+test("空输入仅在后端允许时继续；右键立即动作和默认选择彼此独立", () => {
+  const calls: string[] = [];
+  const callbacks = { onClear() {}, onControl(action: string) { calls.push(action); }, onRefreshControl() {}, onSend() { calls.push("send"); }, onAlternate() {}, onToggleDefault() {} };
+  const props = { ...callbacks, hasContent: false, showInterrupt: true, controlReady: true, defaultDeliveryPolicy: "after_turn" as const };
+  let renderer!: ReactTestRenderer;
+  act(() => { renderer = create(<Actions {...props} />); });
+  const send = () => renderer.root.findByProps({ id: "sendButton" });
+  expect(send().props["aria-disabled"]).toBe(true);
+  act(() => send().props.onClick());
+  expect(calls).toEqual([]);
+  const context = renderer.root.findAllByProps({ className: "composer-more-control" }).find(node => node.props.onContextMenu)!;
+  act(() => context.props.onContextMenu({ preventDefault() {}, clientX: 4, clientY: 8 }));
+  act(() => renderer.update(<Actions {...props} pausing advancementPaused />));
+  const immediate = renderer.root.findAllByProps({ role: "menuitem" });
+  expect(immediate.find(node => node.children.includes("打断当前执行"))?.props.disabled).toBe(false);
+  expect(immediate.find(node => node.children.includes("完全打断整个会话"))?.props.disabled).toBe(false);
+  const defaults = renderer.root.findAllByProps({ role: "menuitemradio" });
+  act(() => defaults[1]!.props.onClick());
+  expect(calls).toEqual([]);
+  act(() => renderer.root.findByProps({ id: "interruptButton" }).props.onClick());
+  expect(calls).toEqual(["interrupt"]);
+  act(() => renderer.update(<Actions {...props} canResume />));
+  expect(send().props["aria-label"]).toBe("继续执行");
+  act(() => send().props.onClick());
+  act(() => renderer.update(<Actions {...props} hasContent canResume />));
+  act(() => send().props.onClick());
+  expect(calls).toEqual(["interrupt", "resume", "send"]);
   act(() => renderer.unmount());
 });

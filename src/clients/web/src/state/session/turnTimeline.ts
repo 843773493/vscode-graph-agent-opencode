@@ -6,10 +6,9 @@ import type {
   TurnJobSummary,
   TurnPage,
   TurnSummary,
-  InternalExecutionHistory,
   TurnResponsePart,
 } from "../../types/backend";
-import { compareInternalResponseParts } from "../timeline/responseParts";
+import { mergeInternalExecutions, type InternalExecutionRecord } from "./internalExecutionHistory";
 import { compactTurnBodies } from "./turnBodyRetention";
 
 export type TurnRecord = (TurnSummary | TurnDetail) & { bodyEvicted?: true };
@@ -32,10 +31,11 @@ export interface SessionTurnTimeline {
   /** 后端原样返回的摘要投影，用于淘汰已展开详情，禁止前端自行重建摘要。 */
   summaryTurnsById: Record<string, TurnSummary>;
   /** Turn 之外的 internal execution 展示记录；仅由独立 history DTO 提供。 */
-  internalExecutions: InternalExecutionHistory[];
+  internalExecutions: InternalExecutionRecord[];
   detailAccessOrder: string[];
   /** 当前挂载范围及邻近回合，属于展示态，不是后端历史窗口或分页游标。 */
   bodyWindowTurnIds?: string[];
+  bodyWindowExecutionItemIds?: string[];
   activeJobs: TurnJobSummary[];
   beforeCursor: string | null;
   afterCursor: string | null;
@@ -744,8 +744,9 @@ export function applyTurnDetails(
 
 function releaseHistoryPageLoading(
   timeline: SessionTurnTimeline,
-  direction: "before" | "after" | "around",
+  direction: "before" | "after" | "around" | "details",
 ): SessionTurnTimeline {
+  if (direction === "details") return timeline;
   const loadingBefore = direction === "after" ? timeline.loadingBefore : false;
   const loadingAfter = direction === "before" ? timeline.loadingAfter : false;
   if (
@@ -760,7 +761,7 @@ function releaseHistoryPageLoading(
 export function applyTurnHistoryPage(
   previous: SessionTurnTimeline,
   page: TurnHistoryPage,
-  direction: "before" | "after" | "around" = "before",
+  direction: "before" | "after" | "around" | "details" = "before",
 ): SessionTurnTimeline {
   requireMatchingEpoch(previous, page.projection_epoch);
   if (previous.restoredFromCache && previous.historyViewRevision !== null
@@ -798,13 +799,14 @@ export function applyTurnHistoryPage(
       || page.source_view_revision! < timeline.historyViewRevision
     )
   ) {
+    if (direction === "details") return { ...timeline, error: "历史视图已更新，正文补读未应用，请重新加载历史" };
     return releaseHistoryPageLoading(timeline, direction);
   }
   const pageTimeline: SessionTurnTimeline = {
     ...timeline,
     // around 的双向游标只描述返回窗口；不能把远处旧页拼成带空洞的连续列表。
     ...(direction === "around" ? {
-      turnsById: {}, orderedTurnIds: [], summaryTurnsById: {}, detailAccessOrder: [], loadingDetailIds: [], internalExecutions: [], bodyWindowTurnIds: undefined,
+      turnsById: {}, orderedTurnIds: [], summaryTurnsById: {}, detailAccessOrder: [], loadingDetailIds: [], internalExecutions: [], bodyWindowTurnIds: undefined, bodyWindowExecutionItemIds: undefined,
     } : {}),
     threadId: page.thread_id,
     historyViewRevision: hasPageBinding
@@ -813,80 +815,8 @@ export function applyTurnHistoryPage(
   };
   const withSummaries = upsertTurns(pageTimeline, page.summaries ?? []);
   const next = upsertTurns(withSummaries, page.items);
-  const internalExecutions = new Map(
-    next.internalExecutions.map((execution) => [execution.execution_id, execution]),
-  );
-  const displayItemExecutions = new Map<string, string>();
-  for (const execution of next.internalExecutions) {
-    for (const part of execution.display_parts) {
-      const owner = displayItemExecutions.get(part.item_id);
-      if (owner !== undefined && owner !== execution.execution_id) {
-        throw new Error(
-          `history projection integrity: display item ${part.item_id} 属于多个 execution`,
-        );
-      }
-      displayItemExecutions.set(part.item_id, execution.execution_id);
-    }
-  }
-  for (const execution of page.internal_executions ?? []) {
-    const previous = internalExecutions.get(execution.execution_id);
-    const displayParts = new Map(
-      (previous?.display_parts ?? []).map((part) => [part.item_id, part]),
-    );
-    for (const part of execution.display_parts) {
-      const owner = displayItemExecutions.get(part.item_id);
-      if (owner !== undefined && owner !== execution.execution_id) {
-        throw new Error(
-          `history projection integrity: display item ${part.item_id} 属于多个 execution`,
-        );
-      }
-      displayItemExecutions.set(part.item_id, execution.execution_id);
-      const previousPart = displayParts.get(part.item_id);
-      if (
-        previousPart !== undefined
-        && (
-          previousPart.item_sequence !== part.item_sequence
-          || previousPart.logical_item_ordinal !== part.logical_item_ordinal
-        )
-      ) {
-        throw new Error(
-          `history projection integrity: 同一 display item 的 item_sequence 或 membership ordinal 冲突: ${part.item_id}`,
-        );
-      }
-      displayParts.set(part.item_id, part);
-    }
-    const responseParts = new Map(
-      (previous?.response_parts ?? []).map((part) => [part.part_id, part]),
-    );
-    for (const part of execution.response_parts) {
-      const previousPart = responseParts.get(part.part_id);
-      if (
-        previousPart !== undefined
-        && (
-          previousPart.source.item_id !== part.source.item_id
-          || previousPart.source.item_sequence !== part.source.item_sequence
-          || previousPart.source.logical_item_ordinal
-            !== part.source.logical_item_ordinal
-          || previousPart.source.part_ordinal !== part.source.part_ordinal
-        )
-      ) {
-        throw new Error(
-          `history projection integrity: 同一 response part 的 canonical 坐标冲突: ${part.part_id}`,
-        );
-      }
-      responseParts.set(part.part_id, part);
-    }
-    const orderedResponseParts = [...responseParts.values()];
-    orderedResponseParts.sort(compareInternalResponseParts);
-    internalExecutions.set(execution.execution_id, {
-      ...execution,
-      display_parts: [...displayParts.values()].sort((left, right) =>
-        left.logical_item_ordinal - right.logical_item_ordinal,
-      ),
-      response_parts: orderedResponseParts,
-    });
-  }
-  const nextInternalExecutions = [...internalExecutions.values()];
+  const nextInternalExecutions = mergeInternalExecutions(next.internalExecutions, page.internal_executions ?? []);
+  if (direction === "details") return { ...next, internalExecutions: nextInternalExecutions, error: null };
   if (direction === "around") {
     return {
       ...next,

@@ -12,12 +12,12 @@ import type {
   AttachmentRef,
   DeliveryPolicy,
   SessionChangesSummary,
-  InternalExecutionHistory,
   InternalDisplayProvenance,
 } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
 import type { TurnProjectionState } from "../../state/session/turnTimeline";
+import type { ExecutionItemReference, InternalExecutionRecord } from "../../state/session/internalExecutionHistory";
 import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "../chat/ChatHistoryEmptyState";
 import ToolApprovalPanel from "./ToolApprovalPanel";
@@ -120,12 +120,17 @@ const renderChatPanelItem: ItemContent<
   ChatPanelVirtuosoContext
 > = (_index, item, context) => {
   const state = currentChatPanelRenderState(context);
+  if (item.kind === "execution_response" || item.kind === "execution_header") return null;
   if (item.kind === "context_event") {
     return <ChatItemOwnerContext.Provider value={state.sessionId && state.threadId ? { sessionId: state.sessionId, threadId: state.threadId } : null}>
       <ContextNotice notices={item.notices} />
     </ChatItemOwnerContext.Provider>;
   }
   if (item.kind === "internal_execution") {
+    if (item.displayPart.bodyEvicted) return <div className="chat-virtual-item"
+      data-item-id={item.displayPart.item_id} style={{ height: state.bodyHeights.get(item.key) }} aria-busy="true">
+      <div role="status">{t("chat.turn.loadingFull")}</div>
+    </div>;
     const source = item.displayPart.provenance;
     const canOpenReport = state.onOpenChildReport && source.source_session_id === state.sessionId
       && source.source_thread_id && source.source_thread_id !== state.threadId && source.source_execution_id;
@@ -226,7 +231,7 @@ export default function ChatPanel({
   sessionId: string | null;
   threadId: string | null;
   conversations: ConversationView[];
-  internalExecutions?: InternalExecutionHistory[];
+  internalExecutions?: InternalExecutionRecord[];
   expandDetails: boolean;
   hasActiveSession: boolean;
   hasNewerMessages: boolean;
@@ -241,7 +246,7 @@ export default function ChatPanel({
   onLoadLatestMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
-  onRetainTurnBodies?: (turnIds: string[]) => Promise<void>;
+  onRetainTurnBodies?: (turnIds: string[], executionItems?: ExecutionItemReference[]) => Promise<void>;
   onLoadToolDetails?: LoadToolDetails;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,

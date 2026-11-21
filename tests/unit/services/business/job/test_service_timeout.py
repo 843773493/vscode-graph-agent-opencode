@@ -11,7 +11,8 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.prompting import internal_message_factory
-from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.common import ControlAction, JobStatus
+from app.schemas.internal_v2.job import JobControlRequest
 from app.services.business.job.service import JobState
 from tests.support.job_thread_fixture import job_fixture_thread_id
 from tests.unit.services.business.job.ports import enqueue_job
@@ -646,6 +647,50 @@ async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reaso
         event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     )
     assert timeout_event["payload"]["code"] == "job_timeout"
+
+
+@pytest.mark.asyncio
+async def test_pause_preserves_remaining_finalization_grace(
+    job_service_factory, session_lifecycle_guard, boundary_executor,
+) -> None:
+    bus = _RecordingBus()
+    service = job_service_factory(
+        job_event_bus=bus, job_executor=boundary_executor,
+        job_timeout_seconds=0.02, job_finalization_grace_seconds=0.1,
+        session_lifecycle_guard=session_lifecycle_guard,
+    )
+    session_id = "session_paused_finalization_grace"
+    thread_id = job_fixture_thread_id(session_id)
+    dispatch = await service.start_job(
+        session_id, "暂停收尾窗口", thread_id=thread_id,
+        message_id="msg_paused_finalization", message_created_at="2026-11-21T00:00:00+00:00",
+    )
+    job = service._jobs[dispatch.job_id]
+    await boundary_executor.started.wait()
+    boundary_executor.runtimes[0].progress_reporter("model")
+    original_task = job.task
+    try:
+        for _ in range(200):
+            if job.current_step == "model_finalizing":
+                break
+            await asyncio.sleep(0.001)
+        assert job.current_step == "model_finalizing"
+        await service.control(job.job_id, JobControlRequest(action=ControlAction.pause))
+        boundary_executor.finish_first.set()
+        await boundary_executor.first_finished.wait()
+        assert job.execution_pause.state == "paused"
+        await asyncio.sleep(0.15)
+        assert not original_task.done()
+        assert not boundary_executor.continued.is_set()
+        await service.control(job.job_id, JobControlRequest(action=ControlAction.resume))
+        boundary_executor.finish_job.set()
+        await original_task
+        assert job.status == JobStatus.completed
+        assert not [event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED]
+    finally:
+        if not original_task.done():
+            await service.control(job.job_id, JobControlRequest(action=ControlAction.cancel))
+            await service.settle_jobs([job.job_id])
 
 
 @pytest.mark.asyncio

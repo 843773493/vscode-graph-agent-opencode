@@ -457,7 +457,8 @@
 .new-chat-input-container { container: composer / inline-size; }
 .composer-actions-left { flex: 1 1 0; }
 .composer-actions-right { flex: 0 0 auto; }
-.composer-more-control { display: inline-flex; flex: 0 0 auto; }
+.composer-more-control { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.send-button[aria-disabled="true"] { opacity: 0.45; cursor: default; }
 @container composer (width < 600px) {
   .composer-hint { display: none; }
 }

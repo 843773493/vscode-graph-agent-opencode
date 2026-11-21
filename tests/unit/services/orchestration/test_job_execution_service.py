@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.core.execution_pause import current_execution_pause
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
@@ -29,6 +30,7 @@ class _StepExecutor:
         message: str,
         **kwargs: object,
     ) -> str:
+        self.execution_pause = current_execution_pause()
         self.calls.append({"session_id": session_id, "message": message, **kwargs})
         return "已执行"
 
@@ -97,6 +99,8 @@ async def test_run_forwards_full_execution_binding_and_message_identity(
     result = await service.run(job)
 
     assert result == "已执行"
+    assert step_executor.execution_pause is job.execution_pause
+    assert current_execution_pause() is None
     assert service._bus.events[-1] == {
         "job_id": "job_runtime", "event_type": EventType.JOB_COMPLETED,
         "payload": {"session_id": "ses_runtime", "result": "已执行"},

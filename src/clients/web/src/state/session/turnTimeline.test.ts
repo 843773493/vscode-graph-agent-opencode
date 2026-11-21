@@ -49,6 +49,47 @@ test("正文窗口释放远处摘要和详情，保留身份与游标；同版�
   expect(store(upsertTurns(restored, [active])).turnsById.active).toEqual(active);
 });
 
+test("同一 execution 按 item 释放正文，定点补读只恢复可视 item 并保持历史游标", () => {
+  const execution: InternalExecutionHistory = {
+    execution_id: "execution-body", job_id: "job-body", session_id: SESSION_ID, thread_id: THREAD_ID,
+    status: "completed", created_at: "2026-07-28T00:00:00Z", updated_at: "2026-07-28T00:00:01Z",
+    display_parts: Array.from({ length: 12 }, (_, index) => ({ kind: "generated_session_result",
+      text: `display-secret-${index}`, item_id: `item-${index}`, item_sequence: index + 1,
+      logical_item_ordinal: index, created_at: "2026-07-28T00:00:00Z", provenance: {} })),
+    response_parts: Array.from({ length: 12 }, (_, index) => ({ part_id: `part-${index}`, kind: "text",
+      projection: "detail", text: `response-secret-${index}`, source: { message_sequence: index + 1,
+        item_id: `item-${index}`, item_sequence: index + 1, logical_item_ordinal: index, part_ordinal: 0 } })),
+  };
+  const page = { thread_id: THREAD_ID, source_view_id: "body-view", source_view_revision: 1,
+    projection_epoch: 1, items: [], internal_executions: [execution], before_cursor: "older", has_before: true };
+  const timeline = applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), page);
+  const store = (current: typeof timeline) => writeTurnTimelineCache(new Map(), SCOPE_KEY, current).get(SCOPE_KEY)!;
+  const compacted = store({ ...timeline, bodyWindowTurnIds: [], bodyWindowExecutionItemIds: ["item-0"] });
+  expect(compacted.orderedTurnIds).toEqual([]);
+  expect(compacted.internalExecutions[0].display_parts[0].text).toBe("display-secret-0");
+  expect(compacted.internalExecutions[0].display_parts[1].bodyEvicted).toBe(true);
+  expect(compacted.internalExecutions[0].response_parts[1].source.item_id).toBe("item-1");
+  expect(JSON.stringify(compacted)).not.toContain("secret-1");
+  const restored = store(applyTurnHistoryPage({ ...compacted, bodyWindowExecutionItemIds: ["item-1"] },
+    { ...page, before_cursor: null, has_before: false, internal_executions: [{ ...execution,
+      display_parts: [execution.display_parts[1]], response_parts: [execution.response_parts[1]] }] }, "details"));
+  expect(restored.beforeCursor).toBe("older");
+  expect(restored.hasBefore).toBe(true);
+  expect(restored.internalExecutions[0].response_parts[1].text).toBe("response-secret-1");
+  expect(restored.internalExecutions[0].display_parts[0].bodyEvicted).toBe(true);
+  expect(restored.internalExecutions[0].display_parts[1].bodyEvicted).toBeUndefined();
+  const active = store({ ...timeline, bodyWindowTurnIds: [], bodyWindowExecutionItemIds: ["item-0"],
+    internalExecutions: [{ ...execution, status: "unknown" }] });
+  expect(active.internalExecutions[0].display_parts.filter(part => !part.bodyEvicted).map(part => part.item_id))
+    .toEqual(["item-0", "item-10", "item-11"]);
+  expect(active.internalExecutions[0].response_parts[1].text).toBeUndefined();
+  const stale = applyTurnHistoryPage({ ...compacted, historyViewRevision: 2,
+    loadingBefore: true, loadingAfter: true }, page, "details");
+  expect(stale.error).toContain("正文补读未应用");
+  expect(stale.loadingBefore && stale.loadingAfter).toBe(true);
+  expect(stale.internalExecutions).toBe(compacted.internalExecutions);
+});
+
 function summary(
   turnId: string,
   ordinal: number,

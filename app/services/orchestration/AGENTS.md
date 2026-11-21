@@ -70,6 +70,7 @@ orchestration/
 - `AgentExecutionService.list_tool_definitions` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。
 - 失败必须立即暴露，不能默认继续。
 - `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。
+- 启动恢复在领取执行队列前装载持久 Thread 暂停门；暂停中的丢失执行只结算，不自动续接工具 checkpoint。显式继续由 `runtime_source_dispatcher.py` 按原 pause_id 幂等准入 internal execution，复用既有 source、队列与上下文 owner。
 - 工具参数流只在累计正文可能以 JSON 对象结束时调用标准 JSON 解析器；不完整、格式无效或非对象的输入仍保留 raw 和未完成标记，不能提前触发工具执行。
 - Terminal完成监控的关闭每次最多观察原任务30秒；到期保留句柄和关闭准入，重入不再次取消原扫描或重启监控。正常轮询中的可重试错误在关闭阶段须交回原异常，不能消耗后返回成功。原结果交回Workspace后才继续后续依赖，不能把观察到期当作扫描已停止或整个shutdown已有硬期限。
 - Terminal完成监控以插件状态SSE驱动，保留变化资源ID并只查询所选摘要；初始／重连和每60秒沿原owner完整对账孤儿期限及漏通知，连续局部事件不能推迟周期对账。心跳和PTY输出不触发扫描；插件流断开按5秒重连，不重放管理动作；一个工作区只由原监控持有一条插件状态流。

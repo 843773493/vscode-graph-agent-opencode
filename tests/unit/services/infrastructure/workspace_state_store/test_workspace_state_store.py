@@ -217,6 +217,10 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
         scheduled = request.configuration.model_copy(update={"trigger": TaskTriggerDTO(type_id="builtin.interval", version="1", interval_seconds=60)})
         tasks.update(task.task_id, expected_revision=1, configuration=scheduled, now=now)
         due = now + timedelta(seconds=60)
+        assert tasks.schedule_due(due, excluded_task_ids={task.task_id}) == []
+        assert tasks.get(task.task_id).next_run_at == due
+        assert tasks.next_schedule_at(excluded_task_ids={task.task_id}) is None
+        assert tasks.runs(task.task_id) == [run]
         with closing(store.connection()) as connection:
             connection.execute("CREATE TRIGGER stop_cursor BEFORE UPDATE OF next_run_at ON persistent_task_schedules BEGIN SELECT RAISE(ABORT,'cursor-write-fault'); END")
         with pytest.raises(sqlite3.IntegrityError, match="cursor-write-fault"):

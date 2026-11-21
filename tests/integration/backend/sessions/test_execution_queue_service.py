@@ -28,6 +28,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_PAUSE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
     TEAM_OBSERVATIONS_MIGRATION_SQL,
@@ -301,6 +302,7 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_c
     import hashlib
     with storage._connect(case.thread, session_id=case.session) as connection:
         restore_schema24(connection)
+        connection.execute("DROP TABLE execution_queue_pause")
         connection.executescript("DROP TRIGGER execution_queue_terminal; DROP TRIGGER execution_queue_insert_revision; "
             "DROP TRIGGER execution_queue_update_revision; DROP TABLE execution_queue; DROP TABLE execution_queue_revision;")
         connection.execute("UPDATE database_meta SET schema_version=23")
@@ -323,6 +325,10 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_c
     storage.migrate_schema(
         case.thread, session_id=case.session, to_version=28,
         migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
+    )
+    storage.migrate_schema(
+        case.thread, session_id=case.session, to_version=29,
+        migration_name="execution_pause_028_029", migration_sql=EXECUTION_PAUSE_SCHEMA_SQL,
     )
     await case.store.migrate_schema(case.session)
     assert not path.exists() and storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original

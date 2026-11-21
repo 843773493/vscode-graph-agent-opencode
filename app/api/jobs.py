@@ -10,6 +10,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
     get_artifact_service,
     get_job_service,
+    get_session_stop_service,
     get_tool_approval_service,
     verify_local_token,
 )
@@ -23,6 +24,8 @@ from app.schemas.internal_v2.job import (
     JobDTO,
     StepDTO,
 )
+from app.schemas.internal_v2.execution_control import ThreadExecutionControlDTO, ThreadExecutionControlRequest
+from app.services.orchestration.session_stop import SessionStopService
 from app.schemas.internal_v2.tool_approval import (
     ToolApprovalCommandDTO,
     ToolApprovalDTO,
@@ -84,6 +87,33 @@ async def list_thread_tool_approvals(
     approvals: Annotated[ToolApprovalService, Depends(get_tool_approval_service)],
 ):
     return APIResponse(data=approvals.list_for_thread(session_id, thread_id), request_id=request_id)
+
+
+@router.get("/control", response_model=APIResponse[ThreadExecutionControlDTO], summary="读取线程执行控制状态")
+async def get_execution_control(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    controls: Annotated[SessionStopService, Depends(get_session_stop_service)],
+):
+    return APIResponse(data=await controls.execution_control_snapshot(session_id, thread_id), request_id=request_id)
+
+
+@router.post("/control", response_model=APIResponse[ThreadExecutionControlDTO], summary="控制线程执行与推进")
+async def control_execution(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId,
+    payload: ThreadExecutionControlRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    controls: Annotated[SessionStopService, Depends(get_session_stop_service)],
+):
+    try:
+        result = await controls.control_execution(session_id, thread_id, payload)
+    except ValidationError:
+        raise
+    except ValueError as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get("/{job_id}", response_model=APIResponse[JobDTO], summary="获取任务详情")

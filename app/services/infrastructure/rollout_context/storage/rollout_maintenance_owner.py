@@ -49,6 +49,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_PAUSE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
@@ -152,6 +153,8 @@ def migrate_schema_snapshot(
             raise RuntimeError("升级前须在原运行时排空执行队列，不能重解释已冻结的输入上下文")
     if (current_version, to_version) == (27, 28) and migration_sql != TEAM_OBSERVATIONS_MIGRATION_SQL:
         raise ValueError("schema migration 27→28 必须使用登记的团队投递回执 SQL")
+    if (current_version, to_version) == (28, 29) and migration_sql != EXECUTION_PAUSE_SCHEMA_SQL:
+        raise ValueError("schema migration 28→29 必须使用登记的 Thread 暂停 SQL")
     execute_atomic_schema_sql(connection, migration_sql)
     if (current_version, to_version) == (27, 28):
         migrate_team_source_observations(connection)
@@ -294,7 +297,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27), (27, 28)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"

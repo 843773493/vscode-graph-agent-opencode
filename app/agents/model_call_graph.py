@@ -19,6 +19,7 @@ from langgraph.runtime import Runtime
 
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.tool_node_adapter import adapt_agent_tool_node
+from app.core.execution_pause import execution_pause_boundary
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
 )
@@ -73,12 +74,16 @@ def create_model_call_agent(model, *, execution: ModelCallExecution, **options) 
         result = chain(request, execution.execute)
         return _build_commands(result.model_response, result.commands)
 
+    async def execute_model(request):
+        async with execution_pause_boundary():
+            return await execution.aexecute(request)
+
     async def amodel_node(state, runtime: Runtime[Any]):
         request = request_for(state, runtime)
         chain = asynchronous["awrap_model_call_handler"]
         if chain is None:
-            return _build_commands(await execution.aexecute(request))
-        result = await chain(request, execution.aexecute)
+            return _build_commands(await execute_model(request))
+        result = await chain(request, execute_model)
         return _build_commands(result.model_response, result.commands)
 
     graph.builder.nodes["model"] = replace(

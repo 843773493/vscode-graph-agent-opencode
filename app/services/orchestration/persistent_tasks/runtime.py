@@ -198,8 +198,9 @@ class PersistentTaskRuntime:
 
     async def request_goal(self, session_id: str, *, objective: SessionGoalStateDTO | None = None) -> None:
         self.assert_healthy()
+        work = GoalWork(session_id, "objective" if objective is not None else "idle", goal=objective)
         done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self._queue_goal(GoalWork(session_id, "objective" if objective is not None else "idle", goal=objective), done)
+        self._queue_goal(work, done)
         await asyncio.shield(done)
 
     async def _process_application(self, key: str) -> None:
@@ -214,14 +215,14 @@ class PersistentTaskRuntime:
         except NotFoundError as error:
             # 导航删除可能先排空 Job 并移除 Session；已排队工作不能拖垮其他任务。
             logger.info("Goal 工作的 Session 已删除，结束该工作项: session_id=%s", work.session_id)
-            if done is not None:
+            if done is not None and not done.done():
                 done.set_exception(error)
         except BaseException as error:
-            if done is not None:
+            if done is not None and not done.done():
                 done.set_exception(error)
             raise
         else:
-            if done is not None:
+            if done is not None and not done.done():
                 done.set_result(None)
         finally:
             reset_current_gateway_id(gateway_token)
@@ -247,6 +248,48 @@ class PersistentTaskRuntime:
 
     async def drain_actions(self) -> None:
         await self._actions_drained.wait()
+
+    def advancement_changed(self) -> None:
+        self._wake.set()
+
+    def _configuration_threads(self, configuration: PersistentTaskConfigurationDTO) -> set[tuple[str, str]]:
+        uris = [configuration.trigger.source_uri]
+        if configuration.condition.model is not None:
+            uris.append(configuration.condition.model.thread_uri)
+        action = configuration.action
+        targets: set[tuple[str, str]] = set()
+        if isinstance(action, SessionGenerationActionDTO):
+            generation = action.generation
+            for target in (generation.session_strategy.target, generation.context_source):
+                if (target is not None and target.workspace_id == self.store.workspace_id
+                        and target.session_id is not None and target.thread_id is not None):
+                    targets.add((target.session_id, target.thread_id))
+        else:
+            uris.append(action.target_uri)
+        targets.update((session_id, thread_id)
+                       for uri in uris if uri is not None
+                       for resource, session_id, thread_id in [parse_session_thread_uri(uri)]
+                       if resource.scope_id == self.store.workspace_id and thread_id is not None)
+        return targets
+
+    def _configuration_paused(self, configuration: PersistentTaskConfigurationDTO) -> bool:
+        return any(self.jobs.advancement_paused(*target) for target in self._configuration_threads(configuration))
+
+    async def pause_for_stop(self, session_id: str, thread_id: str | None) -> None:
+        for task in self.store.list_automations():
+            async with self.locks.lock_for(task.task_id):
+                current = self.store.get_automation(task.task_id)
+                if current.lifecycle == "active" and any(
+                    owner_session == session_id and (thread_id is None or owner_thread == thread_id)
+                    for owner_session, owner_thread in self._configuration_threads(current.configuration)
+                ):
+                    self.store.control(current.task_id, expected_revision=current.revision,
+                                       lifecycle="paused", now=self.clock())
+                    self.notify(current.task_id)
+
+    def _goal_work_paused(self, work: GoalWork) -> bool:
+        goal = work.goal or self.store.goal_read(work.session_id)
+        return goal is not None and self.jobs.advancement_paused(goal.session_id, goal.thread_id)
 
     def notify(self, task_id: str, run_id: str | None = None) -> None:
         task = self.store.get_automation(task_id)
@@ -313,16 +356,23 @@ class PersistentTaskRuntime:
                 if self._closing and not self._application_work and not self._inflight:
                     break
                 for key in tuple(self._application_work):
+                    if not self._closing and self._goal_work_paused(self._application_work[key][0][0]):
+                        # 原 Goal 修改已落盘；回执只表示工作已接受，保留原队列待恢复。
+                        for _work, done in self._application_work[key]:
+                            if done is not None and not done.done():
+                                done.set_result(None)
+                        continue
                     if key not in self._inflight and len(self._inflight) < self._concurrency:
                         running = asyncio.create_task(self._process_application(key), name=f"persistent-task:{key}")
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[key] = running
-                if self._accepting:
-                    for task_id, run_id in self.store.schedule_due(self.clock()):
-                        self.notify(task_id, run_id)
                 tasks = self.store.list_automations() if self._accepting else []
+                paused_tasks = {task.task_id for task in tasks if self._configuration_paused(task.configuration)}
+                if self._accepting:
+                    for task_id, run_id in self.store.schedule_due(self.clock(), excluded_task_ids=paused_tasks):
+                        self.notify(task_id, run_id)
                 for task in tasks:
-                    if task.task_id in self._inflight or task.task_id in self._waiting_checks:
+                    if task.task_id in paused_tasks or task.task_id in self._inflight or task.task_id in self._waiting_checks:
                         continue
                     if len(self._inflight) >= self._concurrency:
                         break
@@ -332,7 +382,7 @@ class PersistentTaskRuntime:
                         running = asyncio.create_task(self._process_task(task.task_id), name=f"persistent-task:{task.task_id}")
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[task.task_id] = running
-                next_run = self.store.next_schedule_at() if self._accepting else None
+                next_run = self.store.next_schedule_at(excluded_task_ids=paused_tasks) if self._accepting else None
                 if next_run is None:
                     await self._wake.wait()
                 else:
@@ -417,11 +467,18 @@ class PersistentTaskRuntime:
     async def _process_run(self, run: PersistentTaskRunDTO) -> None:
         await observe_phase(run.run_id, "task.run.loaded", details={"task_id": run.task_id})
         configuration = self.store.configuration(run)
+        # 旧 revision 必须继续由原判断/投递 owner 抑制或对账，不能因旧目标暂停而反复重排。
+        if (self.store.get_automation(run.task_id).revision == run.task_revision
+                and self._configuration_paused(configuration)):
+            return
         if run.phase in {"pending", "checking"}:
             checked = await self._check(run, configuration)
             if checked is None:
                 return
             run = checked
+        if (self.store.get_automation(run.task_id).revision == run.task_revision
+                and self._configuration_paused(configuration)):
+            return
         action = configuration.action
         if isinstance(action, SessionGenerationActionDTO):
             await advance_generation(self, configuration, run)

@@ -131,7 +131,7 @@ test("树选择与已读取会话独立，后端迟到更新不抢回高亮", as
     expect(selected("ses_a")).toBe(false);
     expect(selected("ses_b")).toBe(true);
     expect(catalogNodeRow(tree, "ses_b").props.className).toContain("current-session");
-    const props = tree.root.findByType(SessionResourceExplorer).props;
+    const props = tree.root.findByType(SessionResourceExplorer).props as React.ComponentProps<typeof SessionResourceExplorer>;
     act(() => tree.update(<SessionResourceExplorer {...props} currentSessionWorkspaceId={WORKSPACE_KEY} currentSessionId="ses_b" />));
     act(() => tree.update(<SessionResourceExplorer {...props} currentSessionWorkspaceId={WORKSPACE_KEY} currentSessionId="ses_a" />));
     expect(catalogNodeRow(tree, "ses_a").props["aria-current"]).toBe("true");

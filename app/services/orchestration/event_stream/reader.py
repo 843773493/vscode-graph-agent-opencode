@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from langgraph.types import Command, StateSnapshot
 
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
+from app.core.execution_pause import ExecutionPause, current_execution_pause
 from app.core.turn_execution_scope import CancellationSignal, ScopeCancelledError
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
@@ -113,10 +114,10 @@ async def iter_agent_events(
         # 下一节点可能产生外部效果；必须先提交原 scheduler，重启才能证明续接点。
         durability="sync",
     ).__aiter__()
-    loop = asyncio.get_running_loop()
+    pause = current_execution_pause() or ExecutionPause()
     next_event_task: asyncio.Task[dict[str, Any]] | None = None
     timeout_triggered = False
-    first_progress_deadline: float | None = loop.time() + initial_event_timeout_seconds
+    first_progress_deadline: float | None = pause.clock() + initial_event_timeout_seconds
     model_deadline: float | None = None
     model_active = False
     tool_dispatch_deadline: float | None = None
@@ -164,7 +165,7 @@ async def iter_agent_events(
                     or previous_pending_tool_call_ids - pending_tool_call_ids
                 ):
                     tool_dispatch_deadline = (
-                        loop.time() + effective_tool_dispatch_timeout_seconds
+                        pause.clock() + effective_tool_dispatch_timeout_seconds
                     )
             else:
                 tool_dispatch_deadline = None
@@ -201,7 +202,7 @@ async def iter_agent_events(
                 elif next_event_task is not None and next_event_task.done():
                     event = next_event_task.result()
                 else:
-                    timeout = deadline - loop.time()
+                    timeout = deadline - pause.clock()
                     if timeout <= 0:
                         await raise_stream_timeout(phase, code=timeout_code)
                     if next_event_task is None:
@@ -211,14 +212,18 @@ async def iter_agent_events(
                     # 保证这里的等待超时只产生本地 tool_dispatch_timeout；
                     # 生成器任务在 finally 中单独收束，不能把清理取消冒泡成
                     # execution_lost。
-                    done, _ = await asyncio.wait(
-                        {next_event_task},
-                        timeout=timeout,
-                    )
-                    if not done:
-                        timeout_triggered = True
-                        await raise_stream_timeout(phase, code=timeout_code)
-                    event = next_event_task.result()
+                    timer = asyncio.create_task(pause.sleep_active(timeout))
+                    try:
+                        done, _ = await asyncio.wait(
+                            {next_event_task, timer}, return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if next_event_task not in done:
+                            timeout_triggered = True
+                            await raise_stream_timeout(phase, code=timeout_code)
+                        event = next_event_task.result()
+                    finally:
+                        timer.cancel()
+                        await asyncio.gather(timer, return_exceptions=True)
                 next_event_task = None
             except StopAsyncIteration:
                 next_event_task = None
@@ -236,18 +241,18 @@ async def iter_agent_events(
                         event_iterator = agent.astream_events(
                             resume, config=stream_config, version="v2", durability="sync",
                         ).__aiter__()
-                        first_progress_deadline = loop.time() + initial_event_timeout_seconds
+                        first_progress_deadline = pause.clock() + initial_event_timeout_seconds
                         model_deadline = tool_dispatch_deadline = None
                         model_active = False
                         previous_pending_tool_call_ids = frozenset()
                         continue
                 return
-            consumption_started = loop.time()
+            consumption_started = pause.clock()
             yield event
             if tool_dispatch_deadline is not None:
                 # 分派 watchdog 只累计事件源等待；processor 正在提交/发布
                 # 已到达事件时，不能把其处理耗时算作工具未分派的空闲。
-                tool_dispatch_deadline += loop.time() - consumption_started
+                tool_dispatch_deadline += pause.clock() - consumption_started
             if _is_progress_event(event):
                 first_progress_deadline = None
             elif first_progress_deadline is not None and _is_agent_lifecycle_event(
@@ -256,11 +261,11 @@ async def iter_agent_events(
                 # LangGraph 在首个模型事件前可能先发出 chain/prompt/parser
                 # 生命周期事件。它们不是用户可见的模型进展，但说明 AgentLoop
                 # 没有卡死；把首事件 watchdog 作为“无事件空闲超时”续期。
-                first_progress_deadline = loop.time() + initial_event_timeout_seconds
+                first_progress_deadline = pause.clock() + initial_event_timeout_seconds
             if _is_model_start_event(event):
                 model_active = True
                 model_deadline = (
-                    loop.time() + idle_model_timeout_seconds
+                    pause.clock() + idle_model_timeout_seconds
                     if idle_model_timeout_seconds is not None
                     else None
                 )
@@ -270,7 +275,7 @@ async def iter_agent_events(
             elif model_deadline is not None:
                 # 这是模型空闲 watchdog，而不是从模型开始事件起算的固定
                 # 响应总预算。活跃的长推理/流式响应不应被 60 秒硬切。
-                model_deadline = loop.time() + idle_model_timeout_seconds
+                model_deadline = pause.clock() + idle_model_timeout_seconds
     except ScopeCancelledError as error:
         if cancellation_signal is None or not cancellation_signal.is_cancelled:
             raise

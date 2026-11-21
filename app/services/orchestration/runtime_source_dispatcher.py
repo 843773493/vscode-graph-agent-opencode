@@ -30,6 +30,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.execution_queue import ExecutionQueuePause
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.prompting import PromptSection, internal_message_factory
@@ -57,6 +58,22 @@ class RuntimeSourceDispatcher:
         self._sessions = session_service
         self._jobs = job_service
         self._dispatch_locks = KeyLockPool()
+
+    async def resume_execution(self, pause: ExecutionQueuePause) -> str:
+        """原暂停身份提供幂等键；新执行沿现有 source 准入，不重放旧工具节点。"""
+        if pause.execution_id is None or pause.outcome != "execution_lost":
+            raise ValueError("只有进程退出后丢失的暂停执行需要创建后续执行")
+        message = internal_message_factory.build(
+            kind="execution_resume",
+            control="用户要求继续进程退出前暂停的任务。基于已保存上下文继续推进；"
+                    "未确认结果的工具可能已产生副作用，先核实实际状态，不要盲目重复执行。",
+            sections=(PromptSection("control_context", {"previous_execution_id": pause.execution_id}),),
+        )
+        accepted = await self.submit(
+            pause.session_id, pause.thread_id, message, source_id="execution_resume",
+            idempotency_key=f"execution-resume:{pause.pause_id}",
+        )
+        return accepted.job_id
 
     @staticmethod
     def _digest(session_id: str, thread_id: str, idempotency_key: str) -> str:

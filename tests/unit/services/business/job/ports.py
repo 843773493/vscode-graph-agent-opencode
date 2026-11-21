@@ -13,6 +13,7 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
+    ExecutionQueuePause,
     ExecutionQueueRecord,
 )
 from app.schemas.internal_v2.message import MessageDTO
@@ -47,6 +48,7 @@ def job_service_factory():
         states = {}
         records = {}
         revision = 0
+        pauses = {}
         owner = Mock()
         store = Mock()
 
@@ -121,6 +123,26 @@ def job_service_factory():
             records[reference.job_id] = replace(records[reference.job_id], delivery_policy=policy)
             revision += 1
 
+        async def pause_state(session_id, thread_id):
+            pause = pauses.get((session_id, thread_id))
+            if pause is not None and pause.execution_id is not None:
+                job = next(job for job in states.values() if job.queue_record.cursor.admission.execution_id == pause.execution_id)
+                outcome = "unknown" if job.status.value in {"running", "cancelling"} else "cancelled"
+                return replace(pause, outcome=outcome)
+            return pause
+
+        async def pause(session_id, thread_id, *, execution_id):
+            value = ExecutionQueuePause(session_id, thread_id, f"pause-{session_id}/{thread_id}", execution_id, "unknown" if execution_id else None)
+            pauses[(session_id, thread_id)] = value
+            return value
+
+        async def resume(session_id, thread_id, *, pause_id, continuation_job_id=None):
+            del pauses[(session_id, thread_id)]
+
+        store.pause_state = AsyncMock(side_effect=pause_state)
+        store.pause = AsyncMock(side_effect=pause)
+        store.resume = AsyncMock(side_effect=resume)
+        store.pauses = AsyncMock(return_value=())
         owner.accept_job_input.side_effect = accept
         owner.accepted_job_message.side_effect = message
         owner.accepted_job_outcome.return_value = "unknown"
