@@ -114,6 +114,7 @@ export function validateRuntimeManifest(value) {
     ),
     bundledPlugins: Object.freeze(bundledPlugins),
     webAssets: optionalString(manifest.web_assets, "runtime manifest.web_assets"),
+    desktopExecutable: optionalString(manifest.desktop_executable, "runtime manifest.desktop_executable"),
     chromiumExecutable: optionalString(
       manifest.chromium_executable,
       "runtime manifest.chromium_executable",
@@ -150,6 +151,7 @@ export function resolveRuntimeManifest(manifestPath, value) {
     skillResources: resolveResource(runtimeRoot, manifest.skillResources),
     bundledPlugins: Object.freeze(manifest.bundledPlugins.map(entry => Object.freeze({ ...entry,
       [entry.directory === undefined ? "archive" : "directory"]: resolveResource(runtimeRoot, entry.directory ?? entry.archive) }))),
+    desktopExecutable: manifest.desktopExecutable === null ? null : resolveResource(runtimeRoot, manifest.desktopExecutable),
     webAssets:
       manifest.webAssets === null
         ? null
@@ -195,6 +197,7 @@ export function assertRuntimeResources(manifest) {
       resourcePath,
     ]),
     ["共享 Skill 资源", manifest.skillResources],
+    ...(manifest.desktopExecutable == null ? [] : [["Electron", manifest.desktopExecutable]]),
     ...manifest.bundledPlugins.map(entry => [`内置插件 ${entry.package_id}`, entry.directory ?? entry.archive]),
     ...(manifest.webAssets === null ? [] : [["Web UI", manifest.webAssets]]),
     ...(manifest.chromiumExecutable === null

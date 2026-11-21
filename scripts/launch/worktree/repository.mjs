@@ -24,7 +24,7 @@ export function gitText(cwd, args) {
 
 export function registeredWorktrees(cwd) {
   const records = gitText(cwd, ["worktree", "list", "--porcelain", "-z"]).split("\0");
-  return records.filter((record) => record.startsWith("worktree ")).map((record) => record.slice(9));
+  return records.filter((record) => record.startsWith("worktree ")).map((record) => path.normalize(record.slice(9)));
 }
 
 export function repositoryContext(cwd = process.cwd()) {

@@ -155,6 +155,14 @@
           ]
         }
       }
+    },
+    "desktop_executable": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "可选的 Electron 桌面入口，相对 runtime manifest 所在目录解析；由 Launcher 在 Gateway 就绪后启动。"
     }
   },
   "allOf": [

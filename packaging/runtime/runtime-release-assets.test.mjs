@@ -219,7 +219,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
     env: { BOXTEAM_PROJECT_ROOT: fixtureRoot }, cwd: () => fixtureRoot,
     execPath: process.execPath, arch: "x64",
     platform: mode === "windows-native" ? "win32" : "linux",
-    argv: mode === "windows-cross" ? ["--cross"] : [],
+    argv: ["node", "builder", ...(mode === "windows-cross" ? ["--cross"] : [])],
   }, Bun: { which(name) {
     if (name === "bun") return bunExecutable;
     if (name === "uv") return uvExecutable;

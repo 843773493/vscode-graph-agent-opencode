@@ -427,6 +427,8 @@ export async function superviseGateway({
 
   const activeEnvironment = activeGatewayEnvironment(environment);
   const controlAddress = gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
+  let desktopChild = null;
+  let desktopClosed = null;
   let currentChild = null;
   let startingChild = null;
   let handoffChain = Promise.resolve();
@@ -593,7 +595,15 @@ export async function superviseGateway({
     if (publicListener !== null) {
       publicListener.setTarget({ host: endpoint.host, port: initialChild.childPort });
     }
-    if (openBrowser) {
+    if (openBrowser && runtime.desktopExecutable) {
+      desktopChild = spawnImpl(runtime.desktopExecutable, [`--gateway=${endpoint.url}`], {
+        env: environment, stdio: "inherit", windowsHide: false,
+      });
+      desktopClosed = new Promise(resolve => {
+        desktopChild.once("error", error => resolve({ error }));
+        desktopChild.once("close", (code, signal) => resolve({ code, signal }));
+      });
+    } else if (openBrowser) {
       void openGatewayBrowser({ url: endpoint.url, logger });
     }
 
@@ -602,7 +612,15 @@ export async function superviseGateway({
       if (observedChild === null) {
         throw new Error("Gateway supervisor active generation 丢失");
       }
-      const [code, signal] = await Promise.race([observedChild.closeResult, stopFailure.then(error => { throw error; })]);
+      const outcome = await Promise.race([
+        observedChild.closeResult, stopFailure.then(error => { throw error; }),
+        ...(desktopClosed === null ? [] : [desktopClosed]),
+      ]);
+      if (!Array.isArray(outcome)) {
+        if (outcome.error) throw outcome.error;
+        return outcome.signal ? 128 : outcome.code ?? 1;
+      }
+      const [code, signal] = outcome;
       observedChild.removeOutputForwarding();
       observedChild.removeSignalHandlers();
       if (currentChild !== observedChild) continue;
@@ -611,6 +629,17 @@ export async function superviseGateway({
   } finally {
     const failures = [];
     for (const cleanup of [
+      async () => {
+        if (desktopChild && desktopChild.exitCode === null && desktopChild.signalCode === null) {
+          desktopChild.kill();
+          let timer;
+          try {
+            await Promise.race([desktopClosed, new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error(`Electron 未退出: pid=${desktopChild.pid}`)), 5000);
+            })]);
+          } finally { clearTimeout(timer); }
+        }
+      },
       () => stopChildren(),
       () => control?.close(),
       () => publicListener?.close(),

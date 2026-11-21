@@ -106,7 +106,7 @@ with tarfile.open(node_archive, 'w:gz') as output:
         } : {}),
       },
       platform: mode === "windows-native" ? "win32" : "linux", arch: "x64",
-      argv: mode === "windows-cross" ? ["--cross"] : [], cwd: () => projectRoot,
+      argv: ["node", "builder", ...(mode === "windows-cross" ? ["--cross"] : [])], cwd: () => projectRoot,
     },
   });
   // 原构建入口全文执行；下载返回本地归档，解包使用真实库，源码复制前停止。

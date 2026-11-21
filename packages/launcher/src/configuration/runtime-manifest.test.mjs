@@ -154,3 +154,14 @@ describe("runtime manifest", () => {
   });
 
 });
+
+test("桌面入口由发行 manifest 解析并与 schema 保持一致", () => {
+  const input = { ...baseManifest, desktop_executable: "desktop/boxteam.exe" };
+  const schema = JSON.parse(readFileSync(new URL("../../runtime-manifest.schema.json", import.meta.url), "utf8"));
+  const validate = new Ajv2020().compile(schema);
+  expect(validate(input)).toBe(true);
+  expect(resolveRuntimeManifest(runtimeManifestPath, input).desktopExecutable).toBe(path.resolve(runtimeDirectory, "desktop/boxteam.exe"));
+  expect(validateRuntimeManifest(baseManifest).desktopExecutable).toBeNull();
+  expect(validate({ ...input, desktop_executable: "" })).toBe(false);
+  expect(() => validateRuntimeManifest({ ...input, desktop_executable: "" })).toThrow();
+});

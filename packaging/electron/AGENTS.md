@@ -14,4 +14,4 @@
 
 ESM；依赖通过 bun 安装。默认产物统一写 out/packaging/electron；正式测试通过同一发布入口的 `--output-root` 将构建、下载缓存、bundle 和归档全部写入该测试镜像的 runtime。下载固定版本并校验摘要。保留上游许可，失败保留明确退出信息。真实验证必须从迁移后的产物启动并经过已有 Gateway。
 
-Windows 安装器复用 NSIS，仅安装客户端；安装时填写已有 Gateway 地址，静默安装通过 `/GATEWAY=<地址>` 指定。卸载只移除安装目录和本安装器的快捷方式／登记，保留 BoxTeam Home 与 Electron 用户配置。
+Windows 完整桌面安装器复用 runtime 的 NSIS 模板及便携包，加入 Electron 并在 runtime manifest 登记桌面入口。Launcher 在本机 Gateway 就绪后打开 Electron，桌面关闭后停止同一服务组；不另建桌面服务管理器。

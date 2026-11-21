@@ -1,11 +1,13 @@
 import { packager } from '@electron/packager';
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm, cp, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, join, basename } from 'node:path';
 import { create as createTar } from 'tar';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
+import { extractZipArchive } from '../runtime/archives/zip.mjs';
 
 const { values } = parseArgs({ options: { 'project-root': { type: 'string' }, 'output-root': { type: 'string' } } });
 const projectRoot = resolve(values['project-root'] || process.env.BOXTEAM_PROJECT_ROOT || process.cwd());
@@ -48,13 +50,26 @@ for (const bundle of bundles) {
   archives.push({ archive, sha256, bundle });
   if (process.platform === 'win32') {
     const installer = join(output, 'releases', `BoxTeam-${product.version}-win32-${process.arch}-setup.exe`);
-    const result = spawnSync(process.env.BOXTEAM_NSIS_BIN ?? 'makensis', [
-      `-DVERSION=${product.version}`, `-DINPUTDIR=${bundle}`, `-DOUTPUT=${installer}`,
-      join(projectRoot, 'packaging/electron/installer.nsi'),
-    ], { stdio: 'inherit', windowsHide: true, env: process.env });
-    if (result.error) throw result.error;
-    if (result.status !== 0 || result.signal) throw new Error(`Electron 安装器构建失败：exit=${result.status}, signal=${result.signal}`);
-    installers.push({ installer, sha256: await writeChecksum(installer) });
+    const runtimeOutput = join(output, 'runtime');
+    const runtimeResult = JSON.parse(await readFile(join(runtimeOutput, 'build-result.json'), 'utf8'));
+    if (runtimeResult.version !== product.version) throw new Error('Electron 与本机运行时版本不一致');
+    const stage = await mkdtemp(join(tmpdir(), 'bt-electron-'));
+    try {
+      await extractZipArchive(runtimeResult.standalone_assets[0].path, { dir: stage });
+      const packageRoot = join(stage, `boxteam-windows-x64-${product.version}`);
+      await cp(bundle, join(packageRoot, 'runtime/desktop'), { recursive: true });
+      const manifestPath = join(packageRoot, 'runtime/runtime-manifest.json');
+      const runtimeManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      runtimeManifest.desktop_executable = 'desktop/boxteam.exe';
+      await writeFile(manifestPath, JSON.stringify(runtimeManifest, null, 2) + '\n');
+      const result = spawnSync(process.env.BOXTEAM_NSIS_BIN ?? 'makensis', [
+        `-DVERSION=${product.version}`, `-DINPUTDIR=${packageRoot}`, `-DOUTPUT=${installer}`,
+        join(projectRoot, 'packaging/runtime/boxteam-installer.nsi'),
+      ], { stdio: 'inherit', windowsHide: true, env: process.env });
+      if (result.error) throw result.error;
+      if (result.status !== 0 || result.signal) throw new Error(`Electron 安装器构建失败：exit=${result.status}, signal=${result.signal}`);
+      installers.push({ installer, sha256: await writeChecksum(installer) });
+    } finally { await rm(stage, { recursive: true, force: true }); }
   }
 }
 const manifest = { ...JSON.parse(await readFile(join(appRoot, 'build.json'), 'utf8')),

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createZipArchive } from '../runtime/archives/zip.mjs';
 
 const outputRoot = path.resolve('out/tests/packaging/electron/package');
 const runId = randomUUID();
@@ -24,13 +25,14 @@ function fixture(scenario, platform = process.platform, installerFailure = false
   json(path.relative(workspace, path.join(output, 'app/build.json')), { version: '1.2.3', workbench: { commit: 'fixture' } });
   json('src/clients/electron/package.json', { devDependencies: { electron: '39.0.0' } });
   json('src/clients/electron/node_modules/electron/checksums.json', {});
-  mkdirSync(path.join(workspace, 'packaging/electron'), { recursive: true });
-  writeFileSync(path.join(workspace, 'packaging/electron/installer.nsi'), installerFailure
-    ? '!error "installer build failure probe"\n' : readFileSync(new URL('./installer.nsi', import.meta.url)));
+  mkdirSync(path.join(workspace, 'packaging/runtime'), { recursive: true });
+  writeFileSync(path.join(workspace, 'packaging/runtime/boxteam-installer.nsi'), installerFailure
+    ? '!error "installer build failure probe"\n' : readFileSync(new URL('../runtime/boxteam-installer.nsi', import.meta.url)));
   const driver = path.join(artifacts, 'packager-driver.mjs');
   // 只替代 Electron 下载和平台 bundle 生成；归档、NSIS、摘要和清单走真实发布入口。
   writeFileSync(driver, `import { mock } from 'bun:test';
 mock.module('@electron/packager', () => ({ packager: async () => [${JSON.stringify(bundle)}] }));
+await import(${JSON.stringify(new URL('../runtime/archives/zip.mjs', import.meta.url).href)});
 Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
 process.argv = [process.execPath, ${JSON.stringify(entry)}, '--project-root', ${JSON.stringify(workspace)}, '--output-root', ${JSON.stringify(output)}];
 await import(${JSON.stringify(entry)});
@@ -112,12 +114,20 @@ test('bundle 缺失时归档失败，不能生成摘要或成功清单', () => {
   expect(() => readFileSync(`${archive}.sha256`)).toThrow();
 });
 
-test.skipIf(!nsis)('Windows 安装器进入同一成功清单，构建失败则不发布成功清单', () => {
+test.skipIf(!nsis)('Windows 安装器合并本机 runtime，构建失败则不发布成功清单', async () => {
   for (const failure of [false, true]) {
     const probe = fixture(`windows-installer-${failure}`, 'win32', failure);
     mkdirSync(probe.bundle, { recursive: true });
     writeFileSync(path.join(probe.bundle, 'boxteam.exe'), 'MZ application fixture');
     if (failure) writeFileSync(path.join(probe.output, 'release.json'), '{"version":"stale"}');
+    const runtimeOutput = path.join(probe.output, 'runtime');
+    const runtimePackage = path.join(runtimeOutput, 'boxteam-windows-x64-1.2.3');
+    mkdirSync(path.join(runtimePackage, 'runtime'), { recursive: true });
+    writeFileSync(path.join(runtimePackage, 'BoxTeam.exe'), 'MZ launcher fixture');
+    writeFileSync(path.join(runtimePackage, 'runtime/runtime-manifest.json'), JSON.stringify({ version: '1.2.3' }));
+    const archive = path.join(runtimeOutput, 'standalone.zip');
+    await createZipArchive(runtimePackage, archive);
+    writeFileSync(path.join(runtimeOutput, 'build-result.json'), JSON.stringify({ version: '1.2.3', standalone_assets: [{ path: archive }] }));
     const result = probe.package();
     if (failure) {
       expect(result.status).not.toBe(0);

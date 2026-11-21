@@ -177,7 +177,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   let installations = 0;
   const context = createContext({ console, Buffer, process: {
     env: { BOXTEAM_PROJECT_ROOT: projectRoot }, cwd: () => projectRoot, arch: "x64",
-    platform: mode === "native" ? "win32" : "linux", argv: mode === "cross" ? ["--cross"] : [],
+    platform: mode === "native" ? "win32" : "linux", argv: ["node", "builder", ...(mode === "cross" ? ["--cross"] : [])],
   } });
   // 执行原构建入口全文及真实最小源码复制；下载、解包和依赖安装均停在明确边界。
   const module = new SourceTextModule(fs.readFileSync(new URL(builderUrl), "utf8"), { identifier: builderUrl, context });

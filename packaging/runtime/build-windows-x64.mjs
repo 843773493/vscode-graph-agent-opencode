@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
 import { parse as parseJsonc } from "jsonc-parser";
 import crossSpawn from "cross-spawn";
 import { extract as extractTar } from "tar";
@@ -43,7 +44,8 @@ import {
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
-const outputRoot = path.join(projectRoot, "out", "packaging", "windows-x64");
+const { values } = parseArgs({ args: process.argv.slice(2), options: { "output-root": { type: "string" }, cross: { type: "boolean" } } });
+const outputRoot = path.resolve(values["output-root"] ?? path.join(projectRoot, "out", "packaging", "windows-x64"));
 const downloadRoot = path.join(outputRoot, "downloads");
 const pythonDownloadRoot = path.resolve(
   process.env.BOXTEAM_PYTHON_DOWNLOAD_ROOT ?? downloadRoot,

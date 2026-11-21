@@ -386,3 +386,47 @@ describe("gateway supervisor", () => {
   });
 
 });
+
+for (const scenario of ["desktop-close", "desktop-error", "gateway-close"]) {
+  test(`完整桌面生命周期：${scenario}`, async () => {
+    const gateway = fakeChild();
+    gateway.stdout = new EventEmitter();
+    gateway.stderr = new EventEmitter();
+    const desktop = fakeChild();
+    let ready = false;
+    const finish = (child, code = 0) => {
+      child.exitCode = code;
+      child.emit("exit", code, null);
+      child.emit("close", code, null);
+    };
+    gateway.kill = signal => { gateway.killedWith.push(signal); finish(gateway); };
+    gateway.stdin = { writableEnded: false, end() { this.writableEnded = true; finish(gateway); } };
+    desktop.kill = signal => { desktop.killedWith.push(signal); finish(desktop); };
+    const calls = [];
+    const result = superviseGateway({
+      runtime: { ...runtime, distribution: "standalone", desktopExecutable: "/installed/runtime/desktop/boxteam.exe" },
+      environment: {}, processObject: new EventEmitter(),
+      logger: createRuntimeLogger("launcher", "test", { write() { return true; } }),
+      fetchImpl: async () => { ready = true; return { ok: true, status: 200 }; },
+      spawnImpl(command, args, options) {
+        calls.push({ command, args, options });
+        if (calls.length === 1) return gateway;
+        expect(ready).toBe(true);
+        expect(command).toBe("/installed/runtime/desktop/boxteam.exe");
+        expect(args).toEqual(["--gateway=http://127.0.0.1:8014"]);
+        setImmediate(() => {
+          if (scenario === "desktop-error") {
+            desktop.exitCode = -1;
+            desktop.emit("error", new Error("desktop spawn failed"));
+          } else finish(scenario === "desktop-close" ? desktop : gateway);
+        });
+        return desktop;
+      },
+    });
+    if (scenario === "desktop-error") await expect(result).rejects.toThrow("desktop spawn failed");
+    else expect(await result).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(gateway.exitCode).toBe(0);
+    if (scenario === "gateway-close") expect(desktop.killedWith).toEqual([undefined]);
+  });
+}
