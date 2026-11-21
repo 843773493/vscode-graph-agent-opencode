@@ -7,8 +7,9 @@ import path from 'node:path';
 const outputRoot = path.resolve('out/tests/packaging/electron/package');
 const runId = randomUUID();
 const entry = new URL('./package.mjs', import.meta.url).href;
+const nsis = process.env.BOXTEAM_NSIS_BIN ?? Bun.which('makensis');
 
-function fixture(scenario) {
+function fixture(scenario, platform = process.platform, installerFailure = false) {
   const workspace = path.join(outputRoot, 'workspace', runId, scenario);
   const artifacts = path.join(outputRoot, 'artifacts', runId, scenario);
   const output = path.join(workspace, '发布 with spaces %&');
@@ -23,10 +24,14 @@ function fixture(scenario) {
   json(path.relative(workspace, path.join(output, 'app/build.json')), { version: '1.2.3', workbench: { commit: 'fixture' } });
   json('src/clients/electron/package.json', { devDependencies: { electron: '39.0.0' } });
   json('src/clients/electron/node_modules/electron/checksums.json', {});
+  mkdirSync(path.join(workspace, 'packaging/electron'), { recursive: true });
+  writeFileSync(path.join(workspace, 'packaging/electron/installer.nsi'), installerFailure
+    ? '!error "installer build failure probe"\n' : readFileSync(new URL('./installer.nsi', import.meta.url)));
   const driver = path.join(artifacts, 'packager-driver.mjs');
-  // 只替代 Electron 下载和平台 bundle 生成；归档、摘要和清单走真实发布入口。
+  // 只替代 Electron 下载和平台 bundle 生成；归档、NSIS、摘要和清单走真实发布入口。
   writeFileSync(driver, `import { mock } from 'bun:test';
 mock.module('@electron/packager', () => ({ packager: async () => [${JSON.stringify(bundle)}] }));
+Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
 process.argv = [process.execPath, ${JSON.stringify(entry)}, '--project-root', ${JSON.stringify(workspace)}, '--output-root', ${JSON.stringify(output)}];
 await import(${JSON.stringify(entry)});
 `);
@@ -43,7 +48,7 @@ await import(${JSON.stringify(entry)});
     return result;
   }
   return { workspace, artifacts, output, bundle, run,
-    package() { return run('package', [process.execPath, driver], { ...process.env, PATH: '' }); },
+    package() { return run('package', [process.execPath, driver], { ...process.env, PATH: '', ...(nsis ? { BOXTEAM_NSIS_BIN: nsis } : {}) }); },
   };
 }
 
@@ -105,4 +110,27 @@ test('bundle 缺失时归档失败，不能生成摘要或成功清单', () => {
   expect(() => readFileSync(path.join(probe.output, 'release.json'))).toThrow();
   const archive = path.join(probe.output, 'releases', `BoxTeam-1.2.3-${process.platform}-${process.arch}.tar.gz`);
   expect(() => readFileSync(`${archive}.sha256`)).toThrow();
+});
+
+test.skipIf(!nsis)('Windows 安装器进入同一成功清单，构建失败则不发布成功清单', () => {
+  for (const failure of [false, true]) {
+    const probe = fixture(`windows-installer-${failure}`, 'win32', failure);
+    mkdirSync(probe.bundle, { recursive: true });
+    writeFileSync(path.join(probe.bundle, 'boxteam.exe'), 'MZ application fixture');
+    if (failure) writeFileSync(path.join(probe.output, 'release.json'), '{"version":"stale"}');
+    const result = probe.package();
+    if (failure) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Electron 安装器构建失败');
+      expect(() => readFileSync(path.join(probe.output, 'release.json'))).toThrow();
+      continue;
+    }
+    expect(result.status).toBe(0);
+    const manifest = JSON.parse(readFileSync(path.join(probe.output, 'release.json'), 'utf8'));
+    expect(manifest.installers).toHaveLength(1);
+    const { installer, sha256 } = manifest.installers[0];
+    expect(path.basename(installer)).toBe(`BoxTeam-1.2.3-win32-${process.arch}-setup.exe`);
+    expect(sha256).toBe(createHash('sha256').update(readFileSync(installer)).digest('hex'));
+    expect(readFileSync(`${installer}.sha256`, 'utf8')).toBe(`${sha256}  ${path.basename(installer)}\n`);
+  }
 });
