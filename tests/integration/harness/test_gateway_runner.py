@@ -262,9 +262,13 @@ def test_runner_reports_original_quiesce_failure(runner_process: RunnerProcess) 
     else:
         runner.process.send_signal(signal.SIGTERM)
     assert runner.process.wait(timeout=5) == 1
-    assert "quiesce-enter" in runner.events()
-    assert "quiesce-finish" not in runner.events()
+    assert runner.events() == ["startup", "quiesce-enter", "lifespan-exit"]
     assert "RuntimeError: original-quiesce-failure" in runner.stderr()
+    port = urlsplit(runner.url).port
+    assert port is not None
+    ensure_local_port_available(port, service_name="领域关闭失败后的 Gateway runner")
+    with httpx.Client(trust_env=False, timeout=1) as client, pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
+        client.get(runner.url + "/health")
 
 
 @pytest.mark.parametrize("runner_process", ["startup_error"], indirect=True)

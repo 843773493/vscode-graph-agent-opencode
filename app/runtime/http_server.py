@@ -95,16 +95,31 @@ class ManagedHTTPServer(uvicorn.Server):
         self._raise_http_startup_error()
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
-        if self.started:
-            before_shutdown = cast(
-                Callable[[], Awaitable[None]] | None,
-                self.lifespan.state.get("before_http_shutdown"),
-            )
-            if before_shutdown is not None:
-                await before_shutdown()
-        if self.http_startup_task is not None and not self.http_startup_task.done():
-            await asyncio.shield(asyncio.gather(self.http_startup_task, return_exceptions=True))
-        await super().shutdown(sockets=sockets)
+        failures: list[BaseException] = []
+        try:
+            if self.started:
+                before_shutdown = cast(
+                    Callable[[], Awaitable[None]] | None,
+                    self.lifespan.state.get("before_http_shutdown"),
+                )
+                if before_shutdown is not None:
+                    await before_shutdown()
+        except BaseException as error:
+            failures.append(error)
+        try:
+            if self.http_startup_task is not None and not self.http_startup_task.done():
+                await asyncio.shield(asyncio.gather(self.http_startup_task, return_exceptions=True))
+        except BaseException as error:
+            failures.append(error)
+        # 领域清理失败仍须关闭监听、排空连接并结束 ASGI lifespan；不能遗留半关闭的服务。
+        try:
+            await super().shutdown(sockets=sockets)
+        except BaseException as error:
+            failures.append(error)
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise BaseExceptionGroup("HTTP 服务关闭的多个阶段失败", failures)
 
 
 def main() -> None:
