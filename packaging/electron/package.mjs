@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir, rm, cp, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { resolve, join, basename } from 'node:path';
+import { resolve, join, basename, parse, sep } from 'node:path';
 import { create as createTar } from 'tar';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
@@ -53,7 +53,8 @@ for (const bundle of bundles) {
     const runtimeOutput = join(output, 'runtime');
     const runtimeResult = JSON.parse(await readFile(join(runtimeOutput, 'build-result.json'), 'utf8'));
     if (runtimeResult.version !== product.version) throw new Error('Electron 与本机运行时版本不一致');
-    const stage = await mkdtemp(join(tmpdir(), 'bt-electron-'));
+    // NSIS 递归输入同样需要短的物理路径。
+    const stage = await mkdtemp(join(sep === '\\' ? parse(projectRoot).root : tmpdir(), 'bt-electron-'));
     try {
       await extractZipArchive(runtimeResult.standalone_assets[0].path, { dir: stage });
       const packageRoot = join(stage, `boxteam-windows-x64-${product.version}`);

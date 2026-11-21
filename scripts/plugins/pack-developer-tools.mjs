@@ -111,7 +111,7 @@ function packageDependencies(root) {
 function run(executable, args, cwd, env) {
   const result = Bun.spawnSync([executable, ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
-    throw new Error(`插件构建阶段失败: ${path.basename(executable)} ${args[0]} exit=${result.exitCode}: ${result.stderr.toString("utf8")}`);
+    throw new Error(`插件构建阶段失败: ${path.basename(executable)} ${args[0]} exit=${result.exitCode}:\n${result.stdout.toString("utf8")}\n${result.stderr.toString("utf8")}`);
   }
   return result.stdout.toString("utf8");
 }
@@ -175,7 +175,9 @@ export async function buildDeveloperToolsDirectory(options) {
   const cache = path.join(projectRoot, "out/plugin-dependencies/developer-tools", hash.digest("hex"));
   mkdirSync(path.dirname(cache), { recursive: true });
   if (!existsSync(cache)) {
-    const temporary = mkdtempSync(path.join(path.dirname(cache), ".prepare-"));
+    // MSVC 仍有 MAX_PATH 限制；短 staging 与缓存同卷，发布继续使用原子 rename。
+    const temporary = mkdtempSync(process.platform === "win32"
+      ? path.join(path.parse(cache).root, "bt-plugin-") : path.join(path.dirname(cache), ".prepare-"));
     try {
       const prepared = prepareDependencies({ ...options, stage: temporary, sdk });
       renameSync(prepared, cache);
