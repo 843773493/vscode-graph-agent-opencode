@@ -2,7 +2,7 @@
   "name": "vscode-graph-agent",
   "displayName": "BoxTeam",
   "description": "A local workspace-aware AI coding assistant with a FastAPI backend and Web client.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "worktree": "bun scripts/launch/worktree.mjs",
