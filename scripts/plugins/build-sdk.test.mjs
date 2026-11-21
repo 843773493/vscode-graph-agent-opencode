@@ -37,9 +37,16 @@ for (const language of ["node", "python"]) {
     const command = [path.join(root, "scripts/plugins/prepare-product-sdk.mjs")];
     const nodeProbe = path.join(root, "workspace-probe.mjs");
     if (language === "node") writeFileSync(nodeProbe, `
+      import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
       import { readFileSync, realpathSync } from 'node:fs';
-      import { fileURLToPath } from 'node:url';
+      import { fileURLToPath, pathToFileURL } from 'node:url';
       import { loadRuntimeLogContract } from '@boxteam/plugin-sdk/logging';
+      const applicationRequire = createRequire(new URL('./package.json', import.meta.url));
+      for (const name of ['logging', 'control']) {
+        const specifier = '@boxteam/plugin-sdk/' + name;
+        assert.strictEqual(await import(pathToFileURL(applicationRequire.resolve(specifier)).href), await import(specifier));
+      }
       const source = realpathSync(fileURLToPath(import.meta.resolve('@boxteam/plugin-sdk')));
       console.log(JSON.stringify({ source, text: readFileSync(source, 'utf8'), version: loadRuntimeLogContract().version }));
     `);

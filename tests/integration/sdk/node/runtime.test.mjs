@@ -3,13 +3,23 @@ import { closeSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 const projectRoot = process.cwd();
 const context = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
 const artifactRoot = context.artifactsDir;
+
+test("Launcher 从应用根解析并导入同一 SDK 日志和控制模块", async () => {
+  const applicationRequire = createRequire(path.join(projectRoot, "package.json"));
+  for (const name of ["logging", "control"]) {
+    const specifier = `@boxteam/plugin-sdk/${name}`;
+    const resolved = await import(pathToFileURL(applicationRequire.resolve(specifier)).href);
+    assert.strictEqual(resolved, await import(specifier));
+  }
+});
 
 test("受管 Node 插件提供生成合同身份、日志控制和原关闭回执", () => {
   mkdirSync(artifactRoot, { recursive: true });
