@@ -366,9 +366,12 @@ function buildWindowsLauncher() {
   const launcherOutput = path.join(launcherOutputRoot, "BoxTeam.exe");
   mkdirSync(launcherOutputRoot, { recursive: true });
   const compilerPath = path.dirname(compiler);
-  const compilerEnvironment = path.isAbsolute(compiler)
-    ? { ...process.env, PATH: `${compilerPath}${path.delimiter}${process.env.PATH ?? ""}` }
-    : process.env;
+  const compilerEnvironment = { ...process.env };
+  if (path.isAbsolute(compiler)) {
+    // Windows 环境通常使用 Path；不能再加 PATH，让子进程收到两份不同值。
+    const pathKey = Object.keys(compilerEnvironment).find(key => key.toLowerCase() === "path") ?? "PATH";
+    compilerEnvironment[pathKey] = `${compilerPath}${path.delimiter}${compilerEnvironment[pathKey] ?? ""}`;
+  }
   run(compiler, [
     "-municode",
     "-mconsole",
