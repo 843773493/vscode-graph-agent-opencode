@@ -295,7 +295,6 @@ async def test_shutdown_observer_cancel_keeps_original_scan_and_delivers_late_re
     worker = service._sweep_task
     assert isinstance(worker, asyncio.Task)
     await asyncio.wait_for(entered.wait(), 3)
-    service._tool_catalog_cache[("retained",)] = []
     observer = asyncio.create_task(service.shutdown())
     try:
         async with asyncio.timeout(3):
@@ -310,7 +309,6 @@ async def test_shutdown_observer_cancel_keeps_original_scan_and_delivers_late_re
         with pytest.raises(asyncio.CancelledError, match="取消驻留关闭观察"):
             await observer
         assert not closing.done() and not worker.done() and worker.cancelling() == 1
-        assert ("retained",) in service._tool_catalog_cache
         assert not service._residency_tracker._closing
         with pytest.raises(RuntimeError, match="正在关闭"):
             await service.start()
@@ -333,7 +331,7 @@ async def test_shutdown_observer_cancel_keeps_original_scan_and_delivers_late_re
         else:
             await service.shutdown()
             assert service._shutdown_task is closing
-        assert not service._tool_catalog_cache and service._residency_tracker._closing
+        assert service._residency_tracker._closing
         await service.shutdown()
         assert calls == [1, 2]
     finally:

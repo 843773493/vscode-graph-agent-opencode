@@ -669,11 +669,14 @@ async def test_cancelled_last_waiter_logs_later_builder_failure(caplog) -> None:
     tracker = _tracker(_FakeClock())
     started = asyncio.Event()
     finish_build = asyncio.Event()
+    original = RuntimeError("detached builder failed password=unit-builder-secret")
+    cause = ValueError("原factory原因 token=unit-cause-secret")
+    original.__cause__ = cause
 
     async def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
         started.set()
         await finish_build.wait()
-        raise RuntimeError("detached builder failed")
+        raise original
 
     caplog.set_level(
         logging.ERROR,
@@ -708,8 +711,12 @@ async def test_cancelled_last_waiter_logs_later_builder_failure(caplog) -> None:
         for record in caplog.records
         if "thread-runtime-builder:ses-a:thread-a" in record.message
     )
-    assert failure.exc_info is not None
-    assert str(failure.exc_info[1]) == "detached builder failed"
+    assert failure.exc_info is None
+    assert "detached builder failed" in failure.getMessage()
+    assert "原factory原因" in failure.getMessage()
+    assert "unit-builder-secret" not in caplog.text and "unit-cause-secret" not in caplog.text
+    assert original.args == ("detached builder failed password=unit-builder-secret",)
+    assert original.__cause__ is cause
     assert tracker.snapshot("ses-a", "thread-a").residency == "cold"
 
     retry = await tracker.acquire(

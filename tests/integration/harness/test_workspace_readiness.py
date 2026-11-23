@@ -16,7 +16,7 @@ import pytest
 import tests.support.processes.workspace as workspace_processes
 from tests.harness.python.run_context import TestRunContext
 from tests.support.http_server import running_http_server
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.workspace import wait_for_backend_ready
 
 EXPECTED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -25,8 +25,8 @@ EXPECTED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 @pytest.fixture
 def parallel_backend_failure(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[TestFilePortBlock, RuntimeError, list[subprocess.Popen[str]], list[int]]:
-    ports = integration_port_block_for_file(Path(__file__))
+) -> tuple[TestFilePorts, RuntimeError, list[subprocess.Popen[str]], list[int]]:
+    ports = integration_ports_for_file(Path(__file__))
     failure = RuntimeError("并行节点就绪失败")
     processes: list[subprocess.Popen[str]] = []
     ready_ports: list[int] = []
@@ -44,7 +44,7 @@ def parallel_backend_failure(
 
 
 async def test_parallel_federation_waits_for_other_starters_before_failure_cleanup(
-    parallel_backend_failure: tuple[TestFilePortBlock, RuntimeError, list[subprocess.Popen[str]], list[int]],
+    parallel_backend_failure: tuple[TestFilePorts, RuntimeError, list[subprocess.Popen[str]], list[int]],
 ) -> None:
     from tests.integration.backend.sessions.test_session_communication_pipeline import (
         _prepare_workspace,

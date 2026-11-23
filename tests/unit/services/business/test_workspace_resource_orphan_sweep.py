@@ -61,11 +61,11 @@ async def test_blocked_orphan_does_not_delay_the_other_original_reclaim(
             peer_deleted.set()
         return result
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         if resource_id == rid and phase == "recovery" and not for_stop:
             entered.set()
             await release.wait()
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
     monkeypatch.setattr(bundle.transport, "delete_resource", deleting)
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", syncing)
@@ -109,8 +109,8 @@ async def test_sweep_deadline_covers_all_phases_without_false_release_or_automat
             await release.wait()
         return await original_list(**query)
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-        await original_sync(resource_id, revision, for_stop=for_stop)
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if resource_id == rid and ((phase == "revision" and for_stop) or (phase == "recovery" and not for_stop)):
             entered.set()
             await release.wait()

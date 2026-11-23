@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
-from app.core.failures import execution_failure_message, report_failure
+from app.core.failures import execution_failure_message, public_error, report_failure
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.services.business.runtime_reminder import (
@@ -103,11 +103,11 @@ async def handle_step_cancelled(
                 turn_id,
                 failure_code,
             )
-        except Exception:
-            logger.exception(
-                "[agent_execution_service] cancellation runtime reminder submission failed: "
-                "turn_id=%s",
-                turn_id,
+        except Exception as reminder_error:  # noqa: BLE001 — 提醒写入失败须记录，原取消结算继续。
+            report_failure(
+                reminder_error,
+                detail=f"[agent_execution_service] cancellation runtime reminder submission failed: turn_id={turn_id}",
+                diagnostic_logger=logger,
             )
     if user_interrupt:
         if state.user_interrupt_reminder_injected:
@@ -139,8 +139,14 @@ async def handle_step_cancelled(
                 checkpoint_ns=checkpoint_ns,
             )
             return
+        await asyncio.to_thread(
+            checkpointer.converge_execution, session_id, thread_id=thread_id, turn_id=turn_id,
+            execution_id=execution_id, outcome="cancelled", turn_status="cancelled", checkpoint_ns=checkpoint_ns,
+        )
         if message_stream_writer is not None:
-            await message_stream_writer.close_interrupted(state.interrupt_request_id)
+            admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
+                thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
+            await message_stream_writer.close_from_execution(checkpointer, admission)
         return
     if message_stream_runtime is not None:
         await message_stream_runtime.fail_pending_tool_calls(
@@ -167,13 +173,13 @@ async def handle_step_cancelled(
             execution_id=execution_id,
             reason=failure_code,
             checkpoint_ns=checkpoint_ns,
+            failure={"code": failure_code, "message": failure_message},
         )
     if message_stream_writer is not None:
-        await message_stream_writer.close_failed(
-            code=failure_code,
-            message=failure_message,
-            resumable=False,
-        )
+        admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
+            thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
+        await message_stream_writer.close_from_execution(checkpointer, admission)
+
 
 
 async def handle_step_failure(
@@ -206,8 +212,14 @@ async def handle_step_failure(
     if turn_id is not None and interrupt_state.interrupt_request_id is not None:
         if message_stream_runtime is not None:
             await message_stream_runtime.finalize_interruption_facts()
+        await asyncio.to_thread(
+            checkpointer.converge_execution, session_id, thread_id=thread_id, turn_id=turn_id,
+            execution_id=execution_id, outcome="cancelled", turn_status="cancelled", checkpoint_ns=checkpoint_ns,
+        )
         if message_stream_writer is not None:
-            await message_stream_writer.close_interrupted(interrupt_state.interrupt_request_id)
+            admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
+                thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
+            await message_stream_writer.close_from_execution(checkpointer, admission)
         return
     failure_code = (
         error.code
@@ -219,6 +231,7 @@ async def handle_step_failure(
         if isinstance(error, (ScopeCancelledError, CheckpointRecoveryRejectedError))
         else "execution_error"
     )
+    failure = public_error(error, code=failure_code, stage="agent_execution")
     if isinstance(error, ScopeCancelledError):
         try:
             await asyncio.to_thread(
@@ -231,11 +244,11 @@ async def handle_step_failure(
                 event_identity=turn_id or execution_id or job_id,
                 execution_id=execution_id,
             )
-        except Exception:
-            logger.exception(
-                "[agent_execution_service] scope failure runtime reminder submission "
-                "failed: turn_id=%s",
-                turn_id,
+        except Exception as reminder_error:  # noqa: BLE001 — 提醒写入失败须记录，原 scope 失败结算继续。
+            report_failure(
+                reminder_error,
+                detail=f"[agent_execution_service] scope failure runtime reminder submission failed: turn_id={turn_id}",
+                diagnostic_logger=logger,
             )
     if message_stream_runtime is not None:
         await message_stream_runtime.fail_pending_tool_calls(
@@ -257,6 +270,7 @@ async def handle_step_failure(
             thread_id=thread_id,
             turn_id=turn_id,
             execution_id=execution_id,
+            failure=failure,
             outcome="failed",
             turn_status="failed" if turn_id is not None else None,
             checkpoint_ns=checkpoint_ns,
@@ -270,26 +284,12 @@ async def handle_step_failure(
             execution_id=execution_id,
             reason=failure_code,
             checkpoint_ns=checkpoint_ns,
+            failure=failure,
         )
     if message_stream_writer is not None:
-        after_interrupt_requested = bool(interrupt_state.cancellation_reason)
-        if turn_id is None:
-            # 内部执行以持久接受事实为准，不能依赖尚未发布的进程内状态。
-            admission = await asyncio.to_thread(
-                checkpointer.execution_admission,
-                session_id, thread_id=thread_id, execution_id=execution_id,
-                checkpoint_ns=checkpoint_ns,
-            )
-            interrupt = await asyncio.to_thread(
-                checkpointer.internal_execution_interrupt, admission,
-            )
-            after_interrupt_requested = interrupt is not None
-        await message_stream_writer.close_failed(
-            code=failure_code,
-            message=failure_message,
-            after_interrupt_requested=after_interrupt_requested,
-            resumable=False,
-        )
+        admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
+            thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
+        await message_stream_writer.close_from_execution(checkpointer, admission)
     await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
 
 

@@ -229,7 +229,7 @@ class ConfigSourceEditMixin:
                 writable=key in _WRITABLE_SOURCES,
                 payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in source_payloads.items()],
-            origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(source_payloads, source_effective)],
+            origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(source_payloads, source_effective, schema=service._load_schema())],
             active_origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in service._require_snapshot().source_origins()],
             source_baseline=baseline,
             status=service.get_reload_status_dto(), edit=edit, fanout=self._source_fanout(source_key, fanout_generation),

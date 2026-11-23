@@ -24,6 +24,8 @@ React 挂载、释放、可见性、样式及浮层隔离；显式 owner 与原�
 
 调试 Thread 导航通过原版 editor options 传递展开资源并选择调试的意图；新建与复用编辑器均应用该意图，保留其余展示态。
 
+Thread 宿主发起的文件引用、变更、调试文件和新会话打开，传所属 groupId 为原生 sourceGroup；异步结果不改投后来激活的组，选组及锁定仍交原 finder。当前 Thread 内部切换保留明确目标组。
+
 消息及子 Thread 资源的上下文分支与导航菜单、Quick Access 共用 `boxteam.session.fork`，显式传递精确 Thread、消息和展示快照；原导航的 `useSessionForkDialog` 与生命周期 writer 唯一持有对话框和提交，Thread 不再重复挂载分支对话框。提交成功后按后端目标身份打开固定 Thread 标签。来源报告留在发起 Thread 的资源内，使用精确来源 Session、Thread、Execution，不以打开另一会话代替读取来源报告。
 
 React 宿主隔离 wheel 冒泡，保留浏览器原生滚动，避免上游工作台根节点取消默认行为；不得用脚本滚动替代真实滚轮验收。

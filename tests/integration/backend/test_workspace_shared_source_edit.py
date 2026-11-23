@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
@@ -43,7 +43,7 @@ class SharedSourceEnvironment:
     workspaces: dict[str, Path]
     home: Path
     other_home: Path
-    port_block: TestFilePortBlock
+    port_block: TestFilePorts
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +85,7 @@ def shared_source_environment(request: pytest.FixtureRequest) -> Iterator[Shared
         workspaces=workspaces,
         home=runtime_root / "shared-boxteam-home",
         other_home=runtime_root / "other-boxteam-home",
-        port_block=integration_port_block_for_file(Path(request.node.path)),
+        port_block=integration_ports_for_file(Path(request.node.path)),
     )
 
 

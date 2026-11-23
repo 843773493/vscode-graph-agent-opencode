@@ -26,9 +26,8 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     _prepare_source_workspace,
 )
 from tests.support.api_helpers import create_session
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -76,7 +75,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     workspace = Path(integration_workspace_root_path)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     use_model_stream = getattr(request, "param", {}).get("model_stream", False)
     if use_model_stream:
         workspace = _prepare_source_workspace(context, ports.port(10))
@@ -103,21 +102,9 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     credential.write_text(LOCAL_TOKEN_HEADERS["X-Local-Token"] + "\n", encoding="utf-8")
     credential.chmod(0o600)
     with ExitStack() as cleanup:
-        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20}
-        fallback_offsets = [offset for offset in range(ports.end - ports.start + 1)
-                            if offset not in preferred_offsets.values()]
-        service_ports: dict[str, int] = {}
-        port_probes: dict[str, list[tuple[int, bool]]] = {}
-        for service, preferred in preferred_offsets.items():
-            lease, probes = E2EProcessLease.acquire_available(
-                runtime / f"{service}-port.json", (ports.port(offset) for offset in (preferred, *fallback_offsets)),
-            )
-            cleanup.callback(lease.release)
-            service_ports[service] = lease.ports[0]
-            port_probes[service] = probes
-            fallback_offsets = [offset for offset in fallback_offsets if ports.port(offset) != lease.ports[0]]
+        service_ports = {"backend-0": ports.port(0), "backend-1": ports.port(1), "gateway": ports.port(20)}
         (context.artifacts_dir / "port-allocation.json").write_text(
-            json.dumps({"ports": service_ports, "probes": port_probes}) + "\n", encoding="utf-8",
+            json.dumps({"ports": service_ports}) + "\n", encoding="utf-8",
         )
         gateway_url = f"http://127.0.0.1:{service_ports['gateway']}"
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", gateway_url)

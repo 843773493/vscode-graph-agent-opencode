@@ -46,6 +46,40 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+for (const ready of [false, true]) test(`原生阅读恢复保留当前展示且不触发定位提示，明确跳转才进入聊天：${ready}`, async () => {
+  const result = await exercise('viewportRestoreContract', ready);
+  const position = { reading_anchor: null, follow_latest: true };
+  expect(result.restored.location).toEqual({ kind: 'viewport', position });
+  expect(result.restored.moves).toEqual([{ position, preview: true }]);
+  expect(result.restored.shows).toEqual([]);
+  expect(result.moves).toEqual([{ position, preview: true }, { position, preview: false }]);
+  expect(result.shows).toEqual([false]); expect(result.reasons).toEqual([1, 4]);
+});
+
+test('Thread标签切换和关闭重开沿原memento恢复，分组隔离并遵守原设置与明确定位', async () => {
+  const result = await exercise('threadViewStateContract');
+  const first = { kind: 'viewport', position: { reading_anchor: null, follow_latest: true } };
+  expect(result.switchedBack).toEqual(first); expect(result.reopened).toEqual(first);
+  expect(result.partialOptions.threadLocation).toEqual(first);
+  expect(result.partialOptions.resourcesVisible).toBe(true); expect(result.partialOptions.resourceTab).toBe('debug');
+  expect(result.separateGroup).toEqual({ kind: 'viewport', position: { reading_anchor: null, follow_latest: false } });
+  expect(result.newWithRestoreDisabled).toBeNull(); expect(result.existingWithRestoreDisabled).toEqual(first);
+  expect(result.explicit).toEqual(first);
+  // 原生恢复不产生明确跳转，仍让 HistoryService 区分 NAVIGATION 与 PROGRAMMATIC。
+  expect(result.reasons).toEqual([4, 1, 1, 1, 1, 4]);
+});
+
+for (const accept of [false, true]) test(`大纲加载时取消预览仍恢复展示和阅读位置，后续接受优先：${accept}`, async () => {
+  const result = await exercise('loadingPreviewRestoreContract', accept);
+  expect(result.afterCancel).toEqual(['selection', 'preview-presentation', 'presentation']);
+  expect(result.events).not.toContain('cancel');
+  expect(result.events.filter(event => event === 'preview-presentation')).toHaveLength(1);
+  expect(result.events.filter(event => event === 'conversation')).toHaveLength(accept ? 1 : 0);
+  expect(result.moves).toHaveLength(2);
+  expect(result.moves[1]).toEqual({ position: { reading_anchor: null, follow_latest: !accept }, preview: !accept });
+  expect(result.closedLocation).toEqual({ kind: 'viewport', position: { reading_anchor: null, follow_latest: true } });
+});
+
 for (const category of ['会话', 'Thread', '文件', '会话消息', '工具结果', 'LLM 请求记录', 'Trace']) test(`${category}接受原owner规范URI，跨Gateway同名及独立位置交原Opener`, async () => {
   const result = await exercise('canonicalSearchContract', { category });
   expect(result.errors).toEqual([]); expect(result.requests).toHaveLength(1);
@@ -55,12 +89,12 @@ for (const category of ['会话', 'Thread', '文件', '会话消息', '工具结
   expect(result.parses).toEqual(Array(positions ? 2 : 1).fill({ uri: result.expectedUri,
     local_gateway_id: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', resource_gateway_id: result.expectedOwner.gatewayId }));
   expect(result.opened.every(item => item.owner.gatewayId === result.expectedOwner.gatewayId && item.owner.workspaceId === result.expectedOwner.workspaceId)).toBe(true);
-  expect(result.opened[0].group).toBe(8); expect(result.opened[0].options.preserveFocus).toBe(false);
+  expect(result.opened[0].group).toBe(-2); expect(result.opened[0].options.preserveFocus).toBe(false);
   if (category !== '文件') expect(result.opened.every(item => item.label === (category === 'Thread' || category === '会话消息' || category === '工具结果' ? 'needle Thread' : 'needle Session'))).toBe(true);
   if (positions) {
     const location = category === 'Trace' ? 'boxteamTrace' : category === 'LLM 请求记录' ? 'boxteamRequestLog' : 'boxteamMessage';
     expect(result.opened.map(item => item.options[location].reference.start_codepoint)).toEqual([2, 8]);
-    expect(result.opened[1].group).toBe(7); expect(result.opened[1].options.preserveFocus).toBe(true);
+    expect(result.opened[1].group).toBe(-1); expect(result.opened[1].options.preserveFocus).toBe(true);
   }
   if (category !== '文件') expect(result.opened.every(item => item.owner.threadId === (category === '会话' || category === 'LLM 请求记录' ? 'main' : 'child'))).toBe(true);
   expect(result.paths.filter(path => path.endsWith('main-thread'))).toHaveLength(category === '会话' ? 1 : category === 'LLM 请求记录' ? 2 : 0);
@@ -89,7 +123,7 @@ test('英文Trace候选侧开仍原样消费规范URI及独立位置', async () 
   expect(result.placeholder).toContain('Search content · Trace');
   expect(result.parses.map(parse => parse.uri)).toEqual([result.expectedUri, result.expectedUri]);
   expect(result.opened.map(item => item.options.boxteamTrace.reference.start_codepoint)).toEqual([2, 8]);
-  expect(result.opened.map(item => item.group)).toEqual([8, 7]);
+  expect(result.opened.map(item => item.group)).toEqual([-2, -1]);
 });
 
 test('英文Opener明确拒绝与规范资源不匹配的位置并保持零打开', async () => {
@@ -505,8 +539,8 @@ test('文件符号退出恢复原活动文件且不重查，无匹配不丢来�
   expect(result.symbols.map(item => item.filter)).toEqual(['beta', 'missing', 'beta']);
   expect(result.symbols.every(item => item.resource === result.target)).toBe(true);
   expect(result.previews).toHaveLength(3);
-  expect(result.previews.every(item => item.resource === result.target && item.group === 1
-    && item.options.transient && item.options.preserveFocus)).toBe(true);
+  expect(result.previews.every(item => item.resource === result.target && item.group === -1
+    && item.options.sourceGroup === 1 && item.options.transient && item.options.preserveFocus)).toBe(true);
   expect(result.opened).toHaveLength(1);
   expect(result.opened[0].resource).toBe(result.target);
   expect(result.opened[0].options.selection.startLineNumber).toBe(3);
@@ -537,7 +571,7 @@ test('quickNavigate 只按所选 owner 的历史顺序导航，不混入补充�
   expect(result.calls).toEqual([]);
   expect(result.buttons).toBe(0);
   expect(result.opened).toHaveLength(1);
-  expect(result.opened[0]).toMatchObject({ resource: result.resources[0], group: 1,
+  expect(result.opened[0]).toMatchObject({ resource: result.resources[0], group: -1,
     options: { pinned: false, preserveFocus: false } });
 });
 
@@ -546,7 +580,7 @@ test('普通 delegate 保留行列定位且修改位置不重查，filesOnly 沿
   expect(positioned.patterns).toEqual(['', 'target.txt']);
   expect(positioned.samePick).toBe(true);
   expect(positioned.opened).toHaveLength(1);
-  expect(positioned.opened[0]).toMatchObject({ group: 1,
+  expect(positioned.opened[0]).toMatchObject({ group: -1,
     selection: { startLineNumber: 9, startColumn: 2, endLineNumber: 9, endColumn: 2 } });
   expect(positioned.opened[0].resource).toEndWith('/target.txt');
   const literal = await exercise('fileRangeContract', true);
@@ -680,4 +714,34 @@ test('完整窗口 # Provider 在取消后迟到 reject 不发布候选', async 
   expect(result.beforeDispose).toEqual(['正在查询工作区符号…']);
   expect(result.afterLate).toEqual(result.afterDispose);
   expect(result.afterLate.some(label => label.includes('late-provider-rejection'))).toBe(false);
+});
+
+
+for (const [mode, target] of [['open', 9], ['side', 10], ['background-side', 8], ['unscoped-open', 7], ['unscoped-side', 10]]) test(`符号 ${mode} 异步解析后仍由原生规则处理来源、锁定和焦点`, async () => {
+  const result = await exercise('symbolGroupContract', mode);
+  expect(result).toEqual([{ target, sourceGroup: 7 }]);
+});
+
+test('文件符号侧开等待原预览恢复，再沿原生侧开意图进入目标', async () => {
+  const result = await exercise('fileSymbolContract', 'side');
+  expect(result.opened).toHaveLength(1);
+  expect(result.opened[0]).toMatchObject({ group: -2, options: { sourceGroup: 1, selection: { startLineNumber: 3 } } });
+  expect(result.sequence.slice(-2)).toEqual(['restore-end', 'open']);
+  expect(result.restoredStates).toEqual([{ position: 'before-preview' }]);
+});
+
+
+test('符号行内侧开等异步解析完成才关闭 Picker，Esc 仍取消迟到打开', async () => {
+  const accepted = await exercise('symbolGroupContract', 'button');
+  expect(accepted.opened).toEqual([{ target: 8, sourceGroup: 7 }]);
+  expect(accepted.sequence).toEqual(['open', 'hide']);
+  const cancelled = await exercise('symbolGroupContract', 'button-cancel');
+  expect(cancelled.opened).toEqual([]);
+  expect(cancelled.sequence).toEqual(['hide']);
+});
+
+
+test('Quick Access 侧开图标和文案遵循原上下分屏设置', async () => {
+  expect(await exercise('sideDirectionContract', 'right')).toMatchObject({ iconClass: 'codicon codicon-split-horizontal', tooltip: '在侧边打开' });
+  expect(await exercise('sideDirectionContract', 'down')).toMatchObject({ iconClass: 'codicon codicon-split-vertical', tooltip: '在下方打开' });
 });

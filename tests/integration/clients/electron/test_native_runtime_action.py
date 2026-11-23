@@ -24,11 +24,8 @@ from tests.integration.clients.electron.test_packaged_workbench import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock
+from tests.support.ports import TestFilePorts
 from tests.support.terminal_plugin import (
     copy_prepared_developer_tools_package,
     enable_developer_tools_plugins,
@@ -40,14 +37,14 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(scope="module", autouse=True)
-def native_runtime_action_service_ports(electron_service_ports: TestFilePortBlock) -> None:
+def native_runtime_action_service_ports(electron_service_ports: TestFilePorts) -> None:
     """在 Gateway fixture 和 Electron 代理使用端口前持有原租约。"""
 
 
 async def test_packaged_electron_quick_access_stops_runtime_resource(
     request: pytest.FixtureRequest,
     packaged_electron: Path,
-    electron_service_ports: TestFilePortBlock,
+    electron_service_ports: TestFilePorts,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, object],
     prepared_developer_tools_package: Path,
 ) -> None:

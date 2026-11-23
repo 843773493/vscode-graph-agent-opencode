@@ -68,13 +68,17 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     assert len({entry[1]["activity_id"] for entry in activities}) == 1
     summary = activities[-1][1]["summary"]
     assert "PermissionError" in summary and "errno=13" in summary
-    assert "phase=tool_callback" in summary
-    assert "private-activity" not in summary
+    assert "stage=tool_callback" in summary
+    assert "reason=" + str(error) in summary
     if sink_fails:
         assert "diagnostic_sink_error=NotADirectoryError" in summary
         assert len(diagnostic_sink.errors) == 1
         assert any(str(diagnostic_sink.errors[0]) in note for note in error.__notes__)
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert str(error) in diagnostic.getMessage()
+    # callback 交付的原异常可能尚未被 raise；不能为它伪造 traceback。
+    assert "PermissionError:" in diagnostic.getMessage()
     assert not [call for call in writer.commit.await_args_list if call.args[0] == "tool.completed"]
 
     # 框架处理异常后的配对消息才是权威正文，不能被早到callback异常字符串替换。

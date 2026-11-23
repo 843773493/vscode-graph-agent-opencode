@@ -1,4 +1,4 @@
-"""历史接口公开失败事实，原生位置和损坏输入只留原异常诊断。"""
+"""历史接口沿统一失败出口保留原因与请求身份，不泄露校验输入。"""
 
 from __future__ import annotations
 
@@ -106,13 +106,21 @@ def test_internal_history_failure_keeps_original_diagnostic_and_structured_500(
     assert detail["code"] == "turn_projection_corrupted" and detail["session_id"] == SESSION
     assert "stage=history_read" in detail["message"]
     assert f"error={type(internal_failure).__name__}" in detail["message"]
-    assert "history-secret" not in response.text and "sqlite-execution-private" not in response.text
+    if isinstance(internal_failure, ValidationError):
+        for issue in internal_failure.errors(include_input=False, include_context=False):
+            assert issue["msg"] in detail["message"]
+        assert "input_value" not in detail["message"]
+    else:
+        assert str(internal_failure) in detail["message"]
     if isinstance(internal_failure, OSError):
         assert "errno=13" in detail["message"]
     if kind := getattr(internal_failure, "sqlite_errorcode", None):
         assert f"sqlite_errorcode={kind}" in detail["message"]
-    diagnostic, = [record for record in caplog.records if record.exc_info and record.exc_info[1] is internal_failure]
-    assert diagnostic.name == "app.core.failures" and str(internal_failure) in caplog.text
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert detail["message"] in diagnostic.getMessage()
+    assert type(internal_failure).__name__ in diagnostic.getMessage()
+    assert "input_value" not in diagnostic.getMessage()
     assert (internal_failure.args, internal_failure.__cause__) == original
 
 
@@ -129,12 +137,14 @@ def test_history_failure_survives_real_diagnostic_write_failure(
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == REQUEST_ID
     detail = response.json()["detail"]
     assert detail["code"] == "turn_projection_corrupted" and detail["session_id"] == SESSION
-    assert "error=PermissionError, errno=13, diagnostic_sink_error=NotADirectoryError" in detail["message"]
-    assert "history-secret" not in response.text and "diagnostic-log-secret" not in response.text
+    for fact in ("error=PermissionError", "errno=13", str(failure), "diagnostic_sink_error=NotADirectoryError"):
+        assert fact in detail["message"]
+    assert "diagnostic-log-secret" not in detail["message"]
     secondary, = diagnostic_sink.errors
     assert str(secondary) in "\n".join(failure.__notes__)
-    assert diagnostic_sink.records[0].exc_info is not None
-    assert diagnostic_sink.records[0].exc_info[1] is failure
+    assert len(diagnostic_sink.records) == 1
+    assert diagnostic_sink.records[0].exc_info is None
+    assert str(failure) in diagnostic_sink.records[0].getMessage()
 
 
 @pytest.mark.parametrize("route", ["bootstrap", "session", "thread"])

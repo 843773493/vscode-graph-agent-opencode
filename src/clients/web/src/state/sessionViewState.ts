@@ -1,10 +1,12 @@
+import type { ReadingAnchor, DisclosureOverrides } from "./timeline/transcriptNodes";
 /** 纯展示数据由当前浏览器保存，不携带 Gateway 用户或租约身份。 */
 export interface SessionViewState {
   gateway_id: string;
   workspace_id: string;
   session_id: string;
-  turn_anchor: string | null;
-  scroll_offset: number;
+  thread_id: string;
+  reading_anchor: ReadingAnchor | null;
+  disclosures: DisclosureOverrides;
   follow_latest: boolean;
   projection_version: number;
   tool_details_expanded: boolean;

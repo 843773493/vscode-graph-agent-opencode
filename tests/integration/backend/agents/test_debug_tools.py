@@ -51,7 +51,7 @@ from tests.support.node_debug_dependencies import (
     node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 DEBUG_TARGET_NAMES = frozenset(
     {
@@ -148,7 +148,7 @@ async def debug_plugin_gateway(
         async with debug_plugin_gateway_for_workspace(
             Path(integration_workspace_root_path),
             context.artifacts_dir / "debug-plugin",
-            integration_port_block_for_file(Path(__file__)).port(21),
+            integration_ports_for_file(Path(__file__)).port(21),
             context.boxteam_home_for_node(request.node.nodeid),
             prepared_developer_tools_package,
         ) as gateway:

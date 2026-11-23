@@ -29,7 +29,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -59,7 +59,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
         artifacts_dir=context.artifacts_dir / "gateway", boxteam_home=chat_backend_boxteam_home,
         extra_env={"BOXTEAM_WEB_ASSETS": str(chat_loop_web_assets)})
     model = "browser-chat-tool-loop-stub"
-    endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
+    endpoint = integration_ports_for_file(Path(request.node.path)).port(10)
     texts = ["准备 fork", "开头😀\n" + "a" * 12000 + QUERY + "\n第二处" + QUERY + "\n结束", "后续执行已完成"]
     interactions = [cast(list[object], build_cassette(asset_id="trace-content", model=model,
         url=f"http://127.0.0.1:{endpoint}/v1/chat/completions", frames=chat_completion_frames(
@@ -92,7 +92,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "samePaneNewLocation", "canonicalUriAndLocations", "exactRecordAfterAppend",
-                    "staleReferenceRejected", "deletedRecordRejected", "noFullTraceRead", "onlySelectedOwnerAndCategory"):
+                    "staleReferenceRejected", "deletedRecordRejected", "noFullTraceRead", "onlySelectedOwnerAndCategory", "nativeSelectionHistory", "previewNotInHistory", "outlineSelectionHistory", "tabViewStateRestored", "reloadedViewStateRestored", "closedLocationNotRestored"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []
         # 删除定位结束后还原同一原件，后续继续证明追加引起file_changed。

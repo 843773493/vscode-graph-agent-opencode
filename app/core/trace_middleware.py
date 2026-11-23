@@ -123,7 +123,7 @@ def http_failure_headers(request: HTTPConnection, error: BaseException | None = 
         workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
         if registry is not None and workspace_id is not None and workspace_id in registry.workspace_ids:
             source["workspace_id"] = workspace_id
-    context["source"] = source
+    context.setdefault("source", source)
     return {HTTP_FAILURE_HEADER: json.dumps(context, separators=(",", ":"))}
 
 

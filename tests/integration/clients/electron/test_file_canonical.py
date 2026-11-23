@@ -27,7 +27,7 @@ from tests.integration.clients.web.quick_access.test_file_canonical import (
     canonical_workspaces as canonical_workspaces,  # noqa: PLC0414
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock
+from tests.support.ports import TestFilePorts
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 
 
@@ -36,7 +36,7 @@ async def test_packaged_electron_canonical_dirty_backup_and_conflict(
     request: pytest.FixtureRequest,
     canonical_workspaces: tuple[TestRunContext, list[Path]],
     packaged_electron: Path,
-    electron_service_ports: TestFilePortBlock,
+    electron_service_ports: TestFilePorts,
 ) -> None:
     context, workspaces = canonical_workspaces
     runtime = context.runtime_root_for_node(request.node.nodeid)

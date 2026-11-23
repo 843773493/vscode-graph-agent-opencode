@@ -46,7 +46,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     if (this.catalog.snapshot.error || !this.data) return { state: McpConnectionState.Kind.Error, message: this.catalog.snapshot.error ?? t('workbench.mcp.missingService') };
     if (pendingMcpOperation(this.operation)) return { state: McpConnectionState.Kind.Starting };
     if (this.data.status === 'ready') return { state: McpConnectionState.Kind.Running };
-    if (this.data.status === 'failed') return { state: McpConnectionState.Kind.Error, message: this.operation?.error_code ?? this.statusLabel };
+    if (this.data.status === 'failed') return { state: McpConnectionState.Kind.Error, message: this.operation?.error_message ?? this.operation?.error_code ?? this.statusLabel };
     return { state: McpConnectionState.Kind.Stopped, reason: this.data.status === 'authorization_required' ? 'needs-user-interaction' : undefined };
   });
   readonly cacheState = derived(this, reader => this.connectionState.read(reader).state === McpConnectionState.Kind.Running ? McpServerCacheState.Live : McpServerCacheState.Unknown);
@@ -97,7 +97,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   get runtimeStatus() {
     return { state: this.data?.enabled ? McpServerEnablementState.Enabled : McpServerEnablementState.DisabledWorkspace,
       message: { severity: this.catalog.snapshot.error || this.catalog.snapshot.actionError || this.operation?.error_code || this.catalog.pluginRuntime?.error || this.pluginSlot?.error ? Severity.Error : Severity.Info,
-        text: new MarkdownString().appendText(this.catalog.snapshot.error ?? this.catalog.snapshot.actionError ?? this.description) } };
+        text: new MarkdownString().appendText(this.catalog.snapshot.error ?? this.catalog.snapshot.actionError ?? this.operation?.error_message ?? this.description) } };
   }
   get canConnect(): boolean { return !this.catalog.isBusy && Boolean(this.data?.enabled) && !this.catalog.snapshot.error && !this.isPending && this.data?.status !== 'ready'; }
   get canStop(): boolean { return !this.catalog.isBusy && !this.catalog.snapshot.error && (this.isPending || this.data?.status === 'ready'); }
@@ -156,7 +156,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     if (this.operation) {
       line(t('workbench.mcp.operationLabel'), `${this.operation.action} · ${statusLabels[this.operation.status] ?? this.operation.status} · ${this.operation.stage}`);
       line(t('workbench.mcp.operationIdLabel'), this.operation.operation_id);
-      if (this.operation.error_code) line(t('workbench.mcp.errorLabel'), this.operation.error_code);
+      if (this.operation.error_code || this.operation.error_message) line(t('workbench.mcp.errorLabel'), [this.operation.error_code, this.operation.error_message].filter(Boolean).join(' · '));
       if (pendingMcpOperation(this.operation)) line(t('workbench.mcp.deadlineLabel'), formatDate(this.operation.deadline * 1000, { dateStyle: 'short', timeStyle: 'medium' }));
     }
     document.appendMarkdown(t('workbench.mcp.toolsHeading'));

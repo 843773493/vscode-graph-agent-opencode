@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/agent_spec.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'agent-spec.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/agent_spec.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>来源合同</title>')
@@ -59,7 +59,7 @@ for (const mode of ['close', 'identity']) test(`${mode}取消真实读取且不�
 });
 test('范围取消保留原owner与发起组，且零打开', async () => {
   const result = await exercise('scope-cancel');
-  expect(result.shows).toHaveLength(1); expect(result.shows[0].options.providerOptions.resourceGroup).toBe(7);
+  expect(result.shows).toHaveLength(1); expect(result.shows[0].options.providerOptions.searchGroup).toBe(7);
   expect(result.shows[0].options.providerOptions.searchOwners).toHaveLength(2);
   expect(parses(result)).toEqual([]); expect(result.references).toEqual([]);
 });
@@ -96,7 +96,8 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'no-preview', 'freez
   expect(parses(result)[0].body.resource_gateway_id).toBe(`gateway_${'b'.repeat(32)}`);
   expect(result.references).toHaveLength(1); expect(result.released).toBe(1); expect(result.opened).toHaveLength(1);
   expect(result.opened[0].source.gatewayId).toBe(`gateway_${'b'.repeat(32)}`);
-  expect(result.opened[0].group).toBe(mode === 'side' ? 8 : 7);
+  expect(result.opened[0].group).toBe(mode === 'side' ? -2 : -1);
+  expect(result.opened[0].options.sourceGroup).toBe(7);
   expect(result.opened[0].options.preserveFocus).toBe(mode === 'background');
   expect(result.opened[0].options.pinned).toBe(['pinned', 'background', 'no-preview'].includes(mode));
 });
@@ -119,8 +120,8 @@ for (const mode of ['open-parse-identity', 'open-model-identity', 'open-model-ga
 });
 for (const mode of ['file', 'thread', 'session']) test(`${mode}规范URI沿原目标与编辑器选项打开`, async () => {
   const result = await exercise(mode, 'resourceOpenTargetContract');
-  expect(result.errors).toEqual([]); expect(result.addedGroups).toBe(1); expect(result.opened).toHaveLength(1);
-  expect(result.opened[0].group).toBe(8); expect(result.opened[0].options).toEqual({ pinned: true });
+  expect(result.errors).toEqual([]); expect(result.addedGroups).toBe(0); expect(result.opened).toHaveLength(1);
+  expect(result.opened[0].group).toBe(-2); expect(result.opened[0].options).toEqual({ pinned: true, sourceGroup: 7 });
   if (mode === 'file') expect(result.opened[0].source).toMatchObject(result.owner);
   else expect(result.opened[0].owner).toMatchObject({ ...result.owner, threadId: result.threadId });
   expect(result.requests.filter(item => item.path.endsWith('/main-thread'))).toHaveLength(mode === 'session' ? 1 : 0);
@@ -130,5 +131,25 @@ for (const mode of ['file-route-identity', 'thread-route-identity', 'session-rou
   const result = await exercise(mode, 'resourceOpenTargetContract');
   expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
   expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);
+  expect(result.subscriptionsAfterOpen).toBe(0);
   expect(result.requests.filter(item => item.path.endsWith('/main-thread'))).toHaveLength(mode.includes('-main-') ? 1 : 0);
+});
+for (const mode of ['item', 'item-with-turn']) test(`${mode}规范URI只核验位置并打开原Thread`, async () => {
+  const result = await exercise(mode, 'resourceOpenTargetContract');
+  expect(result.errors).toEqual([]); expect(result.opened).toHaveLength(1);
+  expect(result.opened[0].owner).toMatchObject({ ...result.owner, threadId: result.threadId });
+  expect(result.opened[0].group).toBe(-2);
+  expect(result.subscriptionsAfterOpen).toBe(1);
+  expect(result.opened[0].options).toEqual({ pinned: true, sourceGroup: 7, boxteamMessage: result.location });
+  expect(result.requests.filter(item => item.path.endsWith('/items/inspect')).map(item => item.body))
+    .toEqual([{ item_id: 'internal-item', operation: 'location' }]);
+  expect(result.requests.filter(item => item.path.endsWith('/main-thread'))).toEqual([]);
+});
+for (const mode of ['item-location-missing', 'item-identity']) test(`${mode}拒绝无定位或失效身份，不降级打开原文`, async () => {
+  const result = await exercise(mode, 'resourceOpenTargetContract');
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain(mode === 'item-identity' ? 'Gateway 或访问凭据已改变' : '未返回已核验的定位信息');
+  expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);
+  expect(result.subscriptionsAfterOpen).toBe(0);
+  expect(result.requests.filter(item => item.path.endsWith('/items/inspect'))).toHaveLength(1);
 });

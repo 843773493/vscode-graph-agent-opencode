@@ -26,6 +26,10 @@ from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionTerminalResult,
+)
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
     apply_event,
@@ -201,33 +205,12 @@ class MessageStreamWriter:
         """返回不消耗 event_seq 的 snapshot 控制帧。"""
         return await self._store.snapshot_event(self.turn_stream_id)
 
-    async def close_completed(self) -> dict[str, Any]:
-        return await self.commit("stream.completed", {"status": "completed"})
-
-    async def close_interrupted(self, interrupt_request_id: str) -> dict[str, Any]:
-        return await self.commit(
-            "stream.interrupted",
-            {"interrupt_request_id": interrupt_request_id, "status": "interrupted"},
-        )
-
-    async def close_failed(
-        self,
-        *,
-        code: str,
-        message: str,
-        after_interrupt_requested: bool = False,
-        resumable: bool = False,
-    ) -> dict[str, Any]:
-        return await self.commit(
-            "stream.failed",
-            {
-                "code": code,
-                "message": message,
-                "after_interrupt_requested": after_interrupt_requested,
-                "resumable": resumable,
-            },
-        )
-
+    async def close_from_execution(self, owner: TurnTerminalStatusWriter, admission: ExecutionAdmission) -> dict[str, Any]:
+        """收尾只消费 rollout 已提交事实，失败落盘失败时不会发布成功镜像。"""
+        terminal = await run_sync_shielded(owner.execution_terminal_result, admission)
+        if terminal is None:
+            raise RuntimeError("消息流收尾缺少已提交 terminal convergence")
+        return await self._store.mirror_terminal_result(self.turn_stream_id, admission, terminal)
 
 class MessageStreamStore:
     """工作区内的消息流事件日志、checkpoint 和临时订阅。"""
@@ -1430,13 +1413,23 @@ class MessageStreamStore:
                     **dict(payload),
                     "reason": "already_interrupting",
                 }
-            elif event_type not in INTERRUPTING_ALLOWED_EVENT_TYPES:
+            elif event_type not in INTERRUPTING_ALLOWED_EVENT_TYPES and not (
+                event_type == "stream.completed" and isinstance(payload.get("terminal_commit_id"), int)
+                and payload.get("terminal_outcome") in {"completed", "completed_empty"}
+            ):
                 raise MessageStreamTerminalError(
                     "中断闸门拒绝新的消息流事件: "
                     "turn_stream_id="
                     f"{turn_stream_id} type={event_type}"
                 )
-        if current_status in TERMINAL_STREAM_STATUSES and event_type not in {
+        control_correction = (
+            current_status == "failed" and state.get("terminal_outcome") == "execution_lost"
+            and event_type == "stream.interrupted" and payload.get("terminal_outcome") in {"cancelled", "interrupted"}
+            and isinstance(state.get("terminal_commit_id"), int)
+            and isinstance(payload.get("terminal_commit_id"), int)
+            and payload["terminal_commit_id"] > state["terminal_commit_id"]
+        )
+        if current_status in TERMINAL_STREAM_STATUSES and not control_correction and event_type not in {
             "interrupt.rejected",
             "stream.snapshot",
         }:
@@ -1758,7 +1751,43 @@ class MessageStreamStore:
                 reconciled += 1
         return reconciled
 
-    async def reconcile_unfinished_streams(self, *, resumed_job_ids: frozenset[str] | set[str] = frozenset()) -> int:
+    async def mirror_terminal_result(
+        self, turn_stream_id: str, admission: ExecutionAdmission, terminal: ExecutionTerminalResult,
+    ) -> dict[str, Any]:
+        """只把原 convergence 已提交结果镜像为原消息事件，稳定 ID 绑定提交。"""
+        state = await self.get_state(turn_stream_id)
+        if (state["session_id"], state["thread_id"], state.get("job_id")) != (
+            admission.session_id, admission.thread_id, admission.job_id,
+        ):
+            raise MessageStreamError("消息流与 terminal execution admission 归属冲突")
+        if admission.turn_id is not None and state["turn_id"] != admission.turn_id:
+            raise MessageStreamError("消息流与 terminal Turn 归属冲突")
+        payload: dict[str, Any] = {
+            "terminal_commit_id": terminal.commit_id, "terminal_outcome": terminal.outcome,
+        }
+        if terminal.outcome in {"completed", "completed_empty"}:
+            event_type = "stream.completed"
+            payload["status"] = "completed"
+        elif terminal.outcome in {"cancelled", "interrupted"}:
+            event_type = "stream.interrupted"
+            interrupt = state.get("interrupt_state")
+            if isinstance(interrupt, Mapping) and interrupt.get("request_id"):
+                payload["interrupt_request_id"] = interrupt["request_id"]
+            payload["status"] = "interrupted"
+        else:
+            event_type = "stream.failed"
+            payload.update(terminal.failure or {"code": terminal.outcome, "message": "此执行未记录失败详情"})
+            payload["resumable"] = False
+            interrupt = state.get("interrupt_state")
+            payload["after_interrupt_requested"] = terminal.after_interrupt_requested or (
+                isinstance(interrupt, Mapping) and interrupt.get("status") == "requested"
+            )
+        return await self.commit(
+            turn_stream_id, event_type, payload, job_id=admission.job_id,
+            event_id=f"terminal:{admission.execution_id}:{terminal.commit_id}",
+        )
+
+    async def reconcile_unfinished_streams(self, *, terminal_status_writer: TurnTerminalStatusWriter | None = None, resumed_job_ids: frozenset[str] | set[str] = frozenset()) -> int:
         """在后端重启时把没有终态的消息流标记为 execution_lost。"""
         reconciled = 0
         for node in self._path_resolver.list_nodes(kind="session"):
@@ -1778,6 +1807,24 @@ class MessageStreamStore:
                     # 创建中断留下的空日志没有已提交事件，保持原有跳过行为。
                     logger.info("启动恢复跳过空消息流: session_id=%s turn_stream_id=%s", node.node_id, turn_stream_id)
                     continue
+                # 已闭合历史无需再次镜像；只有 execution_lost 仍允许权威控制纠正。
+                if state["stream_status"] in TERMINAL_STREAM_STATUSES and state.get("terminal_outcome") != "execution_lost":
+                    self._evict_stream_cache(turn_stream_id)
+                    continue
+                terminal = None
+                admission = None
+                if terminal_status_writer is not None and state.get("job_id"):
+                    admission = await run_sync_shielded(
+                        terminal_status_writer.execution_admission_for_job,
+                        state["session_id"], thread_id=state["thread_id"], job_id=state["job_id"],
+                    )
+                    if admission is not None:
+                        terminal = await run_sync_shielded(terminal_status_writer.execution_terminal_result, admission)
+                if terminal is not None and admission is not None:
+                    await self.mirror_terminal_result(turn_stream_id, admission, terminal)
+                    reconciled += int(state.get("terminal_commit_id") != terminal.commit_id)
+                    self._evict_stream_cache(turn_stream_id)
+                    continue
                 if state["stream_status"] in TERMINAL_STREAM_STATUSES:
                     # 启动扫描只需要识别未完成执行；终态历史已经在磁盘上，不能
                     # 因一次全仓恢复扫描永久占用内存。
@@ -1785,21 +1832,17 @@ class MessageStreamStore:
                     continue
                 if state.get("job_id") in resumed_job_ids:
                     continue
-                interrupt_state = state.get("interrupt_state")
-                after_interrupt_requested = (
-                    isinstance(interrupt_state, Mapping)
-                    and interrupt_state.get("status") == "requested"
+                if terminal_status_writer is None or admission is None:
+                    raise RuntimeError("未闭合消息流恢复缺少精确 canonical execution admission")
+                await run_sync_shielded(
+                    terminal_status_writer.mark_job_terminal_status,
+                    session_id=admission.session_id, thread_id=admission.thread_id,
+                    job_id=admission.job_id, status="execution_lost",
                 )
-                await self.commit(
-                    turn_stream_id,
-                    "stream.failed",
-                    {
-                        "code": "execution_lost",
-                        "message": "工作区后端重启，无法安全续接原 AgentLoop 执行",
-                        "after_interrupt_requested": after_interrupt_requested,
-                        "resumable": False,
-                    },
-                )
+                terminal = await run_sync_shielded(terminal_status_writer.execution_terminal_result, admission)
+                if terminal is None:
+                    raise RuntimeError("消息流恢复未取得已提交 terminal convergence")
+                await self.mirror_terminal_result(turn_stream_id, admission, terminal)
                 reconciled += 1
         return reconciled
 

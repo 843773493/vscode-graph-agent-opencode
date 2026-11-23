@@ -1,3 +1,4 @@
+import { nodeKey } from "../../state/timeline/transcriptNodes";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react-test-renderer";
 import * as views from "./browserSessionViews";
@@ -5,16 +6,16 @@ import type { SessionViewState } from "../../state/sessionViewState";
 import type { AppState } from "../../types/frontend";
 import { mountViewStateController } from "../../tests/fixtures/session/sessionViewState";
 
-const value: SessionViewState = { gateway_id: "gateway-test", workspace_id: "workspace", session_id: "session", turn_anchor: "turn-1", scroll_offset: 45,
-  follow_latest: false, projection_version: 1, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
+const value: SessionViewState = { gateway_id: "gateway-test", thread_id:"thread-main", workspace_id: "workspace", session_id: "session", reading_anchor: {node_key:nodeKey({kind:"turn",id:"turn-1"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:45}, disclosures:{},
+  follow_latest: false, projection_version: 2, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
 const mounted: Array<{ unmount: () => void }> = [];
 const restores: Array<() => void> = [];
 afterEach(() => { mounted.splice(0).forEach(item => item.unmount()); restores.splice(0).forEach(restore => restore()); });
-async function mount(threadId?: string) {
+async function mount(threadId = "thread-main") {
   const instance = await mountViewStateController({ initial: { currentSession: { session_id: "session" }, currentSessionWorkspaceId: "workspace",
     sessionViewStates: new Map(), expandDetails: false, status: "" } as unknown as AppState,
     host: state => ({ apiPort: 0, currentWorkspaceId: "workspace", currentSessionId: "session", threadId,
-      scopeKey: threadId,
+      scopeKey: threadId === "thread-main" ? "workspace::session" : threadId,
       sessionViewStates: state.sessionViewStates, expandDetails: state.expandDetails }) });
   mounted.push(instance); return instance;
 }
@@ -39,20 +40,20 @@ describe("浏览器会话视图", () => {
     const m = await mount("thread-b");
     await act(async () => { await m.controller().loadSessionViewState("workspace", "session"); });
     expect(reader.mock.calls[0]).toEqual([0, "workspace", "session", "thread-b"]);
-    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "turn-1", scroll_offset: 45, follow_latest: false }); });
+    await act(async () => { m.controller().saveSessionViewState({ reading_anchor: {node_key:nodeKey({kind:"turn",id:"turn-1"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:45}, disclosures:{}, follow_latest: false }); });
     expect(writer.mock.calls[0]?.[4]).toBe("thread-b");
     expect(m.state().sessionViewStates.get("thread-b")).toEqual(value);
   });
   test("旧读取完成不能覆盖用户后续保存的位置", async () => {
     let finish!: (view: SessionViewState) => void;
     const reader = spyOn(views, "readSessionView").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    const writer = spyOn(views, "writeSessionView").mockResolvedValue({ ...value, turn_anchor: "turn-new" });
+    const writer = spyOn(views, "writeSessionView").mockResolvedValue({ ...value, reading_anchor: {node_key:nodeKey({kind:"turn",id:"turn-new"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:0} });
     restores.push(() => reader.mockRestore(), () => writer.mockRestore());
     const m = await mount();
     const pending = m.controller().loadSessionViewState("workspace", "session");
-    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "turn-new", scroll_offset: 0, follow_latest: false }); });
+    await act(async () => { m.controller().saveSessionViewState({ reading_anchor: {node_key:nodeKey({kind:"turn",id:"turn-new"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:0}, disclosures:{}, follow_latest: false }); });
     await act(async () => { finish(value); await pending; });
-    expect(m.state().sessionViewStates.get("workspace::session")?.turn_anchor).toBe("turn-new");
+    expect(m.state().sessionViewStates.get("workspace::session")?.reading_anchor?.node_key.source_ref.id).toBe("turn-new");
   });
   test("读取失败和没有保存的视图不同，故障明确显示", async () => {
     const reader = spyOn(views, "readSessionView").mockRejectedValue(new Error("数据库不可读"));
@@ -67,7 +68,7 @@ describe("浏览器会话视图", () => {
     restores.push(() => reader.mockRestore(), () => writer.mockRestore());
     const m = await mount("thread-b");
     await act(async () => { await m.controller().loadSessionViewState("workspace", "session"); });
-    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "unsaved", scroll_offset: 99, follow_latest: false }); });
+    await act(async () => { m.controller().saveSessionViewState({ reading_anchor: {node_key:nodeKey({kind:"turn",id:"unsaved"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:99}, disclosures:{}, follow_latest: false }); });
     expect(m.state().status).toBe("保存浏览器视图位置失败: 事务提交失败");
     expect(m.state().sessionViewStates.get("thread-b")).toEqual(value);
   });

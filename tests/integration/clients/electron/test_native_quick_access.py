@@ -23,11 +23,8 @@ from tests.integration.clients.electron.test_packaged_workbench import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -35,14 +32,14 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(scope="module", autouse=True)
-def native_search_service_ports(electron_service_ports: TestFilePortBlock) -> None:
+def native_search_service_ports(electron_service_ports: TestFilePorts) -> None:
     """先为打包及原生代理保留端口，再由 Gateway fixture 分配剩余端口。"""
 
 
 async def test_packaged_electron_quick_access_scoped_search_and_command_center(
     request: pytest.FixtureRequest,
     packaged_electron: Path,
-    electron_service_ports: TestFilePortBlock,
+    electron_service_ports: TestFilePorts,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, object],
 ) -> None:
     client, context, workspace, _provider = metadata_case

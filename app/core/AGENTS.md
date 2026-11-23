@@ -55,7 +55,7 @@ app/core/
 - 后台任务与邮箱的纯数据合同位于 `app/domain/background_work.py`，handler 端口位于 `app/abstractions/background_task_registry.py`，执行与恢复位于 `app/services/orchestration/background_work/`；不在 core 中增加第二套后台工作实现。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供生命周期原语与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
 - `execution_pause.py`：原协程的进程内安全边界准入；只扣除没有在途模型/工具的静止暂停时间。Thread 调度、控制 API 和持久任务状态仍归各自 owner，不在此实现崩溃恢复或另一套状态存储。
-- `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，已知文件 I/O 的目标与原因可以进入执行诊断；SQLite、内部 Pydantic／canonical 领域校验及上游异常正文继续按来源保护，明确的本地业务说明保持原合同。SQLite 只生成原异常类别和适用错误码，内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。
+- `failures.py`：产品公开错误与诊断的共享出口，复用 Python SDK 的纯提取、校验问题、脱敏与预算原语；Provider 标记、文件 I/O／SQLite 分类及原控制语义保持。普通、Provider 与校验异常保留有界脱敏原因，校验仅提供字段段、code 与原因，不输出 input/context。公共 Error 沿 code/message/details 合同构造；公开 JSON≤16 KiB、message≤8 KiB，诊断正文≤64 KiB、帧合计≤64，原因后代≤8、深度≤4，原更严格预算优先。诊断在构造时限量，不采集 locals，不再传 raw exc_info 或完整校验输入；原日志 sink 失败以安全诊断附在原异常上，保持主失败结算。身份／路径 owner 的独立公开事实合同保持原归属。
 - `sqlite_state.py` 的运行时拒绝复用 `failure_detail`；路径、VFS、进程锁与 schema 规则的原原因保留位置及日志次错，普通错误保留逻辑 artifact、阶段、SQLite 版本与系统码。不得为日志故障改变锁、连接或迁移顺序，也不补建损坏账本声明的表。
 - `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/

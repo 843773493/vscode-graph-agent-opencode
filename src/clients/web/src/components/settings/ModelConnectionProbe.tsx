@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../../../shared/core/i18n/index.js';
+import { modelMetadataDetails } from './modelMetadata.js';
+import { HttpRequestError } from '../../api/http.js';
 import { discoverLlmModels, getConfigSourceDocument, testLlmModel } from '../../api/configSources.js';
 import { observeSecretMetadata, SecretsClient } from '../../api/secrets.js';
 import type { GatewaySecretsDTO } from '../../types/protocol_generated/boxteam/gateway/v2/secrets.js';
@@ -27,6 +29,7 @@ interface TestObservation {
   start?: LlmTestStartDTO;
   result?: LlmTestResultDTO;
   error?: string;
+  errorStatus?: number;
 }
 
 function baselineKey(document: ConfigSourceDocumentDTO | LlmProbeObservationDTO): string {
@@ -58,6 +61,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
   const [search, setSearch] = useState('');
+  const [modelFilter, setModelFilter] = useState('metadata');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [testSelection, setTestSelection] = useState<Set<string>>(new Set());
   const [tests, setTests] = useState<Record<string, TestObservation>>({});
@@ -180,7 +184,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
             });
             entry.result = result; entry.preview = result.preview;
             entry.status = result.status === 'cancelled' ? 'cancelled' : result.status === 'passed' ? 'passed' : 'failed';
-          } catch (cause) { entry.status = controller.signal.aborted ? 'cancelled' : 'failed'; entry.error = controller.signal.aborted ? undefined : failureText(cause); }
+          } catch (cause) { entry.status = controller.signal.aborted ? 'cancelled' : 'failed'; entry.error = controller.signal.aborted ? undefined : failureText(cause); entry.errorStatus = cause instanceof HttpRequestError ? cause.status : undefined; }
           update();
         }
       };
@@ -189,8 +193,10 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
     finally { if (batch.current === controller) { batch.current = undefined; setTesting(false); } }
   };
   const cancel = () => { discovery.current?.abort(); batch.current?.abort(); secretEdited.current = false; changeSecret(''); };
-  const visible = catalog?.result.models.filter(item => `${item.model} ${item.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   const configured = new Set(models.map(model => model.model));
+  const hasMetadata = catalog?.result.models.some(item => Boolean(item.metadata));
+  const visible = catalog?.result.models.filter(item => !configured.has(item.model) && (!hasMetadata || modelFilter === 'all' || Boolean(item.metadata))
+    && `${item.model} ${item.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   const missing = models.filter(model => !catalog?.result.models.some(item => item.model === model.model));
   const observation = (value: LlmProbeObservationDTO) => <small>{value.mode} · {value.protocol} · {value.endpoint} · {value.observed_at}
     {' · '}{t('configuration.probe.editVersion', value.edit_version)} · {value.credential?.source}
@@ -198,9 +204,15 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
     {value.mode === 'active' ? ` · active r${value.active_revision}` : ` · ${value.source_key}`}</small>;
 
   return <section className="configuration-model-probe" aria-label={t('configuration.probe.title')}>
-    <h3>{t('configuration.probe.title')}</h3>
+    <div className="configuration-section-heading"><h3>{t('configuration.probe.title')}</h3>
+      <div className="configuration-probe-actions">
+        <button type="button" disabled={discovering || Boolean(secret && secretScope === 'model')} onClick={() => void discover()}>{t('configuration.probe.discover')}</button>
+        <button type="button" disabled={testing || !selectedModelId} onClick={() => void runTests([selectedModelId!], 'configured')}>{t('configuration.probe.test.configured')}</button>
+        {discovering || testing ? <button type="button" onClick={cancel}>{t(testing ? 'configuration.probe.stop' : 'configuration.probe.cancel')}</button> : null}
+      </div>
+    </div>
     <details><summary>{t('configuration.probe.options')}</summary>
-    <p>{editor.target.gateway_id} · {editor.target.workspace_id} · {providerId}</p>
+    <label><input type="checkbox" checked={editor.autoDiscover} onChange={event => editor.onAutoDiscover(event.target.checked)} /> {t('configuration.probe.autoDiscover')}</label>
     <label className="configuration-entity-field">{t('configuration.probe.inputMode')}
       <select value={actualMode} disabled={discovering || testing} onChange={event => setMode(event.target.value as 'draft' | 'active')}>
         <option value="draft">{t('configuration.probe.draft')}</option><option value="active">{t('configuration.probe.active')}</option>
@@ -227,60 +239,64 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
       </label>
     </details>
     </details>
-    <h4>{t('configuration.probe.catalog')}</h4>
-    <label><input type="checkbox" checked={editor.autoDiscover} onChange={event => editor.onAutoDiscover(event.target.checked)} /> {t('configuration.probe.autoDiscover')}</label>
-    <div className="configuration-probe-actions">
-      <button type="button" disabled={discovering || Boolean(secret && secretScope === 'model')} onClick={() => void discover()}>{t('configuration.probe.discover')}</button>
-      {discovering ? <button type="button" onClick={cancel}>{t('configuration.probe.cancel')}</button> : null}
-    </div>
-    {catalog ? <>
+    {catalog ? <details className="configuration-upstream-candidates" open><summary>{t('configuration.probe.browse')}</summary>
       <p role="status">{t(catalog.result.complete ? 'configuration.probe.completeCatalog' : 'configuration.probe.incompleteCatalog', catalog.result.models.length)}
         {stale(catalog.result.observation, catalog.version) ? ` · ${t('configuration.probe.stale')}` : ''}</p>
-      {catalog.result.observation ? observation(catalog.result.observation) : null}
+      {catalog.result.observation ? <details><summary>{t('configuration.probe.observationDetails')}</summary>{observation(catalog.result.observation)}</details> : null}
       {catalog.result.error ? <p role="alert">{catalog.result.error.message}</p> : null}
-      <label className="configuration-entity-field">{t('configuration.probe.search')}<input value={search} onChange={event => setSearch(event.target.value)} /></label>
+      {catalog.result.models.length > 0 ? <>
+      <div className="configuration-form-grid"><label className="configuration-entity-field">{t('configuration.probe.modelType')}
+        <select value={hasMetadata ? modelFilter : 'all'} onChange={event => setModelFilter(event.target.value)}>
+          {hasMetadata ? <option value="metadata">{t('configuration.probe.modelsWithMetadata')}</option> : null}
+          <option value="all">{t('configuration.probe.allModels')}</option>
+        </select></label>
+      <label className="configuration-entity-field">{t('configuration.probe.search')}<input value={search} onChange={event => setSearch(event.target.value)} /></label></div>
+      <small>{t('configuration.probe.remaining')}</small>
       <button type="button" onClick={() => setSelected(new Set([...selected, ...visible.map(item => item.model)]))}>{t('configuration.probe.selectMatching')}</button>
       <div className="configuration-probe-models">{visible.map((item, index) => <label key={`${item.model}:${index}`}>
         <input type="checkbox" checked={selected.has(item.model)} onChange={event => setSelected(previous => {
           const next = new Set(previous); if (event.target.checked) next.add(item.model); else next.delete(item.model); return next;
-        })} /> {item.name ?? item.model} <code>{item.model}</code> · {t(configured.has(item.model) ? 'configuration.probe.configured' : 'configuration.probe.newModel')}
+        })} /><span className="configuration-upstream-name">{item.name ?? item.model}{item.name && item.name !== item.model ? <small>{item.model}</small> : null}</span>
+        <small className="configuration-upstream-metadata">{modelMetadataDetails(item.metadata)}</small>
       </label>)}</div>
-      {missing.length ? <p>{t('configuration.probe.notReturned', missing.map(model => model.id).join(', '))}</p> : null}
+
       <button type="button" disabled={!document.writable || !selected.size || stale(catalog.result.observation, catalog.version)} onClick={() => {
-        try { onImport(catalog.result.models.filter(item => selected.has(item.model)), editor.version); setSelected(new Set()); }
+        try { onImport(catalog.result.models.filter(item => selected.has(item.model) && !configured.has(item.model)), editor.version); setSelected(new Set()); setCatalog(undefined); }
         catch (cause) { setError(failureText(cause)); }
       }}>{t('configuration.probe.importSelected')}</button>
-    </> : null}
-    <h4>{t('configuration.probe.quickTest')}</h4>
+      </> : null}
+      {missing.length ? <p>{t('configuration.probe.notReturned', missing.map(model => model.id).join(', '))}</p> : null}
+    </details> : null}
+    <details className="configuration-probe-more"><summary>{t('configuration.probe.moreTests')}</summary>
     <p>{t('configuration.probe.testHint')}</p>
     <div className="configuration-probe-models">{models.map(model => <label key={model.id}>
       <input type="checkbox" checked={testSelection.has(model.id)} onChange={event => setTestSelection(previous => {
         const next = new Set(previous); if (event.target.checked) next.add(model.id); else next.delete(model.id); return next;
       })} /> {model.id} · {model.model}
     </label>)}</div>
-    <div className="configuration-probe-actions">{(['configured', 'stream', 'complete', 'both'] as const).map(testMode => <button type="button" key={testMode}
+    <div className="configuration-probe-actions">{(['stream', 'complete', 'both'] as const).map(testMode => <button type="button" key={testMode}
       disabled={testing || !selectedModelId} onClick={() => void runTests([selectedModelId!], testMode)}>{t(`configuration.probe.test.${testMode}`)}</button>)}
       <button type="button" disabled={testing || Boolean(secret && secretScope === 'model') || !models.some(model => testSelection.has(model.id))}
         onClick={() => void runTests(models.filter(model => testSelection.has(model.id)).map(model => model.id), 'configured')}>{t('configuration.probe.testSelected')}</button>
-      {testing ? <button type="button" onClick={cancel}>{t('configuration.probe.stop')}</button> : null}
     </div>
+    </details>
     {Object.entries(tests).map(([key, entry]) => <section key={key} className="configuration-probe-result" data-probe-model={entry.modelId}>
       <p role="status">{entry.modelId} · {t(`configuration.probe.test.${entry.mode}`)} · {t(`configuration.probe.status.${entry.status}`)}
         {stale(entry.result?.observation ?? entry.start?.observation, entry.version) ? ` · ${t('configuration.probe.stale')}` : ''}</p>
-      {entry.start?.observation ? observation(entry.start.observation) : null}
+      {entry.start?.observation ? <details><summary>{t('configuration.probe.observationDetails')}</summary>{observation(entry.start.observation)}</details> : null}
       {entry.preview ? <pre>{entry.preview}</pre> : null}
       {entry.result ? <p>{t('configuration.probe.timing', entry.result.first_content_ms?.toFixed(0) ?? '—', entry.result.elapsed_ms.toFixed(0))}
         {entry.result.preview_truncated ? ` · ${t('configuration.probe.truncated')}` : ''}
         {entry.result.usage ? ` · usage ${JSON.stringify(entry.result.usage)}` : ''}</p> : null}
       {entry.start ? <small>request_id: {entry.start.request_id}</small> : null}
       {entry.error || entry.result?.error ? <>
-        <p role="alert">{(entry.error ?? entry.result!.error!.message).split('\n')[0]}</p>
+        <p role="alert">{entry.errorStatus === 422 ? t('configuration.probe.invalidConnection') : (entry.error ?? entry.result!.error!.message).split('\n')[0]}</p>
         <details><summary>{t('configuration.probe.errorDetails')}</summary>
           <pre>{entry.error ?? `${entry.result!.error!.field ?? ''}\n${entry.result!.error!.message}`}</pre>
           {onOpenSource ? <button type="button" onClick={onOpenSource}>{t('configuration.entities.openJsonc')}</button> : null}
         </details>
       </> : null}
-      {entry.result ? <button type="button" disabled={!document.writable || !models.some(model => model.id === entry.modelId)} onClick={() => onApplyMode(entry.modelId, entry.result!.streaming)}>{t('configuration.probe.applyMode')}</button> : null}
+      {entry.status === 'passed' && entry.result ? <button type="button" disabled={!document.writable || stale(entry.result.observation, entry.version) || !models.some(model => model.id === entry.modelId)} onClick={() => onApplyMode(entry.modelId, entry.result!.streaming)}>{t('configuration.probe.applyMode')}</button> : null}
     </section>)}
     {error ? <p role="alert">{error}</p> : null}
   </section>;

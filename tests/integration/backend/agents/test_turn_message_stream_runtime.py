@@ -28,20 +28,18 @@ from app.services.orchestration.message_stream.activities import (
     DefaultActivityHandler,
 )
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
+from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.messages import admit_message_stream_writer
 
 
 @pytest.fixture
-def runtime_context() -> tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path]:
-    output_root = (
-        Path.cwd()
-        / "out/tests/integration/backend/agents/test_turn_message_stream_runtime"
-    )
-    workspace_root = output_root / "workspace"
+def runtime_context(request: pytest.FixtureRequest) -> tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace_root = context.workspace_root
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
-    resource_state_path = output_root / "runtime" / "resources.sqlite"
-    resource_state_path.unlink(missing_ok=True)
+    resource_state_path = context.runtime_root_for_node(request.node.nodeid) / "resources.sqlite"
     sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
@@ -97,7 +95,7 @@ async def test_model_tool_scopes_share_turn_cancellation_and_close_provider(
     )
     assert await turn_scope.cancel("user_requested") is True
     await runtime.finalize_interruption_facts()
-    await writer.close_interrupted("intr_scope")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_scope", "status": "interrupted"})
 
     assert model_scope.cancellation_signal.is_cancelled is True
     assert tool_scope.cancellation_signal.is_cancelled is True
@@ -284,7 +282,7 @@ async def test_failed_control_acceptance_retries_once_before_interrupting_real_s
         assert [command.status for command in restored.snapshot()] == ["consumed"]
         assert restored._pending.empty()
 
-        await writer.close_interrupted("cmd_retry")
+        await writer.commit("stream.interrupted", {"interrupt_request_id": "cmd_retry", "status": "interrupted"})
         restarted = MessageStreamStore(path_resolver=store._path_resolver)
         await restarted.open_existing(
             session_id=session_id, thread_id=writer.thread_id,
@@ -383,7 +381,7 @@ async def test_interrupt_settlement_retry_uses_committed_event_without_repeating
         assert cancellations == ["user_requested"]
         assert callbacks == ["accepted"]
         assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == events
-        await writer.close_interrupted("cmd_settle")
+        await writer.commit("stream.interrupted", {"interrupt_request_id": "cmd_settle", "status": "interrupted"})
     finally:
         await scope.close()
 
@@ -428,7 +426,7 @@ async def test_crash_after_interrupt_request_recovers_execution_lost(
     runtime_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str, Path],
 ) -> None:
     store, resolver, session_id, _ = runtime_context
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_crash_recovery")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_crash_recovery", job_id="job_crash_recovery_owner")
     await writer.commit(
         "tool.started",
         {
@@ -444,7 +442,7 @@ async def test_crash_after_interrupt_request_recovers_execution_lost(
     )
 
     restarted = MessageStreamStore(path_resolver=resolver)
-    assert await restarted.reconcile_unfinished_streams() == 1
+    assert await restarted.reconcile_unfinished_streams(terminal_status_writer=admit_message_stream_writer(writer, resolver)) == 1
     state = await restarted.get_state(writer.turn_stream_id)
     assert state["stream_status"] == "failed"
     assert state["failure"]["code"] == "execution_lost"
@@ -504,7 +502,7 @@ async def test_activity_projection_failure_keeps_native_location_in_diagnostics(
     assert isinstance(repaired["payload"], dict)
     assert "detail_error" not in repaired["payload"]
     await runtime.completed(activity_id="activity-2", kind="test.projection", summary="再次处理完成")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     replay = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
     assert [event["event_seq"] for event in replay] == list(range(1, 8))
     snapshot = await writer.snapshot()

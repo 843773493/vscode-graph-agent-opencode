@@ -17,7 +17,10 @@ from app.abstractions.execution_queue import (
     ExecutionQueueProtocol,
 )
 from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.abstractions.job_executor import JobExecutorProtocol, JobInputOwnerProtocol
+from app.abstractions.job_executor import (
+    JobExecutorProtocol,
+    JobInputOwnerProtocol,
+)
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.execution_pause import ExecutionPause
 from app.core.failures import execution_failure_message, report_failure
@@ -60,7 +63,6 @@ from app.schemas.internal_v2.pending_request import (
 from app.services.business.job.control_service import JobControlService
 from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.business.job.lifecycle import (
-    FAILED_JOB_STATUSES,
     HEARTBEAT_TRACKED_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     transition_job_status,
@@ -156,6 +158,7 @@ class JobService:
         execution_cancel_timeout_seconds: float = 5.0,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
         input_owner: JobInputOwnerProtocol | None = None,
+        dispatch_guard: Callable[[PendingJob], str | None] | None = None,
     ):
         if isinstance(job_timeout_seconds, bool) or job_timeout_seconds <= 0:
             raise ValueError("job_timeout_seconds 必须大于 0")
@@ -209,6 +212,7 @@ class JobService:
         )
         self._terminal_status_writer = terminal_status_writer
         self._input_owner = input_owner
+        self._dispatch_guard = dispatch_guard
         self._pending_requests = JobPendingRequestService(
             pending_queue=self._pending_queue,
             lock=self._dispatch_lock,
@@ -1255,30 +1259,16 @@ class JobService:
         if finished_job.queue_claim is not None:
             await finished_job.queue_claim.close()
             finished_job.queue_claim = None
-        stale_internal_jobs: list[JobState] = []
         async with self._dispatch_lock:
             current_job_id = self._thread_current_job.get((finished_job.session_id, finished_job.thread_id))
             if current_job_id != finished_job.job_id:
                 return
-
-            if finished_job.status in FAILED_JOB_STATUSES:
-                stale_internal_jobs = self._discard_stale_terminal_followups(
-                    finished_job.session_id,
-                    parent_job_id=finished_job.job_id,
-                    thread_id=finished_job.thread_id,
-                )
 
             if not self._pending_queue.peek_head(finished_job.session_id, finished_job.thread_id):
                 self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id), None)
                 should_dispatch = False
             else:
                 should_dispatch = True
-
-        await self._record_discarded_stale_followups(
-            finished_job.session_id,
-            stale_internal_jobs,
-            parent_job_id=finished_job.job_id,
-        )
 
         if not should_dispatch:
             await self._pending_requests.refresh_version(finished_job.session_id)
@@ -1289,67 +1279,6 @@ class JobService:
             boundary=finished_job.delivery_boundary or "after_turn",
             tool_result_available=False,
         )
-
-    def _discard_stale_terminal_followups(
-        self,
-        session_id: str,
-        *,
-        parent_job_id: str,
-        thread_id: str,
-    ) -> list[JobState]:
-        """失败后丢弃尚未执行的终端收尾提醒，避免创建孤立 continuation stream。"""
-        stale_jobs: list[JobState] = []
-        for job_id in tuple(
-            self._pending_queue.queued_job_ids(session_id, thread_id)
-        ):
-            job = self._jobs.get(job_id)
-            if job is None or not self._is_terminal_followup(job):
-                continue
-            self._pending_queue.remove(session_id, job_id)
-            transition_job_status(
-                job,
-                JobStatus.failed,
-                error_message=(
-                    "父任务已失败，未执行的终端收尾消息已丢弃: "
-                    f"parent_job_id={parent_job_id}"
-                ),
-            )
-            job.current_step = None
-            stale_jobs.append(job)
-        return stale_jobs
-
-    @staticmethod
-    def _is_terminal_followup(job: JobState) -> bool:
-        return (
-            job.status == JobStatus.queued
-            and job.message_metadata.get("internal") is True
-            and job.message_metadata.get("structured_prompt_kind")
-            == "terminal_execution_completed"
-        )
-
-    async def _record_discarded_stale_followups(
-        self,
-        session_id: str,
-        jobs: list[JobState],
-        *,
-        parent_job_id: str,
-    ) -> None:
-        if not jobs:
-            return
-        for job in jobs:
-            await self._persist_terminal_execution_status(job, "failed")
-            if self._bus is not None:
-                await self._bus.publish(
-                    job_id=job.job_id,
-                    event_type=EventType.JOB_FAILED,
-                    payload={
-                        "session_id": session_id,
-                        "code": "stale_internal_followup",
-                        "error": job.error_message,
-                        "parent_job_id": parent_job_id,
-                    },
-                    agent_id="job_service",
-                )
 
     async def _run_job_background(self, job_id: str, session_id: str, message: str):
         job = self._jobs[job_id]
@@ -1367,6 +1296,13 @@ class JobService:
         startup_ready = asyncio.Event()
 
         try:
+            if (job.queue_record is not None and job.queue_record.input.background and self._dispatch_guard is not None
+                    and await self._pending_requests.execution_queue.before_dispatch(job.queue_record)):
+                reason = self._dispatch_guard(job)
+                if reason is not None:
+                    # 复用取消终态与队列交还；不调用模型，也不另造“跳过”状态机。
+                    job.cancellation_reason = reason
+                    raise asyncio.CancelledError
             job_timeout_seconds = self._resolve_job_timeout_seconds()
             finalization_grace_seconds = self._resolve_finalization_grace_seconds(
                 job_timeout_seconds
@@ -1930,8 +1866,6 @@ class JobService:
         tool_result_available: bool = True,
     ) -> bool:
         async with self._pending_dispatch_locks.lock_for(f"{session_id}/{thread_id}"):
-            stale_internal_jobs: list[JobState] = []
-            stale_parent_job_id: str | None = None
             async with self._dispatch_lock:
                 if session_id in self._closed_sessions or self.advancement_paused(session_id, thread_id):
                     return False
@@ -1942,13 +1876,6 @@ class JobService:
                         return False
                     next_job = current_job
                 else:
-                    if current_job is not None and current_job.status in FAILED_JOB_STATUSES:
-                        stale_parent_job_id = current_job.job_id
-                        stale_internal_jobs = self._discard_stale_terminal_followups(
-                            session_id,
-                            parent_job_id=current_job.job_id,
-                            thread_id=thread_id,
-                        )
                     head = self._pending_queue.peek_head(session_id, thread_id)
                     if head is not None and self._pending_queue._policy_allows(
                         head.delivery_policy, boundary, tool_result_available=tool_result_available,
@@ -1980,11 +1907,6 @@ class JobService:
                         next_job.delivery_policy = entry.delivery_policy
                         next_job.delivery_boundary = entry.last_boundary
                         transition_job_status(next_job, JobStatus.running)
-            await self._record_discarded_stale_followups(
-                session_id,
-                stale_internal_jobs,
-                parent_job_id=stale_parent_job_id or "unknown",
-            )
             if next_job is None:
                 await self._pending_requests.refresh_version(session_id)
                 return False

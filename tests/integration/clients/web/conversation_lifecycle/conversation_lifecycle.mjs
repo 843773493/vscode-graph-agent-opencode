@@ -1804,23 +1804,30 @@ function expectedActivityPreview(durationMs, itemCount, boundary = null) {
   assert.ok(Number.isInteger(itemCount) && itemCount >= 0, "Turn item_count 必须是非负整数");
   const duration = durationMs == null ? "—" : durationMs < 1000
     ? `${durationMs}ms`
-    : `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`;
+    : `${new Intl.NumberFormat("zh-CN", {maximumFractionDigits: durationMs >= 10_000 ? 0 : 1}).format(durationMs / 1000)}s`;
   return `耗时 ${duration} · Item ${itemCount} 项${boundary ? ` · ${boundary.title}` : ""}`;
 }
 
 function expectedTurnBoundary(turn) {
-  const tools = turn.response_parts.filter((part) => part.kind === "tool_call");
   const states = [
     [turn.response_parts.some((part) => part.partial && part.completion_reason === "user_interrupt"), "user-interrupted", "已由用户中断"],
     [turn.status === "cancelled", "cancelled", "任务已取消"],
-    [tools.some((part) => part.partial || part.status === "cancelled"), "tool-incomplete", "工具调用未完成"],
-    [tools.some((part) => part.outcome_unknown), "tool-outcome-unknown", "工具执行结果未知"],
-    [tools.some((part) => part.status === "failed"), "tool-failed", "工具执行失败"],
     [turn.status === "failed", "turn-failed", "本轮执行失败"],
     [turn.status === "timed_out", "turn-timed-out", "本轮执行超时"],
   ];
   const state = states.find(([applies]) => applies);
   return state ? { kind: state[1], title: state[2] } : null;
+}
+
+// 经过真实三层控件逐项读取；完整 canonical 身份断言仍由调用方核验。
+async function expandProcessDetails(activity) {
+  for (const selector of [
+    '.chat-activity-group > button',
+    '.chat-activity-item > button, .chat-compaction-summary > button',
+    '.chat-tool-summary',
+  ]) for (const toggle of await activity.locator(selector).all()) {
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  }
 }
 
 async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning) {
@@ -1832,10 +1839,10 @@ async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning)
   const finalMessage = turn.locator(".chat-markdown").filter({ hasText: finalText }).last();
   await finalMessage.waitFor({ state: "visible", timeout: 120_000 });
   await expect(thread.getByTestId("composer-input")).toBeVisible();
-  await expect(thread.locator("#interruptButton, .chat-thinking.is-active")).toHaveCount(0, { timeout: 30_000 });
+  await expect(thread.locator("#interruptButton")).toHaveCount(0, { timeout: 30_000 });
   const thinking = turn.locator(".chat-thinking").last();
   await thinking.waitFor({ state: "visible", timeout: 30_000 });
-  const thinkingToggle = thinking.locator(".chat-thinking-toggle");
+  const thinkingToggle = thinking.locator(":scope > .chat-thinking-toggle");
   await waitUntil(
     async () => thinking.getAttribute("data-item-count").then((value) => value !== null),
     "terminal 历史投影提供 Item 统计",
@@ -1844,27 +1851,16 @@ async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning)
   const durationMs = Number(await thinking.getAttribute("data-duration-ms"));
   const itemCount = Number(await thinking.getAttribute("data-item-count"));
   const activityPreview = expectedActivityPreview(durationMs, itemCount);
-  const activityPreviewElement = thinking.locator(".chat-thinking-preview");
+  const activityPreviewElement = thinking.locator(".chat-activity-duration");
   await activityPreviewElement.waitFor({ state: "visible", timeout: 30_000 });
   const originalViewport = page.viewportSize();
   await page.setViewportSize({ width: 640, height: 900 });
-  assert.equal(
-    await activityPreviewElement.isVisible(),
-    true,
-    "窄窗口也必须显示耗时和 Item 数量",
-  );
+  assert.equal(await activityPreviewElement.isVisible(), true, "窄窗口优先保留可信耗时");
   if (originalViewport) await page.setViewportSize(originalViewport);
-  assert.equal(
-    await activityPreviewElement.innerText(),
-    activityPreview,
-    "可见标题必须精确匹配 Turn duration_ms 和中间 item_count",
-  );
+  assert.equal(await activityPreviewElement.innerText(), activityPreview.split(" · ")[0]);
+  assert.equal(await thinking.locator(".chat-activity-items").innerText(), `Item ${itemCount} 项`);
   assert.equal(itemCount, 4, "固定工具循环每轮必须投影 2 个 reasoning、1 个 tool call 和 1 个 tool result");
-  assert.equal(
-    await thinkingToggle.getAttribute("aria-label"),
-    `展开 Turn 中间消息：${activityPreview}`,
-    "折叠按钮的可访问名称必须包含精确耗时和 Item 数量",
-  );
+  assert.ok((await thinkingToggle.getAttribute("aria-description")).includes(`Item ${itemCount} 项`));
   assert.equal(await thinkingToggle.getAttribute("aria-expanded"), "false");
   await thinkingToggle.click();
   await waitUntil(
@@ -1873,11 +1869,13 @@ async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning)
     30_000,
   );
   await activityPreviewElement.waitFor({ state: "visible", timeout: 30_000 });
-  assert.equal(await activityPreviewElement.innerText(), activityPreview);
+  assert.equal(await activityPreviewElement.innerText(), activityPreview.split(" · ")[0]);
+  await expect(thinking.locator(".chat-activity-group").first()).toBeVisible();
+  await expandProcessDetails(thinking);
   const completedTool = turn.locator(".chat-tool-row.is-complete").filter({ hasText: "已运行 read_file" });
   await completedTool.waitFor({ state: "visible", timeout: 30_000 });
   const activityOrder = await turn.locator(
-    ".chat-thinking-body > .chat-activity-item > .chat-markdown, .chat-thinking-body > .chat-activity-item > .chat-tool-row",
+    ".chat-activity-group .chat-activity-item",
   ).evaluateAll((elements) =>
     elements.map((element) => element.textContent?.trim() ?? ""),
   );
@@ -2779,7 +2777,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
     phase = "backend activity statistics";
     await waitUntil(async () => await activity.getAttribute("data-item-count") === String(turn.activity_stats.item_count)
       && await activity.getAttribute("data-duration-ms") === (turn.activity_stats.duration_ms == null ? null : String(turn.activity_stats.duration_ms)), `${stage} 后端活动统计进入 DOM`);
-    const toggle = activity.locator(".chat-thinking-toggle");
+    const toggle = activity.locator(":scope > .chat-thinking-toggle");
     activityToggle = await toggle.elementHandle();
     phase = "activity summary toggle contract";
     await recordActivityCheckpoint("before activity expansion");
@@ -2787,9 +2785,9 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
       assert.equal(await toggle.evaluate((element) => element.tagName), "BUTTON");
       if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
     } else {
-      assert.equal(await toggle.getAttribute("role"), "status", `${stage}: 零活动 Turn 仍显示静态统计摘要`);
+      assert.equal(await toggle.isDisabled(), true, `${stage}: 零活动 Turn 只显示不可展开统计`);
       assert.equal(await toggle.getAttribute("aria-expanded"), null);
-      assert.equal(await activity.locator("button").count(), 0, `${stage}: 零活动 Turn 不得添加展开按钮`);
+      assert.equal(await activity.locator(".chat-thinking-body").count(), 0, `${stage}: 零活动 Turn 不创建空正文`);
     }
     await recordActivityCheckpoint("after activity expansion click");
     {
@@ -2802,7 +2800,9 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
     phase = "historical boundary and preview";
     const boundary = expectedTurnBoundary(turn);
     assert.equal(await activity.getAttribute("data-status-kind"), boundary?.kind ?? null, `${stage}: 终态提示必须对应后端 Turn/tool 事实`);
-    assert.equal(await activity.locator(".chat-thinking-preview").innerText(), expectedActivityPreview(turn.activity_stats.duration_ms, turn.activity_stats.item_count, boundary));
+    const expectedPreview = expectedActivityPreview(turn.activity_stats.duration_ms, turn.activity_stats.item_count, boundary);
+    if (turn.activity_stats.duration_ms != null) assert.equal(await activity.locator(".chat-activity-duration").innerText(), expectedPreview.split(" · ")[0]);
+    assert.equal(await activity.locator(".chat-activity-items").innerText(), `Item ${turn.activity_stats.item_count} 项`);
     phase = "canonical response part count";
     const countTarget = stage === "live" && timing?.targetTurnId === turn.turn_id ? timing : null;
     const pageDomNodeCount = countTarget
@@ -2815,6 +2815,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
         })
       : null;
     await measureHistoryPhase(countTarget, `transcript.canonical_response_part_count.${stage}`, () => waitUntil(async () => {
+      await expandProcessDetails(activity);
       latestActual = await article.locator("[data-response-sources]").evaluateAll((elements) => elements.flatMap((element) => JSON.parse(element.getAttribute("data-response-sources"))));
       return latestActual.length === expected.length;
     }, `${stage} 全部 canonical response part 展示`), () => ({
@@ -3349,7 +3350,7 @@ function graphAdmission(lifecycle, jobId) {
 }
 
 async function modelRequest(callId) {
-  return JSON.parse(await readFile(`${requiredEnvironment("BOXTEAM_BROWSER_ARTIFACT_ROOT")}/model-stream/${callId}.json`, "utf8"));
+  return JSON.parse(await readFile(`${requiredEnvironment("BOXTEAM_MODEL_STREAM_ARTIFACT_ROOT")}/${callId}.json`, "utf8"));
 }
 
 async function assertToolResultContinuation(owner, calls, providerCallId, result) {

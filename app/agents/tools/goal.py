@@ -8,13 +8,14 @@ from app.services.business.session_goal_service import SessionGoalService
 
 
 def create_goal_tools(
-    *, session_id: str, goal_service: SessionGoalService, invocation_context: ToolInvocationContext
+    *, session_id: str | None, goal_service: SessionGoalService, invocation_context: ToolInvocationContext
 ) -> list[BaseTool]:
-    async def assert_main_thread() -> None:
+    async def assert_main_thread() -> str:
         binding = invocation_context.thread_binding
         if binding is None or binding.session_id != session_id:
             raise RuntimeError("Goal 工具缺少精确 ThreadRuntimeBinding")
-        await goal_service.assert_agent_thread(session_id, binding.thread_id)
+        await goal_service.assert_agent_thread(binding.session_id, binding.thread_id)
+        return binding.session_id
 
     @tool
     async def get_goal() -> dict[str, object] | None:
@@ -23,8 +24,8 @@ def create_goal_tools(
         用户询问、要求停止或控制 Goal 时必须先调用；只有本工具返回 None 时，
         才能说当前会话没有 Goal。
         """
-        await assert_main_thread()
-        goal = await goal_service.get(session_id)
+        owner_session_id = await assert_main_thread()
+        goal = await goal_service.get(owner_session_id)
         return None if goal is None else goal_public_view(goal).model_dump(mode="json")
 
     @tool
@@ -32,8 +33,8 @@ def create_goal_tools(
         objective: str, token_budget: int | None = None
     ) -> dict[str, object]:
         """仅当用户或 system/developer 指令明确要求时创建 Goal，不得从普通任务自行推断。只有明确要求 token 预算时才传 token_budget；存在未完成 Goal 时调用失败。"""
-        await assert_main_thread()
-        goal = await goal_service.create_for_agent(session_id, objective, token_budget)
+        owner_session_id = await assert_main_thread()
+        goal = await goal_service.create_for_agent(owner_session_id, objective, token_budget)
         return goal_public_view(goal).model_dump(mode="json")
 
     @tool
@@ -50,8 +51,8 @@ def create_goal_tools(
             parsed = GoalStatus(status)
         except ValueError as exc:
             raise ValueError("status 只能是 paused、complete 或 blocked") from exc
-        await assert_main_thread()
-        goal = await goal_service.update_for_agent(session_id, parsed)
+        owner_session_id = await assert_main_thread()
+        goal = await goal_service.update_for_agent(owner_session_id, parsed)
         return goal_public_view(goal).model_dump(mode="json")
 
     return [get_goal, create_goal, update_goal]

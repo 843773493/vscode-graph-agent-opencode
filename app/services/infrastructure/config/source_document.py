@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -11,16 +11,14 @@ from commentjson.commentjson import parser
 from lark import Token, Tree
 from pydantic import ValidationError
 
-from app.agents.providers.request_parameters import (
-    normalize_request_headers,
-    normalize_request_parameters,
-)
 from app.core.config_sources import StableConfigFile, parse_stable_config_file
 from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
 from app.services.infrastructure.config.state import (
     normalize_secret_reference,
     redact_config_payload,
 )
+from configs.inheritance.merge import SettingsMerger
+from configs.inheritance.values import ConfigValue, FieldOrigin, OriginTree, freeze
 
 _MASK_PREFIX = "boxteam-redacted:"
 
@@ -191,34 +189,43 @@ def restore_source_text(text: str, original: str) -> str:
     return _replace_tokens(text, replacements)
 
 
-def source_origins(layers: dict[str, dict[str, object]], effective: dict[str, object]) -> list[dict[str, object]]:
-    """只标注原 merge 结果的叶值来源；数组沿原合同作为一个替换单元。"""
+def source_origins(
+    layers: dict[str, dict[str, object]], effective: dict[str, object],
+    *, schema: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """投影同一 schema 合并出的定义来源；数组仍作为一个替换单元。"""
+    merger = SettingsMerger(schema if schema is not None else {})
+    layer_origins: list[OriginTree] = []
+    merged: ConfigValue = None
+    merged_origins: OriginTree | None = None
+    for key, payload in layers.items():
+        merged, merged_origins = merger.merge(merged, freeze(payload), origin=FieldOrigin(key, "", ()),
+                                             inherited_origins=merged_origins)
+        layer_origins.append(merged_origins)
+    normalized, effective_origins = merger.merge(None, freeze(effective), origin=FieldOrigin("effective", "", ()))
     result: list[dict[str, object]] = []
 
-    def visit(value: object, path: tuple[str, ...]) -> None:
-        if isinstance(value, dict) and value:
+    def visit(value: ConfigValue, path: tuple[str, ...], position: OriginTree) -> None:
+        if isinstance(value, Mapping) and value:
             for key, child in value.items():
-                visit(child, (*path, str(key)))
+                visit(child, (*path, key), position.children[key])
             return
+        if merged_origins is None:
+            return
+        try:
+            winner = merged_origins.locate(path)
+        except KeyError:
+            return  # bound projection 可含派生字段；它们没有源文定义。
         sources = []
-        for key, payload in layers.items():
-            item: object = payload
-            for index, part in enumerate(path):
-                if isinstance(item, dict) and path[:2] == ("llm", "providers"):
-                    if path[index - 2:index] == ("request_options", "parameters"):
-                        item = normalize_request_parameters(item, protocol="responses")
-                        part = "max_output_tokens" if part == "max_tokens" else part
-                    elif path[index - 2:index] == ("request_options", "default_headers"):
-                        item = normalize_request_headers(item)
-                        part = part.casefold()
-                if not isinstance(item, dict) or part not in item:
-                    break
-                item = item[part]
-            else:
-                sources.append(key)
-        if sources:
-            result.append({"path": "/" + "/".join(part.replace("~", "~0").replace("/", "~1") for part in path),
-                           "source_key": sources[-1], "shadowed_sources": sources[:-1]})
+        for origins in layer_origins:
+            try:
+                source = origins.locate(path).node_id
+            except KeyError:
+                continue
+            if not sources or sources[-1] != source:
+                sources.append(source)
+        result.append({"path": position.origin.pointer, "source_key": winner.node_id,
+                       "shadowed_sources": sources[:sources.index(winner.node_id)]})
 
-    visit(effective, ())
+    visit(normalized, (), effective_origins)
     return result

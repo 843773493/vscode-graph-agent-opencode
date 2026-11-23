@@ -197,6 +197,9 @@ from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
+from app.services.orchestration.persistent_tasks.dispatch import (
+    pending_task_dispatch_reason,
+)
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
@@ -950,6 +953,7 @@ def _build_app_container(
         job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
         terminal_status_writer=checkpointer,
         input_owner=message_service,
+        dispatch_guard=partial(pending_task_dispatch_reason, store=persistent_task_store),
     )
     session_service.bind_job_service(job_service)
     session_catalog_service.bind_job_service(job_service)
@@ -1151,8 +1155,12 @@ def _build_app_container(
         / "model_tool_test_workspace",
     )
     agent_tool_catalog = AgentToolCatalog(
-        runtime_catalog=agent_execution_service,
         config_service=config_service,
+        dependency_provider=dependency_provider,
+        background_task_registry=background_task_registry,
+        background_mailbox=background_mailbox,
+        job_event_bus=job_event_bus,
+        workspace_root=resolved_workspace_root,
     )
     agent_tool_settings_service = AgentToolSettingsService(
         tool_catalog=agent_tool_catalog,

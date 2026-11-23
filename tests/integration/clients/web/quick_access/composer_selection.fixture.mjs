@@ -22,7 +22,8 @@ export async function composerResourceSelectionContract(mode) {
   let options, selectedText = '发起时选定的正文';
   class Pane extends ThreadPane {
     constructor(index) {
-      super({ id: index + 1 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None });
+      super({ id: index + 1 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None, getObject: () => ({}) },
+        { getValue: () => undefined, onDidChangeConfiguration: Event.None });
       const input = new ThreadInput({ ...owner, workspaceKey: '', sessionId: `session-${index}`, threadId: `thread-${index}`, title: `Thread ${index}` });
       this.target = { input, conversation: { captureDraft() {
         events.push(`capture:${index}`);

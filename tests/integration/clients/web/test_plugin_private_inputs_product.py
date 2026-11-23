@@ -21,7 +21,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import native_plugin_target
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -118,7 +118,7 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(config)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     port = ports.port(20)
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

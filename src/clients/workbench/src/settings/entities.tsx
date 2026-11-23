@@ -2,7 +2,7 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { ConfigurationEntities, definitionObject, definitionValue, type DefinitionKind } from '../../../web/src/components/settings/ConfigurationEntities.js';
 import { ModelConnectionProbe } from '../../../web/src/components/settings/ModelConnectionProbe.js';
 import styles from '../../../web/src/components/settings/configurationEntities.css?text';
-import { Action } from '../../upstream/src/vs/base/common/actions.js';
+import { Action, toAction } from '../../upstream/src/vs/base/common/actions.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
 import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
@@ -25,6 +25,7 @@ import { defaultAgentSourceCommand } from './commands.js';
 import { listAgents, setWorkspaceDefaultAgent, setWorkspaceDefaultModel } from '../../../web/src/api/workspace.js';
 import type { ModelReference } from '../../../web/src/types/backend.js';
 import type { SourceSettings } from './editor.js';
+import { SecretsClient, observeSecretMetadata } from '../../../web/src/api/secrets.js';
 import { chooseProviderCredential, manageSecrets } from './secrets.js';
 import type { SettingsCategoryOptions } from './categories.js';
 
@@ -47,6 +48,8 @@ export class ConfigurationEntityView extends Disposable {
   private readonly sessionAction = this._register(new Action('settings.definition.session', t('configuration.entities.openSessionSelection'), '', true, () => this.run(() => this.openSessionSelection())));
   private readonly defaultsAction = this._register(new Action('settings.definition.defaults', t('configuration.entities.manageSessionDefaults'), '', true, () => this.run(() => this.manageSessionDefaults())));
   private toolbarMode?: string;
+  private credentialNames: Record<string, string> = {};
+  private searchQuery = '';
   private readonly lifetime = this._register(createManagementTargetLifecycle(t('workbench.settings.reopenSource')));
   private kind: DefinitionKind = 'providers';
   private selectedId?: string;
@@ -62,7 +65,7 @@ export class ConfigurationEntityView extends Disposable {
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @ICommandService private readonly commands: ICommandService,
     @IStorageService private readonly storage: IStorageService,
-    @IContextMenuService menus: IContextMenuService) {
+    @IContextMenuService private readonly menus: IContextMenuService) {
     super();
     element.className = 'configuration-entities';
     const container = document.createElement('div');
@@ -73,14 +76,24 @@ export class ConfigurationEntityView extends Disposable {
     this.heading.className = 'settings-group-title-label settings-group-level-1';
     this.heading.style.cssText = 'min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     const actions = document.createElement('div'); actions.style.flexShrink = '0'; header.append(this.heading, actions);
-    this.toolbar = this._register(new ToolBar(actions, menus));
+    this.toolbar = this._register(new ToolBar(actions, this.menus));
     const body = document.createElement('div'); body.style.cssText = 'flex:1;min-height:0';
     container.append(header, body); element.replaceChildren(container);
     this.surface = this._register(new ReactSurface(body, [styles]));
     this._register(source.onDidChange(() => this.render()));
+    const receive = (snapshot: Awaited<ReturnType<SecretsClient['list']>>) => {
+      this.credentialNames = Object.fromEntries(snapshot.items.map(item => [item.id, item.name])); this.render();
+    };
+    this._register({ dispose: observeSecretMetadata(source.location.gateway_id, snapshot => {
+      if ('items' in snapshot) receive(snapshot);
+      else if (snapshot.item) { this.credentialNames = { ...this.credentialNames, [snapshot.item.id]: snapshot.item.name }; this.render(); }
+    }) });
+    void new SecretsClient(source.location, this.lifetime.signal).list().catch(error => {
+      if (!this.lifetime.signal.aborted) this.notifications.error(error);
+    });
   }
   get selection(): DefinitionEditorOptions { return { definitionKind: this.kind, definitionId: this.selectedId, definitionModelId: this.selectedModelId }; }
-  show(kind: DefinitionKind, selectedId?: string, selectedModelId?: string): void { this.kind = kind; this.selectedId = selectedId; this.selectedModelId = selectedModelId; this.setVisible(true); }
+  show(kind: DefinitionKind, selectedId?: string, selectedModelId?: string, searchQuery = ''): void { this.searchQuery = searchQuery; this.kind = kind; this.selectedId = selectedId; this.selectedModelId = selectedModelId; this.setVisible(true); }
   setVisible(visible: boolean): void {
     this.visible = visible;
     if (visible) this.render(); else this.surface.render(null);
@@ -111,7 +124,7 @@ export class ConfigurationEntityView extends Disposable {
         ...(this.kind === 'providers' ? [this.secretsAction] : []),
         ...(this.kind === 'providers' && localProviders ? [this.restoreAction] : [])]);
     }
-    this.surface.render(<ConfigurationEntities kind={this.kind} selectedId={this.selectedId} selectedModelId={this.selectedModelId} draft={draft} document={document} error={error}
+    this.surface.render(<ConfigurationEntities kind={this.kind} selectedId={this.selectedId} selectedModelId={this.selectedModelId} draft={draft} document={document} error={error} searchQuery={this.searchQuery} credentialNames={this.credentialNames} dirty={this.source.model.isDirty()}
       draftVersion={this.source.model.textEditorModel!.getVersionId()}
       onInspectModel={async (modelRef, signal) => {
         this.check();
@@ -125,9 +138,25 @@ export class ConfigurationEntityView extends Disposable {
       onSetSecret={(id, modelId) => this.run(() => this.setSecret(id, modelId))}
       onSelect={id => { this.selectedId = id; this.selectedModelId = undefined; this.render(); }}
       onSelectModel={id => { this.selectedModelId = id; this.render(); }}
-      onAddModel={id => this.run(() => this.addModel(id))}
-      onCopyModel={(id, modelId) => this.run(() => this.addModel(id, modelId))}
-      onRemoveModel={(id, modelId) => this.run(() => this.removeModel(id, modelId))}
+      catalogTarget={{ gateway_id: this.source.location.gateway_id, workspace_id: document.workspace_id,
+        gateway_connection_id: this.source.location.gateway_connection_id }} catalogSignal={this.lifetime.signal}
+      onProviderTemplate={(id, choice) => this.run(() => {
+        const path = ['llm', 'providers', id];
+        const node = definitionObject(definitionValue(this.source.readDraft(), path));
+        const defaults = definitionObject(node.defaults);
+        const saved = definitionObject(definitionValue(this.source.document.source_effective, [...path, 'defaults']));
+        // 首次选服务商只填模板；设置密钥后再沿原提交边界发现上游模型。
+        if ((defaults.api_key ?? saved.api_key) || (defaults.auth ?? saved.auth)) {
+          this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
+        }
+        this.source.editPath(path, { ...node,
+          ...(choice.id && (node.name === t('configuration.catalog.newProvider') || node.name === defaults.custom_llm_provider) ? { name: choice.id } : {}),
+          defaults: { ...defaults, custom_llm_provider: choice.id || 'openai', endpoint: choice.endpoint ?? '',
+            api_mode: { ...definitionObject(defaults.api_mode), protocol: choice.protocol ?? 'chat_completions', supports_reasoning: {} } } });
+        this.commitConnection(id);
+      })}
+      onAddModel={(id, model) => this.run(() => this.addModel(id, model))}
+      onShowActions={(id, modelId, anchor) => this.run(() => this.showDefinitionActions(id, modelId, anchor))}
       onConnectionCommit={id => this.commitConnection(id)}
       renderModelProbe={(id, models, selectedModelId) => <ModelConnectionProbe key={id} providerId={id} models={models}
         selectedModelId={selectedModelId} document={document} editor={{
@@ -146,8 +175,10 @@ export class ConfigurationEntityView extends Disposable {
             let modelId = base, suffix = 1;
             while (occupied.has(modelId)) modelId = `${base}-${++suffix}`;
             occupied.add(modelId);
+            this.selectedModelId = modelId;
             this.source.editPath(['llm', 'providers', id, 'models', modelId], { model: item.model, ...(item.name ? { name: item.name } : {}) });
           }
+          this.render();
         }} onApplyMode={(modelId, streaming) => this.run(() => this.source.editPath(['llm', 'providers', id, 'models', modelId, 'overrides', 'api_mode', 'streaming'], streaming))}
         onOpenSource={() => this.run(() => this.openSource())} />}
       onEdit={(id, path, value) => this.run(() => {
@@ -157,9 +188,20 @@ export class ConfigurationEntityView extends Disposable {
           || path[1] === 'api_mode' && path.length === 2
           || path[1] === 'request_options' && ['default_headers', 'no_proxy'].includes(String(path[2]))
         )) this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
+        if (this.kind === 'providers' && path.length === 2 && path[0] === 'defaults' && path[1] === 'api_mode') {
+          const defaults = definitionObject(definitionValue(this.source.readDraft(), [...prefix, 'defaults']));
+          const saved = definitionObject(definitionValue(this.source.document.source_effective, [...prefix, 'defaults']));
+          const handler = defaults.custom_llm_provider ?? saved.custom_llm_provider ?? '';
+          const protocol = definitionObject(value).protocol;
+          // 原生协议直接确定适配器；其它 LiteLLM 服务保留其明确选择的适配器。
+          if (['', 'openai', 'anthropic'].includes(String(handler)) && ['chat_completions', 'responses', 'anthropic_messages'].includes(String(protocol))) {
+            this.source.editPath([...prefix, 'defaults'], { ...defaults, api_mode: value,
+              custom_llm_provider: protocol === 'anthropic_messages' ? 'anthropic' : 'openai' });
+            return;
+          }
+        }
         this.source.editPath([...prefix, ...path], value);
       })}
-      onRemove={id => this.run(() => this.remove(id))}
       onSetDefaultAgent={id => this.run(() => this.source.editPath(['default_agent'], id))}
       onRestoreDefaultAgent={() => this.run(() => this.source.editPath(['default_agent'], undefined))}
       onInspectDefaultAgent={() => this.run(() => this.commands.executeCommand(defaultAgentSourceCommand, this.source.location))}
@@ -173,6 +215,18 @@ export class ConfigurationEntityView extends Disposable {
     const edit = this.connectionEdits.get(id) ?? 0;
     if (edit === (this.connectionCommits.get(id) ?? 0)) return;
     this.connectionCommits.set(id, edit); this.render();
+  }
+  private showDefinitionActions(id: string, modelId: string | undefined, anchor: HTMLElement): void {
+    const draft = this.source.readDraft();
+    const enabled = this.source.document.writable;
+    const path = this.kind === 'agents' ? ['agents', id] : ['llm', 'providers', id, ...(modelId === undefined ? [] : ['models', modelId])];
+    const actions = modelId === undefined ? [] : [toAction({ id: 'settings.model.copy',
+      label: t('configuration.entities.copyModel'), enabled, run: () => this.run(() => this.addModel(id, undefined, modelId)) })];
+    if (definitionValue(draft, path) !== undefined) actions.push(toAction({ id: 'settings.definition.remove', enabled,
+      label: t(modelId !== undefined ? 'configuration.entities.removeModel' : this.kind === 'providers'
+        ? 'configuration.entities.removeProvider' : 'configuration.entities.removeAgent'),
+      run: () => this.run(() => modelId === undefined ? this.remove(id) : this.removeModel(id, modelId)) }));
+    this.menus.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
   }
   private async openSource(sourceKey?: string): Promise<void> {
     await this.commands.executeCommand('boxteam.settings.openSource', {
@@ -261,25 +315,13 @@ export class ConfigurationEntityView extends Disposable {
   private async create(): Promise<void> {
     const kind = this.kind;
     const version = this.source.model.textEditorModel!.getVersionId();
-    const label = await this.input(t(kind === 'providers' ? 'configuration.entities.serviceName' : 'configuration.entities.newId'),
-      kind === 'agents' ? value => /^[a-zA-Z0-9._-]{2,64}$/.test(value) ? undefined : t('configuration.entities.invalidId') : undefined,
-      kind === 'agents' ? `agent-${generateUuid().slice(0, 8)}` : undefined);
+    const label = kind === 'providers' ? t('configuration.catalog.newProvider') : await this.input(t('configuration.entities.newId'),
+      value => /^[a-zA-Z0-9._-]{2,64}$/.test(value) ? undefined : t('configuration.entities.invalidId'), `agent-${generateUuid().slice(0, 8)}`);
     if (label === undefined) return;
-    let id = label;
+    const id = kind === 'providers' ? `provider-${generateUuid()}` : label;
     if (kind === 'providers') {
-      const providers = definitionObject(definitionValue(this.source.document.source_effective, ['llm', 'providers']));
-      const current = definitionObject(definitionValue(this.source.readDraft(), ['llm', 'providers']));
-      if (!/^[a-zA-Z0-9._-]{2,64}$/.test(id) || Object.hasOwn(current, id) || Object.hasOwn(providers, id)) id = `provider-${generateUuid()}`;
-      const protocol = await this.quick.pick(['chat_completions', 'responses', 'anthropic_messages'].map(protocol => ({ label: t(`configuration.protocol.${protocol}`), protocol })),
-        { title: t('configuration.entities.chooseProtocol') }, this.lifetime.token);
-      this.check(); if (!protocol) return;
-      if (this.source.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.definitionChanged', id));
-      this.source.editPath(['llm', 'providers', id], {
-        name: label,
-        defaults: { custom_llm_provider: protocol.protocol === 'anthropic_messages' ? 'anthropic' : 'openai', api_key: '',
-          api_mode: { protocol: protocol.protocol, model_info: {}, supports_reasoning: {} } },
-        models: {},
-      });
+      this.source.editPath(['llm', 'providers', id], { name: label,
+        defaults: { api_mode: { protocol: 'chat_completions' } }, models: {} });
       this.selectedModelId = undefined;
     } else {
       const name = await this.input(t('configuration.entities.name')); if (name === undefined) return;
@@ -312,7 +354,9 @@ export class ConfigurationEntityView extends Disposable {
     }
     this.selectedId = id; this.render();
   }
-  private async addModel(providerId: string, copyId?: string): Promise<void> {
+  private async addModel(providerId: string, modelName?: string, copyId?: string): Promise<void> {
+    const document = this.source.document;
+    if (!('workspace_id' in document)) throw new Error(t('configuration.entities.workspaceRequired'));
     const version = this.source.model.textEditorModel!.getVersionId();
     const path = ['llm', 'providers', providerId, 'models'];
     const saved = definitionObject(definitionValue(this.source.document.source_effective, path));
@@ -322,8 +366,8 @@ export class ConfigurationEntityView extends Disposable {
     if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', providerId));
     const original = copyId === undefined ? undefined : definitionValue(preview?.candidate, [...path, copyId]);
     if (copyId !== undefined && !original) throw new Error(t('configuration.entities.definitionChanged', copyId));
-    const label = await this.input(t(original ? 'configuration.entities.name' : 'configuration.entities.model'));
-    if (label === undefined) return;
+    const label = original ? await this.input(t('configuration.entities.name')) : modelName;
+    if (!label) return;
     const model = original ? { ...definitionObject(original), name: label } : { model: label };
     const id = /^[a-zA-Z0-9._-]{1,64}$/.test(label) && !Object.hasOwn(saved, label) && !Object.hasOwn(current, label)
       ? label : `model-${generateUuid()}`;
@@ -333,14 +377,14 @@ export class ConfigurationEntityView extends Disposable {
   }
   private async removeModel(providerId: string, modelId: string): Promise<void> {
     const confirmed = await this.dialogs.confirm({ type: 'warning', message: t('configuration.entities.confirmRemove', `${providerId} / ${modelId}`),
-      detail: t('configuration.entities.removeModelBoundary'), primaryButton: t('configuration.entities.removeLocal') });
+      detail: t('configuration.entities.removeModelBoundary'), primaryButton: t('configuration.entities.removeModel') });
     this.check(); if (confirmed.confirmed) this.source.editPath(['llm', 'providers', providerId, 'models', modelId], undefined);
   }
   private async remove(id: string): Promise<void> {
     const kind = this.kind;
     const result = await this.dialogs.confirm({ type: 'warning', message: t('configuration.entities.confirmRemove', id),
       detail: t(kind === 'providers' ? 'configuration.entities.removeProviderBoundary' : 'configuration.entities.removeAgentBoundary'),
-      primaryButton: t('configuration.entities.removeLocal') });
+      primaryButton: t(kind === 'providers' ? 'configuration.entities.removeProvider' : 'configuration.entities.removeAgent') });
     this.check(); if (!result.confirmed) return;
     this.source.editPath(kind === 'agents' ? ['agents', id] : ['llm', 'providers', id], undefined);
   }

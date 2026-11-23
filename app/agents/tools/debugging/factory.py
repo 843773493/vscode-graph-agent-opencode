@@ -59,7 +59,6 @@ class DebuggingToolFactory:
     def __init__(
         self,
         *,
-        session_id: str,
         node_debug_service: NodeDebugService,
         invocation_context: ToolInvocationContext,
         thread_binding: ThreadRuntimeBinding | None = None,
@@ -749,7 +748,6 @@ def create_debugging_tools(
     thread_binding: ThreadRuntimeBinding | None = None,
 ) -> list[BaseTool]:
     return DebuggingToolFactory(
-        session_id=session_id,
         node_debug_service=node_debug_service,
         invocation_context=invocation_context,
         thread_binding=thread_binding,
@@ -765,7 +763,6 @@ def create_debugging_tool(context: CustomToolFactoryContext) -> BaseTool:
     if not isinstance(raw_tool_name, str) or not raw_tool_name.strip():
         raise ValueError("调试扩展工具 options.tool_name 必须是非空字符串")
     factory = DebuggingToolFactory(
-        session_id=context.session_id,
         node_debug_service=node_debug_service,
         invocation_context=context.invocation_context,
     )

@@ -30,7 +30,7 @@ from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -60,7 +60,7 @@ async def attachment_media_case(
 ) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
     backend_url, workspace, replay = browser_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     other = prepare_default_test_workspace(
         workspace_root=context.workspace_root / "attachment-B",
         template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True,

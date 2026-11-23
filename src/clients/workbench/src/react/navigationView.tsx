@@ -15,7 +15,7 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 import { getSession } from '../../../web/src/api.js';
 import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import type { AddRemoteGatewayConnectionRequest, GatewayRuntimeGroupRequest, GatewayWorkspace, Session } from '../../../web/src/types/backend.js';
-import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { EditorsOrder, type IEditorIdentifier } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import type { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
@@ -148,17 +148,18 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
     // 树选择是展示态；点击即反馈，读取失败时仍保留选择，不伪造业务 Session。
     setSelectedSessionKey(sessionScopeKey(workspaceKey, sessionId));
-    // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
-    const group = options.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
+    // 发起组作为原生选组起点，不强制写入锁定组。
+    const group = groups.activeGroup.id;
+    const preferredGroup = options.sideBySide ? SIDE_GROUP : ACTIVE_GROUP;
     const request = Symbol();
     openRequests.current.set(group, request);
     const session = await setActiveSession(workspaceKey, sessionId);
     // Session DTO 已携带 catalog 冻结的 main Thread，不再串行查询同一身份。
     if (session.session_id !== sessionId || !session.thread_id) throw new Error(t('workbench.session.mainThreadOwnerMismatch'));
     if (openRequests.current.get(group) !== request) return;
-    const editorOptions: ThreadEditorOptions = { pinned: options.pinned, boxteamSession: session };
+    const editorOptions: ThreadEditorOptions = { pinned: options.pinned, sourceGroup: group, boxteamSession: session };
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
-      sessionId, threadId: session.thread_id, title: session.title }), editorOptions, group);
+      sessionId, threadId: session.thread_id, title: session.title }), editorOptions, preferredGroup);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
     let selection: { group: number; editor: typeof editors.activeEditor } | undefined;

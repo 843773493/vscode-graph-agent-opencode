@@ -34,8 +34,7 @@ TERMINAL_JOB_STATUSES = frozenset(
     }
 )
 
-# 失败终态子集：父任务进入这些状态后，其未执行的终端收尾提醒必须被丢弃，
-# 且「失败轮次」判定只认这两个码（取消不算失败）。
+# 回退／重试的失败轮次只认这两个码（取消不算失败），不决定其他排队项的去留。
 FAILED_JOB_STATUSES = frozenset(
     {
         JobStatus.failed,

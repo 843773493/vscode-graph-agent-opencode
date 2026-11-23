@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -37,7 +37,7 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
 ) -> None:
     config_path = Path(integration_workspace_config_path)
     source = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     source.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{ports.port(1)}"

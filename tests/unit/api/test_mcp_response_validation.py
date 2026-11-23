@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -140,7 +141,7 @@ def test_internal_validation_remains_a_server_failure(
     assert response.status_code == 500, response.text
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(service.error),
         "data": None,
         "request_id": REQUEST_ID,
     }
@@ -152,9 +153,9 @@ def test_internal_validation_remains_a_server_failure(
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and record.exc_info[1] is service.error
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
-    assert len(diagnostics) == 1 and "mcp-api-sentinel" in caplog.text
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
 
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation"), CASES)
@@ -287,22 +288,20 @@ def test_real_store_validation_does_not_rewrite_operation_and_can_be_retried(
     response = client.get(BASE + f"/{OPERATION_ID}")
     assert response.status_code == 500, response.text
     assert (
-        response.json()["message"]
-        == "请求处理失败: stage=http_request, error=ValidationError"
+        response.json()["message"].startswith("请求处理失败: stage=http_request, error=ValidationError, reason=")
     )
     assert (
         response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
     )
-    assert "mcp-api-sentinel" not in response.text and "mcp-api-sentinel" in caplog.text
+    assert "mcp-api-sentinel" not in response.text and "ValidationError" in caplog.text
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and isinstance(record.exc_info[1], ValidationError)
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
     assert len(diagnostics) == 1
-    failure = diagnostics[0].exc_info
-    assert failure is not None and isinstance(failure[1], ValidationError)
-    assert failure[1].errors()[0]["input"] == native
+    assert "ValidationError" in diagnostics[0].getMessage()
+    assert all(record.exc_info is None for record in diagnostics)
     with closing(store.connection()) as connection:
         assert (
             tuple(

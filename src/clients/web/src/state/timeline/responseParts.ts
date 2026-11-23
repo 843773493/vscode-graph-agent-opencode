@@ -1,6 +1,7 @@
 import type { InternalExecutionHistory, TurnResponsePart } from "../../types/backend";
 import type { TimelineItem } from "./timelineTypes";
 import { isRecord } from "../../utils/jsonDisplay";
+import { contextNode, encodeNode } from "./transcriptNodes";
 
 export interface ResponsePartsProjectionOptions {
   terminalFailure?: boolean;
@@ -93,7 +94,7 @@ export function responsePartsToTimelineItems(
         timestamp: null,
         eventCount: 1,
         rawEvents: [],
-        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source, projection: part.projection, tool_call_id: part.tool_call_id }],
       });
       continue;
     }
@@ -105,7 +106,7 @@ export function responsePartsToTimelineItems(
     ) {
       // redacted/encrypted reasoning 可能只有存在性和元数据，没有可读正文；
       // 不能因 text 为空丢掉该时间线项，否则前端无法显示隐藏提示。
-      if (!text && part.kind !== "reasoning_encrypted") continue;
+      if (!text && part.projection !== "summary" && part.kind !== "reasoning_encrypted") continue;
       const encrypted = part.kind === "reasoning_encrypted";
       items.push({
         kind: "aggregated_text",
@@ -118,7 +119,7 @@ export function responsePartsToTimelineItems(
         timestamp: null,
         eventCount: 1,
         rawEvents: [],
-        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source, projection: part.projection, tool_call_id: part.tool_call_id }],
       });
       continue;
     }
@@ -155,7 +156,7 @@ export function responsePartsToTimelineItems(
         failed: !incomplete && (part.status === "failed" || unresolvedTerminalTool),
         incomplete,
         outcomeUnknown: !incomplete && (part.outcome_unknown === true || unresolvedTerminalTool),
-        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source, projection: part.projection, tool_call_id: part.tool_call_id }],
       };
       const index = items.length;
       toolIndexes.set(toolPartKey(part), index);
@@ -189,8 +190,8 @@ export function responsePartsToTimelineItems(
           items[existingIndex] = {
             ...completed,
             resultText: part.result ?? part.text ?? "",
-            detailsLoaded: existing.detailsLoaded || part.projection === "detail",
-            responseSources: [...(existing.responseSources ?? []), { part_id: part.part_id, kind: part.kind, source: part.source }],
+            detailsLoaded: existing.detailsLoaded === true && part.projection === "detail",
+            responseSources: [...(existing.responseSources ?? []), { part_id: part.part_id, kind: part.kind, source: part.source, projection: part.projection, tool_call_id: part.tool_call_id }],
           };
           continue;
         }
@@ -209,17 +210,19 @@ export function responsePartsToTimelineItems(
         rawEnd: recordField(part, "raw_end"),
         detailsLoaded: part.projection === "detail",
         ...status,
-        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source }],
+        responseSources: [{ part_id: part.part_id, kind: part.kind, source: part.source, projection: part.projection, tool_call_id: part.tool_call_id }],
       });
     }
   }
   for (const { id, notices } of contextNoticeGroups(parts, "before_model_call")) {
-    const call = notices[0].context_model_call_id;
-    const beforeId = notices[0].context_before_item_id;
+    // 补页可能还携带输出产生前的坐标；已有真实输出的成员决定展示位置。
+    const position = notices.find(notice => notice.context_before_item_id) ?? notices[0];
+    const call = position.context_model_call_id;
+    const beforeId = position.context_before_item_id;
     let index = beforeId ? items.findIndex(item => item.responseSources?.some(source => source.source.item_id === beforeId)) : -1;
     if (index < 0) index = items.findIndex(item => item.responseSources?.some(source => source.source.model_call_id === call));
     if (index < 0) {
-      const ordinal = notices[0].context_anchor_ordinal;
+      const ordinal = position.context_anchor_ordinal;
       index = items.findIndex(item => item.responseSources?.some(source => ordinal != null
         && source.source.logical_item_ordinal != null && source.source.logical_item_ordinal >= ordinal));
     }
@@ -228,14 +231,24 @@ export function responsePartsToTimelineItems(
   return items;
 }
 
-/** 消费请求和展示锚点共同决定分组，不改变来源的 canonical／冻结引用。 */
+/** 分组与阅读锚点使用同一来源身份，插入位置变化不拆分标记。 */
 export function contextNoticeGroups(parts: readonly TurnResponsePart[], anchor: "before_user_message" | "before_model_call") {
   const groups = new Map<string, TurnResponsePart[]>();
   for (const part of parts) {
     if (part.kind !== "context_notice" || part.context_anchor !== anchor) continue;
-    const key = `${part.context_model_call_id}:${anchor}:${part.context_before_item_id ?? ""}`;
+    const key = encodeNode(contextNode(part));
     const group = groups.get(key);
     if (group) group.push(part); else groups.set(key, [part]);
   }
   return [...groups].map(([key, notices]) => ({ id: `context:${key}`, notices }));
+}
+
+/** 片段只覆盖已声明的 canonical Part，同绑定轻轮廓不能降级已读正文。 */
+export function mergeCanonicalParts(current: readonly TurnResponsePart[], incoming: readonly TurnResponsePart[]): TurnResponsePart[] {
+  const parts = new Map(current.map(part => [part.part_id, part]));
+  for (const part of incoming) {
+    const previous = parts.get(part.part_id);
+    parts.set(part.part_id, previous?.projection === "detail" && part.projection === "summary" ? previous : part);
+  }
+  return [...parts.values()].sort(compareInternalResponseParts);
 }

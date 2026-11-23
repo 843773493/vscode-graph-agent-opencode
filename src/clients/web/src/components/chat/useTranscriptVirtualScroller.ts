@@ -1,3 +1,4 @@
+import { captureReadingAnchor, persistentReadingAnchor } from "./transcriptGeometry";
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import React from "react";
 import { t } from "../../../../shared/core/i18n/index.js";
@@ -8,15 +9,15 @@ import {
 } from "../../state/session/turnVirtualization";
 import type { ChatTranscriptItem } from "./transcriptItems";
 import { errorMessage } from "../../utils/errorMessage";
-import { useTurnAnchorNavigation, type TurnViewportPosition } from "./useTurnAnchorNavigation";
+import { useTranscriptNavigation, type TranscriptViewportPosition, type TranscriptViewportChangeReason } from "./useTranscriptNavigation";
 
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
 const NATIVE_SCROLLBAR_HIT_WIDTH_PX = 24;
 
 /** 编辑器组内的临时导航；预览不发布持久视图状态。 */
-export interface TurnViewportController {
-  capture(): TurnViewportPosition | undefined;
-  navigate(position: TurnViewportPosition, preview: boolean): void;
+export interface TranscriptViewportController {
+  capture(): TranscriptViewportPosition | undefined;
+  navigate(position: TranscriptViewportPosition, preview: boolean): void;
   cancel(): void;
 }
 
@@ -57,7 +58,7 @@ function isNativeScrollbarPointer(
   );
 }
 
-export function useTurnVirtualScroller({
+export function useTranscriptVirtualScroller({
   items,
   scopeKey,
   onLoadNewerMessages,
@@ -86,11 +87,11 @@ export function useTurnVirtualScroller({
   loadingNewerMessages: boolean;
   loadingOlderMessages: boolean;
   historyLoading: boolean;
-  viewState?: TurnViewportPosition | null;
-  onViewStateChange?: (payload: TurnViewportPosition) => void;
+  viewState?: TranscriptViewportPosition | null;
+  onViewStateChange?: (payload: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => void;
   onViewStateRestoreStatus?: (message: string) => void;
   messageNavigation?: TurnNavigationTarget;
-  onViewportReady?: (controller: TurnViewportController | undefined) => void;
+  onViewportReady?: (controller: TranscriptViewportController | undefined) => void;
 }) {
   const streamRef = React.useRef<VirtuosoHandle | null>(null);
   const scrollerRef = React.useRef<HTMLElement | null>(null);
@@ -117,6 +118,7 @@ export function useTurnVirtualScroller({
   const loadNewerMessagesRef = React.useRef<() => Promise<void>>(async () => undefined);
   const viewStateTimerRef = React.useRef<number | null>(null);
   const previewRef = React.useRef(false);
+  const userScrollingRef = React.useRef(false);
   if (virtualIndexRef.current?.scopeKey !== scopeKey) {
     previewRef.current = false;
     followsLatestRef.current = true;
@@ -147,17 +149,17 @@ export function useTurnVirtualScroller({
       item.conversation.turnItemsView ?? "pending",
       item.conversation.status,
     ].join(":")
-    : item.kind === "internal_execution" ? `${item.key}:${item.displayPart.text}` : item.key).join("|"), [items]);
+    : item.kind === "internal_execution" ? `${item.key}:${item.displayPart.bodyEvicted === true}` : item.key).join("|"), [items]);
 
   const {
-    anchorRef, viewportAnchored, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool, locatedItem,
+    anchorRef, viewportAnchored, cancelAnchor, closeMessageNavigation, navigateToTurn, navigateToAnchor, navigation, locatedMessage, locatedTool, locatedItem,
     preserveViewport, scheduleAnchorAlignment, handleAnchorHeightChanged, scrollToLatest,
-  } = useTurnAnchorNavigation({
+  } = useTranscriptNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
     onLoadAroundTurn, onLoadLatestMessages, hasNewerMessages, historyLoading,
     messageNavigation,
-    viewState, onViewStateChange: position => {
-      if (!previewRef.current) onViewStateChange?.(position);
+    viewState, onViewStateChange: (position, reason) => {
+      if (!previewRef.current) onViewStateChange?.(position, reason);
     }, onViewStateRestoreStatus,
   });
   React.useLayoutEffect(() => { setAtBottom(true); }, [scopeKey]);
@@ -170,26 +172,21 @@ export function useTurnVirtualScroller({
     previewRef.current = false;
     scrollToLatest(...args);
   }, [scrollToLatest]);
-  const captureViewport = React.useCallback((): TurnViewportPosition | undefined => {
+  const captureViewport = React.useCallback((): TranscriptViewportPosition | undefined => {
     const scroller = scrollerRef.current;
     if (!scroller) return undefined;
-    const top = scroller.getBoundingClientRect().top;
-    const anchor = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
-      .find(item => item.getBoundingClientRect().bottom > top);
-    return { turn_anchor: anchor?.dataset.turnId ?? null,
-      scroll_offset: anchor ? Math.max(0, top - anchor.getBoundingClientRect().top) : Math.max(0, scroller.scrollTop),
-      follow_latest: followsLatestRef.current };
+    return { reading_anchor: persistentReadingAnchor(scroller, captureReadingAnchor(scroller)), follow_latest: followsLatestRef.current };
   }, []);
   React.useLayoutEffect(() => {
     if (historyLoading) return;
     onViewportReady?.({ capture: captureViewport,
       navigate(position, preview) {
         previewRef.current = preview;
-        if (position.follow_latest) scrollToLatest();
-        else if (position.turn_anchor) navigateToTurn(position.turn_anchor, position.scroll_offset);
+        if (position.follow_latest) scrollToLatest("auto", true, preview);
+        else if (position.reading_anchor) navigateToAnchor(position.reading_anchor, preview);
       }, cancel: () => cancelAnchor(true) });
     return () => onViewportReady?.(undefined);
-  }, [cancelAnchor, captureViewport, historyLoading, navigateToTurn, onViewportReady, scrollToLatest]);
+  }, [cancelAnchor, captureViewport, historyLoading, navigateToAnchor, onViewportReady, scrollToLatest]);
   const followOutput = React.useCallback(
     (isAtBottom: boolean) => turnFollowOutput(
       followsLatestRef.current,
@@ -201,11 +198,10 @@ export function useTurnVirtualScroller({
   const handleTranscriptClickCapture = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
     const target = event.target instanceof HTMLElement
       ? event.target.closest<HTMLElement>("button[aria-expanded], summary") : null;
-    if (!target?.closest("[data-turn-id]")) return;
+    if (!target?.closest("[data-transcript-node]")) return;
     previewRef.current = false;
-    followsLatestRef.current = false;
     cancelAnchor();
-    preserveViewport(target);
+    preserveViewport();
   }, [cancelAnchor, preserveViewport]);
 
   const bindScroller = React.useCallback((element: HTMLElement | Window | null) => {
@@ -225,6 +221,7 @@ export function useTurnVirtualScroller({
     if (!scroller) return;
     scheduleAnchorAlignment();
     const handleUserWheel = (event: WheelEvent) => {
+      userScrollingRef.current = true;
       previewRef.current = false;
       cancelAnchor();
       if (event.deltaY >= 0) {
@@ -267,28 +264,34 @@ export function useTurnVirtualScroller({
       }
       if (
         typeof window === "undefined"
+        || !userScrollingRef.current
         || !onViewStateChange
         || viewStateTimerRef.current !== null
       ) return;
       viewStateTimerRef.current = window.setTimeout(() => {
         viewStateTimerRef.current = null;
+        userScrollingRef.current = false;
         if (virtualIndexRef.current?.scopeKey !== scopeKey || anchorRef.current || previewRef.current) return;
         const position = captureViewport();
-        if (position) onViewStateChange(position);
+        if (position) onViewStateChange(position, "scroll");
+        userScrollingRef.current = false;
+        preserveViewport();
       }, 250);
     };
     scroller.ontouchstart = () => {
+      userScrollingRef.current = true;
       previewRef.current = false;
       cancelAnchor();
       followsLatestRef.current = false;
     };
     scroller.onkeydown = event => {
       if (event.defaultPrevented || !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)) return;
+      userScrollingRef.current = true;
       previewRef.current = false;
       cancelAnchor();
       followsLatestRef.current = false;
     };
-  }, [anchorRef, cancelAnchor, captureViewport, onViewStateChange, onViewStateRestoreStatus, scheduleAnchorAlignment, scopeKey]);
+  }, [anchorRef, cancelAnchor, captureViewport, onViewStateChange, onViewStateRestoreStatus, preserveViewport, scheduleAnchorAlignment, scopeKey]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -305,6 +308,7 @@ export function useTurnVirtualScroller({
       }
       userRequestedOlderRef.current = true;
       previewRef.current = false;
+      userScrollingRef.current = true;
       if (nativeScrollbarDragRef.current) return;
       nativeScrollbarWasFollowingRef.current = followsLatestRef.current;
       nativeScrollbarReleaseRef.current = null;
@@ -481,7 +485,7 @@ export function useTurnVirtualScroller({
     // 按钮反映真实可见范围；定位和用户手势只决定跟随意图。
     setAtBottom(atBottom);
     if (anchorRef.current || nativeScrollbarDragRef.current) return;
-    if (atBottom && !hasNewerMessages) {
+    if (atBottom && !hasNewerMessages && userScrollingRef.current) {
       followsLatestRef.current = true;
     }
   }, [anchorRef, hasNewerMessages]);

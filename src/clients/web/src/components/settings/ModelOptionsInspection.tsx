@@ -52,8 +52,10 @@ export function ModelOptionsInspection({ modelRef, version, inspect, onOpenSourc
             <details><summary>{t('configuration.inspect.origins')}</summary>
               <table><thead><tr><th>{t('configuration.inspect.field')}</th><th>{t('configuration.inspect.definition')}</th><th>{t('configuration.inspect.source')}</th></tr></thead>
                 <tbody>{options.origins.map(origin => <tr key={origin.path}>
-                  <td><code>{origin.path}</code></td><td>{t(origin.definition === 'defaults' ? 'configuration.entities.providerDefaults' : 'configuration.entities.modelOverrides')}</td>
-                  <td><button type="button" title={origin.definition_path} onClick={() => onOpenSource(origin.source_key)}>{origin.source_key}</button></td>
+                  <td><code>{origin.path}</code></td><td>{origin.definition === 'catalog' || origin.definition === 'builtin'
+                    ? t('configuration.catalog.automatic') : t(origin.definition === 'defaults' ? 'configuration.entities.providerDefaults' : 'configuration.entities.modelOverrides')}</td>
+                  <td>{origin.definition === 'catalog' || origin.definition === 'builtin' ? <span title={origin.definition_path}>{origin.source_key}</span>
+                    : <button type="button" title={origin.definition_path} onClick={() => onOpenSource(origin.source_key)}>{origin.source_key}</button>}</td>
                 </tr>)}</tbody></table>
             </details>
           </> : <p>{t('configuration.inspect.notActive')}</p>}

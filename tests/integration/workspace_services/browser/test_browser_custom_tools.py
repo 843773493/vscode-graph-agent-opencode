@@ -47,6 +47,7 @@ from tests.harness.python.terminal_plugin import (
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
+from tests.support.ports import TestFilePorts
 from tests.support.trace import get_trace_payload
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
@@ -227,7 +228,7 @@ def integration_startup_mount(integration_workspace_root_path: str) -> MountedWo
 
 @pytest.fixture(scope="module")
 def browser_plugin_artifacts() -> Path:
-    return TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    return TestRunContext.from_test_file(Path(__file__)).run_root / "artifacts"
 
 
 @pytest.fixture(scope="module")
@@ -235,14 +236,14 @@ async def browser_plugin_gateway(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     browser_plugin_artifacts: Path,
-    integration_backend_port: int,
+    integration_backend_port: int, integration_service_ports: TestFilePorts,
     prepared_developer_tools_package: Path,
 ) -> AsyncIterator[TerminalPluginGateway]:
     run = TestRunContext.from_test_file(Path(__file__))
     workspace = Path(integration_workspace_root_path).resolve()
     home = run.boxteam_home_for_node(request.node.nodeid)
     async with browser_plugin_gateway_for_workspace(
-        workspace, browser_plugin_artifacts, integration_backend_port + 60, home,
+        workspace, browser_plugin_artifacts, integration_service_ports.port(60), home,
         prepared_package_root=prepared_developer_tools_package,
     ) as gateway:
         yield gateway
@@ -278,7 +279,7 @@ async def browser_runtime(
 def browser_context(browser_runtime: WorkspaceToolRuntime) -> CustomToolFactoryContext:
     container, session_id, invocation = browser_runtime
     return CustomToolFactoryContext(
-        session_id=session_id, agent_id="default", sender_agent_id="default",
+        agent_id="default", sender_agent_id="default",
         workspace_root=container.workspace_root,
         background_task_registry=container.background_task_registry,
         background_message_bus=container.background_mailbox, job_event_bus=container.job_event_bus,
@@ -308,7 +309,7 @@ async def _grant(client: httpx.AsyncClient, resource_id: str, context: CustomToo
     resource = detail.json()["data"]
     granted = await client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={
         "expected_revision": resource["owner_revision"],
-        "thread": {"session_id": context.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
+        "thread": {"session_id": context.invocation_context.thread_binding.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
     })
     assert granted.status_code == 200, granted.text
     return granted.json()["data"]
@@ -318,7 +319,7 @@ async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: C
     detail = (await client.get(f"/api/v1/resources/{resource_id}")).json()["data"]
     detached = await client.post(f"/api/v1/resources/{resource_id}/detach", json={
         "expected_revision": detail["owner_revision"],
-        "thread": {"session_id": context.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
+        "thread": {"session_id": context.invocation_context.thread_binding.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
     })
     assert detached.status_code == 200, detached.text
     return await client.post(f"/api/v1/resources/{resource_id}/delete", json={"expected_revision": detached.json()["data"]["owner_revision"]})
@@ -332,7 +333,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -410,7 +411,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
 ) -> None:
     container, _session, _invocation = browser_runtime
     response = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -476,7 +477,7 @@ async def test_download_failure_publishes_stage_without_native_storage(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -555,7 +556,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     browser_context: CustomToolFactoryContext,
     integration_workspace_root_path: str,
 ):
-    session_id = browser_context.session_id
+    session_id = browser_context.invocation_context.thread_binding.session_id
     context = browser_context
 
     list_pages = create_list_browser_page_tool(context)
@@ -845,7 +846,7 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
-    session_id = browser_context.session_id
+    session_id = browser_context.invocation_context.thread_binding.session_id
     context = browser_context
     open_page = create_open_browser_page_tool(context)
     opened = _json_tool_result(
@@ -978,7 +979,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1055,7 +1056,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1147,7 +1148,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1242,7 +1243,7 @@ async def test_artifact_stream_and_close_failures_keep_server_available(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": "about:blank",
     })
     assert created.status_code == 200, created.text
@@ -1329,7 +1330,7 @@ async def test_browser_artifact_read_failure_reports_identity_and_allows_retry(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": "about:blank",
     })
     assert created.status_code == 200, created.text
@@ -1437,7 +1438,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1519,7 +1520,7 @@ async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1594,7 +1595,7 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1671,7 +1672,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1745,7 +1746,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -1830,7 +1831,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     deleted = await _detach_delete(integration_client, browser_id, browser_context)
     assert deleted.status_code == 200, deleted.text
-    assert (await integration_client.get(f"/api/v1/sessions/{browser_context.session_id}/resources")).status_code == 200
+    assert (await integration_client.get(f"/api/v1/sessions/{browser_context.invocation_context.thread_binding.session_id}/resources")).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -1852,7 +1853,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
                           '<body><script>setInterval(() => {document.body.textContent = String(Date.now())}, 50)</script>', encoding="utf-8")
     url = native_page.as_uri()
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id, "url": url,
     })
     assert created.status_code == 200, created.text
@@ -1990,7 +1991,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
 ) -> None:
     container, _session, _invocation = browser_runtime
     command = {
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     }
@@ -2035,7 +2036,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     assert failed.headers["X-Request-ID"] == failed.json()["request_id"]
     assert f"stage={stage}" in failed.text
     assert str(root) not in failed.text
-    listed = await integration_client.get(f"/api/v1/sessions/{browser_context.session_id}/resources")
+    listed = await integration_client.get(f"/api/v1/sessions/{browser_context.invocation_context.thread_binding.session_id}/resources")
     listed_failure, = [item for item in listed.json()["data"]["items"] if item["kind"] == "browser" and item["resource_id"] != seed_id]
     assert listed_failure["available_actions"] == []
     assert listed_failure["metadata"]["reconciliation_status"] == "verified"
@@ -2094,7 +2095,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -2164,7 +2165,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -2273,7 +2274,7 @@ async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
     )
     url = native_page.as_uri()
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": url,
     })
@@ -2437,7 +2438,7 @@ async def test_browser_open_failure_is_exposed_as_failed_resource(
     browser_context: CustomToolFactoryContext,
 ):
     del browser_plugin_gateway
-    session_id = browser_context.session_id
+    session_id = browser_context.invocation_context.thread_binding.session_id
     open_page = create_open_browser_page_tool(browser_context)
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -2500,7 +2501,7 @@ async def test_real_node_agent_lock_rejection_preserves_owner_and_never_executes
     resource_id = opened["pageId"]
     owner = browser_context.browser_resource_owner
     resource = await owner.get_resource(resource_id)
-    thread = ThreadRef(browser_context.session_id, browser_context.invocation_context.thread_binding.thread_id)
+    thread = ThreadRef(browser_context.invocation_context.thread_binding.session_id, browser_context.invocation_context.thread_binding.thread_id)
     arguments = {
         "expected_revision": resource["owner_revision"], "thread": thread,
         "holder_id": "request:lock-real", "operation_id": "lock-real",
@@ -2546,7 +2547,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -2667,7 +2668,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })
@@ -2759,7 +2760,7 @@ async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
-        "session_id": browser_context.session_id,
+        "session_id": browser_context.invocation_context.thread_binding.session_id,
         "thread_id": browser_context.invocation_context.thread_binding.thread_id,
         "url": "about:blank",
     })

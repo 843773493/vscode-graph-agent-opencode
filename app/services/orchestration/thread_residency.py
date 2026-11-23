@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 
+from app.core.failures import report_failure
 from app.core.phase_observer import observe_phase_sync
 from app.core.thread_residency_contracts import ResidencyBlocker, ResidencyBlockerSource
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -496,10 +497,9 @@ class ThreadResidencyTracker:
             return
         error = task.exception()
         if error is not None:
-            logger.error(
-                "Thread runtime 后台任务失败: task=%s",
-                task.get_name(),
-                exc_info=(type(error), error, error.__traceback__),
+            report_failure(
+                error, detail=f"Thread runtime 后台任务失败: task={task.get_name()}",
+                diagnostic_logger=logger,
             )
 
     # ---- blocker push（debug owner 核实的相位变化） ----

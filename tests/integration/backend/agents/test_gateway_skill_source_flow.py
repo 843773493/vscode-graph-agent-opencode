@@ -25,7 +25,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -167,10 +167,10 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
     state = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
-    artifacts = output / "artifacts"
-    artifacts.mkdir(exist_ok=True)
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
+    artifacts.mkdir(parents=True, exist_ok=True)
     home = output / "boxteam-home"
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(11)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(11)
     config_path = Path(integration_workspace_config_path)
     _configure_model(config_path, ENDPOINT)
     skill_file = home / "skills" / SKILL_NAME / "SKILL.md"
@@ -362,10 +362,10 @@ async def test_gateway_local_update_policy_drives_workspace_skill_and_cold_resta
     state = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
-    artifacts = output / "artifacts" / "gateway-local-updates"
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir / "gateway-local-updates"
     artifacts.mkdir(parents=True, exist_ok=True)
     home = output / "boxteam-home-local"
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(13)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(13)
     base_url = f"http://127.0.0.1:{port}"
     _configure_model(Path(integration_workspace_config_path), ENDPOINT)
     skill = home / "skills" / SKILL_NAME / "SKILL.md"
@@ -486,10 +486,10 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
     state = scripted_model
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent
-    artifacts = output / "artifacts" / "cold-child"
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir / "cold-child"
     artifacts.mkdir(parents=True, exist_ok=True)
     home = output / "boxteam-home"
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(12)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(12)
     _configure_model(Path(integration_workspace_config_path), ENDPOINT)
     skill_file = home / "skills" / SKILL_NAME / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)

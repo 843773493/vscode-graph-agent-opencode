@@ -93,7 +93,7 @@ export async function skillSourcesContract(mode) {
   const configuration = { getValue: key => key === 'workbench.editor.openSideBySideDirection' ? 'right' : true };
   const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) },
     { openEditor: async (input, group) => opened.push({ source: sourceDocumentSource(input.resource), options: input.options, group }) },
-    groups, configuration, { async createModelReference(resource) {
+    groups, { async createModelReference(resource) {
       references.push(sourceDocumentSource(resource));
       if (mode === 'gateway-skill-relay-open') {
         let provider;

@@ -42,7 +42,8 @@ def diagnostic_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Diagnost
 
     def emit(logger: logging.Logger, record: logging.LogRecord) -> None:
         call_handlers(logger, record)
-        if record.exc_info is not None and record.exc_info[1] is failure.primary:
+        # 公开诊断已是有界脱敏正文，不再把原异常交给 logger 二次格式化。
+        if failure.primary is not None and record.levelno >= logging.ERROR:
             failure.records.append(record)
             try:
                 failure.destination.write_text(record.getMessage())

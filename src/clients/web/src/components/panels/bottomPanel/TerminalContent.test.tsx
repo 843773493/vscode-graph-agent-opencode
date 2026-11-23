@@ -344,8 +344,10 @@ describe("TerminalContent 终端连接兜底", () => {
     expect(rows[1]!.props.title).toContain("退出码 0");
     // 仍显示后端真实错误；历史展示不修改或伪造 owner 的核实结果。
     expect(textOf(renderer.root.findByProps({ className: "terminal-panel-error-slot" }).props.children)).toContain("身份或连接尚待核实");
+    expect(textOf(renderer.root.findByType("summary").props.children)).toBe("终端已退出，当前显示历史输出；资源恢复状态待确认");
     act(() => renderer.update(<TerminalContent {...panelProps(items)} selectedTerminalId="terminal_live" />));
     expect(renderer.root.findByType("iframe").props.src).toContain("terminal_live");
+    expect(renderer.root.findAllByType("details")).toHaveLength(0);
     expect(renderer.root.findAllByType(TerminalOutput)).toHaveLength(0);
     act(() => renderer.unmount());
   });

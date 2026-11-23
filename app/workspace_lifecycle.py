@@ -16,6 +16,7 @@ import httpx
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from boxteam_plugin_sdk.maintenance import MaintenanceTask, start_maintenance
 
+from app.core.failures import report_failure
 from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
@@ -101,11 +102,9 @@ async def _prune_context_plan_details(container: AppContainer) -> None:
 
 
 def _report_maintenance_failure(task_id: str, identity: object, elapsed_ms: float, error: Exception) -> None:
-    logger.error(
-        "Workspace周期维护失败: workspace_id=%s task=%s elapsed_ms=%.1f",
-        identity, task_id, elapsed_ms,
-        exc_info=(type(error), error, error.__traceback__),
-    )
+    report_failure(error, detail=(
+        f"Workspace周期维护失败: workspace_id={identity} task={task_id} elapsed_ms={elapsed_ms:.1f}"
+    ), diagnostic_logger=logger)
 
 
 def _report_periodic_failure(task: asyncio.Task[None]) -> None:
@@ -113,8 +112,7 @@ def _report_periodic_failure(task: asyncio.Task[None]) -> None:
         return
     error = task.exception()
     if error is not None:
-        logger.error("Workspace周期任务失败: task=%s", task.get_name(),
-                     exc_info=(type(error), error, error.__traceback__))
+        report_failure(error, detail=f"Workspace周期任务失败: task={task.get_name()}", diagnostic_logger=logger)
 
 
 async def _stop_periodic_tasks(tasks: list[asyncio.Task[None]]) -> None:

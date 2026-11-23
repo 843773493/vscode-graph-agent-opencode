@@ -1105,7 +1105,7 @@ def test_compact_tool_schedules_emergency_replacement_when_regular_cutoff_is_zer
 
 
 @pytest.mark.asyncio
-async def test_http_compaction_check_uses_emergency_replacement_partition() -> None:
+async def test_http_compaction_check_uses_emergency_replacement_partition(tmp_path, monkeypatch) -> None:
     messages = [*_conversation(2), HumanMessage(content="当前用户消息")]
 
     class _SummarizationStub:
@@ -1116,10 +1116,16 @@ async def test_http_compaction_check_uses_emergency_replacement_partition() -> N
     compactor = object.__new__(AgentSummarizationCompactor)
     compactor._config_service = SimpleNamespace(
         get_snapshot=lambda: object(), use_snapshot=lambda _: nullcontext(),
-        get_agent_runtime_config=lambda _: {"models": []}, prepare_llm_credentials=AsyncMock(return_value={}),
-        use_llm_credentials=lambda _: nullcontext(),
+        get_agent_runtime_config=lambda _: {"models": [{"provider_id": "selected", "model_id": "primary"}]},
+        resolve_llm_model=AsyncMock(return_value={"provider_id": "selected", "model_id": "primary"}),
     )
-    compactor._build_summarization = lambda _: _SummarizationStub()  # type: ignore[method-assign]
+    compactor._workspace_root = tmp_path
+    model = SimpleNamespace(aclose=AsyncMock())
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", lambda *_: model)
+    monkeypatch.setattr(
+        "app.agents.summarization.factory.create_cache_preserving_summarization_middleware",
+        lambda *_args, **_kwargs: _SummarizationStub(),
+    )
 
     check = await compactor.check(
         agent_id="default",
@@ -1129,6 +1135,7 @@ async def test_http_compaction_check_uses_emergency_replacement_partition() -> N
 
     assert check.cutoff == 4
     assert check.effective_messages == messages
+    model.aclose.assert_awaited_once()
 
 
 def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> None:
@@ -1596,9 +1603,12 @@ async def test_async_compaction_uses_context_activity_handler(
             failed = writer.commit.await_args_list[-1].args[1]
             assert failed["kind"] == "context.compaction"
             assert failed["outcome"] == "outcome_unknown"
-            assert "private-activity" not in failed["summary"]
+            assert "reason=" + str(failure) in failed["summary"]
             assert type(failure).__name__ in failed["summary"]
-            assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+            diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+            assert diagnostic.exc_info is None
+            assert str(failure) in diagnostic.getMessage()
+            assert "context.compaction" in diagnostic.getMessage()
             # 故障修复后仍走同一中间件和活动入口。
             failure = None
             writer.commit.reset_mock()

@@ -257,6 +257,7 @@ export function failureFromValue(value: unknown): MessageStreamState["failure"] 
   return {
     code: stringValue(value.code) ?? "message_stream_failure",
     message,
+    ...(isRecord(value.details) ? { details: value.details } : {}),
     afterInterruptRequested: booleanValue(value.after_interrupt_requested) ?? false,
     resumable: booleanValue(value.resumable) ?? false,
   };

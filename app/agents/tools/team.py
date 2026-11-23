@@ -69,19 +69,23 @@ class UpdateTeamTaskInput(TeamIdInput):
 
 def create_team_tools(
     *,
-    session_id: str,
+    session_id: str | None,
     agent_id: str,
     team_service: TeamCoordinationProtocol,
     invocation_context: ToolInvocationContext,
 ) -> list[BaseTool]:
     """创建默认团队协作工具组；所有权限都绑定当前 Session。"""
-    current_session_id = session_id
+    def current_session_id() -> str:
+        binding = invocation_context.thread_binding
+        if binding is None or binding.session_id != session_id:
+            raise RuntimeError("团队工具缺少精确 source thread binding")
+        return binding.session_id
 
     @tool("create_team", args_schema=CreateTeamInput)
     async def create_team(name: str) -> dict[str, object]:
         """以当前 Session 为协调者创建持久化团队任务面板。"""
         board = await team_service.create_team(
-            requester_session_id=current_session_id,
+            requester_session_id=current_session_id(),
             requester_thread_id=require_current_execution_admission().thread_id,
             name=name,
         )
@@ -90,14 +94,14 @@ def create_team_tools(
     @tool("list_my_teams")
     async def list_my_teams() -> dict[str, object]:
         """列出当前 Session 已加入的团队，包括协调和受委派的团队。"""
-        result = await team_service.list_teams(requester_session_id=current_session_id, requester_thread_id=require_current_execution_admission().thread_id)
+        result = await team_service.list_teams(requester_session_id=current_session_id(), requester_thread_id=require_current_execution_admission().thread_id)
         return result.model_dump(mode="json")
 
     @tool("get_team_board", args_schema=TeamIdInput)
     async def get_team_board(team_id: str) -> dict[str, object]:
         """按 team_id 读取成员 thread_id、角色、任务状态和最近团队事件。"""
         board = await team_service.get_board(
-            requester_session_id=current_session_id,
+            requester_session_id=current_session_id(),
             requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
         )
@@ -137,7 +141,7 @@ def create_team_tools(
             raise RuntimeError("create_team_member 缺少当前 job_id")
         tool_call_id = invocation_context.require_tool_call_id()
         result = await team_service.create_member(
-            requester_session_id=current_session_id,
+            requester_session_id=current_session_id(),
             requester_thread_id=require_current_execution_admission().thread_id,
             requester_agent_id=agent_id,
             requester_job_id=parent_job_id,
@@ -163,7 +167,7 @@ def create_team_tools(
     ) -> dict[str, object]:
         """登记并启动成员任务；完成状态会自动通知协调者，分派后不要阻塞轮询等待。"""
         result = await team_service.assign_task(
-            requester_session_id=current_session_id,
+            requester_session_id=current_session_id(),
             requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
             assignee_thread_id=assignee_thread_id,
@@ -185,7 +189,7 @@ def create_team_tools(
     ) -> dict[str, object]:
         """更新当前线程负责的任务；重要状态会通过新 Job 通知团队协调者。"""
         result = await team_service.update_task(
-            requester_session_id=current_session_id,
+            requester_session_id=current_session_id(),
             requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
             task_id=task_id,

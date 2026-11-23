@@ -24,10 +24,9 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_tool_restrictions as mcp_plugin_tool_restrictions,  # noqa: PLC0414
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import install_plugin_async
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture(autouse=True)
@@ -39,13 +38,10 @@ def management_ui_environment(request: pytest.FixtureRequest, monkeypatch: pytes
     (context.artifacts_dir / "assets.json").write_text(json.dumps({
         "path": str(assets), "main_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
     }) + "\n")
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "ports.json", (ports.port(20), ports.port(21)))
-    lease.acquire()
-    try:
-        yield
-    finally:
-        lease.release()
+    ports = integration_ports_for_file(Path(request.node.path))
+    ports.port(20)
+    ports.port(21)
+    yield
 
 
 async def test_management_sidebar_and_native_editors(mcp_plugin_case: McpPluginCase) -> None:

@@ -185,3 +185,28 @@ def test_snapshot_reuses_immutable_output_for_same_selection_and_options(
     assert resumed.tool_names == normal.tool_names
     assert resumed.selection_revision == changed_selection.selection_revision
     assert producer.snapshot() is resumed
+
+
+@pytest.mark.parametrize("extra", ["forbid", "allow"])
+def test_registered_parameters_keep_public_schema_extra_policy(tmp_path, extra):
+    from langchain.tools import ToolRuntime
+    from pydantic import BaseModel, ConfigDict
+
+    from app.agents.model_tool_schema import export_model_tool_json_schema
+
+    class Input(BaseModel):
+        model_config = ConfigDict(extra=extra, arbitrary_types_allowed=True)
+        query: str
+        runtime: ToolRuntime
+
+    tool = StructuredTool(name="query", description="查询", args_schema=Input)
+    producer = RegisteredToolSetProducer(
+        agent_id="default", selection_reader=ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
+        policy_resolver=ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={}),
+        tools=[tool], metadata={tool.name: ToolMetadata(tool.name, "builtin", "default", "default")},
+    )
+    producer.freeze_structured_output_tools({})
+    schema = producer.snapshot().tools[0]["function"]["parameters"]
+    assert schema == export_model_tool_json_schema(tool)
+    assert schema["additionalProperties"] is (extra == "allow")
+    assert "runtime" not in schema["properties"]

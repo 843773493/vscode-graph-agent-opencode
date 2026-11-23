@@ -119,7 +119,7 @@ try {
   const boundaryTurn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await boundaryTurn
-    .getByRole("button", { name: /展开 Turn 中间消息/ })
+    .locator(".chat-turn-activity > .chat-thinking-toggle")
     .click();
   await waitUntil(
     async () => (await boundaryTurn.innerText()).includes(

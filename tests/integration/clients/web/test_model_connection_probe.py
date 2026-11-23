@@ -6,10 +6,8 @@ import asyncio
 import json
 import os
 import shutil
-import socket
 import subprocess
 from collections.abc import Iterator
-from contextlib import ExitStack
 from pathlib import Path
 
 import commentjson
@@ -25,8 +23,8 @@ from tests.integration.backend.config.test_llm_discovery import Catalog
 from tests.integration.backend.config.test_llm_discovery import (
     catalog as catalog,  # noqa: PLC0414
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -48,19 +46,8 @@ def probe_web_assets(request: pytest.FixtureRequest) -> Path:
 
 @pytest.fixture
 def probe_service_ports(request: pytest.FixtureRequest) -> Iterator[tuple[int, int]]:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    selected: list[int] = []
-    with ExitStack() as leases:
-        for role in ("backend", "gateway"):
-            with socket.socket() as candidate:
-                candidate.bind(("127.0.0.1", 0))
-                port = candidate.getsockname()[1]
-            lease, _ = E2EProcessLease.acquire_available(
-                context.runtime_root_for_node(request.node.nodeid) / f"{role}-port.json", [port],
-            )
-            leases.callback(lease.release)
-            selected.append(port)
-        yield selected[0], selected[1]
+    ports = integration_ports_for_file(Path(request.node.path))
+    yield ports.port(0), ports.port(20)
 
 
 async def test_models_are_discovered_and_tested_in_original_settings(

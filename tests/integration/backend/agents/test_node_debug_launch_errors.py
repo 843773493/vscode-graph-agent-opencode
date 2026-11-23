@@ -16,7 +16,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -66,7 +66,7 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
     integration_workspace_config_path: str,
     prepared_developer_tools_package: Path,
 ) -> None:
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     gateway_root = Path(integration_workspace_root_path)
     root = prepare_default_test_workspace(

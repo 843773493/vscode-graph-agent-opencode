@@ -30,6 +30,7 @@ from tests.integration.workspace_services.terminal.test_terminal_startup_cleanup
     wait_observed,
     workload,
 )
+from tests.support.ports import TestFilePorts
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -57,7 +58,7 @@ def startup_shell(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: p
 
 @pytest.mark.parametrize("cold", [False, True], ids=["same-node", "restarted-node"])
 async def test_unverified_startup_keeps_directory_until_original_management_stop(
-    request: pytest.FixtureRequest, integration_backend_port: int, integration_config_path: str,
+    request: pytest.FixtureRequest, integration_backend_port: int, integration_service_ports: TestFilePorts, integration_config_path: str,
     monkeypatch: pytest.MonkeyPatch, cold: bool,
     prepared_developer_tools_package: Path,
 ) -> None:
@@ -80,7 +81,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
     async with (
         terminal_plugin_gateway_for_workspace(
             workspace_root=root, artifacts_dir=run.artifacts_dir,
-            gateway_port=integration_backend_port + 68, boxteam_home=home,
+            gateway_port=integration_service_ports.port(48), boxteam_home=home,
             prepared_package_root=prepared_developer_tools_package,
         ) as plugin,
         workspace_tool_runtime(root) as (container, session_id, context),

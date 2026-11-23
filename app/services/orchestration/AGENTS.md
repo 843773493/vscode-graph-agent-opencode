@@ -67,12 +67,13 @@ orchestration/
 - 会话停止在 Job owner 关闭准入期间结算执行，再按原 holder→Session gate 顺序排空资源；每次冻结一份 `runtime.session_stop` 策略。普通停止完成后允许显式新操作，旧队列保留或丢弃；删除前必要排空不可由配置禁用，资源未核实停止时禁止继续数据删除。
 - `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
-- `AgentExecutionService.list_tool_definitions` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。
+- `AgentExecutionService` 只驱动真实执行，不承担工具定义查询或缓存。当前目录由 `business/agent_tool_settings/catalog.py` 独立读取；冻结工具发现继续消费原调用的封存目录，不能用最新管理定义替换。
 - 失败必须立即暴露，不能默认继续。
 - `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。
 - 启动恢复在领取执行队列前装载持久 Thread 暂停门；暂停中的丢失执行只结算，不自动续接工具 checkpoint。显式继续由 `runtime_source_dispatcher.py` 按原 pause_id 幂等准入 internal execution，复用既有 source、队列与上下文 owner。
 - 工具参数流只在累计正文可能以 JSON 对象结束时调用标准 JSON 解析器；不完整、格式无效或非对象的输入仍保留 raw 和未完成标记，不能提前触发工具执行。
 - Terminal完成监控的关闭每次最多观察原任务30秒；到期保留句柄和关闭准入，重入不再次取消原扫描或重启监控。正常轮询中的可重试错误在关闭阶段须交回原异常，不能消耗后返回成功。原结果交回Workspace后才继续后续依赖，不能把观察到期当作扫描已停止或整个shutdown已有硬期限。
 - Terminal完成监控以插件状态SSE驱动，保留变化资源ID并只查询所选摘要；初始／重连和每60秒沿原owner完整对账孤儿期限及漏通知，连续局部事件不能推迟周期对账。心跳和PTY输出不触发扫描；插件流断开按5秒重连，不重放管理动作；一个工作区只由原监控持有一条插件状态流。
+- Terminal 完成只报告事实，经 `submit_runtime_event` 以 `after_turn` 进入原 Thread 的统一队列；不把工具结果边界当作抢占执行入口。Runtime source 准入、wakeup、Job 和队列领取各自保留原职责，不另建通知执行器。
 - Agent驻留服务由唯一关闭任务等待原扫描及tracker排空，每次调用最多观察30秒；观察取消或到期保留原任务和关闭准入，扫描结算前不清句柄或缓存。关闭期原错不按周期重试消耗，迟到失败先交回观察者，再允许显式重试剩余关闭；不能重启扫描或另建资源事实源。
 - Agent驻留周期扫描由本服务向 SDK `start_maintenance` 注册，原维护 scope 持有并排空；保留启动等待首次检查、60秒周期及空执行上下文。SDK 返回的原任务仅供故障观察和排空，维护任务退出不得作为 Job 准入条件；owner 关闭和 runtime 自身准入仍须核实。不读取 scope 私有任务集合，不另建定时循环或移入 Workspace 通用任务列表。

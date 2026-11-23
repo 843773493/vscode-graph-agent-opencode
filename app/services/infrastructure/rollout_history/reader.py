@@ -14,6 +14,7 @@ from app.core.history_loading import (
     default_history_loading_config,
 )
 from app.schemas.internal_v2.turn import (
+    ContextNoticeAnchorDTO,
     ContextNoticeBatchDTO,
     TurnDetailDTO,
     TurnHistoryLoadRequest,
@@ -42,6 +43,7 @@ from app.services.infrastructure.rollout_history.context_notices import (
     read_notice_parts,
 )
 from app.services.infrastructure.rollout_history.errors import (
+    HistoryItemUnavailableError,
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,
@@ -74,6 +76,7 @@ from app.services.mapping.itemized.history_turns.projection import (
 )
 from app.services.mapping.itemized.history_turns.tools import tool_result_metadata_dto
 from app.services.mapping.turn_response_parts import (
+    enrich_selected_item_parts,
     response_parts_from_records,
 )
 
@@ -246,6 +249,9 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     ) -> TurnHistoryPageDTO:
         indexed = self._snapshots.read(session_id, thread_id)
         if indexed is None:
+            if request.anchor_item_id is not None or request.item_ids is not None:
+                raise HistoryItemUnavailableError(session_id=session_id, thread_id=thread_id,
+                    item_id=request.anchor_item_id or request.item_ids[0])
             if request.context_cursor is not None:
                 raise InvalidTurnCursorError("尚未物化的历史不能续读上下文元数据")
             if request.turn_ids is not None and request.cursor is not None:
@@ -271,6 +277,26 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 items=[], next_cursor=None, has_more=False, projection_epoch=1
             )
         try:
+            if request.source_view_id is not None:
+                if request.source_view_id != indexed.view_id:
+                    raise InvalidTurnCursorError("详情来源不属于当前 context view")
+                if request.source_view_revision != indexed.snapshot.manifest.history_view_revision:
+                    raise StaleTurnCursorError(session_id=session_id, cursor_epoch=indexed.projection_epoch,
+                        current_epoch=indexed.projection_epoch, cursor_history_view_revision=request.source_view_revision,
+                        current_history_view_revision=indexed.snapshot.manifest.history_view_revision)
+            located_item = None
+            for item_id in ([request.anchor_item_id] if request.anchor_item_id else request.item_ids or []):
+                row = self._context_reader.inspect_item_metadata(indexed.snapshot, indexed.chain,
+                    item_id=item_id, message_id=None) if indexed.view_id else None
+                if row is None:
+                    raise HistoryItemUnavailableError(session_id=session_id, thread_id=thread_id, item_id=item_id)
+                location = ThreadItemLocationDTO(**dict(zip(("item_id", "turn_id", "execution_id", "job_id",
+                    "model_call_id", "message_id", "semantic_kind", "content_hash", "byte_length"), row, strict=True)))
+                if request.item_ids is not None and (location.turn_id != (request.turn_ids[0] if request.turn_ids else None)
+                    or request.execution_id is not None and location.execution_id != request.execution_id):
+                    raise InvalidTurnCursorError("所选 Item 不属于请求过程")
+                if request.anchor_item_id:
+                    located_item = location
             if request.context_cursor is not None:
                 cursor = decode_context_cursor(request.context_cursor, indexed.snapshot, indexed.view_id)
                 notices = read_notice_parts(self._context_reader, indexed.snapshot, indexed.chain,
@@ -300,7 +326,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 policy=policy,
                 located_tool_call_id=located.tool_call_id if located is not None else located_tool.tool_call_id if located_tool else None,
             )
-            return page.model_copy(update={"located_message": located, "located_tool_result": located_tool})
+            return page.model_copy(update={"located_message": located, "located_tool_result": located_tool, "located_item": located_item})
         finally:
             indexed.snapshot.close()
 
@@ -466,6 +492,11 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         chain: ContextChain,
         tool_call_ids: tuple[str, ...] = (),
         internal_entries: tuple[InternalExecutionHistoryEntry, ...] = (),
+        activity_before: tuple[int, int] | None = None, activity_limit: int | None = None,
+        item_ids: tuple[str, ...] | None = None,
+        projections: dict[str, dict[str, object]] | None = None,
+        anchor_context: ContextNoticeAnchorDTO | None = None,
+        context_turn_id: str | None = None,
     ) -> TurnHistoryPageDTO:
         budget = HistoryProjectionBudget()
         summary_budget = HistoryProjectionBudget()
@@ -474,17 +505,18 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             "tool_call" in include_fields or "tool_result" in include_fields
         )
         selected_tool_call_ids = frozenset(tool_call_ids) or None
-        projections = self._context_reader.read_turn_projections(
+        projections = projections if projections is not None else self._context_reader.read_turn_projections(
             snapshot,
             chain,
-            [span.turn_id for span in spans],
+            [span.turn_id for span in spans], activity_before=activity_before,
+            activity_limit=activity_limit, item_ids=item_ids, outline="activity_outline" in include, include=frozenset(include),
         )
         record_roles = (
             {"user"}
             if "user" in include_fields or "internal" in include_fields
             else set()
         )
-        if not include_fields.isdisjoint(_ASSISTANT_HISTORY_FIELDS):
+        if "activity_outline" not in include_fields and not include_fields.isdisjoint(_ASSISTANT_HISTORY_FIELDS):
             record_roles.add("assistant")
         tool_kinds: set[str] = set()
         if "tool_call" in include_fields:
@@ -510,6 +542,10 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             # 定点补载不读取该 Turn 的其它 assistant/tool message；同一
             # assistant message 内未命中的 call 由 mapper 再次过滤。
             record_roles.discard("assistant")
+        if item_ids is not None:
+            record_roles.clear()
+            tool_kinds.clear()
+            required_sequences.clear()
         records_by_turn = self._context_reader.read_projection_records_batch(
             snapshot,
             turn_ids=[span.turn_id for span in spans],
@@ -519,11 +555,14 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             tool_call_ids=selected_tool_call_ids,
             required_sequences=required_sequences,
         )
+        if item_ids is not None:
+            records_by_turn = {}
         items: list[TurnDetailDTO] = []
         summaries: list[TurnSummaryDTO] = []
         notices = read_notice_parts(self._context_reader, snapshot, chain,
-            turn_ids=[span.turn_id for span in spans],
-            execution_ids=list(dict.fromkeys(entry.execution_id for entry in internal_entries)))
+            turn_ids=[context_turn_id] if context_turn_id else [span.turn_id for span in spans],
+            execution_ids=[] if context_turn_id else list(dict.fromkeys(entry.execution_id for entry in internal_entries)),
+            anchor_context=anchor_context)
         # 先为窗口末端分配正文预算，避免旧回复耗尽预算后截空最新回复。
         # DTO 仍按请求的原顺序返回。
         for span in reversed(spans):
@@ -538,20 +577,23 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 include=include,
                 tool_call_ids=selected_tool_call_ids,
             )
+            if projections[span.turn_id].get("activity_has_more") is True:
+                detail.detail_truncated = True
+            if item_ids is not None:
+                canonical = self._context_reader.read_canonical_items(snapshot, item_ids=list(item_ids))
+                detail.response_parts = enrich_selected_item_parts(detail.response_parts, canonical, include=frozenset(include))
             detail.response_parts.extend(notices.get(span.turn_id, ()))
-            summaries.append(
-                summary(
+            if activity_limit is None and item_ids is None:
+                summaries.append(summary(
                     project_detail(
                         detail,
                         DEFAULT_INITIAL_INCLUDE,
                         summary_budget,
-                    )
-                )
-            )
+                    )))
             items.append(project_detail(detail, include, budget))
         items.reverse()
         summaries.reverse()
-        internal_executions = build_internal_execution_history(internal_entries, include=include)
+        internal_executions = build_internal_execution_history(internal_entries, include=include, budget=budget)
         for execution in internal_executions:
             execution.response_parts.extend(notices.get(execution.execution_id, ()))
         return TurnHistoryPageDTO(

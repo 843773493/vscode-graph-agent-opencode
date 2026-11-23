@@ -9,15 +9,67 @@ import httpx
 import pytest
 from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI, HTTPException, Request, Response
+from starlette.websockets import WebSocket
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 from app.core.failures import HTTP_FAILURE_HEADER
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.main import gateway_http_exception_handler
-from app.gateway.proxy_upstream import filter_hop_by_hop_headers, send_upstream_request
+from app.gateway.proxy_upstream import (
+    ProxyStreamingResponse,
+    UpstreamResponseBody,
+    filter_hop_by_hop_headers,
+    relay_websocket_upstream_to_client,
+    send_upstream_request,
+)
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 GATEWAY_A = "gateway_" + "a" * 32
 GATEWAY_B = "gateway_" + "b" * 32
+
+
+@pytest.fixture
+async def relay_socket():
+    events = []
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        events.append(message)
+
+    socket = WebSocket({"type": "websocket", "path": "/"}, receive, send)
+    await socket.accept()
+    return socket, events
+
+
+@pytest.mark.parametrize("code, expected", [(1000, 1000), (4008, 4008), (4009, 4009), (1006, 1011)])
+async def test_websocket_relay_preserves_close_semantics_and_original_failure(relay_socket, code, expected):
+    socket, events = relay_socket
+    failure = ConnectionClosedError(Close(code, "owner changed") if code != 1006 else None, None)
+
+    class Upstream:
+        close_code = code
+        close_reason = "owner changed"
+
+        async def __aiter__(self):
+            yield "output"
+            yield b"bytes"
+            if code != 1000:
+                raise failure
+
+    if code == 1000:
+        await relay_websocket_upstream_to_client(socket, Upstream())
+    else:
+        with pytest.raises(ConnectionClosedError) as caught:
+            await relay_websocket_upstream_to_client(socket, Upstream())
+        assert caught.value is failure
+    assert events[1:] == [
+        {"type": "websocket.send", "text": "output"},
+        {"type": "websocket.send", "bytes": b"bytes"},
+        {"type": "websocket.close", "code": expected, "reason": "owner changed"},
+    ]
 
 
 @pytest.fixture
@@ -49,11 +101,10 @@ def proxy_factory():
                 "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
             })
             response = await send_upstream_request(upstream, forwarded)
-            try:
-                return Response(await response.aread(), status_code=response.status_code,
-                                headers=filter_hop_by_hop_headers(response.headers.items()))
-            finally:
-                await response.aclose()
+            return ProxyStreamingResponse(
+                UpstreamResponseBody(response), status_code=response.status_code,
+                headers=filter_hop_by_hop_headers(response.headers.items()),
+            )
 
         return app
     return build
@@ -76,16 +127,43 @@ async def test_two_hop_failure_keeps_origin_and_request_identity(backend, proxy_
 
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-two-hop"
     context = json.loads(response.headers[HTTP_FAILURE_HEADER])
-    assert "private-" not in response.text + response.headers[HTTP_FAILURE_HEADER]
     if failure_at == "backend":
+        assert "private-database-path-marker" in response.json()["message"]
         assert response.status_code == 500
         assert context["source"] == {"component": "workspace_backend", "backend_id": "backend-B2", "workspace_id": WORKSPACE_ID}
         assert context["error_type"] == "OperationalError"
     else:
+        assert "private-upstream-address-marker" in response.json()["message"]
         assert response.status_code == 502
         assert context["source"] == {"component": "gateway", "gateway_id": GATEWAY_A if failure_at == "gateway-A" else GATEWAY_B}
         assert context["target"] == {"gateway_id": GATEWAY_B, "workspace_id": WORKSPACE_ID}
         assert context["stage"] == "upstream_request"
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "text/plain"])
+async def test_two_hop_protocol_error_body_is_not_subject_to_summary_budget(proxy_factory, content_type):
+    content = json.dumps({"detail": {"message": "owner rejected", "data": "x" * 96_000}}).encode()
+    if content_type == "text/plain":
+        content = b"owner rejected\n" + b"x" * 96_000
+    owner = FastAPI()
+    owner.add_middleware(TraceMiddleware, component="workspace_backend")
+
+    @owner.get("/catalog")
+    async def catalog() -> Response:
+        return Response(content, status_code=422, media_type=content_type)
+
+    async with AsyncExitStack() as stack:
+        backend = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(owner), base_url="http://backend.test"))
+        gateway_b = proxy_factory(backend, GATEWAY_B)
+        remote = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(gateway_b), base_url="http://gateway-b.test"))
+        gateway_a = proxy_factory(remote, GATEWAY_A)
+        browser = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(gateway_a), base_url="http://gateway-a.test"))
+        response = await browser.get("/catalog", headers={"X-Request-ID": "req-large-error"})
+
+    assert response.status_code == 422
+    assert response.content == content
+    assert response.headers["content-type"].startswith(content_type)
+    assert response.headers["X-Request-ID"] == "req-large-error"
 
 
 async def test_cancelled_upstream_is_not_reported_as_transport_failure():

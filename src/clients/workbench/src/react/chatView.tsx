@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t } from '../../../shared/core/i18n/index.js';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
 import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
-import type { TurnViewportController } from '../../../web/src/components/chat/useTurnVirtualScroller.js';
-import type { TurnViewportPosition } from '../../../web/src/components/chat/useTurnAnchorNavigation.js';
+import type { TranscriptViewportController } from '../../../web/src/components/chat/useTranscriptVirtualScroller.js';
+import type { TranscriptViewportPosition, TranscriptViewportChangeReason } from '../../../web/src/components/chat/useTranscriptNavigation.js';
+import { nodeKey } from '../../../web/src/state/timeline/transcriptNodes.js';
+import { EditorPaneSelectionChangeReason } from '../../upstream/src/vs/workbench/common/editor.js';
+import type { ThreadLocation } from '../threadPane.js';
 import { toDisposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import ContentViewSlots from '../../../web/src/components/shell/ContentViewSlots.js';
 import Composer from '../../../web/src/components/composer/Composer.js';
@@ -30,7 +33,7 @@ import { createDebugOutputRenderer } from '../debug/output.js';
 import { WorkspaceCodePreviewContext, type WorkspaceCodePreviewRenderer } from '../../../web/src/components/workspace/preview/WorkspaceCodePreview.js';
 import { createCodePreviewRenderer } from './codePreview.js';
 import { ChatItemActions } from './itemActions.js';
-import { ChatItemMenuContext, ContextNoticeContinuationContext } from '../../../web/src/components/chat/itemContextMenu.js';
+import { ChatHoverContext, ChatItemMenuContext, ContextNoticeContinuationContext } from '../../../web/src/components/chat/itemContextMenu.js';
 import { ChatItemMenu } from './chatItemMenu.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { productStyles } from './productStyles.js';
@@ -50,16 +53,15 @@ import type { ICommandService } from '../../upstream/src/vs/platform/commands/co
 import { sessionActionCommands } from '../search/sessionActions.js';
 import { taskActionCommand } from '../automation/actions.js';
 import type { InternalDisplayProvenance } from '../../../web/src/types/backend.js';
-import type { LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
-import type { TurnNavigationTarget } from "../../../web/src/api/session/sessionTurnHistory.js";
 
-type SearchNavigation = { kind: 'message'; match: TurnNavigationTarget } | { kind: 'request'; match: LLMRequestLogMatchDTO; recordOnly?: boolean } | { kind: 'trace'; match: TraceMatchDTO; recordOnly?: boolean };
-interface ThreadViewportController extends TurnViewportController {
+type SearchNavigation = Exclude<ThreadLocation, { kind: 'viewport' }>;
+interface ThreadViewportController extends TranscriptViewportController {
   capturePresentation(): () => void;
+  showConversation(preview?: boolean): void;
 }
 
-function ThreadConversation({ input, seed, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, toolbar }: {
+function ThreadConversation({ input, seed, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, onPositionChange, onCloseNavigation, toolbar }: {
   input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; groupId: number; onUpdate: () => void;
   commands: ICommandService;
   onPickModel(request: ModelPickerRequest): Promise<void>;
@@ -68,6 +70,8 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
   navigation?: SearchNavigation;
   onViewportReady: (controller: ThreadViewportController | undefined) => void;
   onDraftReady: (controller: ComposerDraftController | undefined) => void;
+  onPositionChange: (position: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => void;
+  onCloseNavigation: () => void;
   toolbar: ReactNode;
 }) {
   const owner = input.owner;
@@ -80,32 +84,31 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
   useEffect(() => () => stopResize.current?.(), []);
   const onSessionCreated = useCallback(async (session: Session, workspaceKey: string | null) => {
     if (workspaceKey !== owner.workspaceKey || session.workspace_id !== owner.workspaceId || !session.thread_id) throw new Error(t('thread.host.newSessionOwnerMismatch'));
-    await editors.openEditor(new ThreadInput({ ...owner, sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
-  }, [owner, editors]);
+    await editors.openEditor(new ThreadInput({ ...owner, sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true, sourceGroup: groupId });
+  }, [owner, editors, groupId]);
   const runtime = useThreadSessionRuntime({ owner, seed, active, onSessionCreated, onError });
   const { timeline, history, actions, state, content } = runtime;
-  const [dismissedRequest, setDismissedRequest] = useState<LLMRequestLogMatchDTO>();
-  const selectedRequest = requestLogNavigation !== dismissedRequest ? requestLogNavigation : undefined;
-  const requestNavigation = useRequestLogNavigation(0, owner.workspaceKey, owner.sessionId, selectedRequest);
-  const [dismissedTrace, setDismissedTrace] = useState<TraceMatchDTO>();
-  const selectedTrace = traceNavigation !== dismissedTrace ? traceNavigation : undefined;
-  const traceLocation = useTraceNavigation(0, owner.workspaceKey, owner.sessionId, owner.threadId, selectedTrace);
+  const requestNavigation = useRequestLogNavigation(0, owner.workspaceKey, owner.sessionId, requestLogNavigation);
+  const traceLocation = useTraceNavigation(0, owner.workspaceKey, owner.sessionId, owner.threadId, traceNavigation);
   const [outlinePreview, setOutlinePreview] = useState(false);
-  const contentView = outlinePreview ? 'default' : traceLocation ? 'events' : requestNavigation ? 'requests' : state.contentView;
-  const connectViewport = useCallback((controller: TurnViewportController | undefined) => {
+  const contentView = outlinePreview || navigation?.kind === 'message' ? 'default' : traceLocation ? 'events' : requestNavigation ? 'requests' : state.contentView;
+  const savePosition = useCallback((position: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => {
+    if (reason !== 'layout') runtime.views.saveSessionViewState(position);
+    if (contentView === 'default') onPositionChange(position, reason);
+  }, [runtime.views.saveSessionViewState, onPositionChange, contentView]);
+  const showConversation = useCallback((preview = false) => {
+    if (preview) { setOutlinePreview(true); return; }
+    if (state.contentView !== 'default') void content.switchContentView('default').catch((error: unknown) => onError(String(error)));
+    setOutlinePreview(false);
+  }, [content.switchContentView, onError, state.contentView]);
+  const connectViewport = useCallback((controller: TranscriptViewportController | undefined) => {
     onViewportReady(controller ? { ...controller,
+      // 隐藏聊天时不把零尺寸 DOM 当作阅读位置；仍保留 controller 供大纲临时预览。
+      capture: () => contentView === 'default' ? controller.capture() : undefined,
       capturePresentation: () => () => setOutlinePreview(outlinePreview),
-      navigate(position, preview) {
-        if (preview) setOutlinePreview(true);
-        else {
-          setDismissedRequest(requestLogNavigation); setDismissedTrace(traceNavigation);
-          if (state.contentView !== 'default') void content.switchContentView('default').catch((error: unknown) => onError(String(error)));
-          setOutlinePreview(false);
-        }
-        controller.navigate(position, preview);
-      },
+      showConversation,
     } : undefined);
-  }, [content.switchContentView, onError, onViewportReady, outlinePreview, requestLogNavigation, state.contentView, traceNavigation]);
+  }, [contentView, onViewportReady, outlinePreview, showConversation]);
   const fork = (source: SessionForkSourceSelection) => {
     void commands.executeCommand(sessionActionCommands.fork, { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
       sessionId: owner.sessionId, source }).catch(cause => onError(String(cause)));
@@ -126,6 +129,7 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
       const root = resourceFileRootUri(file.path);
       if (!root) throw new Error(t('thread.host.referenceRootMissing'));
       void editors.openEditor({ resource: workspaceFileUri(owner, file.path, root), options: {
+        sourceGroup: groupId,
         selection: reference.selection ? { startLineNumber: reference.selection.startLine, startColumn: reference.selection.startColumn ?? 1,
           endLineNumber: reference.selection.endLine, endColumn: 1 } : undefined,
       } }).catch((cause: unknown) => onError(t('thread.host.openReferenceFailed', String(cause))));
@@ -145,19 +149,19 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
         onLoadOlderTraceHistory={runtime.traces.loadOlder} onRetryTraceHistory={runtime.traces.refresh}
         requestLogs={state.llmRequestLogs} requestLogsLoading={state.llmRequestLogsLoading}
         requestLogsError={state.llmRequestLogsError} requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
-        traceNavigation={traceLocation && { ...traceLocation, recordOnly: navigation?.kind === 'trace' && navigation.recordOnly }} onCloseTraceNavigation={() => setDismissedTrace(traceNavigation)}
-        requestLogNavigation={requestNavigation && { ...requestNavigation, recordOnly: navigation?.kind === 'request' && navigation.recordOnly }} onCloseRequestLogNavigation={() => setDismissedRequest(requestLogNavigation)}
+        traceNavigation={traceLocation && { ...traceLocation, recordOnly: navigation?.kind === 'trace' && navigation.recordOnly }} onCloseTraceNavigation={onCloseNavigation}
+        requestLogNavigation={requestNavigation && { ...requestNavigation, recordOnly: navigation?.kind === 'request' && navigation.recordOnly }} onCloseRequestLogNavigation={onCloseNavigation}
         onRetryRequestLogs={() => { void content.refreshLLMRequestLogs(owner.sessionId); }}
         conversations={runtime.conversations} activeTurnTimeline={timeline}
         changesHint={null} changesHintLoading={false} activeChangeset={state.activeChangeset}
         sessionViewStates={state.sessionViewStates}
         onLoadAroundTurn={history.loadAroundTurn} onLoadNewerMessages={history.loadNewerTurns} onLoadLatestMessages={history.loadLatestTurns} onLoadOlderMessages={history.loadOlderTurns}
         messageNavigation={messageNavigation}
+        onCloseMessageNavigation={onCloseNavigation}
         onViewportReady={connectViewport}
-        onViewStateChange={runtime.views.saveSessionViewState} onViewStateRestoreStatus={runtime.setStatus}
+        onViewStateChange={savePosition} onViewStateRestoreStatus={runtime.setStatus}
         onLoadTurnDetails={history.loadTurnDetails}
         onRetainTurnBodies={history.retainTurnBodies}
-        onLoadToolDetails={(turnId, toolCallId) => history.loadTurnDetails([turnId], `tool:${turnId}:${toolCallId}`, false, ['tool_call', 'tool_result'], [toolCallId])}
         onLoadAgentStateMessageRawContent={content.loadAgentStateMessageRawContent}
         onRetryHistory={history.refreshTurnHistory} onReplayTurn={actions.replayTurn} onOpenChanges={openChanges}
         onForkConversation={point => {
@@ -219,7 +223,7 @@ function ThreadConversation({ input, seed, active, editors, groupId, commands, o
   </ComposerContext.Provider></ContextNoticeContinuationContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, initialSession, initialWorkspaces, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, onChooseThread, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; initialWorkspaces: GatewayWorkspace[]; active: boolean; editors: IEditorService; groupId: number; commands: ICommandService; onPickModel(request: ModelPickerRequest): Promise<void>; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; onChooseThread: () => Promise<void>; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
+function ChatView({ input, initialSession, initialWorkspaces, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, onChooseThread, navigation, onViewportReady, onDraftReady, onPositionChange, onCloseNavigation }: { input: ThreadInput; initialSession?: Session; initialWorkspaces: GatewayWorkspace[]; active: boolean; editors: IEditorService; groupId: number; commands: ICommandService; onPickModel(request: ModelPickerRequest): Promise<void>; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; onChooseThread: () => Promise<void>; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void; onPositionChange: (position: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => void; onCloseNavigation: () => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -286,7 +290,7 @@ function ChatView({ input, initialSession, initialWorkspaces, active, editors, g
     </button>
   </header>;
   return <div className="thread-history-host panel-feedback-host">{cacheError ? <p className="panel-feedback" role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} groupId={groupId} commands={commands} onPickModel={onPickModel} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} groupId={groupId} commands={commands} onPickModel={onPickModel} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} onPositionChange={onPositionChange} onCloseNavigation={onCloseNavigation} toolbar={toolbar} />
       : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? t('thread.host.syncFailed', error) : null} onRetry={retry} />
         : error ? <p role="alert">{t('thread.host.initializeFailed', error)}</p> : <p role="status">{t('thread.host.restoring')}</p>}</div>}</div>;
 }
@@ -300,10 +304,12 @@ export class ChatSurface {
   private readonly itemMenu: ChatItemMenu;
   private readonly itemActions: ChatItemActions;
   private active: boolean;
-  private navigation?: SearchNavigation;
+  private location?: ThreadLocation;
   private viewport?: ThreadViewportController;
   private draft?: ComposerDraftController;
   private previewGeneration = 0;
+  private previewPosition?: TranscriptViewportPosition;
+  private pendingNavigation?: { position: TranscriptViewportPosition; preview: boolean };
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService,
@@ -312,6 +318,7 @@ export class ChatSurface {
     instantiation: IInstantiationService,
     private readonly groupId: number,
     private readonly onChooseThread: () => Promise<void>,
+    private readonly onSelectionChange: (reason: EditorPaneSelectionChangeReason) => void,
     private readonly initialSession?: Session) {
     this.log = instantiation.invokeFunction(accessor => accessor.get(ILogService));
     this.renderDebugOutput = createDebugOutputRenderer(instantiation);
@@ -327,25 +334,62 @@ export class ChatSurface {
     return this.draft;
   }
   update(): void { this.render(); }
-  revealMessage(match: TurnNavigationTarget): void { this.navigation = { kind: 'message', match: { ...match } }; this.render(); }
-  revealRequestLog(match: LLMRequestLogMatchDTO, recordOnly = false): void { this.navigation = { kind: 'request', match: { ...match }, recordOnly }; this.render(); }
-  revealTrace(match: TraceMatchDTO, recordOnly = false): void { this.navigation = { kind: 'trace', match: { ...match }, recordOnly }; this.render(); }
+  getLocation(): ThreadLocation | undefined { return this.location; }
+  revealLocation(location: ThreadLocation, reason = EditorPaneSelectionChangeReason.NAVIGATION): void {
+    // 在真正跳转前刷新来源位置；预览期间使用已捕获的原位置。
+    if (reason === EditorPaneSelectionChangeReason.NAVIGATION && (!this.location || this.location.kind === 'viewport')) {
+      const position = this.previewPosition ?? this.viewport?.capture();
+      if (position) {
+        this.location = { kind: 'viewport', position };
+        this.onSelectionChange(EditorPaneSelectionChangeReason.USER);
+      }
+    }
+    this.location = structuredClone(location);
+    this.previewPosition = undefined;
+    this.pendingNavigation = undefined;
+    this.onSelectionChange(reason);
+    if (location.kind === 'viewport') {
+      // 原 viewState 恢复只还原阅读位置；不能切走已有日志页或触发主动定位提示。
+      const restoring = reason === EditorPaneSelectionChangeReason.PROGRAMMATIC;
+      if (this.viewport) {
+        if (!restoring) this.viewport.showConversation();
+        this.viewport.navigate(location.position, restoring);
+      } else this.pendingNavigation = { position: location.position, preview: restoring };
+    } else if (location.kind === 'message') this.viewport?.showConversation();
+    this.render();
+  }
+  private readonly onCloseNavigation = () => {
+    this.location = undefined;
+    this.pendingNavigation = undefined;
+    const position = this.viewport?.capture();
+    if (position) this.onPositionChange(position, 'layout');
+    this.render();
+  };
   setVisible(visible: boolean): void { if (!visible) { this.itemMenu.hide(); this.modelPicker.hide(); } this.active = visible; this.render(); }
   captureViewState(): IDisposable {
     const position = this.requireViewport().capture();
+    this.previewPosition = position;
     const restore = this.requireViewport().capturePresentation();
     return toDisposable(() => {
-      if (!this.viewport) return;
       // 原 Provider 随后才释放旧预览；恢复属于新导航，不能被旧释放动作取消。
       ++this.previewGeneration;
-      if (position) this.viewport.navigate(position, true);
+      this.previewPosition = undefined;
+      if (position) {
+        if (this.viewport) this.viewport.navigate(position, true);
+        else this.pendingNavigation = { position, preview: true };
+      }
       restore();
     });
   }
   revealTurn(turnId: string, preview = false): IDisposable {
     const generation = ++this.previewGeneration;
-    const position: TurnViewportPosition = { turn_anchor: turnId, scroll_offset: 0, follow_latest: false };
-    this.requireViewport().navigate(position, preview);
+    const position: TranscriptViewportPosition = { reading_anchor: {
+      node_key: nodeKey({ kind: 'turn', id: turnId }, 'header'),
+      content_position: { block: 0, offset_px: 0 }, viewport_offset_px: 0,
+    }, follow_latest: false };
+    const viewport = this.requireViewport();
+    if (preview) { viewport.showConversation(true); viewport.navigate(position, true); }
+    else this.revealLocation({ kind: 'viewport', position });
     return toDisposable(() => { if (generation === this.previewGeneration) this.viewport?.cancel(); });
   }
   private requireViewport(): ThreadViewportController {
@@ -357,7 +401,27 @@ export class ChatSurface {
     this.draft = controller;
     if (controller && this.configurationControl) this.focusConfigurationControl(this.configurationControl);
   };
-  private readonly onViewportReady = (controller: ThreadViewportController | undefined) => { this.viewport = controller; };
+  private readonly onViewportReady = (controller: ThreadViewportController | undefined) => {
+    this.viewport = controller;
+    if (!controller) return;
+    if (this.pendingNavigation) {
+      const { position, preview } = this.pendingNavigation; this.pendingNavigation = undefined;
+      if (!preview) controller.showConversation();
+      controller.navigate(position, preview);
+    } else if (this.location?.kind === 'message') controller.showConversation();
+    else if (!this.location) {
+      const position = controller.capture();
+      if (position) this.onPositionChange(position, 'layout');
+    }
+  };
+  private readonly onPositionChange = (position: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => {
+    // 定位完成和布局保持不覆盖精确 Item／日志引用；普通滚动只更新原历史当前项。
+    if (reason !== 'scroll' && this.location && this.location.kind !== 'viewport') return;
+    const wasNavigation = this.location && this.location.kind !== 'viewport';
+    this.location = { kind: 'viewport', position };
+    this.onSelectionChange(EditorPaneSelectionChangeReason.PROGRAMMATIC);
+    if (wasNavigation) this.render();
+  };
   focus(): void { this.surface.focus('textarea'); }
   focusConfigurationControl(kind: 'providers' | 'agents'): void {
     this.configurationControl = this.surface.focus(kind === 'providers' ? '.composer-model-pill' : '.composer-agent-button') ? undefined : kind;
@@ -374,9 +438,9 @@ export class ChatSurface {
         const options: import('../threadPane.js').ThreadEditorOptions = { boxteamLogRecord: true,
           ...(result.request_log ? { boxteamRequestLog: result.request_log } : { boxteamTrace: result.trace }) };
         void this.editors.openEditor(new ThreadInput(owner), options, this.groupId).catch((cause: unknown) => this.onError(String(cause)));
-      } else if (result.request_log) this.revealRequestLog(result.request_log, true);
-      else if (result.trace) this.revealTrace(result.trace, true);
+      } else if (result.request_log) this.revealLocation({ kind: 'request', match: result.request_log, recordOnly: true });
+      else if (result.trace) this.revealLocation({ kind: 'trace', match: result.trace, recordOnly: true });
     })] });
   };
-  private render(): void { this.surface.render(<ChatItemMenuContext.Provider value={this.showItemMenu}><ComposerDiagnosticsContext.Provider value={this.reportComposerDiagnostic}><WorkspaceCodePreviewContext.Provider value={this.renderCodePreview}><DebugOutputContext.Provider value={this.renderDebugOutput}><ChatView input={this.input} initialSession={this.initialSession} initialWorkspaces={this.initialWorkspaces} editors={this.editors} groupId={this.groupId} commands={this.commands} onPickModel={this.onPickModel} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} onChooseThread={this.onChooseThread} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} /></DebugOutputContext.Provider></WorkspaceCodePreviewContext.Provider></ComposerDiagnosticsContext.Provider></ChatItemMenuContext.Provider>); }
+  private render(): void { this.surface.render(<ChatHoverContext.Provider value={this.itemMenu.bindHover}><ChatItemMenuContext.Provider value={this.showItemMenu}><ComposerDiagnosticsContext.Provider value={this.reportComposerDiagnostic}><WorkspaceCodePreviewContext.Provider value={this.renderCodePreview}><DebugOutputContext.Provider value={this.renderDebugOutput}><ChatView input={this.input} initialSession={this.initialSession} initialWorkspaces={this.initialWorkspaces} editors={this.editors} groupId={this.groupId} commands={this.commands} onPickModel={this.onPickModel} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} onChooseThread={this.onChooseThread} navigation={this.location?.kind === 'viewport' ? undefined : this.location} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} onPositionChange={this.onPositionChange} onCloseNavigation={this.onCloseNavigation} /></DebugOutputContext.Provider></WorkspaceCodePreviewContext.Provider></ComposerDiagnosticsContext.Provider></ChatItemMenuContext.Provider></ChatHoverContext.Provider>); }
 }

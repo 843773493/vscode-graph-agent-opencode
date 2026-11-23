@@ -92,6 +92,8 @@ def test_run_context_separates_artifacts_between_pytest_nodes(
     assert json.loads((second_artifacts / "result.json").read_text())["details"] == {
         "case": "second"
     }
+    assert json.loads((second_artifacts / "result.json").read_text())["node_id"] == "tests/sample.py::second"
+    assert json.loads((second_artifacts / "result.json").read_text())["run_id"] == context.run_root.name
 
 
 def test_run_context_isolates_boxteam_home_by_test_node(

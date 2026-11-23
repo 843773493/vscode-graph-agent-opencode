@@ -1,3 +1,4 @@
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -5,8 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import MarkdownContent, {
   LARGE_MARKDOWN_DEFER_THRESHOLD,
 } from "./MarkdownContent";
-import ThinkingSection from "./ThinkingSection";
-import ToolRow from "./ToolRow";
+import { ProcessActivity } from "./turn/TurnActivitySummary";
+import OriginalToolRow from "./ToolRow";
 import ProgressiveUserMessage, {
   LARGE_USER_MESSAGE_RENDER_LIMIT,
 } from "./turn/ProgressiveUserMessage";
@@ -150,11 +151,10 @@ describe("折叠详情按需解析", () => {
   test("折叠 reasoning 不挂载完整 Markdown", () => {
     const hiddenTail = "REASONING_HIDDEN_TAIL";
     const html = renderToStaticMarkup(
-      <ThinkingSection
-        active={false}
-        completedPreview="耗时 7.1s · Item 4 项"
+      <TranscriptTestView><ProcessActivity
+        process={{kind:"turn",id:"turn"}} settled stats={{duration_ms:7100,item_count:4,first_item_sequence:1,last_item_sequence:4}}
         showRawDetails={false}
-        items={[{
+        groups={[{kind:"work",id:"group",items:[{
           kind: "aggregated_text",
           id: "reasoning-1",
           text: `${"思考 ".repeat(80)}${hiddenTail}`,
@@ -163,24 +163,23 @@ describe("折叠详情按需解析", () => {
           timestamp: null,
           eventCount: 1,
           rawEvents: [],
-        }]}
-      />,
+        }]}]}
+      /></TranscriptTestView>,
     );
 
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("codicon-chevron-right");
-    expect(html).toContain("耗时 7.1s · Item 4 项");
+    expect(html).toContain("7.1");
     expect(html).not.toContain("思考 思考");
     expect(html).not.toContain(hiddenTail);
   });
 
   test("展开 reasoning 使用向下箭头", () => {
     const html = renderToStaticMarkup(
-      <ThinkingSection
-        active
-        completedPreview="耗时 — · Item 计数同步中"
+      <TranscriptTestView><ProcessActivity
+        process={{kind:"turn",id:"turn"}} settled={false}
         showRawDetails={false}
-        items={[{
+        groups={[{kind:"work",id:"group",items:[{
           kind: "aggregated_text",
           id: "reasoning-2",
           text: "正在思考",
@@ -189,8 +188,8 @@ describe("折叠详情按需解析", () => {
           timestamp: null,
           eventCount: 1,
           rawEvents: [],
-        }]}
-      />,
+        }]}]}
+      /></TranscriptTestView>,
     );
 
     expect(html).toContain('aria-expanded="true"');
@@ -258,3 +257,5 @@ describe("折叠详情按需解析", () => {
     renderer!.unmount();
   });
 });
+
+function ToolRow(props: React.ComponentProps<typeof OriginalToolRow>) { return <TranscriptTestView><OriginalToolRow {...props} /></TranscriptTestView>; }

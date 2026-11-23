@@ -80,9 +80,9 @@ async def test_cold_peer_recovers_while_first_real_listing_receipt_is_pending(
                 await release.wait()
             return snapshot
 
-        async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+        async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
             revisions.append((resource_id, revision))
-            await sync(resource_id, revision, for_stop=for_stop)
+            await sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
         with monkeypatch.context() as patch:
             patch.setattr(owner._transport, "list_resources", receiving)

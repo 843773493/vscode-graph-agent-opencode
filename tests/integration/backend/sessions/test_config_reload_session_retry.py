@@ -14,7 +14,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -60,7 +60,7 @@ async def test_persisted_failed_session_retries_after_model_configuration_reload
     integration_workspace_config_path: str,
     retry_model: ModelStreamReplay,
 ) -> None:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path).resolve()
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))

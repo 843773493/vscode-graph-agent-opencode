@@ -5,6 +5,7 @@ import { Virtuoso, VirtuosoMockContext } from "react-virtuoso";
 import ChatPanel from "./ChatPanel";
 import type { InternalDisplayProvenance, InternalExecutionDisplayPart } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 /** 真实 react-virtuoso 只在需要浏览器尺寸测量时才拒绝无 DOM 环境；
@@ -36,6 +37,8 @@ function createVirtuosoHostNode(): unknown {
     setAttribute: () => {},
     removeAttribute: () => {},
     querySelector: () => null,
+    getRootNode: () => ({activeElement:null}),
+    contains: () => false,
     getBoundingClientRect: () => ({
       x: 0,
       y: 0,
@@ -161,6 +164,24 @@ function virtuosoProps(renderer: ReactTestRenderer): Record<string, unknown> {
 }
 
 describe("ChatPanel Virtuoso 渲染引用", () => {
+  test("无 Turn 执行按原终态提交收起，不按关联 Job 或 unknown outcome 猜测", () => {
+    installVirtuosoEnvironment();
+    const execution = {execution_id:"execution",job_id:"job",session_id:"session-1",thread_id:"thread-main",status:"unknown" as const,
+      created_at:"2026-11-23T00:00:00Z",updated_at:"2026-11-23T00:00:00Z",display_parts:[],
+      response_parts:[{part_id:"part",kind:"reasoning" as const,projection:"detail" as const,text:"内部执行正文",
+        source:{message_sequence:1,item_id:"item",item_sequence:1,logical_item_ordinal:0,part_ordinal:0}}]};
+    let renderer!: ReactTestRenderer, item!: ReactTestRenderer;
+    const panel = (terminal?:number) => withVirtuosoMock(<ChatPanel {...panelProps([])} internalExecutions={[{...execution,terminal_commit_id:terminal}]} />);
+    act(()=>{renderer=create(panel(),{createNodeMock:createVirtuosoHostNode});});
+    const renderItem=()=>{const props=renderer.root.findByType(Virtuoso).props;return <TranscriptTestView>{props.itemContent(0,props.data[0],props.context)}</TranscriptTestView>;};
+    act(()=>{item=create(renderItem());});
+    const header=()=>item.root.findAllByType("button").find(node=>JSON.parse(node.props["data-transcript-node"]??"null")?.source_ref.kind === "execution")!;
+    expect(header().props["aria-expanded"]).toBe(true);
+    act(()=>renderer.update(panel(7)));
+    act(()=>item.update(renderItem()));
+    expect(header().props["aria-expanded"]).toBe(false);
+    act(()=>{item.unmount();renderer.unmount();});
+  });
   test("历史 Turn 保留稳定定位身份，活动投影不伪造 Turn，普通排队消息不进入时间线", () => {
     installVirtuosoEnvironment();
     const history: ConversationView = {

@@ -13,8 +13,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -30,20 +29,12 @@ from tests.support.processes.workspace import (
 @pytest.fixture
 def identity_service_ports(request: pytest.FixtureRequest) -> Iterator[tuple[int, int]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    with ExitStack() as leases:
-        backend_lease, backend_probes = E2EProcessLease.acquire_available(
-            context.runtime_root_for_node(request.node.nodeid) / "backend-port.json", range(ports.start, ports.port(50)),
-        )
-        leases.callback(backend_lease.release)
-        gateway_lease, gateway_probes = E2EProcessLease.acquire_available(
-            context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", range(ports.port(50), ports.end + 1),
-        )
-        leases.callback(gateway_lease.release)
-        (context.artifacts_dir / "port-allocation.json").write_text(json.dumps({
-            "backend": backend_probes, "gateway": gateway_probes,
-        }) + "\n")
-        yield backend_lease.ports[0], gateway_lease.ports[0]
+    ports = integration_ports_for_file(Path(request.node.path))
+    backend, gateway = ports.port(0), ports.port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"backend": backend, "gateway": gateway}) + "\n", encoding="utf-8",
+    )
+    yield backend, gateway
 
 
 @pytest.mark.asyncio

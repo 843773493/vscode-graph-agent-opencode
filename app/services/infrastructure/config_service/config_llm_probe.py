@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 import jsonschema
+from boxteam_plugin_sdk.failures import failure_message
 
 from app.core.workspace_identity import read_workspace_id
 from app.runtime.provider_model import (
@@ -116,7 +117,7 @@ class ConfigLlmProbeMixin:
                     layers[request.source_key] = payload
                     config = {}
                     for layer in layers.values():
-                        config = merge_json_objects(config, layer)
+                        config = merge_json_objects(config, layer, schema=service._load_schema())
             connection = (service._llm_resolution.resolve_provider_defaults(config, request.provider_id)
                 if model_id is None else service._llm_resolution.resolve_model_reference(config, ModelReferenceDTO(
                     provider_id=request.provider_id, model_id=model_id,
@@ -249,10 +250,9 @@ class ConfigLlmProbeMixin:
             category = "timeout" if isinstance(failure, TimeoutError) else {
                 401: "authentication", 403: "authentication", 404: "model_or_path", 429: "rate_limit",
             }.get(status_code, "upstream")
-            message = str(failure) or type(failure).__name__
-            for secret in invocation.secrets:
-                message = message.replace(secret, "[redacted]")
-            error = LlmProbeErrorDTO(category=category, message=message[:4096], status_code=status_code)
+            error = LlmProbeErrorDTO(category=category, message=failure_message(
+                failure, secrets=invocation.secrets, max_bytes=4096,
+            ), status_code=status_code)
         finally:
             # Starlette 用 AnyIO scope 连续取消响应；关闭自己持有的连接必须完成。
             with anyio.CancelScope(shield=True):

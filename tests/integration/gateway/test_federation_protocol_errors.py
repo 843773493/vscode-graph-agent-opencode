@@ -23,7 +23,7 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -107,7 +107,7 @@ def remote_stub(
     control = context.runtime_root_for_node(request.node.nodeid) / "federation-response.json"
     control.parent.mkdir(parents=True, exist_ok=True)
     control.write_text(json.dumps({"status": 200, "body": {}}))
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     ensure_local_port_available(ports.port(0), service_name="远端 Gateway HTTP 协议替身")
     with ExitStack() as processes:
         log = processes.enter_context((context.artifacts_dir / "remote-stub.log").open("a"))
@@ -238,7 +238,7 @@ async def test_native_directory_permission_failure_logs_original_and_retries_sam
     directory.mkdir()
     (directory / "child").mkdir()
     original_mode = directory.stat().st_mode
-    port = integration_port_block_for_file(Path(__file__)).port(1)
+    port = integration_ports_for_file(Path(__file__)).port(1)
     receipts = []
     with ExitStack() as processes:
         gateway = start_gateway_process(
@@ -500,7 +500,7 @@ async def test_federation_credential_permission_failure_keeps_request_identity_a
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     assert context.workspace_root == Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
-    port = integration_port_block_for_file(Path(__file__)).port(1)
+    port = integration_ports_for_file(Path(__file__)).port(1)
     credential_path = context.workspace_root.parent / "boxteam-home/state/gateway/credentials/federation.json"
     receipts: dict[str, object] = {}
     with ExitStack() as processes:
@@ -553,7 +553,7 @@ async def test_gateway_identity_failure_keeps_original_identity_and_request_unti
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     assert context.workspace_root == Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
-    port = integration_port_block_for_file(Path(__file__)).port(1)
+    port = integration_ports_for_file(Path(__file__)).port(1)
     identity_path = context.workspace_root.parent / "boxteam-home/state/gateway/identity.json"
     receipts: dict[str, object] = {}
     with ExitStack() as processes:
@@ -631,7 +631,7 @@ async def test_device_credential_publish_failure_keeps_authorization_until_expli
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     assert context.workspace_root == Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
-    port = integration_port_block_for_file(Path(__file__)).port(1)
+    port = integration_ports_for_file(Path(__file__)).port(1)
     credential_path = context.workspace_root.parent / "boxteam-home/state/gateway/credentials/federation.json"
     receipts: dict[str, object] = {}
     with ExitStack() as processes:

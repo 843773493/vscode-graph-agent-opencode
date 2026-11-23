@@ -25,7 +25,7 @@ function sourceDocument(): ConfigSourceDocumentDTO {
 
 function render(draft: Record<string, unknown>, document = sourceDocument()) {
   return renderToStaticMarkup(<ConfigurationEntities kind="agents" selectedId="coder" draft={draft} document={document}
-    onSelect={() => {}} onEdit={() => {}} onRemove={() => {}}
+    onSelect={() => {}} onEdit={() => {}}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
 }
 
@@ -73,11 +73,12 @@ test('服务默认配置不提供虚假的重置，显示名称且把模型单�
   const view = create(<ConfigurationEntities kind="providers" selectedId="fresh" selectedModelId="first"
     draft={{ llm: { providers: { fresh: { name: '我的模型服务', defaults: { endpoint: 'https://example.com/v1' },
       models: { first: { model: 'upstream-one' }, second: { model: 'upstream-two' } } } } } }}
-    document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   const article = view.root.findByType('article');
   expect(article.findByType('h2').children).toEqual(['我的模型服务']);
-  const endpoint = article.findAllByProps({ className: 'configuration-entity-field' }).find(label => label.children.includes(t('configuration.entities.endpoint')))!;
+  const endpoint = article.findAllByProps({ className: 'configuration-entity-field' }).find(field => field.findAllByType('label')
+    .some(label => label.children.includes(t('configuration.entities.endpoint'))))!;
   expect(endpoint.findAllByType('button')).toHaveLength(0);
   expect(article.findByProps({ className: 'configuration-model-overrides' }).props.open).not.toBe(true);
   expect(view.root.findByProps({ 'aria-label': t('configuration.entities.models') }).findAllByType('strong').map(node => node.children[0]))
@@ -91,7 +92,7 @@ test('服务默认配置不提供虚假的重置，显示名称且把模型单�
 test('稳定键列表保留同 Provider 下的继承模型，局部覆盖不会整体替换目录', () => {
   const html = renderToStaticMarkup(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="alternate"
     draft={{ llm: { providers: { team: { models: { main: { name: '本层名称' } } } } } }} document={providerDocument()}
-    onSelect={() => {}} onEdit={() => {}} onRemove={() => {}} onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
+    onSelect={() => {}} onEdit={() => {}} onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   expect(html).toContain('data-model-id="alternate"');
   expect(html).toContain('placeholder="upstream-alternate"');
   expect(html).toContain('继承值：upstream-alternate');
@@ -100,10 +101,45 @@ test('稳定键列表保留同 Provider 下的继承模型，局部覆盖不会�
   expect(html).not.toContain('confirmProviderOverride');
 });
 
+test('已有 OAuth 服务不误报缺少 API 密钥，地址重置仍只移除本层字段', () => {
+  const onEdit = mock(), onSetSecret = mock();
+  const view = create(<ConfigurationEntities kind="providers" selectedId="team"
+    draft={{ llm: { providers: { team: { defaults: {
+      endpoint: 'https://chatgpt.com/backend-api/codex', auth: { type: 'oauth', method: 'chatgpt' },
+    } } } } }} document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
+    onSetDefaultAgent={() => {}} onOpenSource={() => {}} onSetSecret={onSetSecret} />);
+  const credential = view.root.findAllByProps({ className: 'configuration-credential' })[0];
+  expect(credential.findByType('h4').children).toEqual([t('configuration.entities.authentication')]);
+  expect(credential.findByType('p').children).toEqual([t('configuration.entities.oauth')]);
+  expect(credential.findAllByType('button')).toHaveLength(0);
+  const endpoint = view.root.findAllByProps({ className: 'configuration-entity-field' })
+    .find(field => field.props['data-search-key'] === 'defaults.endpoint')!;
+  expect(endpoint.findByType('label').props.htmlFor).toBe(endpoint.findByType('input').props.id);
+  endpoint.findByType('button').props.onClick();
+  expect(onEdit.mock.calls).toEqual([['team', ['defaults', 'endpoint'], undefined]]);
+  view.unmount();
+});
+
+test('配置和模型菜单传递各自精确身份，不在正文重复放删除按钮', () => {
+  const onShowActions = mock();
+  const view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
+    draft={{ llm: { providers: { team: { models: { main: { model: 'my-model' } } } } } }}
+    document={providerDocument()} onSelect={() => {}} onEdit={() => {}} onShowActions={onShowActions}
+    onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
+  const anchor = {} as HTMLElement;
+  const provider = view.root.findByProps({ 'aria-label': t('configuration.entities.definitionActions', 'team') });
+  const model = view.root.findByProps({ 'aria-label': t('configuration.entities.modelActions', 'my-model') });
+  provider.props.onClick({ currentTarget: anchor });
+  model.props.onClick({ currentTarget: anchor });
+  expect(onShowActions.mock.calls).toEqual([['team', undefined, anchor], ['team', 'main', anchor]]);
+  expect(view.root.findAllByType('button').some(button => button.children.includes(t('configuration.entities.copyModel')))).toBe(false);
+  view.unmount();
+});
+
 test('编辑继承模型写入精确 Provider／Model 路径，凭据操作沿相同目标', () => {
   const onEdit = mock(), onSetSecret = mock();
   const view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="alternate"
-    draft={{}} document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    draft={{}} document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} onSetSecret={onSetSecret} />);
   const article = view.root.findByProps({ 'data-definition-id': 'team' });
   const input = article.findAllByType('input').find(input => input.props.value === 'upstream-alternate')!;
@@ -120,7 +156,7 @@ test('协议切换替换本层 reasoning 整块，恢复继承保留独立 strea
   const onEdit = mock();
   const view = create(<ConfigurationEntities kind="providers" selectedId="team" draft={{ llm: { providers: { team: {
     defaults: { api_mode: { protocol: 'responses', streaming: false, supports_reasoning: { reasoning_items: { summary: true } } } },
-  } } } }} document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+  } } } }} document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   const protocol = view.root.findAllByType('select').find(select => select.props.value === 'responses')!;
   protocol.props.onChange({ target: { value: 'anthropic_messages' } });
@@ -140,12 +176,12 @@ test('服务清除密钥保留有效的无认证配置，模型重置只移除�
     models: { main: { overrides: { api_key: '' } } },
   } } } };
   const render = (writable: boolean) => <ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
-    draft={draft} document={{ ...document, writable }} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    draft={draft} document={{ ...document, writable }} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />;
   const view = create(render(true));
   const credentials = view.root.findAllByProps({ className: 'configuration-credential' });
   expect(credentials.map(section => section.props['data-credential-scope'])).toEqual(['provider', 'model']);
-  expect(credentials[1].findByType('code').children).toEqual([t('configuration.entities.noAuthentication')]);
+  expect(credentials[1].findByType('p').children).toEqual([t('configuration.entities.noAuthentication')]);
   for (const section of credentials) section.findByType('button').props.onClick();
   expect(onEdit.mock.calls).toEqual([
     ['team', ['defaults', 'api_key'], ''],
@@ -163,11 +199,11 @@ test('继承的凭据不提供删除下层值的动作', () => {
     models: { main: { model: 'main', overrides: { api_key: '' } } },
   } } };
   const view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
-    draft={{}} document={document} onSelect={() => {}} onEdit={() => {}} onRemove={() => {}}
+    draft={{}} document={document} onSelect={() => {}} onEdit={() => {}}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   const credentials = view.root.findAllByProps({ className: 'configuration-credential' });
-  expect(credentials[0].findByType('code').children).toEqual(['${INHERITED_KEY}']);
-  expect(credentials[1].findByType('code').children).toEqual([t('configuration.entities.noAuthentication')]);
+  expect(credentials[0].findByType('p').children).toEqual([t('configuration.credentials.environment', 'INHERITED_KEY')]);
+  expect(credentials[1].findByType('p').children).toEqual([t('configuration.entities.noAuthentication')]);
   expect(credentials.every(section => section.findAllByType('button').length === 0)).toBe(true);
   view.unmount();
 });
@@ -177,7 +213,7 @@ test('fallback 编辑保留完整身份及顺序，不按 Provider 合并同服�
   const view = create(<ConfigurationEntities kind="agents" selectedId="coder" document={sourceDocument()}
     draft={{ agents: { coder: { model: { fallbacks: [
       { provider_id: 'team', model_id: 'a' }, { provider_id: 'team', model_id: 'b' },
-    ] } } } }} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    ] } } } }} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   view.root.findAllByType('input').find(input => input.props.value === 'b')!.props.onChange({ target: { value: 'c' } });
   expect(onEdit.mock.calls).toEqual([['coder', ['model', 'fallbacks'], [
@@ -189,14 +225,17 @@ test('fallback 编辑保留完整身份及顺序，不按 Provider 合并同服�
 test('高级能力按目标schema提供类型，不把输入容量当请求输出限制或复制继承值', () => {
   const onEdit = mock();
   const view = create(<ConfigurationEntities kind="providers" selectedId="team" draft={{}}
-    document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   const defaults = view.root.findAllByProps({ className: 'configuration-model-options' })[0];
-  const label = defaults.findAllByType('label').find(label => label.children.includes('supports_function_calling'))!;
+  const label = defaults.findAllByType('label').find(label => label.children.includes(t('configuration.capability.supports_function_calling')))!;
   label.findByType('select').props.onChange({ target: { value: 'false' } });
-  const capacity = defaults.findAllByType('input').find(input => input.props.type === 'number')!;
-  expect(capacity.props.min).toBe(1);
-  capacity.props.onChange({ target: { value: '128000', valueAsNumber: 128000, validity: { valid: true } } });
+  const capacity = defaults.findByProps({ className: 'configuration-capacity-input' }).findByType('input');
+  expect(capacity.props.inputMode).toBe('numeric');
+  const input = { value: '128000', selectionStart: 6, selectionEnd: 6, setCustomValidity: mock(), reportValidity: mock(), setSelectionRange: mock() };
+  capacity.props.onChange({ currentTarget: input });
+  expect(input.value).toBe('128,000');
+  expect(input.setSelectionRange).toHaveBeenLastCalledWith(7, 7);
   expect(onEdit.mock.calls).toEqual([
     ['team', ['defaults', 'api_mode', 'model_info', 'supports_function_calling'], false],
     ['team', ['defaults', 'api_mode', 'model_info', 'max_input_tokens'], 128000],
@@ -209,11 +248,11 @@ test('参数区分null与恢复继承，JSON显式等值覆盖和reasoning整块
   const onEdit = mock();
   const view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
     draft={{ llm: { providers: { team: { models: { main: { overrides: { request_options: { parameters: { temperature: null } } } } } } } } }}
-    document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    document={providerDocument()} onSelect={() => {}} onEdit={onEdit}
     onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
   const model = view.root.findByProps({ 'data-model-id': 'main' });
   const parameter = model.findByProps({ 'data-parameter': 'temperature' });
-  expect(parameter.findAllByType('p').flatMap(node => node.children)).toContain(t('configuration.options.omitted'));
+  expect(parameter.findAllByType('small').flatMap(node => node.children)).toContain(t('configuration.options.omitted'));
   parameter.findAllByType('button').find(button => button.children.includes(t('configuration.options.clear')))!.props.onClick();
   parameter.findAllByType('button').find(button => button.children.includes(t('configuration.options.omit')))!.props.onClick();
   const value = { value: '0', setCustomValidity: mock(), reportValidity: mock() };

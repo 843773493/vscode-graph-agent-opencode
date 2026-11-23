@@ -11,6 +11,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.abstractions.tool_selection import ToolSelectionReader, ToolSelectionSnapshot
 from app.agents.instruction_producers import build_toolset_policy_keys
+from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import ToolMetadata, ToolPolicyResolver
 from app.agents.tool_identity import (
     EXTENSION_TOOL_INVOKER_NAME,
@@ -47,9 +48,13 @@ class RegisteredToolSetProducer:
         self._metadata = dict(metadata)
         self._default_model_visibility: dict[str, bool] = {}
         self._last_snapshot: tuple[tuple[str, bool, bool], ToolSetSnapshot] | None = None
-        schemas_json = canonical_json_bytes(
-            [convert_to_openai_tool(tool) for tool in tools]
-        )
+        schemas = []
+        for tool in tools:
+            schema = convert_to_openai_tool(tool)
+            if isinstance(tool, BaseTool) and schema.get("type") == "function":
+                schema["function"]["parameters"] = export_model_tool_json_schema(tool)
+            schemas.append(schema)
+        schemas_json = canonical_json_bytes(schemas)
         # 解析模板不对外暴露；ToolSetSnapshot 会把输入复制到独立的规范 JSON。
         self._registered_tool_schemas: tuple[dict[str, Any], ...] = tuple(
             json.loads(schemas_json)

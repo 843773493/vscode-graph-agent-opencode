@@ -21,11 +21,13 @@ ID 等），避免同一份消息在不同状态码下出现两种文本形态�
 
 from __future__ import annotations
 
+from boxteam_plugin_sdk.failures import bounded_failure_text, failure_message
 from fastapi import HTTPException
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.exceptions import BaseAPIException, NotFoundError
+from app.core.failures import public_failure_message
 
 __all__ = [
     "client_error_message",
@@ -60,16 +62,18 @@ def client_error_message(error: Exception) -> str:
     ``KeyError`` 取原始参数，因为 ``str()`` 会给消息补一对引号。
     其余异常类型仍是 ``str(error)``。
     """
+    if (public_message := public_failure_message(error)) is not None:
+        return public_message
     if isinstance(error, BaseAPIException):
-        return error.readable_message()
+        return bounded_failure_text(error.readable_message())
     if isinstance(error, KeyError) and error.args and isinstance(error.args[0], str):
-        return error.args[0]
-    return str(error)
+        return bounded_failure_text(error.args[0])
+    return failure_message(error)
 
 
 def unimplemented_http_error(error: RuntimeError) -> HTTPException:
     """把「服务端尚未实现的能力」落成 501，而不是无上下文的 500。"""
-    return HTTPException(status_code=501, detail=str(error))
+    return HTTPException(status_code=501, detail=client_error_message(error))
 
 
 def state_conflict_error(error: ClientStateConflictError) -> HTTPException:

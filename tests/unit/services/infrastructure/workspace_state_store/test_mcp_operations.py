@@ -24,7 +24,7 @@ def operation_store(workspace_root):
     database.close()
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
-        assert store.diagnostics().schema_version == 24
+        assert store.diagnostics().schema_version == 27
         with closing(store.connection()) as connection:
             assert connection.execute("SELECT layer_digest FROM config_source_layers WHERE config_key = 'original'").fetchone()[0] == "old-digest"
         yield McpConnectionOperationStore(store), store
@@ -52,3 +52,32 @@ def test_active_connection_aliases_and_terminal_replay_are_durable(operation_sto
     assert replay == complete and not created
     next_operation, created = cold.begin(**{**request, "operation_id": "third", "action": "disconnect"})
     assert created and next_operation.operation_id == "third" and len(cold.active()) == 1
+
+
+def test_failure_reason_survives_alias_refresh_and_late_callback(operation_store):
+    operations, store = operation_store
+    request = {"operation_id": "failure", "connection_id": "workspace:server", "server_id": "server",
+               "action": "connect", "configuration_ref": "config-v1", "deadline": 9999999999}
+    operations.begin(**request)
+    operations.begin(**{**request, "operation_id": "alias"})
+    failure = operations.advance("failure", status="failed", stage="initialize", error_code="ConnectionError",
+                                 error_message="连接被目标拒绝")
+    assert operations.advance("failure", status="succeeded", stage="complete") == failure
+    refreshed = McpConnectionOperationStore(store).get("alias")
+    assert refreshed.error_code == "ConnectionError" and refreshed.error_message == "连接被目标拒绝"
+
+
+def test_v26_rows_keep_missing_reason_after_original_owner_upgrade(workspace_root):
+    database = SQLiteStateDatabase(path=workspace_root / ".boxteam/state/workspace.sqlite",
+                                   schema_version=26, migrations=_WORKSPACE_MIGRATIONS[:26])
+    with closing(database.connection()) as connection:
+        connection.execute("INSERT INTO mcp_connection_operations VALUES ('old', 'connection', 'server', 'connect', 'ref', 'failed', 'catalog', 1, 2, 3, 'ConnectionError')")
+        connection.execute("INSERT INTO mcp_connection_operation_aliases VALUES ('old', 'old')")
+    database.close()
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    try:
+        operation = McpConnectionOperationStore(store).get("old")
+        assert operation.error_code == "ConnectionError" and operation.error_message is None
+        assert store.diagnostics().schema_version == 27
+    finally:
+        store.close()

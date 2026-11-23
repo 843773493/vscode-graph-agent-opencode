@@ -14,7 +14,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -53,7 +53,7 @@ def team_gateway(
     client_base_url: str,
 ) -> Generator[GatewayProcess, None, None]:
     """本文件通过真实 Gateway 代理独立 Workspace 后端。"""
-    port = e2e_port_block_for_file(Path(request.node.fspath)).port(1)
+    port = e2e_ports_for_file(Path(request.node.fspath)).port(1)
     gateway = start_gateway_process(
         workspace_root=Path(e2e_workspace_root_path),
         default_backend_url=client_base_url,

@@ -106,9 +106,9 @@ async def test_real_recovery_preserves_completed_failure_and_original_unknown_le
                 deadlines.append(budget)
             return budget
 
-        async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+        async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
             calls.append((resource_id, revision, for_stop))
-            await sync(resource_id, revision, for_stop=for_stop)
+            await sync(resource_id, revision, for_stop=for_stop, **revision_options)
             if resource_id == failed:
                 did_fail.set()
                 raise original

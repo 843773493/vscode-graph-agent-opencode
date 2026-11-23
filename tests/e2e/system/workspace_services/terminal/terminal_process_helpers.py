@@ -13,24 +13,7 @@ from app.core.identifier import create_uuid_hex
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import TerminalPluginService
 from tests.harness.python.terminal_state import read_terminal_state
-from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
 from tests.support.workspaces import prepare_test_workspace
-
-
-def _terminal_port_pair(e2e_backend_port: int, offset: int) -> tuple[int, int]:
-    if offset < 0 or offset + 1 >= TEST_FILE_PORT_BLOCK_SIZE:
-        raise ValueError(
-            f"终端 e2e 端口偏移超出当前测试文件端口块: offset={offset}, block_size={TEST_FILE_PORT_BLOCK_SIZE}"
-        )
-    return e2e_backend_port + offset, e2e_backend_port + offset + 1
-
-
-def terminal_ports(e2e_backend_port: int) -> tuple[int, int]:
-    return _terminal_port_pair(e2e_backend_port, 40)
-
-
-def terminal_ports_with_offset(e2e_backend_port: int, offset: int) -> tuple[int, int]:
-    return _terminal_port_pair(e2e_backend_port, offset)
 
 
 def create_terminal_scenario_workspace(

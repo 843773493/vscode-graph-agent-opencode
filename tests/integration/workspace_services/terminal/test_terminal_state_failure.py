@@ -19,18 +19,19 @@ from tests.harness.python.terminal_backend import (
     stop_terminal_plugin_service,
 )
 from tests.harness.python.terminal_state import read_terminal_state
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
-def terminal_backend(integration_backend_port: int) -> Iterator[tuple[TestRunContext, httpx.Client, str]]:
+def terminal_backend(integration_backend_port: int, integration_service_ports: TestFilePorts) -> Iterator[tuple[TestRunContext, httpx.Client, str]]:
     run = TestRunContext.from_test_file(Path(__file__)).prepare()
     prepare_default_test_workspace(
         workspace_root=run.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
     workspace_id = load_or_create_workspace_id(run.workspace_root)
-    port = integration_backend_port + 64
+    port = integration_service_ports.port(44)
     with ExitStack() as lifetime:
         service = start_terminal_plugin_service(
             backend_port=port, workspace_root=str(run.workspace_root), artifacts_dir=run.artifacts_dir,

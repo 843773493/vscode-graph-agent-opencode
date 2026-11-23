@@ -48,7 +48,6 @@ interface ContentViewSlotsProps extends Pick<
   | "onLoadAroundTurn"
   | "onLoadTurnDetails"
   | "onRetainTurnBodies"
-  | "onLoadToolDetails"
   | "onLoadAgentStateMessageRawContent"
   | "onRetryHistory"
   | "onOpenChanges"
@@ -61,6 +60,7 @@ interface ContentViewSlotsProps extends Pick<
   | "onViewStateChange"
   | "onViewStateRestoreStatus"
   | "messageNavigation"
+  | "onCloseMessageNavigation"
   | "onViewportReady"
 > {
   error: string | null;
@@ -180,10 +180,10 @@ export default function ContentViewSlots({
   onLoadLatestMessages,
   onLoadAroundTurn,
   messageNavigation,
+  onCloseMessageNavigation,
   onViewportReady,
   onLoadTurnDetails,
   onRetainTurnBodies,
-  onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
   onRetryHistory,
   onOpenChanges,
@@ -298,10 +298,10 @@ export default function ContentViewSlots({
           onLoadLatestMessages={onLoadLatestMessages}
           onLoadAroundTurn={onLoadAroundTurn}
           messageNavigation={messageNavigation}
+          onCloseMessageNavigation={onCloseMessageNavigation}
           onViewportReady={onViewportReady}
           onLoadTurnDetails={onLoadTurnDetails}
           onRetainTurnBodies={onRetainTurnBodies}
-          onLoadToolDetails={onLoadToolDetails}
           onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}
           onRetryHistory={onRetryHistory}
           sessionChangeSummary={activeSessionChangeHint}

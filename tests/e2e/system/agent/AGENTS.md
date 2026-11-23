@@ -1,6 +1,6 @@
 # 目录用途
 
-存放 Workspace 后端系统的严格端到端测试，包括 Agent 执行、真实模型 Provider、Job、Session 和持久化子分区。
+存放 Workspace 后端的业务流程验收，包括 Agent 执行、Provider、Job、Session 和持久化子分区；模型模式与目录归属分开。
 
 ## 职责树
 
@@ -25,7 +25,7 @@ agent/
 
 - 不使用前端本地状态代替后端真实结果。
 - 不使用模型 stub 或进程内 fake 代替 Agent 与后端业务执行链。
-- 模型 replay 只能替代 Provider 请求边界；工作区服务和 Agent 调用链仍须经真实应用运行。
+- 模型真实调用、上游录制重放或手工 SSE 只选择 Provider 响应方式；工作区服务和 Agent 调用链仍须经实际应用运行，产物注明模式与资产来源。
 
 # 规范
 

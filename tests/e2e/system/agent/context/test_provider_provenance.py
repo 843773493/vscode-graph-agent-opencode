@@ -55,7 +55,7 @@ from app.services.mapping.itemized.content_blocks import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -91,7 +91,7 @@ def provenance_artifacts(request: pytest.FixtureRequest) -> Path:
 @pytest.fixture(scope="module")
 def e2e_backend_composition(request: pytest.FixtureRequest) -> tuple[str, dict[str, str]]:
     """真实工作区的 Skill 回查必须指向同一隔离 Gateway。"""
-    port = e2e_port_block_for_file(Path(request.node.fspath)).port(1)
+    port = e2e_ports_for_file(Path(request.node.fspath)).port(1)
     return "app.main:app", {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port}"}
 
 
@@ -130,7 +130,7 @@ def provenance_gateway(
 ) -> Generator[GatewayProcess, None, None]:
     gateway = start_gateway_process(
         workspace_root=Path(e2e_workspace_root_path), default_backend_url=client_base_url,
-        port=e2e_port_block_for_file(Path(request.node.fspath)).port(1),
+        port=e2e_ports_for_file(Path(request.node.fspath)).port(1),
         artifacts_dir=provenance_artifacts,
     )
     try:

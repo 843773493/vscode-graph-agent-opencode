@@ -19,8 +19,11 @@ from app.core.resource_uri import session_artifact_uri
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
-from app.domain.itemized.identity.item_projection import ItemProjectionManifest
-from app.domain.itemized.records import user_input_payload
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProjectionManifest,
+)
+from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
@@ -38,14 +41,14 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.support.api_helpers import checkpoint_fixture, create_session
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
 
 
 @pytest.fixture(scope="module")
 def integration_backend_port(request: pytest.FixtureRequest) -> int:
-    return integration_port_block_for_file(Path(request.node.fspath)).port(37)
+    return integration_ports_for_file(Path(request.node.fspath)).port(37)
 
 
 def _turn_messages(
@@ -1269,6 +1272,44 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
             {"source": "deterministic-rollout-stub"},
             checkpoint["channel_versions"],
         )
+        internal_stamp = saver._storage.storage.read_items(session_id, owner.thread_id)[-1].created_at
+        internal_items = tuple(CanonicalItemRecord.create(
+            item_sequence=1, item_id=f"internal-long-{index}", semantic_kind="reasoning",
+            payload_kind="text", status="completed", payload=f"内部步骤 {index}",
+            producer_ref={"producer_kind":"provider", "producer_id":"internal-long-model"},
+            projection_identity=ItemProjectionIdentity(model_call_id="internal-long-model",
+                block_id=f"internal-long-block-{index}", block_index=index),
+            created_at=internal_stamp,
+        ) for index in range(300))
+        saver.append_items(session_id, internal_items, thread_id=owner.thread_id)
+    zero_turn = await _load_history(integration_client, session_id, {"direction":"tail", "include":["metadata", "internal"]})
+    assert zero_turn["items"] == []
+    assert all(entry["terminal_commit_id"] is None for entry in zero_turn["internal_executions"])
+    binding = {key:zero_turn[key] for key in ("source_view_id", "source_view_revision")}
+    internal_outline = await _load_history(integration_client, session_id, {
+        "execution_id":admission.execution_id, "include":["internal", "activity_outline", "assistant_text"], **binding,
+    })
+    assert internal_outline["before_cursor"]
+    tail_ids = {part["source"]["item_id"] for entry in internal_outline["internal_executions"] for part in entry["response_parts"]}
+    assert internal_items[0].item_id not in tail_ids
+    earlier_outline = await _load_history(integration_client, session_id, {"direction":"before", "cursor":internal_outline["before_cursor"]})
+    early_ids = {part["source"]["item_id"] for entry in earlier_outline["internal_executions"] for part in entry["response_parts"]}
+    assert not early_ids & tail_ids
+    assert {item.item_id for item in internal_items} <= early_ids | tail_ids
+    around_item = await _load_history(integration_client, session_id, {
+        "direction":"around", "anchor_item_id":internal_items[1].item_id, "include":["metadata", "internal"],
+    })
+    assert around_item["items"] == []
+    assert around_item["located_item"]["item_id"] == internal_items[1].item_id
+    assert around_item["located_item"]["turn_id"] is None
+    selected_items = [item.item_id for item in internal_items[:4]]
+    selected_bodies = await _load_history(integration_client, session_id, {
+        "execution_id":admission.execution_id, "item_ids":selected_items, "include":["internal", "reasoning_detail"], **binding,
+    })
+    body_parts = [part for entry in selected_bodies["internal_executions"] for part in entry["response_parts"]]
+    assert {part["source"]["item_id"] for part in body_parts} == set(selected_items)
+    assert all(part["text"].startswith("内部步骤 ") for part in body_parts)
+    assert selected_bodies["before_cursor"] is None
     user_messages = _turn_messages(1)
     messages = [notice, internal, *user_messages]
     with _history_user_execution(frozen_provider_prepare, saver, session_id, user_messages[0], "job-0001"):
@@ -1299,6 +1340,11 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     )
     assert [item.ordinal for item in page.items] == [1]
     assert page.items[0].user_messages[0].content == "用户问题 1"
+
+    commit = saver.converge_execution(session_id,thread_id=owner.thread_id,turn_id=None,
+        execution_id=admission.execution_id,outcome="interrupted",turn_status=None,items=())
+    committed = await _load_history(integration_client,session_id,{"direction":"tail","include":["metadata","internal"]})
+    assert {entry["terminal_commit_id"] for entry in committed["internal_executions"]} == {commit}
 
 
 @pytest.mark.asyncio
@@ -1570,3 +1616,71 @@ async def test_history_job_identity_requires_canonical_last_execution(
         with pytest.raises(RuntimeError, match=error):
             storage.storage.read_turn_projections(copied, view_id, ["job-0001"])
     assert jsonl_path.read_bytes() == jsonl_bytes
+
+
+@pytest.mark.asyncio
+async def test_item_navigation_and_process_details_share_http_snapshot(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    frozen_provider_prepare,
+) -> None:
+    """通过正式路由核 Item around、四项补读和轻轮廓的冻结来源。"""
+    session_id = await create_session(integration_client, "节点定位与逐层读取")
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id, count=8, tool_count=2)
+    path = f"/api/v1/sessions/{session_id}/history"
+    tail = await _load_history(integration_client, session_id, {"direction": "tail"})
+    binding = {name: tail[name] for name in ("source_view_id", "source_view_revision")}
+    outline_response = await integration_client.post(path, json={
+        "turn_ids": ["job-0008"], "include": ["activity_outline", "assistant_text"], **binding,
+    })
+    assert outline_response.status_code == 200, outline_response.text
+    assert outline_response.json()["request_id"] == outline_response.headers["x-request-id"]
+    outline = outline_response.json()["data"]
+    assert {name: outline[name] for name in binding} == binding
+    parts = outline["items"][0]["response_parts"]
+    assert parts
+    assert all(part["projection"] == "summary" for part in parts)
+    assert all(not (part.get("text") or part.get("arguments") or part.get("result"))
+               for part in parts if part["kind"] in {"reasoning", "tool_call", "tool_result"})
+    ids = list(dict.fromkeys(part["source"]["item_id"] for part in parts))
+    assert len(ids) >= 5
+    selected = ids[:4]
+    point = await _load_history(integration_client, session_id, {
+        "turn_ids": ["job-0008"], "item_ids": selected,
+        "include": ["text", "reasoning_detail", "tool_call", "tool_result"], **binding,
+    })
+    assert {part["source"]["item_id"] for part in point["items"][0]["response_parts"]} == set(selected)
+    assert point["next_cursor"] is None and point["before_cursor"] is None and point["after_cursor"] is None
+    around = await _load_history(integration_client, session_id, {
+        "direction": "around", "anchor_item_id": ids[0], "before_turns": 0, "after_turns": 0,
+        "include": ["user", "metadata", "final_response", "internal"],
+    })
+    assert around["located_item"]["item_id"] == ids[0]
+    assert around["located_item"]["turn_id"] == "job-0008"
+    assert [item["ordinal"] for item in around["items"]] == [8]
+    assert around["has_before"] and not around["has_after"]
+    missing = await integration_client.post(path, json={"direction":"around", "anchor_item_id":"missing-item"})
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["request_id"] == missing.headers["x-request-id"]
+    missing_context = json.loads(missing.headers["x-boxteam-error-context"])
+    assert missing_context["stage"] == "history_locate"
+    assert missing_context["error_type"] == "HistoryItemUnavailableError"
+    assert missing_context["target"] == {"session_id":session_id, "thread_id":tail["thread_id"], "item_id":"missing-item"}
+    too_many = await integration_client.post(path, json={
+        "turn_ids": ["job-0008"], "item_ids": ids[:5], **binding,
+    })
+    assert too_many.status_code == 422, too_many.text
+    wrong_owner = await integration_client.post(path, json={
+        "turn_ids": ["job-0007"], "item_ids": [ids[0]], **binding,
+    })
+    assert wrong_owner.status_code == 400, wrong_owner.text
+    stale = await integration_client.post(path, json={
+        "turn_ids": ["job-0008"], "item_ids": [ids[0]],
+        "source_view_id": binding["source_view_id"],
+        "source_view_revision": binding["source_view_revision"] + 1,
+    })
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["request_id"] == stale.headers["x-request-id"]
+    # 详情请求没有推进或重写主窗口的 cursor。
+    before = await _load_history(integration_client, session_id, {"direction": "before", "cursor": tail["before_cursor"]})
+    assert [item["ordinal"] for item in before["items"]] == [1, 2, 3]

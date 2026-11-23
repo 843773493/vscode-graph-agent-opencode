@@ -153,9 +153,9 @@ async def test_one_deadline_spans_listing_and_sync_and_retry_keeps_the_frozen_re
         await release_listing.wait()
         return await original_list(**query)
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         revisions.append((resource_id, revision))
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if resource_id == rid:
             entered.set()
             await release_sync.wait()
@@ -244,9 +244,9 @@ async def test_slow_initial_listing_does_not_block_peer_or_replace_its_frozen_ve
                 raise failure
         return snapshot
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         revisions.append((resource_id, revision))
-        await sync(resource_id, revision, for_stop=for_stop)
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
     monkeypatch.setattr(bundle.transport, "list_resources", receiving)
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", syncing)
@@ -309,9 +309,9 @@ async def test_cold_management_revokes_before_waiting_for_the_original_operation
     entered = asyncio.Event()
     calls: list[tuple[int, bool]] = []
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((revision, for_stop))
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if not for_stop:
             if entered.is_set():
                 raise RuntimeError("普通排空仍在等待真实停止，管理入口不能先等待它")

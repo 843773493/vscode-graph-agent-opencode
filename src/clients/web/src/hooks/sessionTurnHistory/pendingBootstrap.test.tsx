@@ -1,3 +1,4 @@
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -8,7 +9,7 @@ import { cloneMaps } from "../../state/appStateMaps";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { createSessionTurnTimeline, upsertTurns } from "../../state/session/turnTimeline";
-import { TurnActivitySummary } from "../../components/chat/turn/TurnActivitySummary";
+import { TurnActivitySummary as OriginalTurnActivitySummary } from "../../components/chat/turn/TurnActivitySummary";
 import { useSessionJobTurnLoader } from "../session/useSessionTurnTimeline";
 import {
   HISTORY_SOURCE_BINDING,
@@ -102,7 +103,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       const metadataResponse = new Promise<Response>((resolve) => { resolveMetadata = resolve; });
       const pendingResponse = new Promise<Response>((resolve) => { resolvePending = resolve; });
       const fullResponse = new Promise<Response>((resolve) => { resolveFull = resolve; });
-      const requests: Array<{ direction: string; turn_ids?: string[]; include?: string[] }> = [];
+      const requests: Array<{ direction: string; turn_ids?: string[]; include?: string[]; source_view_id?: string; source_view_revision?: number }> = [];
       const fullParts = [{ part_id: "part_active_body", kind: "text" as const, projection: "detail" as const,
         status: "completed" as const, source: { message_sequence: 1 }, text: "历史完整正文" }];
       const initialState = appState();
@@ -151,7 +152,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         if (path.endsWith("/main-thread/pending-requests")) return pendingResponse;
         if (path.endsWith("/history")) {
           const parameters = JSON.parse(String(args[1]?.body));
-          if (parameters.direction === "tail") return emptyHistoryPageResponse("req_active_tail");
+          if (parameters.direction === "tail" && !parameters.turn_ids) return emptyHistoryPageResponse("req_active_tail");
           requests.push(parameters);
           return parameters.include?.length === 2 && parameters.include.includes("metadata") && parameters.include.includes("user")
             ? metadataResponse : fullResponse;
@@ -252,9 +253,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         await act(async () => { renderer.root.findByType("button").props.onClick(); await wait(30); });
         expect(requests).toHaveLength(2);
         const toggle = renderer.root.findByType("button");
-        expect(toggle.props["aria-label"]).toContain("耗时 1.0s · Item 1 项");
+        expect(toggle.props["aria-description"]).toContain("1s");
+        expect(toggle.props["aria-description"]).toContain("Item 1 项");
         expect(toggle.props["aria-busy"]).toBe(true);
-        expect(toggle.props["aria-description"]).toContain("正在加载中间消息…");
         await act(async () => { resolveFull(full); await wait(40); });
       }
       await act(async () => {
@@ -271,8 +272,8 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         expectedRequests.push({ direction: "around", turn_ids: [turnId] });
       }
       if (order === "completed_metadata_expand") {
-        expectedRequests.push({ direction: "around", turn_ids: [turnId], include: ["user", "metadata", "text",
-          "reasoning_detail", "encrypted_reasoning_meta", "tool_summary", "tool_call", "tool_result", "final_response"] });
+        expectedRequests.push({ direction: "tail", turn_ids: [turnId], include: ["activity_outline", "assistant_text"],
+          ...HISTORY_SOURCE_BINDING });
       }
       expect(requests).toEqual(expectedRequests);
       const projected = getConversationsForSession(SESSION_ID, currentState, SCOPE_KEY)[0]!;
@@ -280,7 +281,8 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       expect(projected.turnItemsView).toBe("full");
       expect(projected.userMessage?.attachments?.[0].file_id).toBe(userMessages[0].attachments[0].file_id);
       if (order === "completed_metadata_expand") {
-        expect(projected.assistantMessages?.[0]?.content).toBe("历史完整正文");
+        // 轮廓片段只补所选部件，不把响应未覆盖的 final 字段当作整轮替换。
+        expect(projected.assistantMessages).toHaveLength(0);
         expect(projected.responseParts).toEqual(fullParts);
       } else {
         expect(projected.assistantMessages).toBe(live.assistantMessages);
@@ -673,3 +675,5 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     act(() => renderer!.unmount());
   });
 });
+
+function TurnActivitySummary(props: React.ComponentProps<typeof OriginalTurnActivitySummary>) { return <TranscriptTestView><OriginalTurnActivitySummary {...props} /></TranscriptTestView>; }

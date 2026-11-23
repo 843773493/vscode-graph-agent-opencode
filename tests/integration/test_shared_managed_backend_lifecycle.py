@@ -9,7 +9,6 @@ import re
 import signal
 import sqlite3
 from collections.abc import AsyncIterator
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,9 +40,8 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -76,7 +74,7 @@ class SharedBackendCase:
     async def plan(self, workspace_id: str, session_id: str, text: str) -> str:
         main = await self.data("GET", f"/api/v1/sessions/{session_id}/main-thread", headers={"X-BoxTeam-Workspace-Id": workspace_id})
         thread_id = main["thread_id"]
-        port = integration_port_block_for_file(self.context.test_file).port(80)
+        port = integration_ports_for_file(self.context.test_file).port(48)
         interaction = build_cassette(
             asset_id="shared-managed-backend", model="e2e-stub-model",
             url=f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -130,7 +128,7 @@ class SharedBackendCase:
 @pytest.fixture
 async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[SharedBackendCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     roots = (context.workspace_root / "primary", context.workspace_root / "secondary")
     for root in roots:
         prepare_default_test_workspace(
@@ -144,7 +142,7 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
         config = commentjson.loads(config_path.read_text())
         provider = config["llm"]["providers"]["primary"]
         provider["defaults"] = {
-            "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1",
+            "endpoint": f"http://127.0.0.1:{ports.port(48)}/v1",
             "api_key": "", "custom_llm_provider": "openai",
             "api_mode": {
                 "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
@@ -156,13 +154,11 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             agent["model"]["fallbacks"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
-    with ExitStack() as resources, model_stream_replay(
+    with model_stream_replay(
         context.artifacts_dir / request.node.name, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="shared-backend-mount-isolation-and-controlled-exit",
     ) as replay:
-        gateway_lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (ports.port(20),))
-        gateway_lease.acquire()
-        resources.callback(gateway_lease.release)
+        ports.port(20)
         gateway = await asyncio.to_thread(
             start_gateway_process, workspace_root=roots[0], default_backend_url=None, port=ports.port(20),
             boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",

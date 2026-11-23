@@ -82,7 +82,7 @@ def startup_failure(request: pytest.FixtureRequest) -> tuple[Exception, tuple[st
     )
 
 
-async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
+async def test_startup_failure_keeps_safe_reason_and_original_exception_chain(
     tmp_path: Path, event_channel_service: EventChannelService, startup_failure,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -102,11 +102,11 @@ async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
     assert "server_id=mini" in public_error
     assert "stage=startup" in public_error
     assert all(fact in public_error for fact in expected)
-    assert "private" not in public_error
+    assert "private diagnostic" in public_error
     assert raised.value.__cause__ is failure
     assert not owner.started
     assert owner._runtimes == {}
-    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+    assert all(record.exc_info is None for record in caplog.records)
     assert "private diagnostic" in caplog.text
 
 
@@ -346,7 +346,7 @@ async def test_server_without_notifications_relists_at_activation_boundary(
         snapshot = owner.list_servers()[0]
         assert snapshot.last_relist_error is not None
         assert snapshot.last_relist_error == str(raised.value)
-        assert "connection lost" not in snapshot.last_relist_error
+        assert "connection lost" in snapshot.last_relist_error
     finally:
         await owner.shutdown()
 

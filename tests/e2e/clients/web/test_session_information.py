@@ -16,7 +16,7 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
 )
 from tests.support.paths import output_root_for_test
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -72,7 +72,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
     if chromium_path is None:
         pytest.fail("会话信息 Web E2E 需要 Chromium")
 
-    port = e2e_port_block_for_file(Path(request.node.fspath)).port(21)
+    port = e2e_ports_for_file(Path(request.node.fspath)).port(21)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=None,

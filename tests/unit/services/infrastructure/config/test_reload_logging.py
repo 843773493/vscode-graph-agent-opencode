@@ -144,11 +144,12 @@ async def test_reload_failure_state_uses_facts_and_preserves_original_exception(
     assert not status.healthy
     assert status.reason == ("invalid_config" if phase == "build" else "apply_failed")
     assert status.last_error is not None
-    assert "private-config" not in status.last_error
+    assert "private-config" in status.last_error
     assert type(error).__name__ in status.last_error
     if isinstance(error, OSError):
         assert "errno=13" in status.last_error
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert all(record.exc_info is None for record in caplog.records)
+    assert type(error).__name__ in caplog.text and native_path in caplog.text
     failed = False
     await store.reload(candidate_applier=apply_candidate)
     assert store.current() is after

@@ -37,9 +37,9 @@ def test_reference_roundtrip_stays_visible_but_never_resolves_into_snapshots(con
     assert bindings["/llm/providers/aa/defaults/api_key"]["secret_ref"] == "secret:" + SECRET_ID
 
 
-def test_two_providers_share_scoped_value_and_rotation_does_not_mutate_config(config: dict) -> None:
+def test_two_providers_share_scoped_value_and_rotation_does_not_mutate_config(config: dict, workspace_config_schema: dict) -> None:
     original = deepcopy(config)
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default")
+    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
     first_model = {"provider_id": "aa", "model_id": "general"}
     assert resolver.get_model(first_model)["api_key"] == "secret:" + SECRET_ID
     first = {SECRET_ID: ResolvedSecret(revision=1, value="before")}
@@ -54,7 +54,7 @@ def test_two_providers_share_scoped_value_and_rotation_does_not_mutate_config(co
         resolver.get_model(first_model)
 
 
-def test_unresolved_reference_cannot_be_sent_as_model_api_key(config: dict) -> None:
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default")
+def test_unresolved_reference_cannot_be_sent_as_model_api_key(config: dict, workspace_config_schema: dict) -> None:
+    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
     with pytest.raises(ValueError, match="尚未解析"):
         build_model_from_provider(resolver.get_model({"provider_id": "aa", "model_id": "general"}), {})

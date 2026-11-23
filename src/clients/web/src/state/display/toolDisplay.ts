@@ -102,10 +102,9 @@ function isTerminalToolItem(item: AggregatedToolItem): boolean {
 }
 
 function formatTerminalToolContent(
-  item: AggregatedToolItem,
   inputRecord: Record<string, unknown>,
   resultRecord: Record<string, unknown>,
-): string {
+): ToolDetails {
   const terminalId = fieldText(resultRecord, "chunk_id") ||
     fieldText(resultRecord, "session_id") ||
     fieldText(inputRecord, "session_id");
@@ -115,7 +114,7 @@ function formatTerminalToolContent(
   const status = runningSessionId ? "running" : hasExitCode ? "completed" : "";
   const output = fieldText(resultRecord, "output");
 
-  const sections = [
+  const input = [
     t("chat.tool.inputHeading"),
     toolFieldLines([
       [t("chat.tool.command"), fieldText(inputRecord, "cmd")],
@@ -128,7 +127,8 @@ function formatTerminalToolContent(
       ["PTY", fieldText(inputRecord, "tty")],
       ["Login shell", fieldText(inputRecord, "login")],
     ]),
-    "",
+  ].filter(Boolean).join("\n\n");
+  const result = [
     t("chat.tool.resultHeading"),
     toolFieldLines([
       [t("chat.tool.commandStatus"), status ? commandStatusLabel(status) : ""],
@@ -143,9 +143,9 @@ function formatTerminalToolContent(
       ? t("chat.tool.terminalHint")
       : "",
     output ? t("chat.tool.outputContent", output) : "",
-  ].filter((part) => part.trim().length > 0);
+  ].filter((part) => part.trim().length > 0).join("\n\n");
 
-  return sections.join("\n\n");
+  return { input, result };
 }
 
 function terminalToolCollapsedText(
@@ -185,45 +185,24 @@ export function isRoutineInternalToolItem(item: AggregatedToolItem): boolean {
   return ROUTINE_INTERNAL_TOOL_NAMES.has(item.toolName);
 }
 
-function formatCustomToolSkillContent(item: AggregatedToolItem): string | null {
+interface ToolDetails { input: string; result: string }
+
+function formatCustomToolCardContent(item: AggregatedToolItem): ToolDetails {
   const names = skillNames(item);
-  if (names.length === 0) {
-    return null;
-  }
-  const result = item.resultText.trim();
-  const input = item.inputText.trim();
   const invocation = invocationToolName(item);
-  return [
-    t("chat.tool.skillContent", names.map(markdownCode).join(t("chat.nameSeparator"))),
-    invocation
-      ? t("chat.tool.invocationContent", markdownCode(invocation), markdownCode(item.toolName))
-      : "",
-    input ? t("chat.tool.inputContent", input) : "",
-    result ? t("chat.tool.resultContent", result) : "",
-  ].filter((part) => part.trim().length > 0).join("\n\n");
-}
-
-function formatCustomInvocationToolContent(item: AggregatedToolItem): string | null {
-  const invocation = invocationToolName(item);
-  if (!invocation) {
-    return null;
-  }
-  const result = item.resultText.trim();
-  const input = item.inputText.trim();
-  return [
-    t("chat.tool.invocationContent", markdownCode(invocation), markdownCode(item.toolName)),
-    input ? t("chat.tool.inputContent", input) : "",
-    result ? t("chat.tool.resultContent", result) : "",
-  ].filter((part) => part.trim().length > 0).join("\n\n");
-}
-
-function formatCustomToolCardContent(item: AggregatedToolItem): string | null {
-  return formatCustomToolSkillContent(item) ?? formatCustomInvocationToolContent(item);
+  return {
+    input: [
+      names.length ? t("chat.tool.skillContent", names.map(markdownCode).join(t("chat.nameSeparator"))) : "",
+      invocation ? t("chat.tool.invocationContent", markdownCode(invocation), markdownCode(item.toolName)) : "",
+      item.inputText ? t("chat.tool.inputBody", item.inputText) : "",
+    ].filter(Boolean).join("\n\n"),
+    result: item.resultText ? t("chat.tool.outputBody", item.resultText) : "",
+  };
 }
 
 export interface ToolRowDisplay {
   previewText: string;
-  detailsContent: string | null;
+  detailsContent: ToolDetails | null;
 }
 
 export function deriveToolRowDisplay(
@@ -236,7 +215,7 @@ export function deriveToolRowDisplay(
     return {
       previewText,
       detailsContent: includeExpandedContent
-        ? formatTerminalToolContent(item, toolInputRecord(item), resultRecord)
+        ? formatTerminalToolContent(toolInputRecord(item), resultRecord)
         : null,
     };
   }

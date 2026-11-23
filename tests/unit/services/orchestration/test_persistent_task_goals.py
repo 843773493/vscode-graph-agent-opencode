@@ -41,9 +41,9 @@ from app.services.business.persistent_tasks.goal import (
     objective_updated_message,
 )
 from app.services.business.session_goal_service import SessionGoalService
-from app.services.mapping.message_content import is_user_visible_message
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.services.mapping.message_content import is_user_visible_message
 from app.services.orchestration.persistent_tasks.goal import GoalWork
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 
@@ -165,7 +165,9 @@ class _Orchestrator:
         source_id,
         idempotency_key,
         delivery_policy="after_turn",
+        background=False,
     ):
+        assert background is True
         self.calls.append(
             (session_id, message.content, message.metadata, delivery_policy)
         )

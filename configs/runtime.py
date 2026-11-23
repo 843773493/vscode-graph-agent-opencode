@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import cast
 
 import jsonschema
 from referencing.exceptions import Unresolvable
 
-from app.agents.providers.request_parameters import (
-    normalize_request_headers,
-    normalize_request_parameters,
-)
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.services.infrastructure.config.policy import (
@@ -17,6 +14,8 @@ from app.services.infrastructure.config.policy import (
     validate_policy_manifest,
     workspace_config_policy,
 )
+from configs.inheritance.merge import SettingsMerger
+from configs.inheritance.values import FieldOrigin, freeze, thaw
 
 
 def read_jsonc_object(path: Path) -> dict[str, object]:
@@ -31,34 +30,14 @@ def merge_json_objects(
     base: dict[str, object],
     override: dict[str, object],
     *,
-    _path: tuple[str, ...] = (),
+    schema: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """递归合并；逻辑别名按层覆盖，保留胜出来源的原文键名。"""
-
-    model_options = _path[:2] == ("llm", "providers")
-    base_names: dict[str, str] = {}
-    override_names: dict[str, str] = {}
-    if model_options and _path[-2:] == ("request_options", "parameters"):
-        base_names = dict(zip(normalize_request_parameters(base, protocol="responses"), base, strict=True))
-        override_names = dict(zip(normalize_request_parameters(override, protocol="responses"), override, strict=True))
-    elif model_options and _path[-2:] == ("request_options", "default_headers"):
-        base_names = dict(zip(normalize_request_headers(base), base, strict=True))
-        override_names = dict(zip(normalize_request_headers(override), override, strict=True))
-
-    result = dict(base)
-    # 这里只统一比较身份；实际协议字段在选定模型解析后归一，来源仍可定位原 JSONC。
-    for canonical, name in override_names.items():
-        previous = base_names.get(canonical)
-        if previous is not None and previous != name:
-            result[name] = result.pop(previous)
-    for key, value in override.items():
-        base_value = result.get(key)
-        atomic_reasoning = model_options and _path[-1:] == ("api_mode",) and key == "supports_reasoning"
-        if isinstance(base_value, dict) and isinstance(value, dict) and not atomic_reasoning:
-            result[key] = merge_json_objects(base_value, value, _path=(*_path, key))
-        else:
-            result[key] = value
-    return result
+    """配置 owner 提供 schema；值与来源共用节点合并，不按业务路径特判。"""
+    merger = SettingsMerger(schema if schema is not None else {})
+    value, origins = merger.merge(None, freeze(base), origin=FieldOrigin("base", "", ()))
+    value, origins = merger.merge(value, freeze(override), origin=FieldOrigin("override", "", ()),
+                                  inherited_origins=origins)
+    return cast(dict[str, object], thaw(value, origins=origins))
 
 
 def validate_config(
@@ -123,6 +102,7 @@ def validate_config_payload(
         resolver = LlmResolution(
             effective_config_provider=lambda: config,
             default_agent_id_provider=lambda: config["default_agent"],
+            schema_provider=lambda: schema,
         )
         validator = jsonschema.Draft202012Validator({
             "$ref": "#/$defs/resolvedModelOptions", "$defs": schema["$defs"],

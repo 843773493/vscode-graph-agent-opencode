@@ -56,10 +56,11 @@ class RolloutContextReader:
     def read_context_notices(self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
                              turn_ids: list[str], execution_ids: list[str],
                              after: tuple[int, int] = (0, -1),
-                             call_upper_bound: int | None = None) -> list[ContextNoticeMetadata]:
+                             call_upper_bound: int | None = None,
+                             model_call_id: str | None = None, anchor: str | None = None) -> list[ContextNoticeMetadata]:
         return context_notice_metadata(self._storage.storage._snapshot_connection(snapshot),
             self.context_view_id(chain), turn_ids=turn_ids, execution_ids=execution_ids,
-            after=after, call_upper_bound=call_upper_bound)
+            after=after, call_upper_bound=call_upper_bound, model_call_id=model_call_id, anchor=anchor)
 
     @asynccontextmanager
     async def read_lease(
@@ -270,10 +271,13 @@ class RolloutContextReader:
         self,
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
-        turn_ids: Iterable[str],
+        turn_ids: Iterable[str], *, activity_before: tuple[int, int] | None = None,
+        activity_limit: int | None = None, item_ids: tuple[str, ...] | None = None,
+        outline: bool = False, include: frozenset[str] | None = None,
     ) -> dict[str, dict[str, object]]:
         return self._storage.storage.read_turn_projections(
-            snapshot, self.context_view_id(chain), turn_ids
+            snapshot, self.context_view_id(chain), turn_ids, activity_before=activity_before,
+            activity_limit=activity_limit, item_ids=item_ids, outline=outline, include=include,
         )
 
     def read_projection_records_batch(
@@ -310,6 +314,9 @@ class RolloutContextReader:
         if not chain.ranges:
             raise RuntimeError("context view 链为空")
         return chain.ranges[-1][0]
+
+    def read_item_position(self, snapshot: RolloutReadSnapshot, chain: ContextChain, item_id: str) -> tuple[int, str | None]:
+        return self._storage.storage.read_item_position(snapshot, self.context_view_id(chain), item_id)
 
     def read_history_snapshot_bounds(
         self,
@@ -399,6 +406,7 @@ class RolloutContextReader:
         limit: int,
         execution_id: str | None = None,
         item_ids: tuple[str, ...] | None = None,
+        outline: bool = False,
     ) -> InternalExecutionHistoryPage:
         """同一 view/snapshot 在 SQL 中择一，再读取有界元数据与正文页。"""
         return self._storage.storage.read_internal_execution_history_page(
@@ -411,7 +419,7 @@ class RolloutContextReader:
             snapshot_upper_logical_item_ordinal=snapshot_upper_logical_item_ordinal,
             limit=limit,
             execution_id=execution_id,
-            item_ids=item_ids,
+            item_ids=item_ids, outline=outline,
         )
 
     def decode_message(

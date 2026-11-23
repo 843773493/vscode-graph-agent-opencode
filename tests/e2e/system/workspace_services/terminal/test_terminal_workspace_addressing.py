@@ -16,7 +16,6 @@ from websockets.exceptions import InvalidStatus
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    terminal_ports_with_offset,
     wait_process_gone,
 )
 from tests.harness.python.run_context import TestRunContext
@@ -25,12 +24,13 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
 def terminal_mounts(
-    request: pytest.FixtureRequest, e2e_backend_port: int
+    request: pytest.FixtureRequest, e2e_service_ports: TestFilePorts
 ) -> Iterator[list[tuple[str, TerminalPluginService, Path]]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     mounts = []
@@ -44,9 +44,7 @@ def terminal_mounts(
                 template_items=(),
             )
             workspace_id = load_or_create_workspace_id(root)
-            backend_port, _frontend_port = terminal_ports_with_offset(
-                e2e_backend_port, 40 + index * 2
-            )
+            backend_port = e2e_service_ports.port(40 + index * 2)
             service = start_terminal_plugin_service(
                 backend_port=backend_port, workspace_root=str(root),
                 artifacts_dir=context.artifacts_dir,

@@ -41,6 +41,35 @@ def _notice(marker: str) -> PreparedInternalMessage:
     )
 
 
+@pytest.mark.parametrize("context_mode", ["event", "state"])
+async def test_runtime_priority_is_explicit_and_preserved_by_real_admission(
+    source_case: RuntimeSourceCase, context_mode: str,
+) -> None:
+    case = source_case
+    session_id = await create_session(case.client, "显式后台优先级")
+    thread_id = await case.container.session_service.resolve_main_thread(session_id)
+    jobs = case.container.job_service
+    await jobs.control_thread_advancement(session_id, thread_id, action="pause", expected_execution_id=None)
+    for source_id, background in (("goal:only-a-name", False), ("renamed-owner", True)):
+        message = internal_message_factory.build(kind="checkpoint_reminder", control="等待队列，不请求模型",
+            metadata={"task_id": "task-explicit", "task_revision": 7, "task_check_only": False})
+        accepted = await case.container.session_orchestrator.submit_runtime_event(
+            session_id, message, thread_id=thread_id, source_id=source_id,
+            idempotency_key=source_id, background=background, context_mode=context_mode,
+        )
+        record = case.container.checkpointer.execution_queue_record(session_id, thread_id, accepted.job_id)
+        assert record.phase == "queued" and record.input.background is background
+        job = jobs._jobs[accepted.job_id]
+        assert job.message_metadata["task_id"] == "task-explicit"
+        assert job.message_metadata["task_revision"] == 7
+        retried = await case.container.session_orchestrator.submit_runtime_event(
+            session_id, message, thread_id=thread_id, source_id=source_id,
+            idempotency_key=source_id, background=background, context_mode=context_mode,
+        )
+        assert retried.job_id == accepted.job_id
+    assert case.call_count(session_id, thread_id) == 0
+
+
 @pytest.mark.asyncio
 async def test_idle_publication_is_durable_without_execution_and_consumed_by_real_user(
     source_case: RuntimeSourceCase,

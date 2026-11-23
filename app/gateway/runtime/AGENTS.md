@@ -47,6 +47,7 @@ runtime/
 
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
+- 所有平台的受管 Backend 在身份核验后绑定同一认证 HTTP shutdown 入口，先由 Backend 结清内部资源，再核实整组退出；正常关闭不先向整组发送 SIGTERM，超时回收仍由原进程 owner 执行。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
 - `connection_drain_timeout_seconds` 只约束HTTP连接排空和相应路由等待；进程退出沿 `ManagedBackendOwner.close()` 的既有8秒期限核验，包含lifespan、解释器收尾与已确认后代，不能以HTTP排空期限缩短它。超时仍明确失败并保留原句柄，不把ACK或lifespan完成当作进程已退出。
 - 向 Workspace 提交配置重启失败时传递原异常到 controller 的 HTTP 发送边界，复用配置失败事实出口；不得预拼原生异常正文进入业务记录，原异常留诊断。

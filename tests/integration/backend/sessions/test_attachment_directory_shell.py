@@ -37,7 +37,7 @@ from tests.integration.test_terminal_owner_tool_invocation import (
 from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_workspace_root_path as terminal_workspace_root_path,  # noqa: PLC0414
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
@@ -423,7 +423,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
     prepared_developer_tools_package: Path,
 ) -> None:
     root = Path(terminal_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(40)
+    port = integration_ports_for_file(Path(request.node.path)).port(40)
     run = TestRunContext.from_test_file(Path(request.node.path))
     home = run.boxteam_home_for_node(request.node.nodeid)
     monkeypatch.setenv("BOXTEAM_HOME", str(home))
@@ -471,12 +471,12 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
         original = TerminalManagerClient.sync_owner_revision
         calls: list[tuple[str, int]] = []
 
-        async def pending_revision(transport: TerminalManagerClient, resource_id: str, revision: int, *, for_stop: bool) -> None:
+        async def pending_revision(transport: TerminalManagerClient, resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
             calls.append((resource_id, revision))
             if resource_id == terminals[0]:
                 entered.set()
                 await release.wait()
-            await original(transport, resource_id, revision, for_stop=for_stop)
+            await original(transport, resource_id, revision, for_stop=for_stop, **revision_options)
 
         monkeypatch.setattr(TerminalManagerClient, "sync_owner_revision", pending_revision)
         # 服务图重新从原catalog/owner/lease文件恢复，不复制内存状态。

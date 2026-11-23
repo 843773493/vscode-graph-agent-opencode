@@ -149,37 +149,44 @@ for (const phase of ['routes', 'roots']) {
 
 describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
   test('显式转接保留原归属及接收者，新入口独立捕获，不隐式继承旧错误或接受动作', () => {
-    const editors = { activeEditor: new m.ThreadInput({ ...owner, sessionId: 'session-a', threadId: 'thread-a', title: 'A', routeId: '' }) };
+    const editors = { activeEditor: new m.ThreadInput({ ...owner, sessionId: 'session-a', threadId: 'thread-a', title: 'A', routeId: '' }),
+      activeEditorPane: { group: { id: 7 } } };
     const accept = () => {}, additions = [{ label: '原附件' }];
     let focused = true;
     const context = { getContextKeyValue: key => key === 'editorTextFocus' ? focused : undefined };
     const initial = m.prepareSearchInvocation({ providerOptions: { handleAccept: accept, additionPicks: additions, includeHelp: true },
-      enabledProviderPrefixes: ['', '?', '%'] }, editors, context);
+      enabledProviderPrefixes: ['', '?', '%'] }, editors, context, 7);
     focused = false;
     const other = { ...owner, workspaceId: 'workspace-b' };
     editors.activeEditor = new m.ThreadInput({ ...other, sessionId: 'session-b', threadId: 'thread-b', title: 'B', routeId: '' });
+    editors.activeEditorPane.group.id = 9;
     const transfer = m.prepareSearchInvocation({ ...initial, preserveValue: true,
-      providerOptions: { ...initial.providerOptions, includeHelp: false } }, editors, context);
+      providerOptions: { ...initial.providerOptions, includeHelp: false } }, editors, context, 9);
     expect(transfer.providerOptions.searchOwner).toEqual(owner);
+    expect(transfer.providerOptions.searchGroup).toBe(7);
     expect(transfer.providerOptions.pluginCommandOwner).toEqual(owner);
     expect(new Map(transfer.providerOptions.pluginCommandContext).get('editorTextFocus')).toBe(true);
     expect(transfer.providerOptions.handleAccept).toBe(accept);
     expect(transfer.providerOptions.additionPicks).toBe(additions);
     expect(transfer.providerOptions.includeHelp).toBe(false);
     expect(transfer.enabledProviderPrefixes).toEqual(['', '?', '%']);
-    const fresh = m.prepareSearchInvocation(undefined, editors, context);
+    const fresh = m.prepareSearchInvocation(undefined, editors, context, 9);
     expect(fresh.providerOptions.searchOwner).toEqual(other);
+    expect(fresh.providerOptions.searchGroup).toBe(9);
     expect(fresh.providerOptions.pluginCommandOwner).toEqual(other);
     expect(new Map(fresh.providerOptions.pluginCommandContext).get('editorTextFocus')).toBe(false);
     expect(fresh.providerOptions.handleAccept).toBeUndefined();
     expect(fresh.enabledProviderPrefixes).toBeUndefined();
     const failed = { providerOptions: { searchOwnerError: '发起身份已失效' } };
-    const continued = m.prepareSearchInvocation(failed, editors, context);
+    const continued = m.prepareSearchInvocation(failed, editors, context, 9);
     expect(continued.providerOptions.searchOwnerError).toBe('发起身份已失效');
     expect(continued.providerOptions.searchOwner).toBeUndefined();
     expect(fresh.providerOptions.searchOwnerError).toBeUndefined();
     const selected = [owner, other];
-    const multi = m.prepareSearchInvocation({ providerOptions: { searchOwners: selected } }, { activeEditor: undefined }, context);
+    const multi = m.prepareSearchInvocation({ providerOptions: { searchOwners: selected } }, { activeEditor: undefined }, context, 11);
+    expect(multi.providerOptions.searchGroup).toBe(11);
+    const emptyTransfer = m.prepareSearchInvocation(multi, { activeEditor: undefined }, context, 13);
+    expect(emptyTransfer.providerOptions.searchGroup).toBe(11);
     expect(multi.providerOptions.searchOwners).toBe(selected);
     expect(multi.providerOptions.searchOwner).toBeUndefined();
     expect(multi.providerOptions.searchOwnerError).toBeUndefined();
@@ -193,7 +200,7 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
       const preview = { isDirty: () => false };
       const group = { isTransient: editor => editor === preview, closeEditor: () => closed,
         openEditor: async editor => { restored.push(editor.id); } };
-      const editors = { activeEditorPane: { input: original, group, getControl: () => undefined },
+      const editors = { activeEditorPane: { input: original, group, getControl: () => undefined, getViewState: () => undefined },
         openEditor: async () => ({ input: preview, group }) };
       const state = new m.PickerEditorState(editors, { groups: [group] });
       state.set();

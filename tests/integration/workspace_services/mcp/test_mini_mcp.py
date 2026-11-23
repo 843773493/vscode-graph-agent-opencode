@@ -9,6 +9,7 @@ import httpx
 import pytest
 from mcp import types
 
+from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.configuration import write_mcp_config
@@ -34,6 +35,7 @@ def use_test_gateway_home(
 
 @pytest.fixture
 async def mini_mcp_case(
+    request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     integration_backend_port: int,
@@ -64,7 +66,7 @@ async def mini_mcp_case(
     ) as endpoint:
         generated_config = Path(
             write_mcp_config(
-                workspace_root=workspace_root,
+                artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir,
                 servers={
                     "mini": {
                         "enabled": True,

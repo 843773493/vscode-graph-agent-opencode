@@ -18,6 +18,7 @@ from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import JobStatus, MessageRole
+from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
@@ -55,7 +56,7 @@ class QueueCase:
     jobs: JobService
     executor: HeldExecutor
 
-    def accept(self, text: str, policy="after_turn"):
+    def accept(self, text: str, policy="after_turn", *, background: bool = False):
         identity = self.jobs.reserve_user_execution_identity()
         now = datetime.now(UTC)
         message = MessageDTO(
@@ -65,6 +66,7 @@ class QueueCase:
         frozen = ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
             model=None, delivery_policy=policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
+            background=background,
         )
         self.messages.accept_user_message(message, execution_identity=identity, queue_input=frozen)
         return message, identity
@@ -75,6 +77,20 @@ class QueueCase:
             execution_binding=identity, agent_id="default", message_id=message.message_id,
             message_created_at=message.created_at.isoformat(), delivery_policy=policy,
         )
+
+    def accept_internal(self, text: str, *, background: bool = False, kind: str = "checkpoint_reminder"):
+        now = datetime.now(UTC).isoformat()
+        intent = InternalExecutionIntent(create_prefixed_id("msg"), create_prefixed_id("exec"), create_prefixed_id("admission"))
+        job_id = self.jobs.reserve_internal_job_id()
+        prepared = internal_message_factory.build(kind=kind, control=text)
+        self.saver.admit_internal_execution(
+            self.session_id, thread_id=self.thread_id, job_id=job_id, intent=intent,
+            queue_input=ExecutionQueueInput(intent, intent.message_id, "default", None, "after_turn", None, None, now,
+                                            background=background),
+            message=HumanMessage(id=intent.message_id, content=prepared.content,
+                response_metadata={"message_id": intent.message_id, "created_at": now, "message_metadata": prepared.metadata}),
+        )
+        return self.saver.execution_queue_record(self.session_id, self.thread_id, job_id)
 
 
 @pytest.fixture
@@ -126,6 +142,109 @@ async def test_acceptance_commit_is_already_a_cold_runnable_queue(queue_case: Qu
     await case.jobs.list_pending(case.session_id)
     assert await asyncio.wait_for(case.executor.started.get(), 5) == identity.job_id
     assert case.jobs._jobs[identity.job_id].message_id == message.message_id
+
+
+async def test_user_completion_and_persistent_requests_share_one_non_preemptive_queue(queue_case: QueueCase) -> None:
+    case = queue_case
+    active = case.accept("正在执行的持续任务", background=True)
+    await case.start(*active)
+    active_id = await asyncio.wait_for(case.executor.started.get(), 5)
+    active_task = case.jobs._jobs[active_id].task
+    persistent = case.accept_internal("下一轮持续任务", background=True)
+    completion = case.accept_internal("终端完成通知")
+    user1, identity1 = case.accept("用户消息一")
+    user2, identity2 = case.accept("用户消息二")
+    await case.jobs.list_pending(case.session_id)
+    snapshot = await case.store.snapshot(case.session_id, case.thread_id)
+    await case.jobs.reorder_pending(case.session_id, case.thread_id,
+        message_ids=(user2.message_id, user1.message_id), expected_thread_revision=snapshot.thread_revision)
+    expected = [identity2.job_id, identity1.job_id, completion.cursor.admission.job_id, persistent.cursor.admission.job_id]
+    with RolloutCheckpointSaver(sessions_dir=case.workspace.sessions_root) as cold:
+        assert [r.cursor.admission.job_id for r in cold.execution_queue_snapshot(case.session_id, case.thread_id).records
+                if r.phase == "queued"] == expected
+    assert case.jobs._jobs[active_id].task is active_task and not active_task.done()
+    assert case.executor.started.empty()
+    # 真实领取必须服从与查询相同的优先级；不能只改 UI 顺序。
+    previous = active_id
+    for job_id in expected:
+        await case.jobs.control(previous, JobControlRequest(action="cancel"))
+        assert await asyncio.wait_for(case.executor.started.get(), 5) == job_id
+        previous = job_id
+
+
+async def test_stopped_background_request_is_cancelled_before_executor_and_queue_continues(
+    queue_case: QueueCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = queue_case
+    await case.jobs.control_thread_advancement(case.session_id, case.thread_id, action="pause", expected_execution_id=None)
+    obsolete = case.accept_internal("已经关闭的持续任务", background=True)
+    following = case.accept_internal("另一个有效任务", background=True)
+    obsolete_id = obsolete.cursor.admission.job_id
+    following_id = following.cursor.admission.job_id
+    monkeypatch.setattr(case.jobs, "_dispatch_guard", lambda job: "持续任务已关闭" if job.job_id == obsolete_id else None)
+    await case.jobs.list_pending(case.session_id)
+    assert case.executor.started.empty()
+    await case.jobs.control_thread_advancement(case.session_id, case.thread_id, action="resume", expected_execution_id=None)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == following_id
+    frozen = case.saver.execution_queue_record(case.session_id, case.thread_id, obsolete_id)
+    assert (frozen.phase, frozen.outcome) == ("terminal", "cancelled")
+    assert case.jobs._jobs[obsolete_id].error_message == "持续任务已关闭"
+    assert case.executor.started.empty()
+
+
+async def test_failed_user_execution_keeps_terminal_notification_after_queued_user(
+    queue_case: QueueCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = queue_case
+    active = case.accept("会失败的用户请求")
+    active_id = active[1].job_id
+    fail = asyncio.Event()
+    original_run = case.executor.run
+
+    async def fail_first(job):
+        if job.job_id != active_id:
+            return await original_run(job)
+        job.progress_reporter("agent_loop_ready")
+        case.executor.started.put_nowait(job.job_id)
+        await fail.wait()
+        # 真实执行器先提交执行终态，Job 再记录业务失败；替身也遵守这个边界。
+        case.saver.mark_turn_terminal_status(session_id=case.session_id, thread_id=case.thread_id,
+                                            turn_id=active[1].turn_id, status="failed")
+        raise ValueError("测试用户请求失败，终端通知仍有效")
+
+    monkeypatch.setattr(case.executor, "run", fail_first)
+    await case.start(*active)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == active_id
+    notification = case.accept_internal("后台命令已完成", kind="terminal_execution_completed")
+    notification_id = notification.cursor.admission.job_id
+    pending = case.accept("优先处理的用户消息")
+    await case.jobs.list_pending(case.session_id)
+    active_task = case.jobs._jobs[active_id].task
+    fail.set()
+    await asyncio.wait_for(asyncio.shield(active_task), 5)
+    assert case.jobs._jobs[active_id].status == JobStatus.failed
+    assert case.jobs._thread_current_job.get((case.session_id, case.thread_id)) == pending[1].job_id, (
+        case.jobs._pending_queue.queued_job_ids(case.session_id),
+        case.saver.execution_queue_snapshot(case.session_id, case.thread_id),
+    )
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == pending[1].job_id
+    assert case.saver.execution_queue_record(case.session_id, case.thread_id, notification_id).phase == "queued"
+    await case.jobs.control(pending[1].job_id, JobControlRequest(action="cancel"))
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == notification_id
+    assert case.jobs._jobs[notification_id].status == JobStatus.running
+
+
+async def test_explicit_resume_still_precedes_preserved_user_input(queue_case: QueueCase) -> None:
+    case = queue_case
+    _message, user = case.accept("暂停前保留的用户消息")
+    continuation = case.accept_internal("显式继续原任务")
+    pause = await case.store.pause(case.session_id, case.thread_id, execution_id=None)
+    await case.store.resume(case.session_id, case.thread_id, pause_id=pause.pause_id,
+                            continuation_job_id=continuation.cursor.admission.job_id)
+    snapshot = await case.store.snapshot(case.session_id, case.thread_id)
+    assert [row.job_id for row in snapshot.requests] == [continuation.cursor.admission.job_id, user.job_id]
+    await case.jobs.list_pending(case.session_id)
+    assert await asyncio.wait_for(case.executor.started.get(), 5) == continuation.cursor.admission.job_id
 
 
 async def test_loaded_runtime_discovers_acceptance_without_start_job(queue_case: QueueCase) -> None:

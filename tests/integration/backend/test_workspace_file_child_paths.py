@@ -18,7 +18,7 @@ import pytest
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -35,7 +35,7 @@ async def child_case(request: pytest.FixtureRequest, integration_workspace_root_
     (source / spaced_name / "seed.txt").write_text("original", encoding="utf-8")
     target = workspace / ("target-" + uuid4().hex)
     target.mkdir()
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     backend = start_backend_process(workspace_root=str(workspace), port=port, log_name="child-backend")
     try:
         async with httpx.AsyncClient(

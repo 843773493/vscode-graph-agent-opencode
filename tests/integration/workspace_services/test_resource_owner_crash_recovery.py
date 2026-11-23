@@ -36,7 +36,7 @@ from tests.harness.python.terminal_plugin import (
     TerminalPluginGateway,
     terminal_plugin_gateway_for_workspace,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
 from tests.support.resource_owners.lease_storage import read_lease_snapshot
@@ -92,7 +92,7 @@ async def resource_processes(
     temporary.mkdir(exist_ok=True)
     for name in ("TMPDIR", "TMP", "TEMP"):
         monkeypatch.setenv(name, str(temporary))
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     monkeypatch.setenv("PYTHONPATH", str(project))
     monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(project))
     home = TestRunContext.from_test_file(Path(request.node.path)).boxteam_home_for_node(request.node.nodeid)

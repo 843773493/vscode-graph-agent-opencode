@@ -70,6 +70,12 @@ def test_base_api_exception_handler_is_registered_for_the_subclass() -> None:
             404,
             "Session ses_x not found",
         ),
+        (
+            "/api/v1/__probe_credential",
+            lambda: ForbiddenError("上游拒绝 api_key=private-key-marker"),
+            403,
+            "上游拒绝 api_key=[redacted]",
+        ),
     ],
 )
 def test_bubbling_base_api_exception_is_never_a_500(

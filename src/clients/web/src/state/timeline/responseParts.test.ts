@@ -69,7 +69,7 @@ describe("responsePartsToTimelineItems", () => {
 
     expect(items.map((item) => item.id)).toEqual(parts.map((part) => part.part_id));
     expect(items.flatMap((item) => item.responseSources ?? [])).toEqual(
-      parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })),
+      parts.map(({ part_id, kind, source, projection, tool_call_id }) => ({ part_id, kind, source, projection, tool_call_id })),
     );
     expect(items[0]).toMatchObject({
       kind: "aggregated_tool", active: false, failed: true, resultText: "",
@@ -105,7 +105,7 @@ describe("responsePartsToTimelineItems", () => {
     const items = responsePartsToTimelineItems(parts, { terminalFailure: true });
 
     expect(items.flatMap((item) => item.responseSources ?? [])).toEqual(
-      parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })),
+      parts.map(({ part_id, kind, source, projection, tool_call_id }) => ({ part_id, kind, source, projection, tool_call_id })),
     );
     expect(items[0]).toMatchObject({ active: false, failed: true, incomplete: false });
     expect(items[1]).toMatchObject({ active: false, failed: false, incomplete: true, outcomeUnknown: true });
@@ -155,7 +155,7 @@ describe("responsePartsToTimelineItems", () => {
     if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
     const display = deriveToolRowDisplay(item, true);
     expect(display.previewText).toBe("命令已完成，终端仍可打开");
-    expect(display.detailsContent).toContain("/workspace");
+    expect(display.detailsContent?.result).toContain("/workspace");
   });
 
   it("历史 detail response parts 使用 arguments/result 展示 exec_command", () => {
@@ -184,8 +184,8 @@ describe("responsePartsToTimelineItems", () => {
     expect(item?.kind).toBe("aggregated_tool");
     if (item?.kind !== "aggregated_tool") throw new Error("应生成工具时间线项");
     const display = deriveToolRowDisplay(item, true);
-    expect(display.detailsContent).toContain("ls");
-    expect(display.detailsContent).toContain("README.md");
+    expect(display.detailsContent?.input).toContain("ls");
+    expect(display.detailsContent?.result).toContain("README.md");
     expect(display.previewText).toBe("命令已完成，终端仍可打开");
   });
 

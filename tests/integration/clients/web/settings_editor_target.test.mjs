@@ -564,6 +564,16 @@ scenario('功能导航先选分类，独立范围保存到原 owner；Gateway �
     expect(providerNavigation[0].element.children).toEqual([]);
     expect(pane.categoryForNode(clientBranch.element).id).toBe('client');
     expect(pane.currentGroup(clientBranch.element.id)).toBeUndefined();
+    const ownedIds = [...new Set(settingsCategories.flatMap(category => [...category.groups]))];
+    const remainingIds = ['runtime', 'context', 'ui', 'custom-package/custom-plugin'];
+    const sourceRoot = group('source-root', [...ownedIds, ...remainingIds].map(id => group(id)));
+    for (const definition of settingsCategories.filter(category => category.id !== 'client')) {
+      pane.setCategory(definition.id);
+      pane.decorate(sourceRoot, () => []);
+      const expectedIds = definition.id === 'runtime' ? remainingIds : [...definition.groups];
+      expect(pane.filter.children.map(child => child.id)).toEqual(expectedIds);
+      for (const child of pane.filter.children) expect(sourceRoot.children).toContain(child);
+    }
     pane.setCategory('client');
     pane.decorate(clientRoot, () => []);
     expect(pane.currentGroup(clientBranch.element.id)).toBe(clientRoot.children[0]);

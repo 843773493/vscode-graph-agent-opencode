@@ -27,7 +27,7 @@ from tests.integration.gateway.runtime_logging_controls import (
     verify_runtime_logging_reload,
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 def _get_json(
@@ -152,7 +152,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
     credential_path.write_text(f"{token}\n", encoding="utf-8")
     credential_path.chmod(0o600)
 
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(20)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(20)
     node_executable = shutil.which("node")
     bun_executable = shutil.which("bun")
     if node_executable is None or bun_executable is None:

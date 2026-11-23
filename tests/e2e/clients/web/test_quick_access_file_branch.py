@@ -12,9 +12,8 @@ from pathlib import Path
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import prepare_test_workspace
 
@@ -32,18 +31,11 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 @pytest.fixture
 def file_branch_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    block = e2e_port_block_for_file(Path(request.node.path))
-    lease, probes = E2EProcessLease.acquire_available(
-        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
-        range(block.port(20), block.end + 1),
+    port = e2e_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
     )
-    (context.artifacts_dir / "port-allocation.json").write_text(json.dumps({
-        "block": {"start": block.start, "end": block.end}, "port": lease.ports[0], "probes": probes,
-    }, indent=2) + "\n", encoding="utf-8")
-    try:
-        yield lease.ports[0]
-    finally:
-        lease.release()
+    yield port
 
 
 async def test_first_default_quick_open_completes_file_branch(

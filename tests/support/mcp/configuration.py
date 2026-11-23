@@ -8,7 +8,7 @@ import commentjson
 
 def write_mcp_config(
     *,
-    workspace_root: Path,
+    artifacts_dir: Path,
     servers: dict[str, dict[str, object]],
     allowed_mcp_tools: list[str],
 ) -> str:
@@ -26,7 +26,6 @@ def write_mcp_config(
     workspace_config["agents"]["default"]["tools"]["denylist"] = ["all"]
     workspace_config["agents"]["default"]["tools"]["allowlist"] = list(allowed_mcp_tools)
 
-    artifacts_dir = workspace_root.parent / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     output_config_path = artifacts_dir / "workspace.jsonc"
     output_config_path.write_text(

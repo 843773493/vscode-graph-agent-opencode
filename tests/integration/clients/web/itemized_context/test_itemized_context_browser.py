@@ -56,7 +56,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
 from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -84,8 +84,8 @@ def browser_runtime(
     workspace = Path(integration_workspace_root_path)
     assert workspace == context.workspace_root
     assert Path(integration_workspace_config_path).is_file()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    ensure_local_port_available(ports.backend_port, service_name="itemized Web 后端")
+    ports = integration_ports_for_file(Path(request.node.path))
+    ensure_local_port_available(ports.port(0), service_name="itemized Web 后端")
     ensure_local_port_available(ports.port(20), service_name="itemized Web Gateway")
     runtime_home = context.boxteam_home_for_node(request.node.nodeid)
     credential = runtime_home / "state/gateway/credentials/local-token"
@@ -94,7 +94,7 @@ def browser_runtime(
     credential.chmod(0o600)
     backend = start_backend_process(
         workspace_root=str(workspace),
-        port=ports.backend_port,
+        port=ports.port(0),
         log_name="itemized-web-backend",
         env_overrides={"BOXTEAM_HOME": str(runtime_home)},
     )

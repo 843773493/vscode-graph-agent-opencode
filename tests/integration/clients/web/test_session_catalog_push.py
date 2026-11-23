@@ -17,22 +17,19 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 — 复用正式构建。
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 
 
 @pytest.fixture
 def catalog_push_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port = integration_port_block_for_file(Path(request.node.path)).port(20)
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
-    lease.acquire()
-    try:
-        yield port
-    finally:
-        lease.release()
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
+    )
+    yield port
 
 
 async def test_catalog_push_idle_and_updates(

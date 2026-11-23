@@ -10,7 +10,10 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.default_tools import build_default_tools
-from app.agents.middleware_assembly import build_deep_agent_middleware
+from app.agents.middleware_assembly import (
+    build_deep_agent_middleware,
+    build_deep_agent_tool_middleware,
+)
 from app.agents.policy import (
     DEFAULT_AGENT_TOOL_NAMES,
     build_agent_tool_universe,
@@ -168,13 +171,9 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         invocation_context=invocation_context, response_byte_limit=32768,
     ))
     model = FakeListChatModel(responses=["ok"])
-    middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(workspace_root),
+    middleware = build_deep_agent_middleware(
         model=model,
         backend=StateBackend(),
-        workspace_root=workspace_root,
-        resource_navigation=MagicMock(),
-        artifact_reader=MagicMock(),
-        permissions=None,
         # D1 后 resolved_skills 合同是 PublishedSkillCatalog | None；
         # 本测试只关注工具名集合，不装配 Skill middleware。
         resolved_skills=None,
@@ -187,6 +186,9 @@ def test_policy_default_names_match_actual_agent_graph_tools(
             invocation_context
         ),
         tool_output_middleware=AgentMiddleware(),
+        tool_middleware=build_deep_agent_tool_middleware(
+            backend=StateBackend(), workspace_root=workspace_root, resource_navigation=MagicMock(), text_mutations=text_mutations_factory(workspace_root), artifact_reader=MagicMock(), permissions=None,
+        ),
     )
     agent = create_agent(model, tools=direct_tools, middleware=middleware)
 

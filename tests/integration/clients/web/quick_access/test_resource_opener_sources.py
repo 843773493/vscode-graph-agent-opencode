@@ -25,7 +25,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 
 
@@ -38,7 +38,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "规范来源打开验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     (workspace / "AGENTS.md").write_text("资源打开归属基线\n", encoding="utf-8")
     replies = [{"tool_calls": [{"index": 0, "id": "source-tool-output", "type": "function", "function": {
         "name": "invoke_extension_tool", "arguments": json.dumps({"tool_name": "large_test_output", "arguments": {}}),

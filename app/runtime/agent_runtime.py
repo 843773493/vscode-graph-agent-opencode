@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
@@ -48,7 +48,6 @@ if TYPE_CHECKING:
     from app.agents.instruction_producers import InstructionProducerSpec
     from app.agents.model_capability_routing import CapabilityRoutingMiddleware
     from app.agents.skill_catalog import PublishedSkillCatalog
-    from app.agents.tool_identity import ToolDefinitionLike
     from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
@@ -62,7 +61,6 @@ if TYPE_CHECKING:
     )
 
 
-AgentAssemblyMode = Literal["execution", "tool_catalog"]
 AGENT_GRAPH_RECURSION_LIMIT = 9999
 
 
@@ -82,8 +80,9 @@ def prepare_agent_model(
     prompt_cache_key: str | None = None,
     preferred_model: ModelReferenceDTO | None = None,
     gateway_id: str | None = None,
+    lifetime_scope: LifetimeScope | None = None,
 ) -> AgentModelSetup:
-    """准备配置中的模型候选、路由和指令来源，供执行与压缩预览共用。"""
+    """准备配置中的模型候选、路由和指令来源，供正式执行使用。"""
     from app.agents.instruction_producers import runtime_instruction_producers
     from app.agents.model_capability_routing import (
         CapabilityRoutingMiddleware,
@@ -118,6 +117,8 @@ def prepare_agent_model(
                     f"当前选择的模型配置不可用: provider_id={provider_id}, model_id={provider['model_id']}; {detail}"
                 ) from error
             continue
+        if lifetime_scope is not None:
+            lifetime_scope.register(model.aclose, label=f"model:{provider['provider_id']}/{provider['model_id']}")
         candidates.append(
             build_provider_model_candidate(provider=provider, model=model)
         )
@@ -221,18 +222,15 @@ def assemble_agent(
     graph_binding_store: GraphBindingStorePort,
     workspace_root: Path,
     include_team_tools: bool = False,
-    assembly_mode: AgentAssemblyMode = "execution",
-) -> AgentEventSource | list[ToolDefinitionLike]:
-    """统一读取配置、注入依赖并选择冻结工厂；按模式返回执行图或工具目录。"""
+) -> AgentEventSource:
+    """注入真实执行依赖，严格使用 Thread 冻结的图工厂。"""
     from app.agents.graph_binding import (
-        DEEP_AGENT_GRAPH_BINDING,
         GRAPH_FACTORY_REGISTRY,
         GraphBindingOwnerKey,
         resolve_graph_binding,
     )
     from app.agents.policy import parse_custom_tool_specs
 
-    preload_agent_dependencies()
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
@@ -253,16 +251,6 @@ def assemble_agent(
     node_debug_service = dependency_provider.get_node_debug_service()
     resource_navigation = dependency_provider.get_resource_navigation()
     text_mutations = dependency_provider.get_text_mutations()
-    model_setup = (
-        prepare_agent_model(
-            agent_id=resolved_agent_id,
-            config_service=config_service,
-            prompt_cache_key=session_id,
-            preferred_model=preferred_model,
-            gateway_id=skill_catalog.gateway_id if skill_catalog is not None else None,
-        )
-        if assembly_mode == "execution" else None
-    )
     tool_config = config_service.get_agent_tool_config(resolved_agent_id)
     tool_policy = config_service.resolve_agent_tool_policy(resolved_agent_id)
     confirmation_tool_names = (
@@ -278,31 +266,22 @@ def assemble_agent(
     direct_confirmation_tool_names = confirmation_tool_names - configured_custom_tool_names
     if session_service is None:
         raise RuntimeError("assemble_agent 需要显式传入 SessionService")
-    model = override_model if override_model is not None else (model_setup.model if model_setup is not None else None)
-    # 执行只用 Thread 创建时冻结的 selector；工具目录没有持久 Thread owner。
-    binding = (
-        resolve_graph_binding(
-            store=graph_binding_store,
-            owner=GraphBindingOwnerKey(session_id, thread_id),
-        )
-        if assembly_mode == "execution" else DEEP_AGENT_GRAPH_BINDING
+    binding = resolve_graph_binding(
+        store=graph_binding_store,
+        owner=GraphBindingOwnerKey(session_id, thread_id),
     )
-    builder = cast(
-        "Callable[..., AgentEventSource | list[ToolDefinitionLike]]",
-        GRAPH_FACTORY_REGISTRY.resolve(binding),
-    )
+    builder = cast("Callable[..., AgentEventSource]", GRAPH_FACTORY_REGISTRY.resolve(binding))
     return builder(
-        model=model,
+        model=override_model,
+        preferred_model=preferred_model,
+        model_routing_enabled=model_routing_enabled,
         response_format=None,
-        instruction_producers=model_setup.instruction_producers if model_setup is not None else (),
+        instruction_producers=(),
         tool_selection_reader=tool_selection_reader,
         checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,
         agent_id=resolved_agent_id,
-        model_routing_middleware=model_setup.routing_middleware
-        if model_setup is not None and model_routing_enabled and override_model is None
-        else None,
         sender_agent_id=None,
         enabled_tool_names=None,
         enabled_runtime_middleware_names=None,
@@ -344,5 +323,4 @@ def assemble_agent(
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=config_service,
         workspace_root=workspace_root,
-        assembly_mode=assembly_mode,
     )

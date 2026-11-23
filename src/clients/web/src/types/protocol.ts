@@ -624,9 +624,9 @@ export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "u
   items?: TraceEventDTO[];
   activity_stats?: TurnActivityStats;
 };
-export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "execution_item_ids" | "tool_call_ids" | "include"> & {
+export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadRequest, "turn_ids" | "item_ids" | "tool_call_ids" | "include"> & {
   turn_ids?: string[] | null;
-  execution_item_ids?: string[] | null;
+  item_ids?: string[] | null;
   tool_call_ids?: string[] | null;
   include?: string[];
 };

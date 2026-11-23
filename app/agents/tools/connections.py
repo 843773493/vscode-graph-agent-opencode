@@ -75,11 +75,11 @@ def create_connections_tool(context: CustomToolFactoryContext) -> BaseTool:
                 if operation.action != "connect":
                     raise ValueError("只有连接操作支持授权后的 continuation")
                 binding = context.invocation_context.thread_binding
-                if binding is None or binding.session_id != context.session_id:
+                if binding is None:
                     raise RuntimeError("MCP 长等待缺少匹配的精确 thread binding")
                 admission = require_current_execution_admission(langgraph_thread_id=binding.thread_id)
-                task_id = mcp_wait_task_id(context.session_id, binding.thread_id, operation.operation_id)
-                existing = context.background_task_registry.get_handle(context.session_id, task_id)
+                task_id = mcp_wait_task_id(binding.session_id, binding.thread_id, operation.operation_id)
+                existing = context.background_task_registry.get_handle(binding.session_id, task_id)
                 if existing is not None:
                     previous = McpWaitPayload.model_validate(existing.descriptor.payload)
                     if previous.continuation != request.continuation:
@@ -95,7 +95,7 @@ def create_connections_tool(context: CustomToolFactoryContext) -> BaseTool:
                         gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
                     )
                     handle = await context.background_task_registry.spawn(
-                        session_id=context.session_id, thread_id=binding.thread_id, agent_id=context.agent_id,
+                        session_id=binding.session_id, thread_id=binding.thread_id, agent_id=context.agent_id,
                         task_id=task_id, descriptor=BackgroundTaskDescriptor(
                             kind="mcp_connection_wait", version=1, payload=payload.model_dump(mode="json"),
                         ),

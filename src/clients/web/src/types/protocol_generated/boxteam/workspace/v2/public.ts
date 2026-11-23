@@ -5,6 +5,7 @@
 // source: boxteam/workspace/v2/public.proto
 
 /* eslint-disable */
+import { Error } from "../../common/v1/error.js";
 import { PluginServiceReference } from "../../gateway/v2/service_plugin.js";
 import { AttachmentRef } from "./message.js";
 
@@ -247,9 +248,48 @@ export interface LlmProbeObservationDTO_SourceBaselineEntry {
   value: ConfigSourceBaselineDTO | undefined;
 }
 
+export interface LlmModelMetadataDTO {
+  max_input_tokens?: number | undefined;
+  supports_vision?: boolean | undefined;
+  supports_video_input?: boolean | undefined;
+  supports_audio_input?: boolean | undefined;
+  supports_audio_output?: boolean | undefined;
+  supports_function_calling?: boolean | undefined;
+  supports_reasoning?:
+    | boolean
+    | undefined;
+  /** 逐字段标记 provider／upstream／litellm；目录声明均不代表实测通过。 */
+  sources: { [key: string]: string };
+  catalog_provider?: string | undefined;
+}
+
+export interface LlmModelMetadataDTO_SourcesEntry {
+  key: string;
+  value: string;
+}
+
+export interface LlmModelCatalogDTO {
+  provider: string;
+  models: LlmDiscoveredModelDTO[];
+}
+
+export interface LlmProviderDTO {
+  provider: string;
+  model_count: number;
+  chat_model_count: number;
+  default_endpoint?: string | undefined;
+  protocol?: string | undefined;
+  upstream_discovery: boolean;
+}
+
+export interface LlmProvidersDTO {
+  providers: LlmProviderDTO[];
+}
+
 export interface LlmDiscoveredModelDTO {
   model: string;
   name?: string | undefined;
+  metadata?: LlmModelMetadataDTO | undefined;
 }
 
 export interface LlmProbeErrorDTO {
@@ -885,6 +925,7 @@ export interface McpConnectionOperationDTO {
   deadline: number;
   updated_at: number;
   error_code?: string | undefined;
+  error_message?: string | undefined;
 }
 
 export interface McpConnectionRequestDTO {
@@ -2920,6 +2961,7 @@ export interface TurnDetailDTO {
   source_view_revision: number;
   /** 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。 */
   tool_summary_truncated?: boolean | undefined;
+  failure?: Error | undefined;
 }
 
 /** 原历史视图的工具结果元数据；发现不读 canonical 正文。 */
@@ -3011,6 +3053,11 @@ export interface WorkspaceMessageSearchResultsDTO {
   scanned_bytes: number;
 }
 
+export interface ContextNoticeAnchorDTO {
+  model_call_id: string;
+  anchor: string;
+}
+
 export interface TurnHistoryLoadRequest {
   direction?: string | undefined;
   cursor?: string | undefined;
@@ -3027,8 +3074,15 @@ export interface TurnHistoryLoadRequest {
   context_cursor?:
     | string
     | undefined;
-  /** 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。 */
-  execution_item_ids: string[];
+  /** 同一 Turn 或 execution 内最多四个 canonical Item 的正文回补；不推进历史游标。 */
+  item_ids: string[];
+  anchor_item_id?: string | undefined;
+  source_view_id?: string | undefined;
+  source_view_revision?:
+    | number
+    | undefined;
+  /** 在原过程窗口内定点读取上下文标记元数据，不扫描 context_cursor。 */
+  anchor_context?: ContextNoticeAnchorDTO | undefined;
 }
 
 export interface ContextNoticeBatchDTO {
@@ -3054,6 +3108,7 @@ export interface TurnHistoryPageDTO {
   located_message?: TurnMessageLocationDTO | undefined;
   located_tool_result?: TurnToolResultDTO | undefined;
   context_notices: ContextNoticeBatchDTO[];
+  located_item?: ThreadItemLocationDTO | undefined;
 }
 
 export interface InternalExecutionHistoryDTO {
@@ -3071,6 +3126,11 @@ export interface InternalExecutionHistoryDTO {
   thread_id: string;
   /** 对应 executions.updated_at 的来源更新时刻，接口按 ISO8601 表达；fork 保留全部历史行的原始时间，不用目标安装、发布或取消时间覆盖。 */
   updated_at: string | undefined;
+  failure?:
+    | Error
+    | undefined;
+  /** 原 terminal convergence 的提交；未提交时不根据 Job 或 outcome 推断终态。 */
+  terminal_commit_id?: number | undefined;
 }
 
 export interface InternalExecutionDisplayPartDTO {
@@ -3173,6 +3233,11 @@ export interface TurnResponseSourceDTO {
   elapsed_ms?: number | undefined;
   logical_item_ordinal?: number | undefined;
   model_call_id?: string | undefined;
+  activity_group_item_id?: string | undefined;
+  activity_group_part_ordinal?: number | undefined;
+  turn_id?: string | undefined;
+  execution_id?: string | undefined;
+  process_segment_item_id?: string | undefined;
 }
 
 export interface TurnSummaryDTO {
@@ -3214,6 +3279,7 @@ export interface TurnSummaryDTO {
   source_view_revision: number;
   /** 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。 */
   tool_summary_truncated?: boolean | undefined;
+  failure?: Error | undefined;
 }
 
 export interface TurnThinkingBlockDTO {
@@ -5689,8 +5755,288 @@ export const LlmProbeObservationDTO_SourceBaselineEntry: MessageFns<LlmProbeObse
   },
 };
 
+function createBaseLlmModelMetadataDTO(): LlmModelMetadataDTO {
+  return {
+    max_input_tokens: undefined,
+    supports_vision: undefined,
+    supports_video_input: undefined,
+    supports_audio_input: undefined,
+    supports_audio_output: undefined,
+    supports_function_calling: undefined,
+    supports_reasoning: undefined,
+    sources: {},
+    catalog_provider: undefined,
+  };
+}
+
+export const LlmModelMetadataDTO: MessageFns<LlmModelMetadataDTO> = {
+  fromJSON(object: any): LlmModelMetadataDTO {
+    return {
+      max_input_tokens: isSet(object.max_input_tokens) ? globalThis.Number(object.max_input_tokens) : undefined,
+      supports_vision: isSet(object.supports_vision) ? globalThis.Boolean(object.supports_vision) : undefined,
+      supports_video_input: isSet(object.supports_video_input)
+        ? globalThis.Boolean(object.supports_video_input)
+        : undefined,
+      supports_audio_input: isSet(object.supports_audio_input)
+        ? globalThis.Boolean(object.supports_audio_input)
+        : undefined,
+      supports_audio_output: isSet(object.supports_audio_output)
+        ? globalThis.Boolean(object.supports_audio_output)
+        : undefined,
+      supports_function_calling: isSet(object.supports_function_calling)
+        ? globalThis.Boolean(object.supports_function_calling)
+        : undefined,
+      supports_reasoning: isSet(object.supports_reasoning) ? globalThis.Boolean(object.supports_reasoning) : undefined,
+      sources: isObject(object.sources)
+        ? (globalThis.Object.entries(object.sources) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      catalog_provider: isSet(object.catalog_provider) ? globalThis.String(object.catalog_provider) : undefined,
+    };
+  },
+
+  toJSON(message: LlmModelMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.max_input_tokens !== undefined) {
+      obj.max_input_tokens = Math.round(message.max_input_tokens);
+    }
+    if (message.supports_vision !== undefined) {
+      obj.supports_vision = message.supports_vision;
+    }
+    if (message.supports_video_input !== undefined) {
+      obj.supports_video_input = message.supports_video_input;
+    }
+    if (message.supports_audio_input !== undefined) {
+      obj.supports_audio_input = message.supports_audio_input;
+    }
+    if (message.supports_audio_output !== undefined) {
+      obj.supports_audio_output = message.supports_audio_output;
+    }
+    if (message.supports_function_calling !== undefined) {
+      obj.supports_function_calling = message.supports_function_calling;
+    }
+    if (message.supports_reasoning !== undefined) {
+      obj.supports_reasoning = message.supports_reasoning;
+    }
+    if (message.sources) {
+      const entries = globalThis.Object.entries(message.sources) as [string, string][];
+      if (entries.length > 0) {
+        obj.sources = {};
+        entries.forEach(([k, v]) => {
+          obj.sources[k] = v;
+        });
+      }
+    }
+    if (message.catalog_provider !== undefined) {
+      obj.catalog_provider = message.catalog_provider;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmModelMetadataDTO>, I>>(base?: I): LlmModelMetadataDTO {
+    return LlmModelMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmModelMetadataDTO>, I>>(object: I): LlmModelMetadataDTO {
+    const message = createBaseLlmModelMetadataDTO();
+    message.max_input_tokens = object.max_input_tokens ?? undefined;
+    message.supports_vision = object.supports_vision ?? undefined;
+    message.supports_video_input = object.supports_video_input ?? undefined;
+    message.supports_audio_input = object.supports_audio_input ?? undefined;
+    message.supports_audio_output = object.supports_audio_output ?? undefined;
+    message.supports_function_calling = object.supports_function_calling ?? undefined;
+    message.supports_reasoning = object.supports_reasoning ?? undefined;
+    message.sources = (globalThis.Object.entries(object.sources ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    message.catalog_provider = object.catalog_provider ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLlmModelMetadataDTO_SourcesEntry(): LlmModelMetadataDTO_SourcesEntry {
+  return { key: "", value: "" };
+}
+
+export const LlmModelMetadataDTO_SourcesEntry: MessageFns<LlmModelMetadataDTO_SourcesEntry> = {
+  fromJSON(object: any): LlmModelMetadataDTO_SourcesEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: LlmModelMetadataDTO_SourcesEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmModelMetadataDTO_SourcesEntry>, I>>(
+    base?: I,
+  ): LlmModelMetadataDTO_SourcesEntry {
+    return LlmModelMetadataDTO_SourcesEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmModelMetadataDTO_SourcesEntry>, I>>(
+    object: I,
+  ): LlmModelMetadataDTO_SourcesEntry {
+    const message = createBaseLlmModelMetadataDTO_SourcesEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseLlmModelCatalogDTO(): LlmModelCatalogDTO {
+  return { provider: "", models: [] };
+}
+
+export const LlmModelCatalogDTO: MessageFns<LlmModelCatalogDTO> = {
+  fromJSON(object: any): LlmModelCatalogDTO {
+    return {
+      provider: isSet(object.provider) ? globalThis.String(object.provider) : "",
+      models: globalThis.Array.isArray(object?.models)
+        ? object.models.map((e: any) => LlmDiscoveredModelDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: LlmModelCatalogDTO): unknown {
+    const obj: any = {};
+    if (message.provider !== "") {
+      obj.provider = message.provider;
+    }
+    if (message.models?.length) {
+      obj.models = message.models.map((e) => LlmDiscoveredModelDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmModelCatalogDTO>, I>>(base?: I): LlmModelCatalogDTO {
+    return LlmModelCatalogDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmModelCatalogDTO>, I>>(object: I): LlmModelCatalogDTO {
+    const message = createBaseLlmModelCatalogDTO();
+    message.provider = object.provider ?? "";
+    message.models = object.models?.map((e) => LlmDiscoveredModelDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseLlmProviderDTO(): LlmProviderDTO {
+  return {
+    provider: "",
+    model_count: 0,
+    chat_model_count: 0,
+    default_endpoint: undefined,
+    protocol: undefined,
+    upstream_discovery: false,
+  };
+}
+
+export const LlmProviderDTO: MessageFns<LlmProviderDTO> = {
+  fromJSON(object: any): LlmProviderDTO {
+    return {
+      provider: isSet(object.provider) ? globalThis.String(object.provider) : "",
+      model_count: isSet(object.model_count) ? globalThis.Number(object.model_count) : 0,
+      chat_model_count: isSet(object.chat_model_count) ? globalThis.Number(object.chat_model_count) : 0,
+      default_endpoint: isSet(object.default_endpoint) ? globalThis.String(object.default_endpoint) : undefined,
+      protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : undefined,
+      upstream_discovery: isSet(object.upstream_discovery) ? globalThis.Boolean(object.upstream_discovery) : false,
+    };
+  },
+
+  toJSON(message: LlmProviderDTO): unknown {
+    const obj: any = {};
+    if (message.provider !== "") {
+      obj.provider = message.provider;
+    }
+    if (message.model_count !== 0) {
+      obj.model_count = Math.round(message.model_count);
+    }
+    if (message.chat_model_count !== 0) {
+      obj.chat_model_count = Math.round(message.chat_model_count);
+    }
+    if (message.default_endpoint !== undefined) {
+      obj.default_endpoint = message.default_endpoint;
+    }
+    if (message.protocol !== undefined) {
+      obj.protocol = message.protocol;
+    }
+    if (message.upstream_discovery !== false) {
+      obj.upstream_discovery = message.upstream_discovery;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmProviderDTO>, I>>(base?: I): LlmProviderDTO {
+    return LlmProviderDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmProviderDTO>, I>>(object: I): LlmProviderDTO {
+    const message = createBaseLlmProviderDTO();
+    message.provider = object.provider ?? "";
+    message.model_count = object.model_count ?? 0;
+    message.chat_model_count = object.chat_model_count ?? 0;
+    message.default_endpoint = object.default_endpoint ?? undefined;
+    message.protocol = object.protocol ?? undefined;
+    message.upstream_discovery = object.upstream_discovery ?? false;
+    return message;
+  },
+};
+
+function createBaseLlmProvidersDTO(): LlmProvidersDTO {
+  return { providers: [] };
+}
+
+export const LlmProvidersDTO: MessageFns<LlmProvidersDTO> = {
+  fromJSON(object: any): LlmProvidersDTO {
+    return {
+      providers: globalThis.Array.isArray(object?.providers)
+        ? object.providers.map((e: any) => LlmProviderDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: LlmProvidersDTO): unknown {
+    const obj: any = {};
+    if (message.providers?.length) {
+      obj.providers = message.providers.map((e) => LlmProviderDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmProvidersDTO>, I>>(base?: I): LlmProvidersDTO {
+    return LlmProvidersDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmProvidersDTO>, I>>(object: I): LlmProvidersDTO {
+    const message = createBaseLlmProvidersDTO();
+    message.providers = object.providers?.map((e) => LlmProviderDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
 function createBaseLlmDiscoveredModelDTO(): LlmDiscoveredModelDTO {
-  return { model: "", name: undefined };
+  return { model: "", name: undefined, metadata: undefined };
 }
 
 export const LlmDiscoveredModelDTO: MessageFns<LlmDiscoveredModelDTO> = {
@@ -5698,6 +6044,7 @@ export const LlmDiscoveredModelDTO: MessageFns<LlmDiscoveredModelDTO> = {
     return {
       model: isSet(object.model) ? globalThis.String(object.model) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      metadata: isSet(object.metadata) ? LlmModelMetadataDTO.fromJSON(object.metadata) : undefined,
     };
   },
 
@@ -5709,6 +6056,9 @@ export const LlmDiscoveredModelDTO: MessageFns<LlmDiscoveredModelDTO> = {
     if (message.name !== undefined) {
       obj.name = message.name;
     }
+    if (message.metadata !== undefined) {
+      obj.metadata = LlmModelMetadataDTO.toJSON(message.metadata);
+    }
     return obj;
   },
 
@@ -5719,6 +6069,9 @@ export const LlmDiscoveredModelDTO: MessageFns<LlmDiscoveredModelDTO> = {
     const message = createBaseLlmDiscoveredModelDTO();
     message.model = object.model ?? "";
     message.name = object.name ?? undefined;
+    message.metadata = (object.metadata !== undefined && object.metadata !== null)
+      ? LlmModelMetadataDTO.fromPartial(object.metadata)
+      : undefined;
     return message;
   },
 };
@@ -9797,6 +10150,7 @@ function createBaseMcpConnectionOperationDTO(): McpConnectionOperationDTO {
     deadline: 0,
     updated_at: 0,
     error_code: undefined,
+    error_message: undefined,
   };
 }
 
@@ -9813,6 +10167,7 @@ export const McpConnectionOperationDTO: MessageFns<McpConnectionOperationDTO> = 
       deadline: isSet(object.deadline) ? globalThis.Number(object.deadline) : 0,
       updated_at: isSet(object.updated_at) ? globalThis.Number(object.updated_at) : 0,
       error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+      error_message: isSet(object.error_message) ? globalThis.String(object.error_message) : undefined,
     };
   },
 
@@ -9848,6 +10203,9 @@ export const McpConnectionOperationDTO: MessageFns<McpConnectionOperationDTO> = 
     if (message.error_code !== undefined) {
       obj.error_code = message.error_code;
     }
+    if (message.error_message !== undefined) {
+      obj.error_message = message.error_message;
+    }
     return obj;
   },
 
@@ -9866,6 +10224,7 @@ export const McpConnectionOperationDTO: MessageFns<McpConnectionOperationDTO> = 
     message.deadline = object.deadline ?? 0;
     message.updated_at = object.updated_at ?? 0;
     message.error_code = object.error_code ?? undefined;
+    message.error_message = object.error_message ?? undefined;
     return message;
   },
 };
@@ -22342,6 +22701,7 @@ function createBaseTurnDetailDTO(): TurnDetailDTO {
     source_view_id: "",
     source_view_revision: 0,
     tool_summary_truncated: undefined,
+    failure: undefined,
   };
 }
 
@@ -22396,6 +22756,7 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
       tool_summary_truncated: isSet(object.tool_summary_truncated)
         ? globalThis.Boolean(object.tool_summary_truncated)
         : undefined,
+      failure: isSet(object.failure) ? Error.fromJSON(object.failure) : undefined,
     };
   },
 
@@ -22485,6 +22846,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     if (message.tool_summary_truncated !== undefined) {
       obj.tool_summary_truncated = message.tool_summary_truncated;
     }
+    if (message.failure !== undefined) {
+      obj.failure = Error.toJSON(message.failure);
+    }
     return obj;
   },
 
@@ -22523,6 +22887,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     message.source_view_id = object.source_view_id ?? "";
     message.source_view_revision = object.source_view_revision ?? 0;
     message.tool_summary_truncated = object.tool_summary_truncated ?? undefined;
+    message.failure = (object.failure !== undefined && object.failure !== null)
+      ? Error.fromPartial(object.failure)
+      : undefined;
     return message;
   },
 };
@@ -23076,6 +23443,40 @@ export const WorkspaceMessageSearchResultsDTO: MessageFns<WorkspaceMessageSearch
   },
 };
 
+function createBaseContextNoticeAnchorDTO(): ContextNoticeAnchorDTO {
+  return { model_call_id: "", anchor: "" };
+}
+
+export const ContextNoticeAnchorDTO: MessageFns<ContextNoticeAnchorDTO> = {
+  fromJSON(object: any): ContextNoticeAnchorDTO {
+    return {
+      model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : "",
+      anchor: isSet(object.anchor) ? globalThis.String(object.anchor) : "",
+    };
+  },
+
+  toJSON(message: ContextNoticeAnchorDTO): unknown {
+    const obj: any = {};
+    if (message.model_call_id !== "") {
+      obj.model_call_id = message.model_call_id;
+    }
+    if (message.anchor !== "") {
+      obj.anchor = message.anchor;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ContextNoticeAnchorDTO>, I>>(base?: I): ContextNoticeAnchorDTO {
+    return ContextNoticeAnchorDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextNoticeAnchorDTO>, I>>(object: I): ContextNoticeAnchorDTO {
+    const message = createBaseContextNoticeAnchorDTO();
+    message.model_call_id = object.model_call_id ?? "";
+    message.anchor = object.anchor ?? "";
+    return message;
+  },
+};
+
 function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
   return {
     direction: undefined,
@@ -23091,7 +23492,11 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     anchor_message: undefined,
     anchor_tool_result: undefined,
     context_cursor: undefined,
-    execution_item_ids: [],
+    item_ids: [],
+    anchor_item_id: undefined,
+    source_view_id: undefined,
+    source_view_revision: undefined,
+    anchor_context: undefined,
   };
 }
 
@@ -23117,9 +23522,13 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
         : undefined,
       anchor_tool_result: isSet(object.anchor_tool_result) ? globalThis.String(object.anchor_tool_result) : undefined,
       context_cursor: isSet(object.context_cursor) ? globalThis.String(object.context_cursor) : undefined,
-      execution_item_ids: globalThis.Array.isArray(object?.execution_item_ids)
-        ? object.execution_item_ids.map((e: any) => globalThis.String(e))
-        : [],
+      item_ids: globalThis.Array.isArray(object?.item_ids) ? object.item_ids.map((e: any) => globalThis.String(e)) : [],
+      anchor_item_id: isSet(object.anchor_item_id) ? globalThis.String(object.anchor_item_id) : undefined,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : undefined,
+      source_view_revision: isSet(object.source_view_revision)
+        ? globalThis.Number(object.source_view_revision)
+        : undefined,
+      anchor_context: isSet(object.anchor_context) ? ContextNoticeAnchorDTO.fromJSON(object.anchor_context) : undefined,
     };
   },
 
@@ -23164,8 +23573,20 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.context_cursor !== undefined) {
       obj.context_cursor = message.context_cursor;
     }
-    if (message.execution_item_ids?.length) {
-      obj.execution_item_ids = message.execution_item_ids;
+    if (message.item_ids?.length) {
+      obj.item_ids = message.item_ids;
+    }
+    if (message.anchor_item_id !== undefined) {
+      obj.anchor_item_id = message.anchor_item_id;
+    }
+    if (message.source_view_id !== undefined) {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== undefined) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    if (message.anchor_context !== undefined) {
+      obj.anchor_context = ContextNoticeAnchorDTO.toJSON(message.anchor_context);
     }
     return obj;
   },
@@ -23190,7 +23611,13 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       : undefined;
     message.anchor_tool_result = object.anchor_tool_result ?? undefined;
     message.context_cursor = object.context_cursor ?? undefined;
-    message.execution_item_ids = object.execution_item_ids?.map((e) => e) || [];
+    message.item_ids = object.item_ids?.map((e) => e) || [];
+    message.anchor_item_id = object.anchor_item_id ?? undefined;
+    message.source_view_id = object.source_view_id ?? undefined;
+    message.source_view_revision = object.source_view_revision ?? undefined;
+    message.anchor_context = (object.anchor_context !== undefined && object.anchor_context !== null)
+      ? ContextNoticeAnchorDTO.fromPartial(object.anchor_context)
+      : undefined;
     return message;
   },
 };
@@ -23254,6 +23681,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     located_message: undefined,
     located_tool_result: undefined,
     context_notices: [],
+    located_item: undefined,
   };
 }
 
@@ -23288,6 +23716,7 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       context_notices: globalThis.Array.isArray(object?.context_notices)
         ? object.context_notices.map((e: any) => ContextNoticeBatchDTO.fromJSON(e))
         : [],
+      located_item: isSet(object.located_item) ? ThreadItemLocationDTO.fromJSON(object.located_item) : undefined,
     };
   },
 
@@ -23341,6 +23770,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.context_notices?.length) {
       obj.context_notices = message.context_notices.map((e) => ContextNoticeBatchDTO.toJSON(e));
     }
+    if (message.located_item !== undefined) {
+      obj.located_item = ThreadItemLocationDTO.toJSON(message.located_item);
+    }
     return obj;
   },
 
@@ -23370,6 +23802,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       ? TurnToolResultDTO.fromPartial(object.located_tool_result)
       : undefined;
     message.context_notices = object.context_notices?.map((e) => ContextNoticeBatchDTO.fromPartial(e)) || [];
+    message.located_item = (object.located_item !== undefined && object.located_item !== null)
+      ? ThreadItemLocationDTO.fromPartial(object.located_item)
+      : undefined;
     return message;
   },
 };
@@ -23385,6 +23820,8 @@ function createBaseInternalExecutionHistoryDTO(): InternalExecutionHistoryDTO {
     session_id: "",
     thread_id: "",
     updated_at: undefined,
+    failure: undefined,
+    terminal_commit_id: undefined,
   };
 }
 
@@ -23404,6 +23841,8 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      failure: isSet(object.failure) ? Error.fromJSON(object.failure) : undefined,
+      terminal_commit_id: isSet(object.terminal_commit_id) ? globalThis.Number(object.terminal_commit_id) : undefined,
     };
   },
 
@@ -23436,6 +23875,12 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.failure !== undefined) {
+      obj.failure = Error.toJSON(message.failure);
+    }
+    if (message.terminal_commit_id !== undefined) {
+      obj.terminal_commit_id = Math.round(message.terminal_commit_id);
+    }
     return obj;
   },
 
@@ -23453,6 +23898,10 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
     message.session_id = object.session_id ?? "";
     message.thread_id = object.thread_id ?? "";
     message.updated_at = object.updated_at ?? undefined;
+    message.failure = (object.failure !== undefined && object.failure !== null)
+      ? Error.fromPartial(object.failure)
+      : undefined;
+    message.terminal_commit_id = object.terminal_commit_id ?? undefined;
     return message;
   },
 };
@@ -23942,6 +24391,11 @@ function createBaseTurnResponseSourceDTO(): TurnResponseSourceDTO {
     elapsed_ms: undefined,
     logical_item_ordinal: undefined,
     model_call_id: undefined,
+    activity_group_item_id: undefined,
+    activity_group_part_ordinal: undefined,
+    turn_id: undefined,
+    execution_id: undefined,
+    process_segment_item_id: undefined,
   };
 }
 
@@ -23969,6 +24423,17 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
         ? globalThis.Number(object.logical_item_ordinal)
         : undefined,
       model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : undefined,
+      activity_group_item_id: isSet(object.activity_group_item_id)
+        ? globalThis.String(object.activity_group_item_id)
+        : undefined,
+      activity_group_part_ordinal: isSet(object.activity_group_part_ordinal)
+        ? globalThis.Number(object.activity_group_part_ordinal)
+        : undefined,
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+      process_segment_item_id: isSet(object.process_segment_item_id)
+        ? globalThis.String(object.process_segment_item_id)
+        : undefined,
     };
   },
 
@@ -24013,6 +24478,21 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.model_call_id !== undefined) {
       obj.model_call_id = message.model_call_id;
     }
+    if (message.activity_group_item_id !== undefined) {
+      obj.activity_group_item_id = message.activity_group_item_id;
+    }
+    if (message.activity_group_part_ordinal !== undefined) {
+      obj.activity_group_part_ordinal = Math.round(message.activity_group_part_ordinal);
+    }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.process_segment_item_id !== undefined) {
+      obj.process_segment_item_id = message.process_segment_item_id;
+    }
     return obj;
   },
 
@@ -24034,6 +24514,11 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     message.elapsed_ms = object.elapsed_ms ?? undefined;
     message.logical_item_ordinal = object.logical_item_ordinal ?? undefined;
     message.model_call_id = object.model_call_id ?? undefined;
+    message.activity_group_item_id = object.activity_group_item_id ?? undefined;
+    message.activity_group_part_ordinal = object.activity_group_part_ordinal ?? undefined;
+    message.turn_id = object.turn_id ?? undefined;
+    message.execution_id = object.execution_id ?? undefined;
+    message.process_segment_item_id = object.process_segment_item_id ?? undefined;
     return message;
   },
 };
@@ -24069,6 +24554,7 @@ function createBaseTurnSummaryDTO(): TurnSummaryDTO {
     source_view_id: "",
     source_view_revision: 0,
     tool_summary_truncated: undefined,
+    failure: undefined,
   };
 }
 
@@ -24124,6 +24610,7 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
       tool_summary_truncated: isSet(object.tool_summary_truncated)
         ? globalThis.Boolean(object.tool_summary_truncated)
         : undefined,
+      failure: isSet(object.failure) ? Error.fromJSON(object.failure) : undefined,
     };
   },
 
@@ -24216,6 +24703,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     if (message.tool_summary_truncated !== undefined) {
       obj.tool_summary_truncated = message.tool_summary_truncated;
     }
+    if (message.failure !== undefined) {
+      obj.failure = Error.toJSON(message.failure);
+    }
     return obj;
   },
 
@@ -24255,6 +24745,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     message.source_view_id = object.source_view_id ?? "";
     message.source_view_revision = object.source_view_revision ?? 0;
     message.tool_summary_truncated = object.tool_summary_truncated ?? undefined;
+    message.failure = (object.failure !== undefined && object.failure !== null)
+      ? Error.fromPartial(object.failure)
+      : undefined;
     return message;
   },
 };

@@ -72,7 +72,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.support.api_helpers import checkpoint_fixture
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -294,7 +294,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     secondary_workspace = _prepare_workspace(
         primary_workspace.parent / "secondary-workspace",
@@ -521,7 +521,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     secondary_workspace = _prepare_workspace(
         primary_workspace.parent / "context-tool-secondary-workspace",
@@ -828,7 +828,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     managed_workspace = _prepare_workspace(
         primary_workspace.parent / "managed-local-workspace",
@@ -909,7 +909,7 @@ async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     primary_backend = start_backend_process(
         workspace_root=str(primary_workspace),
@@ -1029,7 +1029,7 @@ async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     primary_backend = start_backend_process(
         workspace_root=str(primary_workspace),
@@ -1147,7 +1147,7 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     primary_backend = start_backend_process(
         workspace_root=str(primary_workspace),
@@ -1323,7 +1323,7 @@ async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
     primary_backend = start_backend_process(
         workspace_root=str(primary_workspace),
@@ -1441,7 +1441,7 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     local_workspace = Path(integration_workspace_root_path).resolve()
     remote_workspace = _prepare_workspace(
         local_workspace.parent / "remote-gateway-host" / "workspace",

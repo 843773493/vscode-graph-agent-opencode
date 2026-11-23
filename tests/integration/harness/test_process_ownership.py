@@ -17,7 +17,7 @@ from tests.harness.python import terminal_backend
 from tests.integration.gateway import (
     test_navigation_actor_scope_proxy as navigation_case,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     GatewayProcess,
     close_gateway_process,
@@ -41,7 +41,7 @@ def test_windows_python_service_stop_releases_actual_server_before_port_reuse(
     force: bool, tmp_path: Path,
 ) -> None:
     python = resolve_workspace_python_executable(Path.cwd())
-    port = integration_port_block_for_file(Path(__file__)).port(90)
+    port = integration_ports_for_file(Path(__file__)).port(62)
     script = tmp_path / "server.py"
     script.write_text(
         "import sys, uvicorn\n"

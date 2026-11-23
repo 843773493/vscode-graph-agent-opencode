@@ -15,10 +15,12 @@ import type { SearchInvocationOptions } from './target.js';
 /** 明确范围只查询完整窗口工作区；原 Provider、评分与接受动作继续由上游持有。 */
 export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
   private openToken?: CancellationToken;
+  private sourceGroup?: number;
   private picker?: Parameters<SymbolsQuickAccessProvider['provide']>[0];
 
   override provide(picker: Parameters<SymbolsQuickAccessProvider['provide']>[0], token: CancellationToken, options: SearchInvocationOptions = {}) {
     if (options.searchOwners || options.searchOwner || options.searchOwnerError) picker.placeholder = t('quickAccess.symbols.placeholder', options.searchOwners?.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')) ?? options.searchOwner?.workspaceId ?? t('quickAccess.symbols.ownerUnavailable'));
+    this.sourceGroup = options.searchGroup ?? this.editorGroupService.activeGroup.id;
     this.picker = picker;
     this.openToken = token;
     const access = new CancellationTokenSource(token);
@@ -32,7 +34,9 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
 
   protected override _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken, options?: SearchInvocationOptions) {
     if (token.isCancellationRequested) return [];
-    if (!options?.searchOwners && !options?.searchOwner && !options?.searchOwnerError) return super._getPicks(filter, disposables, token);
+    if (!options?.searchOwners && !options?.searchOwner && !options?.searchOwnerError) {
+      return this.getSymbolPicks(filter, { openToken: this.openToken, sourceGroup: this.sourceGroup }, token);
+    }
     const picker = this.picker!;
     disposables.add(toDisposable(() => { if (this.picker === picker) picker.busy = false; }));
     let initial: ISymbolQuickPickItem[] = [];
@@ -43,14 +47,14 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
       picker.busy = busy;
       picker.items = picks;
       if (active?.symbol) picker.activeItems = picks.filter(pick => pick.symbol === active.symbol);
-    }, { openToken: this.openToken });
+    }, { openToken: this.openToken, sourceGroup: this.sourceGroup });
     return initial;
   }
 
   /** 两个入口共用范围准入、Provider 结果、失败重试与原评分／打开逻辑。 */
   async getScopedSymbolPicks(filter: string, options: SearchInvocationOptions, token: CancellationToken,
     progress: (picks: ISymbolQuickPickItem[], busy: boolean) => void,
-    pickOptions?: { skipLocal?: boolean; editorGroup?: (side: boolean) => number; openToken?: CancellationToken }): Promise<void> {
+    pickOptions?: { skipLocal?: boolean; sourceGroup?: number; openToken?: CancellationToken }): Promise<void> {
     try {
       if (options.searchOwnerError && !options.searchOwners) throw new Error(options.searchOwnerError);
       const owners = options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : []);

@@ -7,8 +7,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import commentjson
@@ -20,10 +19,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式模块产物
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -46,42 +44,16 @@ def metadata_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: P
 
 
 @pytest.fixture
-def metadata_port_reservations() -> Iterator[ExitStack]:
-    with ExitStack() as reservations:
-        yield reservations
-
-
-@pytest.fixture
 async def metadata_case(
-    request: pytest.FixtureRequest, metadata_port_reservations: ExitStack,
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, gateway_probes = E2EProcessLease.acquire_available(
-        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", range(ports.start, ports.end + 1),
-    )
-    metadata_port_reservations.callback(lease.release)
-    gateway_port = lease.ports[0]
+    ports = integration_ports_for_file(Path(request.node.path))
+    gateway_port = ports.port(20)
     provider_port = ports.port(10)
     (context.artifacts_dir / "port-allocation.json").write_text(
-        json.dumps(
-            {
-                "test_file": ports.test_file.as_posix(),
-                "block_index": ports.index,
-                "block": {"start": ports.start, "end": ports.end},
-                "gateway": {
-                    "port": gateway_port,
-                    "bind_probes": [
-                        {"port": port, "available": available}
-                        for port, available in gateway_probes
-                    ],
-                },
-                "provider": {"port": provider_port, "transport": "model_stream_replay"},
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
+        json.dumps({"gateway": gateway_port, "provider": {"port": provider_port, "transport": "model_stream_replay"}})
+        + "\n", encoding="utf-8",
     )
     workspace = prepare_default_test_workspace(
         workspace_root=context.workspace_root / context.run_root.name / context.runtime_root_for_node(request.node.nodeid).name / "metadata",
@@ -125,23 +97,18 @@ async def metadata_data(client: httpx.AsyncClient, path: str):
 async def metadata_frontend(
     request: pytest.FixtureRequest,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
-    metadata_port_reservations: ExitStack,
 ) -> AsyncIterator[str]:
     client, context, _workspace, _provider = metadata_case
     if request.param == "static":
         yield str(client.base_url).rstrip("/")
         return
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, port_probes = E2EProcessLease.acquire_available(runtime / "vite-port.json", range(ports.start, ports.end + 1))
-    metadata_port_reservations.callback(lease.release)
-    port = lease.ports[0]
+    ports = integration_ports_for_file(Path(request.node.path))
+    port = ports.port("vite")
     allocation_path = context.artifacts_dir / "port-allocation.json"
     allocation = json.loads(allocation_path.read_text())
-    allocation["frontend"] = {"port": port, "transport": "vite", "bind_probes": [
-        {"port": candidate, "available": available} for candidate, available in port_probes
-    ]}
-    allocation_path.write_text(json.dumps(allocation, ensure_ascii=False, indent=2) + "\n")
+    allocation["frontend"] = {"port": port, "transport": "vite"}
+    allocation_path.write_text(json.dumps(allocation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     base_url = f"http://127.0.0.1:{port}"
     node = shutil.which("node")
     assert node is not None, "Workbench 源码开发入口需要 Node"

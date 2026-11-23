@@ -11,6 +11,7 @@ import {
   applyTurnBootstrap,
   applyTurnDetails,
   applyTurnHistoryPage,
+  applyHistoryFragment,
   applyContextNoticePage,
   applyTurnPage,
   beginTurnBootstrap,
@@ -26,6 +27,26 @@ import {
 const SESSION_ID = "ses_turns";
 const THREAD_ID = "thr_018f0000000070008000000000000001";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;
+
+test("Item 片段与迟到轮廓保留其它正文和主游标，旧快照不能回写", () => {
+  const part = (id: number, projection: "summary" | "detail"): TurnResponsePart => ({
+    part_id: `item-${id}:part:0`, kind: "reasoning", projection, text: projection === "detail" ? `完整正文 ${id}` : "",
+    source: {item_id: `item-${id}`, message_sequence: id, logical_item_ordinal: id, part_ordinal: 0},
+  });
+  const original = {...detail("process", 1), response_parts: [part(1,"detail"),part(2,"summary")]};
+  const page = {thread_id: THREAD_ID, source_view_id: original.source_view_id,
+    source_view_revision: original.source_view_revision, projection_epoch: 1, items: [original],
+    internal_executions: [], before_cursor: "main-before", after_cursor: "main-after", has_before: true, has_after: true};
+  const timeline = applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), page, "around");
+  const enriched = applyHistoryFragment(timeline, {...page, before_cursor:null, after_cursor:null,
+    items:[{...original,response_parts:[part(2,"detail")]}]});
+  const outlined = applyHistoryFragment(enriched,{...page,before_cursor:"outline-before",
+    items:[{...original,response_parts:[part(1,"summary"),part(2,"summary")]}]},true);
+  expect(outlined.turnsById.process.response_parts).toEqual([part(1,"detail"),part(2,"detail")]);
+  expect(outlined.turnsById.process.activityOutline).toEqual({beforeCursor:"outline-before"});
+  expect([outlined.beforeCursor,outlined.afterCursor]).toEqual(["main-before","main-after"]);
+  expect(applyHistoryFragment(outlined,{...page,source_view_revision:0})).toBe(outlined);
+});
 
 test("正文窗口释放远处摘要和详情，保留身份与游标；同版本补读可恢复正文", () => {
   const originals = Array.from({ length: 12 }, (_, index) => ({ ...summary(`body-${index}`, index + 1),
@@ -1316,5 +1337,14 @@ test("上下文续页合并元数据且不改变正文、统计或 Turn 游标",
   expect(next.turnsById[first.turn_id].revision).toBe(first.revision);
   expect(next.turnsById[first.turn_id].activity_stats).toBe(first.activity_stats);
   expect(applyContextNoticePage(next, page, "context-next").turnsById[first.turn_id].response_parts).toHaveLength(2);
+  const refreshed = applyTurnHistoryPage(next, {thread_id:THREAD_ID,source_view_id:"view_history_fixture",source_view_revision:1,
+    items:[{...first,response_parts:[marker,{part_id:"new-body",kind:"text",projection:"detail",text:"新读取的正文",
+      source:{message_sequence:1,item_id:"body-item",item_sequence:1,created_at:"2026-11-23T00:00:00Z"}}]}],
+    summaries:[short],projection_epoch:1},"details");
+  expect(refreshed.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).toContain(extra.part_id);
+  expect(refreshed.summaryTurnsById[first.turn_id].response_parts?.map(part => part.part_id)).toContain(extra.part_id);
+  const changed = {...first,source_view_revision:2,response_parts:[marker]};
+  const replaced = applyTurnHistoryPage(refreshed,{...page,source_view_revision:2,items:[changed]},"details");
+  expect(replaced.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).not.toContain(extra.part_id);
   expect(() => applyContextNoticePage(next, { ...page, thread_id: "other-thread" }, "context-next")).toThrow();
 });

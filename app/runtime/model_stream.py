@@ -1,7 +1,8 @@
-"""冻结显式配置，在第一次 Provider 请求前装配模型 stream SDK。"""
+"""冻结显式录放配置；在各实例的 HTTP 传输边界共用匹配与录制状态。"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 
@@ -28,9 +29,11 @@ class ModelStreamTransportController:
         self.config = config
         self.scenario = scenario
         self._transport: ModelStreamHTTPTransport | None = None
-        self.client: httpx.AsyncClient | None = None
-        self._previous_async_client_factory: object = None
         self._closed = False
+
+    @property
+    def installed(self) -> bool:
+        return self._transport is not None and not self._closed
 
     @property
     def transport(self) -> ModelStreamHTTPTransport:
@@ -60,61 +63,28 @@ class ModelStreamTransportController:
         with _controller_lock:
             if self._closed:
                 raise ModelStreamError("model stream transport owner 已关闭")
-            if self.client is not None:
+            if self._transport is not None:
                 return
-            from app.runtime.litellm_runtime import (
-                AsyncHTTPHandler,
-                litellm,
-                litellm_http_handler,
-            )
-
-            if litellm.aclient_session is not None:
-                raise ModelStreamError(
-                    "无法安装 model stream transport：LiteLLM async client 已经存在，"
-                    "必须在第一次模型请求前安装"
-                )
-            transport = ModelStreamHTTPTransport(
+            self._transport = ModelStreamHTTPTransport(
                 scenario=self.scenario,
                 mode=self.config.transport.mode,
                 matching_policy=self.config.transport.matching_policy,
                 replay_policy=self.config.transport.replay_policy,
                 artifact_root=self.config.transport.artifact_root,
             )
-            client = httpx.AsyncClient(transport=transport, follow_redirects=True)
-            injected_handler = AsyncHTTPHandler.__new__(AsyncHTTPHandler)
-            injected_handler.timeout = None
-            injected_handler.event_hooks = None
-            injected_handler.client_alias = "boxteam-model-stream"
-            injected_handler.client = client
-            self._previous_async_client_factory = litellm_http_handler.get_async_httpx_client
-
-            # TODO: LiteLLM 尚未给 Responses API 暴露稳定的 AsyncClient 注入参数；
-            # 待上游提供正式扩展点后，删除这个进程内 factory hook。
-            def get_injected_async_client(*_args: object, **_kwargs: object) -> AsyncHTTPHandler:
-                return injected_handler
-
-            litellm_http_handler.get_async_httpx_client = get_injected_async_client
-            litellm.aclient_session = client
-            self._transport = transport
-            self.client = client
 
     async def aclose(self) -> None:
         global _configured_controller
         with _controller_lock:
             if self._closed:
                 return
+            transport = self._transport
+        if transport is not None:
+            await transport.aclose()
+        with _controller_lock:
             self._closed = True
             if _configured_controller is self:
                 _configured_controller = None
-            client = self.client
-            if client is None:
-                return
-            from app.runtime.litellm_runtime import litellm, litellm_http_handler
-
-            litellm_http_handler.get_async_httpx_client = self._previous_async_client_factory
-            if litellm.aclient_session is client:
-                litellm.aclient_session = None
-        await client.aclose()
 
 
 _configured_controller: ModelStreamTransportController | None = None
@@ -136,10 +106,50 @@ def ensure_model_stream_installed() -> None:
         controller.ensure_installed()
 
 
-def model_stream_async_transport() -> httpx.AsyncBaseTransport | None:
-    """实例 client 借用同一回放 transport，关闭时不关闭进程级 owner。"""
+class _RecordingRoute(httpx.AsyncBaseTransport):
+    """实例持有实际路由；录制状态仍归原进程级 owner。"""
+
+    def __init__(self, recorder: ModelStreamHTTPTransport, live: httpx.AsyncBaseTransport) -> None:
+        self._recorder, self._live = recorder, live
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self._recorder.handle_async_request(request, live_transport=self._live)
+
+    async def aclose(self) -> None:
+        await self._live.aclose()
+
+
+class _SyncRecordingRoute(httpx.BaseTransport):
+    def __init__(self, recorder: ModelStreamHTTPTransport, live: httpx.BaseTransport) -> None:
+        self._recorder, self._live = recorder, live
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._recorder.handle_request(request, live_transport=self._live)
+
+    def close(self) -> None:
+        self._live.close()
+
+
+def model_stream_sync_transport(
+    live_factory: Callable[[], httpx.BaseTransport],
+) -> httpx.BaseTransport:
     controller = _configured_controller
     if controller is None:
-        return None
+        return live_factory()
     controller.ensure_installed()
+    if controller.config.transport.mode == "record":
+        return _SyncRecordingRoute(controller.transport, live_factory())
+    return httpx.MockTransport(controller.transport.handle_request)
+
+
+def model_stream_async_transport(
+    live_factory: Callable[[], httpx.AsyncBaseTransport],
+) -> httpx.AsyncBaseTransport:
+    """回放不创建真实路由；录制包装本实例路由，关闭不触碰进程级 owner。"""
+    controller = _configured_controller
+    if controller is None:
+        return live_factory()
+    controller.ensure_installed()
+    if controller.config.transport.mode == "record":
+        return _RecordingRoute(controller.transport, live_factory())
     return httpx.MockTransport(controller.transport.handle_async_request)

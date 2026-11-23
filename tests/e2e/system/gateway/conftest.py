@@ -21,9 +21,10 @@ def docker_e2e_paths(request: pytest.FixtureRequest) -> GatewayTargetE2EPaths:
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
     context = TestRunContext.from_test_file(test_file_path, project_root=project_root)
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     root = context.output_root
     local_workspace = context.workspace_root
-    artifacts = context.artifacts_dir
     prepare_default_test_workspace(
         workspace_root=local_workspace,
         template_root=project_root
@@ -32,7 +33,6 @@ def docker_e2e_paths(request: pytest.FixtureRequest) -> GatewayTargetE2EPaths:
         / "workspaces"
         / "default_test_workspace",
     )
-    artifacts.mkdir(parents=True, exist_ok=True)
     container_test_root = (
         f"/opt/boxteam-dev/repository/out/tests/{relative_test_path.as_posix()}"
     )

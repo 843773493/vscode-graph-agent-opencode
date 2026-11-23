@@ -26,12 +26,9 @@ from tests.integration.clients.web import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +44,7 @@ def localization_execution_interaction(request: pytest.FixtureRequest) -> str:
     model = 'e2e-stub-model'
     cassette = build_cassette(
         asset_id='localization-running-execution', model=model,
-        url=f'http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(10)}/v1/chat/completions',
+        url=f'http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(10)}/v1/chat/completions',
         frames=chat_completion_frames(response_id='localization-running-execution', model=model,
             deltas=[{'role': 'assistant', 'content': '语言切换后执行完成 /home/alice/{0}'}], finish_reason='stop'),
     )

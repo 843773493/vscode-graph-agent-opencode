@@ -17,7 +17,7 @@ import pytest
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.http_server import running_http_server
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -43,7 +43,7 @@ class Provider403State:
 
 @pytest.fixture
 def provider_403_ports(request: pytest.FixtureRequest) -> tuple[int, int, int]:
-    port_block = integration_port_block_for_file(Path(request.node.path))
+    port_block = integration_ports_for_file(Path(request.node.path))
     return port_block.port(0), port_block.port(10), port_block.port(20)
 
 

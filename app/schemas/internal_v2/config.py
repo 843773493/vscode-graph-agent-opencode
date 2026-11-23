@@ -215,7 +215,7 @@ class ConfigSourceDocumentDTO(BaseModel):
 class ConfigModelOptionOriginDTO(BaseModel):
     path: str
     source_key: str
-    definition: Literal["defaults", "overrides"]
+    definition: Literal["defaults", "overrides", "catalog", "builtin"]
     definition_path: str
 
 

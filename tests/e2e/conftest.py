@@ -12,7 +12,7 @@ from app.core.mounted_workspaces import MountedWorkspace
 from tests.harness.python.run_context import TestRunContext
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import TestFilePorts, e2e_ports_for_file
 from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.processes.workspace import (
     close_backend_process,
@@ -112,7 +112,8 @@ def e2e_model_stream_runtime_config_path(
         prepare_e2e_model_stream_config(
             e2e_model_stream_config_path,
             runtime_root=context.runtime_root_for_node(request.node.nodeid),
-            artifacts_dir=context.artifacts_dir,
+            # 后端与 transport 按模块复用，录制归本次文件运行，不能挂在首个用例下。
+            artifacts_dir=context.run_root / "artifacts",
             mode=e2e_model_stream_mode,
         )
     )
@@ -132,8 +133,13 @@ def e2e_workspace_config_path(
 
 
 @pytest.fixture(scope="module")
-def e2e_backend_port(request: pytest.FixtureRequest) -> int:
-    return e2e_port_block_for_file(Path(request.node.fspath)).backend_port
+def e2e_service_ports(request: pytest.FixtureRequest) -> TestFilePorts:
+    return e2e_ports_for_file(Path(request.node.fspath))
+
+
+@pytest.fixture(scope="module")
+def e2e_backend_port(e2e_service_ports: TestFilePorts) -> int:
+    return e2e_service_ports.port(0)
 
 
 @pytest.fixture(scope="module")

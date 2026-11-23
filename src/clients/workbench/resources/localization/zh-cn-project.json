@@ -1,5 +1,8 @@
 {
   "contents": {
+    "vs/workbench/services/editor/common/editorGroupFinder": {
+      "editorSourceGroupClosed": "发起打开的编辑器组已关闭"
+    },
     "vs/workbench/api/common/extHostLogService": {
       "worker": "扩展宿主（Web Worker）"
     },

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
+
 
 @pytest.fixture
 def startup_failure_probe(tmp_path: Path) -> Path:
@@ -100,12 +102,15 @@ try {
 )
 @pytest.mark.parametrize("failure_stage", ["listen", "launch", "context"])
 def test_component_setup_failure_releases_acquired_resources(
+    request: pytest.FixtureRequest,
     fixture_name: str,
     failure_stage: str,
     startup_failure_probe: Path,
     tmp_path: Path,
 ) -> None:
     root = Path.cwd()
+    context = TestRunContext.from_test_file(Path(__file__).with_name(f"{fixture_name}.mjs")).prepare()
+    runtime = context.runtime_root_for_node(request.node.nodeid)
     environment = {
         **os.environ,
         **{name: str(tmp_path) for name in ("TMPDIR", "TMP", "TEMP")},
@@ -130,6 +135,5 @@ def test_component_setup_failure_releases_acquired_resources(
     assert observation["browserConnected"] is False, observation
     assert observation["viteCloseCalls"] == 1, observation
     assert observation["browserCloseCalls"] == (1 if failure_stage == "context" else 0), observation
-    runtime = root / "out/tests/integration/clients/web/components" / fixture_name / "runtime"
     assert observation["temporaryDirectory"] == str(runtime), observation
     assert observation["configuredCacheDir"] == str(runtime / "vite-cache"), observation

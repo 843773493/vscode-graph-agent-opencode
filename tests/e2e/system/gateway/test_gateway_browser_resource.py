@@ -37,8 +37,9 @@ from tests.e2e.system.gateway.gateway_target import (
     start_remote_gateway_via_ssh,
     stop_remote_gateway,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.support.browser_test_data import browser_test_data_url
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -239,10 +240,8 @@ with httpx.Client(base_url=f'http://127.0.0.1:{port}', headers={'X-Local-Token':
 if result.artifact.package_id != 'boxteam.developer-tools':
     raise RuntimeError(f'开发工具插件远端安装失败: {result}')
 """
-    package_path = _remote_join(
-        target, target.repository_path, "out", "tests", "e2e", "system", "gateway",
-        "test_gateway_browser_resource", "artifacts", "developer-tools.zip",
-    )
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir.relative_to(Path.cwd())
+    package_path = _remote_join(target, target.repository_path, *artifacts.parts, "developer-tools.zip")
     arguments = (
         _remote_python(target), "-c", script, gateway_id, target.repository_path, package_path,
         str(gateway_port), boxteam_home,
@@ -263,10 +262,9 @@ if result.artifact.package_id != 'boxteam.developer-tools':
 
 
 def _write_launcher_runtime_manifest(
-    *, project_root: Path, output_root: Path, python_executable: Path
+    *, project_root: Path, runtime_root: Path, python_executable: Path
 ) -> Path:
     package = json.loads((project_root / "package.json").read_text(encoding="utf-8"))
-    runtime_root = output_root / "runtime"
     runtime_root.mkdir(parents=True, exist_ok=True)
     manifest_path = runtime_root / "runtime-manifest.json"
     manifest = {
@@ -383,7 +381,7 @@ async def test_gateway_restart_reuses_browser_plugin_and_live_page(
     workspace_root = Path(e2e_workspace_root_path).resolve()
     output_root = workspace_root.parent
     project_root = Path.cwd().resolve()
-    gateway_port = e2e_port_block_for_file(Path(request.node.fspath)).port(40)
+    gateway_port = e2e_ports_for_file(Path(request.node.fspath)).port(40)
     ensure_local_port_available(gateway_port, service_name="Gateway E2E Launcher")
     workspace_config_path = Path(e2e_workspace_config_path)
     workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
@@ -410,12 +408,13 @@ async def test_gateway_restart_reuses_browser_plugin_and_live_page(
     credential_path.write_text("local-dev-token\n", encoding="utf-8")
     credential_path.chmod(0o600)
 
+    context = TestRunContext.from_test_file(Path(request.node.path))
     runtime_manifest = _write_launcher_runtime_manifest(
         project_root=project_root,
-        output_root=output_root,
+        runtime_root=context.runtime_root_for_node(request.node.nodeid),
         python_executable=python_executable,
     )
-    artifacts = output_root / "artifacts"
+    artifacts = context.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     stdout_file = (artifacts / "browser-plugin-restart-launcher.stdout.log").open(
         "w", encoding="utf-8"
@@ -768,11 +767,12 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     if docker_error is not None:
         pytest.skip(f"Docker daemon 当前不可访问: {docker_error}")
 
-    port_block = e2e_port_block_for_file(Path(request.node.fspath))
+    port_block = e2e_ports_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
     gateway_port = port_block.port(41)
     remote_gateway_port = port_block.port(43)
-    tunnel_port_range = (port_block.port(60), port_block.port(75))
+    tunnels = port_block.port_range("ssh-tunnels", count=16)
+    tunnel_port_range = (tunnels[0], tunnels[-1])
     remote_workspace_path = docker_e2e_paths.remote_workspace
     remote_boxteam_home = docker_e2e_paths.remote_boxteam_home
 
@@ -784,7 +784,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     try:
         docker_target = ensure_gateway_ssh_container(
             known_hosts_path=(
-                local_workspace.parent / "artifacts" / "gateway_ssh_known_hosts"
+                docker_e2e_paths.artifacts / "gateway_ssh_known_hosts"
             ),
         )
         remote_gateway_pid = start_remote_gateway_via_ssh(
@@ -807,7 +807,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             ssh_port=docker_target.ssh_port,
             username=docker_target.username,
             remote_gateway_port=remote_gateway_port,
-            private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
+            private_key_path=install_gateway_ssh_assets_for_e2e(docker_e2e_paths.artifacts),
             remote_pair_command=build_remote_pair_command(
                 docker_target,
                 remote_boxteam_home=remote_boxteam_home,

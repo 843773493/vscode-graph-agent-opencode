@@ -21,6 +21,7 @@ import type { AnythingQuickAccessProviderRunOptions, IQuickAccessOptions } from 
 
 /** 同一次模式转接保留发起归属，不重新采样后来获得焦点的编辑器。 */
 export interface SearchInvocationOptions extends AnythingQuickAccessProviderRunOptions {
+  searchGroup?: number;
   searchOwner?: WorkspaceOwner;
   /** 管理动作的只选择模式：接受不打开目标，也不提供写入或侧开按钮。 */
   resourceSelection?: 'session' | 'thread';
@@ -32,9 +33,10 @@ export interface SearchInvocationOptions extends AnythingQuickAccessProviderRunO
 }
 
 /** 原 Controller 的同次模式转接传递调用参数；新入口在浮层聚焦前捕获归属。 */
-export function prepareSearchInvocation(options: IQuickAccessOptions | undefined, editors: IEditorService, context: IContextKeyService): IQuickAccessOptions {
+export function prepareSearchInvocation(options: IQuickAccessOptions | undefined, editors: IEditorService, context: IContextKeyService, sourceGroup: number): IQuickAccessOptions {
   const supplied = options?.providerOptions as SearchInvocationOptions | undefined;
   const providerOptions: SearchInvocationOptions = { ...supplied };
+  providerOptions.searchGroup ??= sourceGroup;
   if (!('fileSearchDelegate' in providerOptions) && !providerOptions.searchOwners && !providerOptions.searchOwner && !providerOptions.searchOwnerError) {
     try { providerOptions.searchOwner = captureSearchOwner(editors); }
     catch (error) { providerOptions.searchOwnerError = String(error); }

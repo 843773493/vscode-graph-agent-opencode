@@ -8,10 +8,8 @@ from __future__ import annotations
 from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
     _authoritative_tool_coordinates,
-    _final_reasoning_source_refs,
     _finalize_activity_projection,
     _json_object,
-    _logical_activity_key,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -24,8 +22,9 @@ def _merge_activity_items(
     result: dict[str, dict[str, object]],
     tool_rows: object,
     activity_rows: object,
-) -> tuple[dict[str, set[int]], dict[str, set[tuple[str | None, str]]]]:
-    """归并 canonical activity item，返回 shadow 索引与 reasoning 源引用表。"""
+    text_parts: dict[str, list[dict[str, object]]],
+) -> None:
+    """物化已由查询择一的 canonical activity；此处不再次决定成员身份。"""
 
     tool_by_item: dict[
         tuple[str, str], tuple[ItemProjectionManifest, list[dict[str, object]]]
@@ -82,6 +81,12 @@ def _merge_activity_items(
     canonical_tool_call_ids_by_model_call: dict[
         tuple[str, str, int], str
     ] = {}
+    # 分页不能截掉同一模型调用的身份声明；只复用已取得的工具轻元数据。
+    for (turn_id, _item_id), (manifest, tools) in tool_by_item.items():
+        identity = manifest.projection_identity
+        if identity is not None and identity.model_call_id is not None and identity.block_id is not None:
+            canonical_tool_call_ids_by_model_call[(turn_id, identity.model_call_id, identity.block_index)] = identity.block_id
+            canonical_tools_by_model_call.setdefault((turn_id, identity.model_call_id), []).extend(tools)
     canonical_tool_call_ids_by_raw_id: dict[tuple[str, str | None, str], str | None] = {}
     # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
     # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
@@ -129,21 +134,6 @@ def _merge_activity_items(
         in canonical_tool_call_ids_by_model_call.items()
     }
 
-    seen_activity: dict[str, set[tuple[object, ...]]] = {
-        turn_id: set() for turn_id in result
-    }
-    seen_reasoning_source_refs: dict[str, set[tuple[str | None, str]]] = {
-        turn_id: set() for turn_id in result
-    }
-    canonical_reasoning_keys: dict[
-        str, dict[tuple[str, str, int], tuple[object, ...]]
-    ] = {turn_id: {} for turn_id in result}
-    shadow_reasoning_indices: dict[str, dict[tuple[str, str, int], int]] = {
-        turn_id: {} for turn_id in result
-    }
-    discarded_activity_indices: dict[str, set[int]] = {
-        turn_id: set() for turn_id in result
-    }
     for (
         turn_id,
         item_sequence,
@@ -331,13 +321,6 @@ def _merge_activity_items(
             if semantic_kind == "reasoning" and payload_kind in {"opaque", "extension"}
             else semantic_kind
         )
-        if (
-            semantic_kind == "reasoning"
-            and isinstance(source_part_id, str)
-            and source_part_id
-        ):
-            prefix = f"{activity_model_call_id}:block:"
-            seen_reasoning_source_refs[turn_id].add((activity_model_call_id, source_part_id.removeprefix(prefix)))
         for activity_tool in activity_tools:
             activity_item: dict[str, object] = {
                 "item_id": strict_text(item_id, field="item_catalog.item_id"),
@@ -366,6 +349,7 @@ def _merge_activity_items(
                 "producer_ref": producer_ref,
                 "model_call_id": activity_model_call_id,
                 "block_ordinal": block_ordinal,
+                "content_block_index": identity.block_index if identity is not None else None,
                 "block_id": (
                     source_part_id
                     if isinstance(source_part_id, str) and source_part_id
@@ -384,64 +368,23 @@ def _merge_activity_items(
                     activity_tool.get("call_index"),
                     field="tool_calls.call_index",
                 )
-            logical_key = _logical_activity_key(activity_item, activity_model_call_id)
-            reasoning_block_key = (
-                (
-                    kind,
-                    activity_model_call_id,
-                    block_ordinal,
-                )
-                if semantic_kind == "reasoning"
-                else None
-            )
-            is_checkpoint_reasoning_shadow = (
-                semantic_kind == "reasoning"
-                and activity_item["block_id"] is None
-                and projection_group is not None
-                and activity_model_call_id is not None
-            )
-            if (
-                is_checkpoint_reasoning_shadow
-                and reasoning_block_key is not None
-                and reasoning_block_key in canonical_reasoning_keys[turn_id]
-            ):
-                continue
-            if logical_key in seen_activity[turn_id]:
-                continue
-            seen_activity[turn_id].add(logical_key)
             items = result[turn_id]["activity_items"]
             if not isinstance(items, list):
                 raise TypeError("Turn activity_items projection 必须是列表")
-            if (
-                is_checkpoint_reasoning_shadow
-                and reasoning_block_key is not None
-            ):
-                shadow_reasoning_indices[turn_id][reasoning_block_key] = len(items)
-            elif reasoning_block_key is not None and activity_item["block_id"]:
-                canonical_reasoning_keys[turn_id].setdefault(
-                    reasoning_block_key,
-                    logical_key,
-                )
-                shadow_index = shadow_reasoning_indices[turn_id].pop(
-                    reasoning_block_key,
-                    None,
-                )
-                if shadow_index is not None:
-                    discarded_activity_indices[turn_id].add(shadow_index)
-            items.append(activity_item)
-    return discarded_activity_indices, seen_reasoning_source_refs
+            if semantic_kind == "assistant_output" and payload_kind == "structured_content":
+                items.extend({**activity_item, **part} for part in text_parts[item_id])
+            else:
+                items.append(activity_item)
 
 
 def _merge_final_reasoning(
     result: dict[str, dict[str, object]],
     final_reasoning_rows: object,
-    seen_reasoning_source_refs: dict[str, set[tuple[str | None, str]]],
     final_manifests: dict[str, object],
 ) -> None:
-    """归并 final checkpoint reasoning 源引用。"""
+    """物化 final checkpoint 的真实 reasoning 部位；成员由统一坐标查询选择。"""
     previous_turn_id: str | None = None
     model_call_id: str | None = None
-    part_refs: dict[int, str] = {}
     for (
         turn_id,
         message_sequence,
@@ -457,6 +400,7 @@ def _merge_final_reasoning(
         item_sequence,
         item_created_at,
         logical_item_ordinal,
+        part_ordinal,
     ) in final_reasoning_rows:
         turn_id = strict_text(turn_id, field="turns.turn_id")
         content_block_index = strict_non_negative_int(
@@ -470,13 +414,13 @@ def _merge_final_reasoning(
             encrypted_length,
             field=f"reasoning_blocks.encrypted_length:{turn_id}",
         )
-        if reasoning_text:
+        if reasoning_text is not None:
             kind, text = "reasoning", strict_text(
-                reasoning_text, field=f"reasoning_blocks.reasoning_text:{turn_id}"
+                reasoning_text, field=f"reasoning_blocks.reasoning_text:{turn_id}", allow_empty=True
             )
-        elif summary_text:
+        elif summary_text is not None:
             kind, text = "reasoning_summary", strict_text(
-                summary_text, field=f"reasoning_blocks.summary_text:{turn_id}"
+                summary_text, field=f"reasoning_blocks.summary_text:{turn_id}", allow_empty=True
             )
         elif encrypted_length is not None:
             kind, text = "reasoning_encrypted", ""
@@ -494,17 +438,7 @@ def _merge_final_reasoning(
             # 不得为每个思考块重读整条 manifest、再扫描全部 part，避免块数增加时平方增长。
             final_identity = ItemProjectionManifest.from_dict(_json_object(final_manifests[turn_id], field=f"item_catalog.projection_manifest_json:{item_id}")).projection_identity
             model_call_id = final_identity.model_call_id if final_identity is not None else None
-            part_refs = {ref.index: ref.id for ref in final_identity.content_part_refs} if final_identity is not None else {}
             previous_turn_id = turn_id
-        source_refs = _final_reasoning_source_refs(
-            model_call_id, part_refs,
-            content_block_index=content_block_index,
-            item_index=item_index,
-            provider_item_id=reasoning_item_id,
-        )
-        if source_refs & seen_reasoning_source_refs[turn_id]:
-            continue
-        seen_reasoning_source_refs[turn_id].update(source_refs)
         items = result[turn_id]["activity_items"]
         if not isinstance(items, list):
             raise TypeError("Turn activity_items projection 必须是列表")
@@ -517,7 +451,8 @@ def _merge_final_reasoning(
                 "logical_item_ordinal": strict_non_negative_int(
                     logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}"
                 ),
-                "part_ordinal": content_block_index * 1_000_000 + item_index,
+                "part_ordinal": part_ordinal,
+                "model_call_id": model_call_id,
                 "kind": kind,
                 "status": "completed",
                 "created_at": strict_text(
@@ -540,20 +475,12 @@ def _merge_final_reasoning(
 
 def _finalize_projections(
     result: dict[str, dict[str, object]],
-    discarded_activity_indices: dict[str, set[int]],
 ) -> None:
-    """剔除 shadow 后排序并生成兼容统计。"""
-    for turn_id, projection in result.items():
+    """按统一坐标排序并派生统计。"""
+    for projection in result.values():
         activity_items = projection["activity_items"]
         if not isinstance(activity_items, list):
             raise TypeError("Turn activity_items projection 必须是列表")
-        discarded_indices = discarded_activity_indices[turn_id]
-        if discarded_indices:
-            projection["activity_items"] = activity_items = [
-                item
-                for index, item in enumerate(activity_items)
-                if index not in discarded_indices
-            ]
         activity_items.sort(
             key=lambda item: (
                 strict_non_negative_int(

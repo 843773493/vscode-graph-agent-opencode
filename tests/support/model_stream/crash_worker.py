@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Literal
 
-import httpx
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
@@ -40,11 +39,6 @@ from app.core.turn_execution_scope import (
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.runtime.litellm_runtime import (
-    AsyncHTTPHandler,
-    litellm,
-    litellm_http_handler,
-)
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -117,26 +111,6 @@ def _model(provider: ProviderKind, endpoint: str):
 
 
 async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
-    client = httpx.AsyncClient()
-    previous_session = litellm.aclient_session
-    if previous_session is not None:
-        raise RuntimeError("崩溃 worker 启动前 LiteLLM async session 已存在")
-    injected_handler = AsyncHTTPHandler.__new__(AsyncHTTPHandler)
-    injected_handler.timeout = None
-    injected_handler.event_hooks = None
-    injected_handler.client_alias = "boxteam-provider-crash-worker"
-    injected_handler.client = client
-    previous_factory = litellm_http_handler.get_async_httpx_client
-
-    def get_injected_async_client(
-        *_args: object,
-        **_kwargs: object,
-    ) -> AsyncHTTPHandler:
-        return injected_handler
-
-    litellm_http_handler.get_async_httpx_client = get_injected_async_client
-    litellm.aclient_session = client
-
     sessions_root = Path(args.sessions_root)
     seed_catalog_session_bundle(sessions_root, args.session_id)
     resolver = get_session_path_resolver(sessions_root)
@@ -185,6 +159,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
     sink_token = set_current_model_delta_sink(
         _ReadyDeltaSink(runtime, Path(args.ready_path))
     )
+    model = None
     try:
         model = _model(args.provider, args.endpoint)
         is_responses = args.provider == "responses"
@@ -274,10 +249,8 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
         reset_current_model_delta_sink(sink_token)
         reset_current_turn_execution_scope(scope_token)
         await scope.close()
-        litellm_http_handler.get_async_httpx_client = previous_factory
-        if litellm.aclient_session is client:
-            litellm.aclient_session = previous_session
-        await client.aclose()
+        if model is not None:
+            await model.aclose()
 
 
 async def _run(args: argparse.Namespace) -> None:

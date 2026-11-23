@@ -18,7 +18,7 @@ import type {
   WorkspaceFileList,
   WorkspaceFileNode,
 } from "../../../types/backend";
-import { errorDisplayMessage } from "../../../utils/errorMessage";
+import { errorMessage } from "../../../utils/errorMessage";
 import {
   copyTextToClipboard,
   readFilePathTextFromClipboard,
@@ -348,7 +348,7 @@ export function useWorkspaceFileTreeContextMenu({
       return;
     }
     void uploadEntries(target, files).catch((error: unknown) => {
-      onStatusChange(t("fileTree.status.uploadFailed", errorDisplayMessage(error)));
+      onStatusChange(t("fileTree.status.uploadFailed", errorMessage(error)));
     });
   };
 
@@ -363,7 +363,7 @@ export function useWorkspaceFileTreeContextMenu({
       const files = filesFromClipboardData(event.clipboardData);
       if (files.length > 0) {
         void uploadEntries(target, files).catch((error: unknown) => {
-          onStatusChange(t("fileTree.status.uploadFailed", errorDisplayMessage(error)));
+          onStatusChange(t("fileTree.status.uploadFailed", errorMessage(error)));
         });
         return;
       }
@@ -371,11 +371,11 @@ export function useWorkspaceFileTreeContextMenu({
       try {
         clipboardText = readFilePathTextFromClipboardData(event.clipboardData);
       } catch (error) {
-        onStatusChange(t("fileTree.status.pasteFailed", errorDisplayMessage(error)));
+        onStatusChange(t("fileTree.status.pasteFailed", errorMessage(error)));
         return;
       }
       void pasteEntries(target, clipboardText).catch((error: unknown) => {
-        onStatusChange(t("fileTree.status.pasteFailed", errorDisplayMessage(error)));
+        onStatusChange(t("fileTree.status.pasteFailed", errorMessage(error)));
       });
     };
     const handleCopyShortcut = (event: KeyboardEvent) => {
@@ -390,7 +390,7 @@ export function useWorkspaceFileTreeContextMenu({
       const target = contextMenu;
       setContextMenu(null);
       void copyEntryToClipboard(target).catch((error: unknown) => {
-        onStatusChange(t("fileTree.status.copyFileFailed", errorDisplayMessage(error)));
+        onStatusChange(t("fileTree.status.copyFileFailed", errorMessage(error)));
       });
     };
     window.addEventListener("paste", handlePaste);
@@ -405,7 +405,7 @@ export function useWorkspaceFileTreeContextMenu({
     setContextMenu(null);
     setActionError(null);
     void action().catch((error: unknown) => {
-      const failureMessage = t("fileTree.status.actionFailed", failurePrefix, errorDisplayMessage(error));
+      const failureMessage = t("fileTree.status.actionFailed", failurePrefix, errorMessage(error));
       setActionError(failureMessage);
       onStatusChange(failureMessage);
     });
@@ -413,7 +413,7 @@ export function useWorkspaceFileTreeContextMenu({
 
   const runStatusAction = useCallback((failurePrefix: string, action: () => Promise<unknown>) => {
     void action().catch((error: unknown) => {
-      onStatusChange(t("fileTree.status.actionFailed", failurePrefix, errorDisplayMessage(error)));
+      onStatusChange(t("fileTree.status.actionFailed", failurePrefix, errorMessage(error)));
     });
   }, [onStatusChange]);
 

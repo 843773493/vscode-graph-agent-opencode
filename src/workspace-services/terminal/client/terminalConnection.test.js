@@ -157,12 +157,53 @@ test("显式detach发送原协议并清除意图；授权失败保留错误且�
   assert.equal(state.connection.attached, false);
   assert.equal(state.connection.desiredAttached, false);
   state.connection.requestGrant = async () => {
-    state.statuses.push(["owner denied", true]);
-    return undefined;
+    throw new Error("owner denied");
   };
   await state.connection.attach();
   assert.deepEqual(state.statuses.at(-1), ["owner denied", true]);
   assert.equal(state.sockets.length, 1);
+  assert.equal(state.timers.size, 0);
+});
+
+test("临时授权失败与握手失败沿同一退避重取票据，成功后清除重试次数", async t => {
+  let attempts = 0;
+  const state = setup(t, { requestGrant: async () => {
+    if (++attempts === 1) throw Object.assign(new Error("owner 503"), { retryable: true });
+    return { grant_token: `grant-${attempts}`, service: "terminal" };
+  } });
+  await state.connection.attach();
+  assert.equal(state.connection.desiredAttached, true);
+  assert.equal(state.sockets.length, 0);
+  await state.reconnect();
+  state.sockets[0].open();
+  assert.equal(state.sockets[0].sent[0].grantToken, "grant-2");
+  state.sockets[0].message({ type: "error", message: "grant expired" });
+  state.sockets[0].close(4008);
+  assert.equal([...state.timers.values()][0].delay, 1000);
+  await state.reconnect();
+  state.sockets[1].open();
+  assert.equal(state.sockets[1].sent[0].grantToken, "grant-3");
+  state.sockets[1].message({ type: "attached" });
+  assert.equal(state.connection.reconnectAttempts, 0);
+});
+
+test("反复握手失败有界停止，用户可以重新连接；等待重试时detach取消意图", async t => {
+  const state = setup(t);
+  await state.connection.attach();
+  for (let index = 0; index < 6; index++) {
+    state.sockets[index].close(4008);
+    await state.reconnect();
+  }
+  state.sockets[6].close(4008);
+  assert.equal(state.timers.size, 0);
+  assert.equal(state.connection.desiredAttached, false);
+  assert.match(state.statuses.at(-1)[0], /请点击连接重试/);
+  await state.connection.attach();
+  state.sockets[7].close(1006);
+  assert.equal([...state.timers.values()][0].delay, 500);
+  state.connection.detach();
+  assert.equal(state.timers.size, 0);
+  assert.equal(state.connection.desiredAttached, false);
 });
 
 test("等待授权时断开再重新连接，以最新连接意图完成原在途授权", async t => {

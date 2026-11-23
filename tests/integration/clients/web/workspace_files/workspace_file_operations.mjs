@@ -18,7 +18,7 @@ const scope = await TestRunContext.fromTestFile("tests/integration/clients/web/w
 const output = scope.outputRoot;
 const artifacts = scope.artifactsDir;
 const bundle = path.join(artifacts, "bundle");
-const runtime = path.join(scope.runRoot, "runtime");
+const runtime = scope.runtimeDir;
 const browserTemporary = path.join(runtime, "browser-temporary");
 const downloads = path.join(artifacts, "downloads");
 await mkdir(bundle, { recursive: true });
@@ -95,7 +95,7 @@ const backendStarted = performance.now();
 const python = path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
 const backend = spawn(python, ["-u",
   "-m", "tests.integration.clients.web.workspace_files.workspace_file_operations_backend",
-  "--port", String(backendPort), "--output-root", output], {
+  "--port", String(backendPort), "--output-root", output, "--runtime-root", runtime], {
     cwd: root, env: { ...process.env, PYTHONPATH: root }, stdio: ["ignore", "pipe", "pipe"],
   });
 backend.stdout.pipe(backendLog, { end: false });

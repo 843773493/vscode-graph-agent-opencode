@@ -50,10 +50,10 @@ def assert_provider_failure_facts(caplog: pytest.LogCaptureFixture) -> Callable[
         expected = f"模型执行失败: stage=execution-provider, error={type(error).__name__}"
         if isinstance(error, OSError):
             expected += f", errno={error.errno}"
-        assert detail == expected
-        assert any(record.name == "app.core.failures" and record.exc_info is not None
-                   and record.exc_info[1] is error for record in caplog.records)
-        assert str(error) in caplog.text
+        assert detail.startswith(expected + ", reason=")
+        assert any(record.exc_info is None and type(error).__name__ in record.getMessage()
+                   for record in caplog.records)
+        assert str(error) in detail
 
     return check
 
@@ -389,7 +389,7 @@ async def test_empty_chat_retry_settles_each_attempt_before_next_request(
     )
     token = begin_upstream_capture()
     try:
-        with pytest.raises(RuntimeError, match="真实 finish_reason"):
+        with pytest.raises(RuntimeError, match="真实 finish_reason") as raised:
             if is_async:
                 async for _chunk in model._astream([HumanMessage(content="hello")]):
                     pass
@@ -399,12 +399,10 @@ async def test_empty_chat_retry_settles_each_attempt_before_next_request(
     finally:
         attempts = end_upstream_capture(token)
     assert len(attempts) == 2
-    errors = [record.exc_info[1] for record in caplog.records
-              if record.name == "app.core.failures" and record.exc_info is not None]
-    assert len(errors) == 2
-    for ordinal, (attempt, error) in enumerate(zip(attempts, errors, strict=True), 1):
-        assert error is not None and f"已尝试 {ordinal} 次" in str(error)
-        assert_provider_failure_facts(attempt["error"], error)
+    assert "已尝试 2 次" in str(raised.value)
+    for ordinal, attempt in enumerate(attempts, 1):
+        assert f"已尝试 {ordinal} 次" in attempt["error"]
+        assert attempt["error"].startswith("模型执行失败: stage=execution-provider, error=RuntimeError, reason=")
         assert attempt["response"] is None
 
 
@@ -642,3 +640,94 @@ async def test_chat_partial_output_without_real_finish_does_not_retry(
     assert len(opened) == len(attempts) == 1
     assert_provider_failure_facts(attempts[0]["error"], raised.value)
     assert attempts[0]["response"] is None
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize("failure_stage", ["open", "iterator", "next"])
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_provider_source_redacts_current_bare_key_before_all_error_consumers(
+    failed_provider: tuple[BoxteamLiteLLMChatModel | BoxteamOpenAIResponsesModel, RuntimeError],
+    protocol: str, failure_stage: str, is_async: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import json
+
+    from app.api.errors import client_error_message
+    from app.core.failures import (
+        execution_failure_message,
+        mark_provider_failure,
+        public_error,
+        report_failure,
+    )
+
+    model, error = failed_provider
+    secret = "unit-bare-credential-419728-" + protocol
+    model.api_key = secret
+    original_message = "Incorrect API key provided: " + secret
+    error.args = (original_message,)
+    cause = ValueError("上游原因包含裸值 " + secret)
+    error.__cause__ = cause
+    error.add_note("上游注记包含裸值 " + secret)
+    token = begin_upstream_capture()
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            if is_async:
+                async for _chunk in model._astream([HumanMessage(content="hello")]):
+                    pass
+            else:
+                list(model._stream([HumanMessage(content="hello")]))
+    finally:
+        attempts = end_upstream_capture(token)
+    assert caught.value is error and error.__cause__ is cause
+    assert error.args == (original_message,)
+    source_logs = [record for record in caplog.records if record.name.startswith("app.agents.providers.")]
+    assert len(source_logs) == 1 and source_logs[0].exc_info is None
+    # 再次捕获同一对象既不重录原诊断，也不需要重新携带凭据。
+    assert mark_provider_failure(error) is error
+    assert len([record for record in caplog.records if record.name.startswith("app.agents.providers.")]) == 1
+    failure = public_error(error, code="execution_error", stage="agent_execution")
+    assert failure["details"]["error_type"] == "RuntimeError"
+    assert failure["details"]["cause"]["details"]["error_type"] == "ValueError"
+    assert failure["details"]["stage"] == "agent_execution"
+    assert "Incorrect API key provided" in failure["message"] and "[redacted]" in failure["message"]
+    detail = execution_failure_message(error)
+    report_failure(error, detail=detail)
+    # 原notes属于原异常，不属于新增事实；其身份与内容保留，新增事实不能保存凭据。
+    safe_attributes = {key: value for key, value in error.__dict__.items() if key != "__notes__"}
+    assert secret not in json.dumps(safe_attributes, ensure_ascii=False)
+    assert secret not in json.dumps([failure, attempts, detail, client_error_message(error),
+        [record.getMessage() for record in caplog.records]], ensure_ascii=False)
+    assert len(json.dumps(public_error(error, code="\x01" * 10000, stage="\x01" * 10000),
+        ensure_ascii=False, separators=(",", ":")).encode()) <= 16 * 1024
+    failure["details"]["cause"]["message"] = "消费者改写"
+    assert public_error(error)["details"]["cause"]["message"] != "消费者改写"
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize("failure_stage", ["open"])
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_nonstream_provider_source_redacts_current_bare_key(
+    failed_provider: tuple[BoxteamLiteLLMChatModel | BoxteamOpenAIResponsesModel, RuntimeError],
+    protocol: str, failure_stage: str, is_async: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import json
+
+    from app.core.failures import public_error
+
+    model, error = failed_provider
+    model.streaming = False
+    secret = "unit-nonstream-credential-739502"
+    model.api_key = secret
+    error.args = ("Incorrect API key provided: " + secret,)
+    token = begin_upstream_capture()
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            if is_async:
+                await model._agenerate([HumanMessage(content="hello")], stream=False)
+            else:
+                model._generate([HumanMessage(content="hello")], stream=False)
+    finally:
+        attempts = end_upstream_capture(token)
+    assert caught.value is error
+    assert len(attempts) == 1
+    assert secret not in json.dumps([attempts, public_error(error), [record.getMessage() for record in caplog.records]])
+    assert "[redacted]" in attempts[0]["error"]

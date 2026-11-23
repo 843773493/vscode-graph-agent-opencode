@@ -217,6 +217,9 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
         urls: list[str],
         max_chars_per_page: int = 6_000,
     ) -> str:
+        binding = context.invocation_context.thread_binding
+        if binding is None:
+            raise RuntimeError("网页抓取缺少精确 ThreadRuntimeBinding")
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(_FETCH_TIMEOUT_SECONDS),
@@ -242,7 +245,7 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
                 + "\n\n"
             )
             reference = await asyncio.to_thread(
-                store.materialize, session_id=context.session_id, tool_name="fetch_webpage",
+                store.materialize, session_id=binding.session_id, tool_name="fetch_webpage",
                 tool_call_id=context.invocation_context.require_tool_call_id(), text=header + content,
                 output_key=f"{context.invocation_context.require_operation_id('web-fetch')}:page:{index}",
             )

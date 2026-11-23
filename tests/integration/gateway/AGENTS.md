@@ -22,7 +22,7 @@
 - 导航 scope 下游装具在启动成功前由 `ExitStack` 管理日志，成功后由返回句柄接管；就绪失败或中断仍释放进程和全部日志，清理失败独立汇总并保留启动异常。诊断引用原始日志路径，不全量读取追加日志。
 - 正式产物写入 `out/tests/integration/gateway/`。
 - `test_search_provider_lifecycle.py` 通过独立 Gateway 与 A/B Backend 验证原 Provider 的注销、服务关闭和同类别版本交接。`search_lifecycle_app.py` 仅在测试组合中观察原 canonical 查询的准入 worker，以原 Session OS 锁探针核安全结算；关键历史由产品消息入口及统一 model_stream 生成，不新增生产控制接口或替代查询实现。
-- `test_federated_search.py` 的六个服务在本文件端口块内复用既有可用端口租约，首选占用时有界选择；所有消费者读取同一组实际端口，逐项登记释放并保存探测，不终止未知进程或改变原搜索断言。
+- `test_federated_search.py` 的服务通过公共 `TestFilePorts` 独立申请并持有实际端口；所有消费者读取同一计划，不另做首选／备用扫描或重复租约，不终止未知进程或改变原搜索断言。
 - `test_search_scope_changes.py` 复用现有双后端装具与正式搜索 SDK；经产品创建 Session／保存独有文件正文／删除登记，Gateway 停止后沿原 registry owner 准备有真实 UUID 的新离线目标。核 all 的冻结范围、移除后同名但不同 UUID 的新登记和实际后端分发，不将该控制面准备作为新增工作区管理 UI 的验收。
 - `test_resource_search_tools.py` 在无浏览器的真实 Gateway／双 Backend 中，经产品创建、移动入口生成 A/B 同名 folder 和 Session，交错读取各自 roots、children、breadcrumb 与独立 cursor；核跨 owner 续点拒绝、origin／集合／all 的实际分发和重启后单分支续查。模型场景沿原消息入口、model_stream 和插件工具验证控制面发现与正文查询；可复用已准备的不可变插件包，Home、端口和运行实例仍逐测试隔离。
 - `test_mounted_file_targets.py` 复用共享 Backend fixture，经真实注册及整组重启建立双挂载；文件引用、并发读写和未注册目录绑定均经产品 HTTP 入口验证，原生正文不作资源目标。工作区和端口沿当前测试文件隔离，不使用共享开发服务。

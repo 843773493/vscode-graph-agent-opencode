@@ -18,3 +18,4 @@
 
 - 消费者直接 import 真实 owner；禁止经 processor 转引契约或恢复旧 support shim。
 - 队列、watchdog 和清理由 reader 单独负责；状态累计仅在本次事件消费期间存在。
+- 工具 callback 失败沿统一错误出口一次取得摘要和诊断；保留真实原因，不伪造工具结果覆盖框架随后返回的配对消息。

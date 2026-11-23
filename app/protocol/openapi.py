@@ -159,7 +159,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
         "ConfigSourceEditRequest", "ConfigSourceDocumentDTO", "ConfigSourcePreflightDTO", "ConfigEventDTO",
-        "LlmDiscoverRequest", "LlmDiscoverResultDTO",
+        "LlmDiscoverRequest", "LlmDiscoverResultDTO", "LlmModelCatalogDTO", "LlmProvidersDTO",
         "LlmTestRequest", "LlmTestStartDTO", "LlmTestDeltaDTO", "LlmTestResultDTO",
     )
 } | {

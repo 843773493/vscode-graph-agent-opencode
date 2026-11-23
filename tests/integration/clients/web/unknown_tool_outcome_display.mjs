@@ -124,39 +124,33 @@ try {
   await expect(thread).toBeVisible();
   const boundaryTurn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
-  await waitUntil(
-    async () => (await boundaryTurn.innerText()).includes("工具执行结果未知"),
-    "折叠态工具异常提示",
-  );
+  const processText = "我已经启动大输出工具，正在等待结果。";
+  await expect(boundaryTurn.locator('.chat-turn-activity[data-status-kind="turn-failed"]')).toBeVisible();
   const collapsedText = await boundaryTurn.innerText();
-  const unknownStatus = boundaryTurn.locator(
-    '[data-status-kind="tool-outcome-unknown"]',
-  );
-  const unknownStatusVisible = await unknownStatus.isVisible();
-  const backendCompletionWarningVisible = collapsedText.includes(
-    "large_test_output：后端未返回结果，无法确认是否成功",
-  );
-  const finalResponseVisible = collapsedText.includes(
-    "我已经启动大输出工具，正在等待结果。",
-  );
-
-  await boundaryTurn
-    .getByRole("button", { name: /^展开 Turn 中间消息/ })
-    .click();
-  await waitUntil(
-    async () => (await boundaryTurn.innerText()).includes("large_test_output 结果未知"),
-    "展开态工具异常提示",
-  );
+  const turnFailureVisible = collapsedText.includes("本轮执行失败");
+  const turnFailureDetailVisible = collapsedText.includes(historyItem.failure?.message ?? "该记录未保存失败详情");
+  const processHiddenWhenCollapsed = !collapsedText.includes(processText);
+  await boundaryTurn.locator(".chat-turn-activity > .chat-thinking-toggle").click();
+  await expect(boundaryTurn.locator(".chat-activity-group").first()).toBeVisible();
+  for (const group of await boundaryTurn.locator('.chat-activity-group > button').all()) {
+    if (await group.getAttribute('aria-expanded') === 'false') await group.click();
+  }
+  const tool = boundaryTurn.locator('.chat-tool-row.is-unknown');
+  await expect(tool).toContainText("large_test_output 结果未知");
+  await tool.locator('.chat-tool-summary').click();
+  await expect(tool).toContainText("未确认返回结果");
   const expandedText = await boundaryTurn.innerText();
   const expandedToolStatusVisible = expandedText.includes("large_test_output 结果未知");
   const expandedUnknownDetailVisible = expandedText.includes("未确认返回结果");
+  const processVisibleWhenExpanded = expandedText.includes(processText);
 
   result = {
     apiFailed: historyItem.status === "failed",
     apiUnknownTool: unknownToolPart.tool_name === "large_test_output",
-    unknownStatusVisible,
-    backendCompletionWarningVisible,
-    finalResponseVisible,
+    turnFailureVisible,
+    turnFailureDetailVisible,
+    processHiddenWhenCollapsed,
+    processVisibleWhenExpanded,
     expandedToolStatusVisible,
     expandedUnknownDetailVisible,
     noPageErrors: pageErrors.length === 0,
@@ -169,9 +163,10 @@ try {
   if (
     !result.apiFailed
     || !result.apiUnknownTool
-    || !result.unknownStatusVisible
-    || !result.backendCompletionWarningVisible
-    || !result.finalResponseVisible
+    || !result.turnFailureVisible
+    || !result.turnFailureDetailVisible
+    || !result.processHiddenWhenCollapsed
+    || !result.processVisibleWhenExpanded
     || !result.expandedToolStatusVisible
     || !result.expandedUnknownDetailVisible
     || !result.noPageErrors

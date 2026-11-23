@@ -82,6 +82,7 @@ class McpConnectionOperationDTO(BaseModel):
     deadline: float
     updated_at: float
     error_code: str | None = None
+    error_message: str | None = None
 
     @property
     def terminal(self) -> bool:

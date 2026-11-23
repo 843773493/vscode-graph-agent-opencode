@@ -27,9 +27,8 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     _send,
 )
 from tests.support.api_helpers import create_session
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -87,7 +86,7 @@ class LifecycleNetwork:
 def lifecycle_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[LifecycleNetwork]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
     workspace_a = _prepare_source_workspace(context, ports.port(10))
     workspace_b = workspace_a / "secondary-b"
@@ -107,9 +106,8 @@ def lifecycle_network(request: pytest.FixtureRequest, monkeypatch: pytest.Monkey
     control = runtime / "search-lifecycle-control"
     control.mkdir(parents=True)
     with ExitStack() as cleanup:
-        lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20)))
-        lease.acquire()
-        cleanup.callback(lease.release)
+        for offset in (0, 1, 20):
+            ports.port(offset)
         model = cleanup.enter_context(model_stream_replay(
             context.artifacts_dir, runtime_root=runtime,
             business_assertion="gateway-canonical-provider-close-and-version-handover",

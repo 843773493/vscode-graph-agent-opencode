@@ -115,28 +115,89 @@ def test_existing_listener_is_preserved_and_lease_is_not_created(
     assert client.recv(100) == b"existing-listener-alive"
 
 
-def test_available_lease_skips_listener_and_retains_selected_port(
-    port_case: tuple[ExitStack, Path],
+def test_pool_coordinates_same_file_across_processes_and_releases_after_crash(
+    port_case: tuple[ExitStack, Path], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import subprocess
+
+    from tests.support import ports
+    from tests.support.ports import TestFilePorts
+
+    resources, artifacts = port_case
+    # 父进程与子进程使用同一测试文件及候选起点；必须由租约互斥，而非随机运气隔离。
+    plan = TestFilePorts(Path(__file__).resolve(), artifacts / "shared-port-pool")
+    resources.callback(plan.close)
+    first = plan.port("gateway")
+    probe = TestFilePorts(Path(__file__).resolve(), plan.lease_root)
+    second = probe.port("gateway")
+    probe.close()
+    script = '''
+import os, sys
+from pathlib import Path
+from tests.support import ports
+ports.secrets.randbelow = lambda _size: 0
+plan = ports.TestFilePorts(Path(sys.argv[1]), Path(sys.argv[2]), tuple((int(p), int(p)) for p in sys.argv[3:]))
+selected = plan.port("gateway")
+print(selected, flush=True)
+os._exit(0)
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(plan.test_file), str(plan.lease_root), str(first), str(second)],
+        capture_output=True, text=True, timeout=15, check=True, cwd=Path.cwd(),
+    )
+    (artifacts / "concurrent-allocation.json").write_text(json.dumps({
+        "parent": first, "child": completed.stdout.strip(), "stderr": completed.stderr,
+    }) + "\n", encoding="utf-8")
+    assert int(completed.stdout.strip()) == second
+    # os._exit 不执行 Python 清理；OS 释放锁/socket，PID 创建时间核验允许下一次取得旧记录。
+    monkeypatch.setattr(ports.secrets, "randbelow", lambda _size: 0)
+    after_crash = TestFilePorts(plan.test_file, plan.lease_root, ((second, second),))
+    resources.callback(after_crash.close)
+    assert after_crash.port("gateway") == second
+
+
+def test_pool_skips_busy_port_and_hands_reservation_to_real_service(
+    port_case: tuple[ExitStack, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    from tests.support import ports
+    from tests.support.ports import TestFilePorts
+
     resources, artifacts = port_case
     occupied = resources.enter_context(socket.socket())
     occupied.bind(("127.0.0.1", 0))
     occupied.listen()
-    with socket.socket() as candidate:
-        candidate.bind(("127.0.0.1", 0))
-        selected = candidate.getsockname()[1]
     busy = occupied.getsockname()[1]
-    lease, probes = E2EProcessLease.acquire_available(artifacts / "available-port.json", [busy, selected])
-    resources.callback(lease.release)
-    assert probes == [(busy, False), (selected, True)]
-    assert lease.ports == (selected,)
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        selected = available.getsockname()[1]
+    monkeypatch.setattr(ports.secrets, "randbelow", lambda _size: 0)
+    plan = TestFilePorts(Path(__file__).resolve(), artifacts / "handoff-pool", ((busy, busy), (selected, selected)))
+    resources.callback(plan.close)
+    assert plan.port("gateway") == selected
+    assert plan.port("gateway") == selected
+    with pytest.raises(RuntimeError, match="端口池已耗尽.*attempts=2"):
+        plan.port("other-service")
     with pytest.raises(OSError) as retained:
         automatic_client(resources, selected).connect(occupied.getsockname())
     assert retained.value.errno == errno.EADDRNOTAVAIL
-    with socket.socket() as client:
-        client.settimeout(1)
-        client.connect(occupied.getsockname())
-        accepted, _ = occupied.accept()
-        with accepted:
-            accepted.sendall(b"occupied-listener-preserved")
-            assert client.recv(100) == b"occupied-listener-preserved"
+    completed = subprocess.run(
+        [sys.executable, "-c", '''
+import socket, sys
+with socket.socket() as service:
+    service.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    service.bind(("127.0.0.1", int(sys.argv[1])))
+    service.listen()
+    print(service.getsockname()[1])
+''', str(selected)],
+        capture_output=True, text=True, timeout=10, check=True,
+    )
+    assert int(completed.stdout) == selected
+    # 子服务关闭也不提前归还端口，支持原地址重启。
+    with pytest.raises(OSError) as after_stop:
+        automatic_client(resources, selected).connect(occupied.getsockname())
+    assert after_stop.value.errno == errno.EADDRNOTAVAIL
+    plan.close()
+    with socket.socket() as reuse:
+        reuse.bind(("127.0.0.1", selected))

@@ -28,6 +28,16 @@ from app.main import app as workspace_app
 _REQUEST_ID = "request-validation-contract"
 
 
+def _validation_message(code: str) -> str:
+    return {
+        "string_type": "Input should be a valid string",
+        "string_too_short": "String should have at least 64 characters",
+        "int_parsing": "Input should be a valid integer, unable to parse string as an integer",
+        "missing": "Field required",
+    }[code]
+
+
+
 @pytest.fixture(params=["workspace", "gateway"])
 def validation_client(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, empty_workspace_scope: tuple[str, Path]) -> Iterator[tuple[TestClient, MagicMock, str]]:
     owner = MagicMock()
@@ -64,9 +74,12 @@ def test_actual_routes_reject_without_echo_or_service_execution(validation_clien
     assert response.status_code == 422, response.text
     assert "validation-sentinel" not in response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == _REQUEST_ID
-    assert response.json()["detail"] == [{"loc": ["body", expected_field], "type": expected_type, "msg": "请求参数校验失败"}]
+    assert response.json()["detail"] == [{"loc": ["body", expected_field], "type": expected_type, "msg": _validation_message(expected_type)}]
     assert owner.mock_calls == []
-    assert "validation-sentinel" in caplog.text  # 原始异常仍在服务端，可定位实际输入。
+    diagnostics = "\n".join(record.getMessage() for record in caplog.records
+                            if record.name == "app.protocol.codecs.http_validation")
+    assert "validation-sentinel" not in diagnostics
+    assert _REQUEST_ID in diagnostics
 
 
 class NamedInput(BaseModel):
@@ -131,16 +144,16 @@ def test_dynamic_keys_values_and_custom_errors_use_structural_coordinates(struct
     assert "validation-sentinel" not in response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == _REQUEST_ID
     assert response.json()["detail"] == [
-        {"loc": ["body", "entries", 0, "member[0]"], "type": "int_parsing", "msg": "请求参数校验失败"},
-        {"loc": ["body", "text"], "type": "value_error", "msg": "请求参数校验失败"},
-        {"loc": ["body", "member[2]"], "type": "extra_forbidden", "msg": "请求参数校验失败"},
+        {"loc": ["body", "entries", 0, "member[0]"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
+        {"loc": ["body", "text"], "type": "value_error", "msg": "Value error, 拒绝输入: [redacted]"},
+        {"loc": ["body", "member[2]"], "type": "extra_forbidden", "msg": "Extra inputs are not permitted"},
     ]
 
 
 def test_missing_fields_and_malformed_json_keep_precise_failure_categories(structured_client: TestClient) -> None:
     missing = structured_client.post("/validation", json={})
     assert missing.status_code == 422, missing.text
-    assert missing.json()["detail"] == [{"loc": ["body", "entries"], "type": "missing", "msg": "请求参数校验失败"}]
+    assert missing.json()["detail"] == [{"loc": ["body", "entries"], "type": "missing", "msg": "Field required"}]
     malformed = structured_client.post("/validation", content='{"entries": /private/validation-sentinel}', headers={"Content-Type": "application/json"})
     assert malformed.status_code == 422, malformed.text
     assert "validation-sentinel" not in malformed.text
@@ -155,20 +168,20 @@ def test_mapping_keys_cannot_borrow_declared_names(structured_client: TestClient
         response = structured_client.post(endpoint, json=body)
         assert response.status_code == 422, response.text
         assert response.json()["detail"] == [
-            {"loc": [*prefix, "entries", 0, "member[1]"], "type": "int_parsing", "msg": "请求参数校验失败"},
-            {"loc": [*prefix, "named", "member[0]", "total"], "type": "int_parsing", "msg": "请求参数校验失败"},
+            {"loc": [*prefix, "entries", 0, "member[1]"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
+            {"loc": [*prefix, "named", "member[0]", "total"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
         ]
 
 
 def test_aliases_query_models_and_union_references_keep_declared_fields(structured_client: TestClient) -> None:
     query = structured_client.get("/query", params={"total": "invalid"})
     assert query.status_code == 422, query.text
-    assert query.json()["detail"] == [{"loc": ["query", "total"], "type": "int_parsing", "msg": "请求参数校验失败"}]
+    assert query.json()["detail"] == [{"loc": ["query", "total"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"}]
     union = structured_client.post("/union", json=[{"total": "invalid"}])
     assert union.status_code == 422, union.text
     assert union.json()["detail"] == [
-        {"loc": ["body", "<schema>"], "type": "model_attributes_type", "msg": "请求参数校验失败"},
-        {"loc": ["body", "<schema>", 0, "member[0]"], "type": "int_parsing", "msg": "请求参数校验失败"},
+        {"loc": ["body", "<schema>"], "type": "model_attributes_type", "msg": "Input should be a valid dictionary or object to extract fields from"},
+        {"loc": ["body", "<schema>", 0, "member[0]"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
     ]
 
 
@@ -176,8 +189,8 @@ def test_union_mapping_cannot_borrow_sibling_model_fields(structured_client: Tes
     response = structured_client.post("/mapping-union", json={"total": "invalid"})
     assert response.status_code == 422, response.text
     assert response.json()["detail"] == [
-        {"loc": ["body", "<schema>", "member[0]"], "type": "int_parsing", "msg": "请求参数校验失败"},
-        {"loc": ["body", "<schema>", "member[0]"], "type": "int_parsing", "msg": "请求参数校验失败"},
+        {"loc": ["body", "<schema>", "member[0]"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
+        {"loc": ["body", "<schema>", "member[0]"], "type": "int_parsing", "msg": "Input should be a valid integer, unable to parse string as an integer"},
     ]
 
 
@@ -185,4 +198,4 @@ def test_union_mapping_cannot_borrow_sibling_model_fields(structured_client: Tes
 def test_composed_schema_keeps_declared_field_coordinates(structured_client: TestClient, payload: dict[str, str], rule: str) -> None:
     response = structured_client.post("/composition", json=payload)
     assert response.status_code == 422, response.text
-    assert response.json()["detail"] == [{"loc": ["body", "total"], "type": rule, "msg": "请求参数校验失败"}]
+    assert response.json()["detail"] == [{"loc": ["body", "total"], "type": rule, "msg": _validation_message(rule)}]

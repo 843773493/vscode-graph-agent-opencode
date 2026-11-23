@@ -20,10 +20,9 @@ import pytest
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -61,19 +60,12 @@ def _run_process(
 
 
 @pytest.fixture(scope="module")
-def electron_service_ports(request: pytest.FixtureRequest) -> Iterator[TestFilePortBlock]:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+def electron_service_ports(request: pytest.FixtureRequest) -> Iterator[TestFilePorts]:
+    ports = integration_ports_for_file(Path(request.node.path))
     # 打包前保留整组绑定，避免客户端临时源端口抢占尚未启动的 Gateway 或代理。
-    lease = E2EProcessLease(
-        context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-        tuple(ports.port(offset) for offset in (0, 20, 21)),
-    )
-    lease.acquire()
-    try:
-        yield ports
-    finally:
-        lease.release()
+    for offset in (0, 20, 21):
+        ports.port(offset)
+    yield ports
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +75,8 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
     if shutil.which("xvfb-run") is None:
         pytest.fail("便携 Electron 原生回归需要 xvfb-run")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     prepared = os.environ.get("BOXTEAM_TEST_PACKAGED_ELECTRON")
     if prepared is not None:
         executable = Path(prepared)
@@ -91,7 +85,7 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
         assert asar.is_file(), f"缺少打包 ASAR：{asar}"
         with asar.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
-        (context.artifacts_dir / "package-verification.json").write_text(json.dumps({
+        (artifacts / "package-verification.json").write_text(json.dumps({
             "prepared_executable": str(executable), "asar_sha256": digest,
             "boundary": "仅复用显式指定的不可变包；不代表本轮重新构建或发行验收",
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -109,9 +103,9 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
         command = ["bun", "tests/integration/clients/electron/seed_electron_cache.mjs",
                    str(download_cache), str(output / "downloads")]
         assert _run_process(command, cwd=context.project_root,
-            log=context.artifacts_dir / "seed-cache.log", timeout=30, environment=environment) == 0
+            log=artifacts / "seed-cache.log", timeout=30, environment=environment) == 0
     command = ["bun", "run", "package:electron", "--development", "--output-root", str(output)]
-    log_path = context.artifacts_dir / "package.log"
+    log_path = artifacts / "package.log"
     exit_code = _run_process(command, cwd=context.project_root, log=log_path, timeout=360,
                              environment=environment)
     receipt: dict[str, object] = {"command": command, "exit_code": exit_code,
@@ -133,7 +127,7 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
     executable = application / "boxteam"
     assert os.access(executable, os.X_OK)
     receipt.update({"release": release, "sha256": digest, "executable": str(executable)})
-    (context.artifacts_dir / "package-verification.json").write_text(
+    (artifacts / "package-verification.json").write_text(
         json.dumps(receipt, indent=2) + "\n", encoding="utf-8",
     )
     return executable
@@ -143,7 +137,7 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
 async def test_packaged_electron_chat_files_and_restart_cache(
     request: pytest.FixtureRequest,
     packaged_electron: Path,
-    electron_service_ports: TestFilePortBlock,
+    electron_service_ports: TestFilePorts,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> None:

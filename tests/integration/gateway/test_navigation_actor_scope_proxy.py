@@ -21,7 +21,7 @@ from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -161,7 +161,7 @@ def navigation_scope_proxy_runtime(
         peer_gateway_id="gateway_peer_verified",
     )
 
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     backend: _NavigationScopeBackendProcess | None = None
     gateway: GatewayProcess | None = None
     try:

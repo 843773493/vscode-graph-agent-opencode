@@ -19,7 +19,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -48,7 +48,7 @@ def logging_case(
     home = context.boxteam_home_for_node(request.node.nodeid)
     copy_prepared_developer_tools_package(prepared_developer_tools_package, home)
     workspace = Path(integration_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     provider = config["llm"]["providers"]["primary"]

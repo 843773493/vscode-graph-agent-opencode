@@ -60,7 +60,7 @@ def get_python_executable() -> Path:
 
 
 def create_python_execution_tool(
-    session_id: str, agent_id: str = "default"
+    session_id: str | None, agent_id: str = "default"
 ) -> BaseTool:
     """创建用于执行 Python 代码的工具。"""
     del session_id, agent_id

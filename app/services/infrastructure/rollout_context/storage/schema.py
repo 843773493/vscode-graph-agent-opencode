@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 29
+ROLLOUT_SCHEMA_VERSION = 30
 ITEM_CATALOG_LOCATOR_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_locator_index.sql")
 COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "migrations/catalog/commit_idempotency_index.sql")
 ITEM_CATALOG_MODEL_TOOL_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_model_tool_index.sql")

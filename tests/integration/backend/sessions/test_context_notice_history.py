@@ -6,9 +6,11 @@ import json
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from app.api.deps import get_llm_request_log_reader
 from app.core.path_utils import workspace_context
+from app.core.trace_middleware import TraceMiddleware
 from app.domain.itemized.hashing import contribution_content_hash_and_length
 from app.prompting.validation import parse_root_section
 from app.schemas.internal_v2.session import SessionCreateRequest
@@ -51,7 +53,11 @@ from tests.support.api_helpers import with_message_run_operation_id
 
 @pytest.fixture
 async def notice_client(history_client: httpx.AsyncClient, recording_runtime_case: RuntimeCase):
+    from app.main import app as workspace_app
+
     application = history_client._transport.app
+    application.add_middleware(TraceMiddleware, component="workspace_backend")
+    application.add_exception_handler(HTTPException, workspace_app.exception_handlers[HTTPException])
     container = recording_runtime_case.runner.container
     application.dependency_overrides[get_llm_request_log_reader] = lambda: container.llm_request_log_reader
     yield history_client
@@ -311,3 +317,97 @@ async def test_context_metadata_continuation_keeps_turn_page_and_does_not_read_b
             changed = base64.urlsafe_b64encode(json.dumps({**decoded, field: value}).encode()).decode().rstrip("=")
             invalid = await notice_client.post(base + "/history", json={"context_cursor": changed})
             assert invalid.status_code == status, invalid.text
+
+
+async def test_context_marker_after_metadata_first_page_is_located_in_original_history(
+    recording_runtime_case: RuntimeCase, notice_client: httpx.AsyncClient,
+) -> None:
+    case = recording_runtime_case
+    container = case.runner.container
+    session_id, thread_id = await _session(case.runner)
+    base = f"/api/v1/sessions/{session_id}/threads/{thread_id}"
+    (case.runner.workspace / "context-anchor.txt").write_text("上下文定位工具步骤", encoding="utf-8")
+
+    async def send(content: str):
+        response = await notice_client.post(base + "/messages", json=with_message_run_operation_id({
+            "message": {"content": content}, "run": {},
+        }))
+        assert response.status_code == 200, response.text
+        job = container.job_service._jobs[response.json()["data"]["job_id"]]
+        await asyncio.wait_for(asyncio.shield(job.task), 20)
+        assert job.status.value == "completed", job.error_message
+        return response.json()["data"]
+
+    with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
+        await send("建立提醒来源")
+        for index in range(133):
+            submit_runtime_reminder(checkpointer=container.checkpointer, session_id=session_id, thread_id=thread_id,
+                reminder=f"首个请求的上下文 {index}", response_metadata={"source": "interrupt"},
+                checkpoint_source="interrupt", event_identity=f"anchor-first-{index}",
+                execution_id=case.model_admissions[-1].execution_id)
+        first_call = True
+
+        def model_reply(_payload):
+            nonlocal first_call
+            if first_call:
+                first_call = False
+                # 第一个请求已封存；该提示由同一 Turn 的下一个请求消费。
+                submit_runtime_reminder(checkpointer=container.checkpointer, session_id=session_id, thread_id=thread_id,
+                    reminder="恢复定位到第二个请求的标记", response_metadata={"source": "interrupt"},
+                    checkpoint_source="interrupt", event_identity="anchor-later",
+                    execution_id=case.model_admissions[-1].execution_id)
+                return [
+                    {"choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [{
+                        "index": 0, "id": "context-anchor-read", "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({"path": "context-anchor.txt"})},
+                    }]}}]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+                ]
+            return [
+                {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "定位样本完成"}}]},
+                {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
+
+        case.response_chunks = model_reply
+        consumed = await send("消费来源并继续一个工具步骤")
+        calls = [value.snapshot.model_call_id for value in case.model_dispatches[-2:]]
+        assert len(set(calls)) == 2
+        window = {"direction": "around", "anchor_turn_id": consumed["turn_id"], "before_turns": 0, "after_turns": 0}
+        response = await notice_client.post(base + "/history", json=window)
+        assert response.status_code == 200, response.text
+        original = response.json()["data"]
+        markers = [part for turn in original["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        assert len(markers) == 128 and markers[-1]["context_cursor"]
+        assert all(part["context_model_call_id"] == calls[0] for part in markers)
+
+        # checkpoint_reminder 沿既有规则挂到本轮用户消息之前；model_call_id 区分两个消费边界。
+        reference = {"model_call_id": calls[1], "anchor": "before_user_message"}
+        response = await notice_client.post(base + "/history", json={**window, "anchor_context": reference})
+        assert response.status_code == 200, response.text
+        located = response.json()["data"]
+        target = [part for turn in located["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        assert len(target) == 1
+        assert target[0]["context_model_call_id"] == calls[1]
+        assert target[0]["context_anchor"] == "before_user_message"
+        assert target[0]["context_before_item_id"]
+        assert target[0]["text"] == "" and target[0]["context_cursor"] is None
+        assert located["before_cursor"] == original["before_cursor"]
+        assert located["after_cursor"] == original["after_cursor"]
+        for missing in ({**reference, "anchor": "before_model_call"},
+                        {**reference, "model_call_id": case.model_dispatches[0].snapshot.model_call_id}):
+            response = await notice_client.post(base + "/history", json={**window, "anchor_context": missing})
+            assert response.status_code == 404, response.text
+            context = json.loads(response.headers["X-BoxTeam-Error-Context"])
+            assert context["stage"] == "history_locate"
+            assert context["target"]["model_call_id"] == missing["model_call_id"]
+        # 定点补读的 continuation 仍只服务这个请求／标记，不越界到后面的消费请求。
+        response = await notice_client.post(base + "/history", json={**window, "anchor_context": {
+            "model_call_id": calls[0], "anchor": "before_user_message",
+        }})
+        assert response.status_code == 200, response.text
+        first = [part for turn in response.json()["data"]["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        response = await notice_client.post(base + "/history", json={"context_cursor": first[-1]["context_cursor"]})
+        assert response.status_code == 200, response.text
+        remaining = [part for batch in response.json()["data"]["context_notices"] for part in batch["parts"]]
+        assert len(remaining) == 5
+        assert all(part["context_model_call_id"] == calls[0] and part["context_cursor"] is None for part in remaining)

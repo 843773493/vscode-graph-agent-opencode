@@ -35,6 +35,7 @@ def context_notice_metadata(
     connection: sqlite3.Connection, view_id: str, *, turn_ids: list[str],
     execution_ids: list[str], limit: int = 128,
     after: tuple[int, int] = (0, -1), call_upper_bound: int | None = None,
+    model_call_id: str | None = None, anchor: str | None = None,
 ) -> list[ContextNoticeMetadata]:
     if not turn_ids and not execution_ids:
         return []
@@ -43,6 +44,7 @@ def context_notice_metadata(
     parameters: dict[str, str | int | None] = {
         "view_id": view_id, "limit": limit + 1,
         "after_call": after[0], "after_plan": after[1], "call_upper_bound": call_upper_bound,
+        "model_call_id": model_call_id, "anchor": anchor,
     }
     parameters.update({f"turn_{index}": value for index, value in enumerate(turn_ids)})
     parameters.update({f"execution_{index}": value for index, value in enumerate(execution_ids)})
@@ -56,7 +58,7 @@ def context_notice_metadata(
     deadline = monotonic() + 1.0
     connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
     try:
-        rows = connection.execute(_notice_query(" OR ".join(scope)),
+        rows = connection.execute(_notice_query("(" + " OR ".join(scope) + ") AND (:model_call_id IS NULL OR call.model_call_id=:model_call_id)"),
             parameters,
         ).fetchall()
         result = [ContextNoticeMetadata(*row) for row in rows[:limit]]
@@ -203,7 +205,7 @@ def _notice_query(scope: str) -> str:
         candidate.assembly_id,candidate.contribution_id,candidate.session_id,candidate.thread_id,
         candidate.source_revision,candidate.content_length,candidate.availability,
         CASE WHEN anchor.root_visible=1 AND (candidate.kind='checkpoint_reminder' OR anchor.first_in_turn)
-             THEN 'before_user_message' ELSE 'before_model_call' END,
+             THEN 'before_user_message' ELSE 'before_model_call' END AS notice_anchor,
         CASE WHEN anchor.root_visible=1 AND (candidate.kind='checkpoint_reminder' OR anchor.first_in_turn)
              THEN anchor.root_ordinal ELSE COALESCE(
                (SELECT output.logical_item_ordinal FROM context_view_items output
@@ -217,5 +219,6 @@ def _notice_query(scope: str) -> str:
         SELECT 1 FROM context_view_items member
         WHERE member.view_id=:view_id AND member.item_id=candidate.item_id AND member.visible=1))
       AND (candidate.call_order,candidate.plan_ordinal)>(:after_call,:after_plan)
+      AND (:anchor IS NULL OR notice_anchor=:anchor)
     ORDER BY candidate.call_order,candidate.plan_ordinal LIMIT :limit
     """

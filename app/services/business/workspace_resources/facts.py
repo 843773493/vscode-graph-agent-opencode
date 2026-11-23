@@ -102,7 +102,8 @@ def observe_resource(
     # 只有原创建回执能首次核实创建；普通清单不能替代丢失的回执。
     if record.reconciliation_status == "verified" or creation_receipt:
         record.reconciliation_status = recovery
-        record.error = None if recovery == "verified" else "Node 运行时 身份或连接尚待核实"
+        resource_name = "终端" if kind == "terminal" else "浏览器"
+        record.error = None if recovery == "verified" else f"{resource_name}进程或连接的恢复状态尚未核实"
 
 
 def lease_status(record: OwnedResourceRecord) -> str:

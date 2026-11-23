@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha1
@@ -19,6 +20,16 @@ TestResultStatus = Literal[
 
 _PROCESS_RUN_ID = f"pid-{os.getpid()}-{uuid4().hex}"
 _PROCESS_STARTED_AT = datetime.now(UTC).isoformat()
+test_path_observer: ContextVar[Callable[[Path, str], None] | None] = ContextVar(
+    "test_path_observer", default=None,
+)
+
+
+def observe_test_path(path: Path, kind: str) -> None:
+    """由正在运行的测试登记可写路径；独立脚本不隐式回收目录。"""
+    observer = test_path_observer.get()
+    if observer is not None:
+        observer(path, kind)
 
 
 def _run_directory_name() -> str:
@@ -39,7 +50,7 @@ def _node_directory_name(node_id: str) -> str:
     return f"node-{sha1(node_id.encode('utf-8')).hexdigest()[:12]}"
 
 
-def _pytest_node_directory_name() -> str | None:
+def _pytest_node_id() -> str | None:
     current_test = os.getenv("PYTEST_CURRENT_TEST")
     if current_test is None:
         return None
@@ -55,7 +66,12 @@ def _pytest_node_directory_name() -> str | None:
         }
     ):
         raise ValueError(f"PYTEST_CURRENT_TEST 格式无效: {current_test!r}")
-    return _node_directory_name(node_id)
+    return node_id
+
+
+def _pytest_node_directory_name() -> str | None:
+    node_id = _pytest_node_id()
+    return _node_directory_name(node_id) if node_id is not None else None
 
 
 @dataclass(slots=True)
@@ -102,10 +118,12 @@ class TestRunContext:
     @property
     def performance_dir(self) -> Path:
         """性能产物单独按冻结日期归档，不移动已有工作区和运行产物。"""
+        return self.performance_dir_for_node(_pytest_node_id())
+
+    def performance_dir_for_node(self, node_id: str | None) -> Path:
         started = datetime.fromisoformat(os.getenv("BOXTEAM_TEST_RUN_STARTED_AT", _PROCESS_STARTED_AT))
-        node_directory = _pytest_node_directory_name()
         root = self.output_root / "artifacts" / started.strftime("%Y/%m/%d") / self.run_root.name
-        return root / node_directory if node_directory else root
+        return root / _node_directory_name(node_id) if node_id is not None else root
 
     @property
     def artifacts_dir(self) -> Path:
@@ -115,6 +133,10 @@ class TestRunContext:
         return self.run_root / "nodes" / node_directory / "artifacts"
 
     def prepare(self) -> TestRunContext:
+        observe_test_path(self.run_root, "artifact")
+        observe_test_path(self.workspace_root, "workspace")
+        observe_test_path(self.boxteam_home, "workspace")
+        observe_test_path(self.run_root / "runtime", "runtime")
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.boxteam_home.mkdir(parents=True, exist_ok=True)
@@ -122,6 +144,7 @@ class TestRunContext:
 
     def runtime_root_for_node(self, node_id: str) -> Path:
         """返回同一测试文件内按 pytest 节点隔离的运行目录。"""
+        observe_test_path(self.output_root / "runtime" / self.run_root.name, "runtime")
         return (
             self.output_root
             / "runtime"
@@ -147,6 +170,8 @@ class TestRunContext:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         result: dict[str, object] = {
             "schema_version": 1,
+            "run_id": self.run_root.name,
+            "node_id": _pytest_node_id(),
             "test_id": self.test_file.relative_to(self.project_root / "tests")
             .with_suffix("")
             .as_posix(),

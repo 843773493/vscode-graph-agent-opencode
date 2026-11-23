@@ -293,10 +293,10 @@ def _request_runtime_shutdown(
 
 
 def _bind_backend_shutdown(process: ManagedProcess | AdoptedManagedProcess, contract: ManagedBackendContract) -> None:
-    if os.name == "nt":
-        # PID 来自完整健康合同与原生进程身份核验；跨代接管仍使用同一 Backend HTTP 服务。
-        process.shutdown_request = partial(_request_runtime_shutdown, f"{contract.backend_url.rstrip('/')}/api/internal/runtime/shutdown",
-            RuntimeShutdownRequest(process_id=process.pid, backend_generation=contract.generation), get_gateway_local_token())
+    # 所有平台先请求根服务结清 owner，不能用进程组 SIGTERM 提前杀掉文件监听等子进程。
+    # PID 来自完整健康合同与原生进程身份核验；超时后的整组强制回收仍归原 ManagedProcess。
+    process.shutdown_request = partial(_request_runtime_shutdown, f"{contract.backend_url.rstrip('/')}/api/internal/runtime/shutdown",
+        RuntimeShutdownRequest(process_id=process.pid, backend_generation=contract.generation), get_gateway_local_token())
 
 
 async def verify_managed_backend_group(

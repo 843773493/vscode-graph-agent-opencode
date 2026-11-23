@@ -31,7 +31,7 @@ def test_render_preserves_config_values_and_normalizes_local_schema() -> None:
 
 
 @pytest.mark.parametrize("endpoint", [None, "http://127.0.0.1:1/v1"])
-def test_isolated_provider_keys_pass_schema_and_resolve_without_secrets(endpoint: str | None) -> None:
+def test_isolated_provider_keys_pass_schema_and_resolve_without_secrets(endpoint: str | None, workspace_config_schema: dict) -> None:
     config = json.loads(workspaces.render_test_workspace_config(
         Path("configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
@@ -41,7 +41,7 @@ def test_isolated_provider_keys_pass_schema_and_resolve_without_secrets(endpoint
     original_llm = json.loads(json.dumps(config["llm"]))
     workspaces.clear_test_provider_api_keys(config, endpoint=endpoint)
     validate_config(config, schema_path=Path("configs/workspace_schema.jsonc"))
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default")
+    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
     with resolver.use_secrets({}):
         models = resolver.list_models(config)
     assert models and all(model["api_key"] == "" for model in models)

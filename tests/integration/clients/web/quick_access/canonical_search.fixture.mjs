@@ -89,7 +89,7 @@ export async function canonicalSearchContract({ category, mismatch = false, omit
     return new Response(events.map((event, index) => `id: ${index + 1}\nevent: search\ndata: ${JSON.stringify({ ...event, sequence: index + 1, request_id: 'canonical-search' })}\n\n`).join(''),
       { headers: { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'canonical-search' } });
   };
-  const opener = lifetime.add(new ResourceOpener({ registerOpener: () => ({ dispose() {} }) }, editors, groups, configuration,
+  const opener = lifetime.add(new ResourceOpener({ registerOpener: () => ({ dispose() {} }) }, editors, groups,
     { createModelReference() { throw new Error('搜索接受不得提前读取只读模型'); } }, {}, { getAssociationsForResource: () => [] }));
   const changes = lifetime.add(new Emitter()), accepts = lifetime.add(new Emitter()), buttons = lifetime.add(new Emitter());
   const prefix = content ? 'content ' : category === '会话' ? 'session ' : category === 'Thread' ? 'thread ' : '';

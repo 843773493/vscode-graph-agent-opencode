@@ -18,7 +18,7 @@ from tests.harness.python.web_workbench import (
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -53,7 +53,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
     if chromium_path is None:
         pytest.fail("会话物理树 Web E2E 需要 Chromium")
 
-    port = e2e_port_block_for_file(Path(request.node.fspath)).port(20)
+    port = e2e_ports_for_file(Path(request.node.fspath)).port(20)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=None,

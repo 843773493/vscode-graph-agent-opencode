@@ -23,7 +23,7 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 沿当前文件正式输出路径复用原 HTTP MCP
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -102,9 +102,9 @@ async def private_header_case(request: pytest.FixtureRequest, http_schema_endpoi
         http_schema_endpoint_factory("private", request_observer=observe_request, call_observer=observe_call) as endpoint,
         http_schema_endpoint_factory("changed-endpoint", request_observer=observe_new_endpoint) as changed,
     ):
-        with model_stream_replay(context.output_root, runtime_root=runtime, business_assertion=request.node.nodeid) as replay:
+        with model_stream_replay(context.artifacts_dir, runtime_root=runtime, business_assertion=request.node.nodeid) as replay:
             gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspaces["A1"], default_backend_url=None,
-                port=integration_port_block_for_file(Path(request.node.path)).port(0),
+                port=integration_ports_for_file(Path(request.node.path)).port(0),
                 boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir,
                 asgi_app="tests.support.e2e_control.gateway_app:app", extra_env=replay.environment)
             case = None

@@ -17,7 +17,7 @@ from app.services.business.communication.wait import (
 
 
 def create_wait_for_session_tool(
-    session_id: str, *, communication_service: SessionCommunicationProtocol,
+    session_id: str | None, *, communication_service: SessionCommunicationProtocol,
     invocation_context: ToolInvocationContext,
 ) -> BaseTool:
     @tool("wait_for_session")

@@ -189,12 +189,12 @@ export async function configurationUriContract(mode) {
     openEditor: async () => { throw new Error('不得绕过原设置命令直接打开模型'); } },
     { activeGroup: group, getGroup: () => mode === 'closed-group' ? undefined : group,
       findGroup: () => undefined, addGroup: () => { addedGroups++; return { id: 8 }; } },
-    { getValue: () => 'right' }, { createModelReference: async resource => { references.push(String(resource)); throw new Error('不得走普通来源正文读取'); } },
+    { createModelReference: async resource => { references.push(String(resource)); throw new Error('不得走普通来源正文读取'); } },
     { executeCommand: async (id, request) => { commands.push({ id, request }); } }, { getAssociationsForResource: () => [] });
   try {
     const opened = opener.open(mode === 'gateway' ? gatewayUri : mode === 'remote' ? remoteFixture.referenceUri : uri, {
-      ...(mode === 'remote' ? {} : { boxteamResourceOwner: owner }), boxteamTargetGroup: 7,
-      openToSide: mode === 'side', editorOptions: { pinned: mode === 'pinned', preserveFocus: mode === 'background' } });
+      ...(mode === 'remote' ? {} : { boxteamResourceOwner: owner }),
+      openToSide: mode === 'side', editorOptions: { sourceGroup: 7, pinned: mode === 'pinned', preserveFocus: mode === 'background' } });
     if (mode === 'freeze') {
       for (let i = 0; i < 200 && !release; i++) await new Promise(resolve => setTimeout(resolve, 5));
       if (!release) throw new Error('配置目录没有进入受控等待');

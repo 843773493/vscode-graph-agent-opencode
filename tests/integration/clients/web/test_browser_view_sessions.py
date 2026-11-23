@@ -22,7 +22,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -76,7 +76,7 @@ def browser_backend(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
@@ -98,7 +98,7 @@ def browser_backend(
     )
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.artifacts_dir / "model-replay", runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.run_root / "artifacts" / "model-replay", runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="browser-view-isolation-and-real-background-result-notification",
     ) as replay:
         backend = start_backend_process(
@@ -163,7 +163,7 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
     history = await browser_backend_client.post(f"/api/v1/sessions/{unopened_session_id}/threads/{unopened_thread_id}/history", json={})
     assert history.status_code == 200, history.text
     assert history.json()["data"]["items"] == [], "通知会话的执行状态必须由后续真实消息产生"
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     replay = browser_backend[2]
     interaction = build_cassette(
         asset_id="browser-view-background-notification", model="e2e-stub-model",

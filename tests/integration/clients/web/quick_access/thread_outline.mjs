@@ -142,7 +142,23 @@ try {
   await viewport(secondPane).hover(); await page.mouse.wheel(0, -420);
   await expect.poll(async () => (await position(secondPane)).top).toBeLessThan(secondBottom.top - 100);
   const originalSecond = await position(secondPane);
-  await expect.poll(async () => (await storedPosition())?.turn_anchor).toBe(originalSecond.anchor);
+  await expect.poll(async () => {
+    const record = await storedPosition();
+    if (!record?.reading_anchor || record.follow_latest) return false;
+    return viewport(secondPane).evaluate((scroller, anchor) => {
+      const element = [...scroller.querySelectorAll('[data-transcript-node]')]
+        .find(node => node.dataset.transcriptNode === JSON.stringify(anchor.node_key));
+      if (!element) return false;
+      const selector = 'p, pre, li, blockquote, h1, h2, h3, h4, table, img';
+      const blocks = [...element.querySelectorAll(selector)].filter(block => block.closest('[data-transcript-node]') === element
+        && !block.parentElement?.closest(selector)?.closest('[data-transcript-node]')?.isSameNode(element));
+      const bounds = element.getBoundingClientRect(), view = scroller.getBoundingClientRect();
+      const block = (blocks[anchor.content_position.block] ?? element).getBoundingClientRect();
+      const point = block.top + Math.min(anchor.content_position.offset_px,block.height);
+      return bounds.bottom > view.top && bounds.top < view.bottom
+        && Math.abs(point-view.top-anchor.viewport_offset_px) < 2;
+    },record.reading_anchor);
+  }).toBe(true);
   const storedBefore = await storedPosition();
   expect(storedBefore.follow_latest).toBe(false);
   result.phase = 'outline-page-preview';
@@ -179,7 +195,7 @@ try {
   expect(outlineReads()[3].body.cursor).toBeTruthy();
   result.coverageAndExplicitPage = true;
   await page.keyboard.press('ArrowDown');
-  await expect(secondPane).toContainText(/已定位第 \d+ 轮/);
+  await expect(secondPane.getByRole('status').filter({hasText:'已定位指定轮次'})).toBeVisible();
   const preview = await position(secondPane);
   expect(preview.anchor).not.toBe(originalSecond.anchor);
   expect((await position(firstPane)).anchor).toBe(originalFirst.anchor);
@@ -200,7 +216,7 @@ try {
   await expect(match).toHaveCount(1);
   await page.keyboard.press('Enter');
   await expect(quick).not.toBeVisible();
-  await expect(secondPane).toContainText(/已定位第 \d+ 轮/);
+  await expect(secondPane.getByRole('status').filter({hasText:'已定位指定轮次'})).toBeVisible();
   await expect.poll(async () => viewport(secondPane).evaluate(element => [...element.querySelectorAll('[data-turn-id]')].some(item => {
     const bounds = item.getBoundingClientRect(), view = element.getBoundingClientRect();
     return item.textContent.includes('child 大纲消息 05') && bounds.bottom > view.top && bounds.top < view.bottom;

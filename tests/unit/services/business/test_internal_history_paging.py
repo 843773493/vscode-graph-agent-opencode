@@ -34,6 +34,10 @@ from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
 from app.services.mapping.itemized.history_turns.internal_execution import (
     build_internal_execution_history,
 )
+from app.services.mapping.itemized.history_turns.projection import (
+    HistoryProjectionBudget,
+    HistoryProjectionLimits,
+)
 
 
 @dataclass
@@ -77,6 +81,7 @@ class _FakeContextReader:
         snapshot_upper_logical_item_ordinal: int | None,
         limit: int,
         execution_id: str | None = None,
+        outline: bool = False,
     ) -> InternalExecutionHistoryPage:
         self.internal_queries.append(
             (
@@ -295,6 +300,7 @@ def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
     projected = build_internal_execution_history(
         (entry,),
         include=DEFAULT_INITIAL_INCLUDE,
+        budget=HistoryProjectionBudget(),
     )
     assert projected[0].status == "completed"
     assert projected[0].display_parts[0].logical_item_ordinal == 20
@@ -309,7 +315,7 @@ def test_internal_projection_keeps_original_historical_owner() -> None:
         thread_id="source-thread",
     )
     projected = build_internal_execution_history(
-        (entry,), include=DEFAULT_INITIAL_INCLUDE,
+        (entry,), include=DEFAULT_INITIAL_INCLUDE, budget=HistoryProjectionBudget(),
     )
     serialized = projected[0].model_dump(mode="json")
     assert (serialized["session_id"], serialized["thread_id"]) == (
@@ -327,8 +333,24 @@ def test_internal_projection_rejects_conflicting_execution_owners() -> None:
     )
     with pytest.raises(RuntimeError, match="durable metadata 不一致"):
         build_internal_execution_history(
-            (entry, conflicting), include=DEFAULT_INITIAL_INCLUDE,
+            (entry, conflicting), include=DEFAULT_INITIAL_INCLUDE, budget=HistoryProjectionBudget(),
         )
+
+
+def test_internal_body_uses_remaining_page_budget_and_keeps_member_identity() -> None:
+    budget = HistoryProjectionBudget(HistoryProjectionLimits(chars=40, item_chars=40))
+    budget.add(byte_count=10, char_count=10)
+    entries = tuple(replace(_entry(index, logical_item_ordinal=index),
+        item=CanonicalItemRecord.create(item_sequence=index, item_id=f"reasoning-{index}",
+            semantic_kind=SemanticKind.REASONING, payload_kind=PayloadKind.TEXT,
+            status=CanonicalItemStatus.COMPLETED, payload="r" * 20,
+            producer_ref={"producer_kind": "runtime", "producer_id": "fixture"}))
+        for index in range(1, 4))
+    execution, = build_internal_execution_history(entries, include=("internal", "reasoning_detail"), budget=budget)
+    assert [part.source.item_id for part in execution.response_parts] == [f"reasoning-{index}" for index in range(1, 4)]
+    assert sum(len(part.text) for part in execution.response_parts) <= 30
+    assert execution.response_parts[0].text == "r" * 20
+    assert all(part.truncated for part in execution.response_parts[1:])
 
 
 @pytest.mark.parametrize(

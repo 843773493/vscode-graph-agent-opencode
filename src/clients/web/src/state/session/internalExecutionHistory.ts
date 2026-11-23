@@ -2,13 +2,15 @@ import type { InternalExecutionHistory, TurnResponsePart } from "../../types/bac
 import { compareInternalResponseParts } from "../timeline/responseParts";
 
 export type InternalExecutionRecord = Omit<InternalExecutionHistory, "display_parts" | "response_parts"> & {
+  sourceViewId?: string; sourceViewRevision?: number;
+  activityOutline?: {beforeCursor: string | null};
   display_parts: Array<InternalExecutionHistory["display_parts"][number] & { bodyEvicted?: true }>;
   response_parts: Array<TurnResponsePart & { bodyEvicted?: true }>;
 };
 export interface ExecutionItemReference { executionId: string; itemId: string }
 
 /** 所有历史窗口沿相同 canonical identity 合并，不复制另一份执行正文。 */
-export function mergeInternalExecutions(previous: readonly InternalExecutionRecord[], incoming: readonly InternalExecutionHistory[]): InternalExecutionRecord[] {
+export function mergeInternalExecutions(previous: readonly InternalExecutionRecord[], incoming: readonly InternalExecutionHistory[], binding?: {source_view_id?: string | null; source_view_revision?: number | null}): InternalExecutionRecord[] {
   const internalExecutions = new Map(
     previous.map((execution) => [execution.execution_id, execution]),
   );
@@ -26,8 +28,10 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
   }
   for (const execution of incoming) {
     const previous = internalExecutions.get(execution.execution_id);
+    const sameBinding = previous?.sourceViewId === binding?.source_view_id
+      && previous?.sourceViewRevision === binding?.source_view_revision;
     const displayParts = new Map(
-      (previous?.display_parts ?? []).map((part) => [part.item_id, part]),
+      (sameBinding ? previous?.display_parts ?? [] : []).map((part) => [part.item_id, part]),
     );
     for (const part of execution.display_parts) {
       const owner = displayItemExecutions.get(part.item_id);
@@ -52,7 +56,7 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
       displayParts.set(part.item_id, part);
     }
     const responseParts = new Map(
-      (previous?.response_parts ?? []).map((part) => [part.part_id, part]),
+      (sameBinding ? previous?.response_parts ?? [] : []).map((part) => [part.part_id, part]),
     );
     for (const part of execution.response_parts) {
       const previousPart = responseParts.get(part.part_id);
@@ -70,12 +74,15 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
           `history projection integrity: 同一 response part 的 canonical 坐标冲突: ${part.part_id}`,
         );
       }
-      responseParts.set(part.part_id, part);
+      responseParts.set(part.part_id, sameBinding && previousPart?.projection === "detail" && part.projection === "summary" ? previousPart : part);
     }
     const orderedResponseParts = [...responseParts.values()];
     orderedResponseParts.sort(compareInternalResponseParts);
     internalExecutions.set(execution.execution_id, {
       ...execution,
+      sourceViewId: binding?.source_view_id ?? previous?.sourceViewId,
+      sourceViewRevision: binding?.source_view_revision ?? previous?.sourceViewRevision,
+      ...(previous?.activityOutline && previous.sourceViewId === binding?.source_view_id && previous.sourceViewRevision === binding?.source_view_revision ? {activityOutline: previous.activityOutline} : {}),
       display_parts: [...displayParts.values()].sort((left, right) =>
         left.logical_item_ordinal - right.logical_item_ordinal,
       ),

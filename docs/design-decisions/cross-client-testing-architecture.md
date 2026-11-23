@@ -64,24 +64,21 @@ src/clients/electron-web
 
 ### Integration
 
-验证多个真实生产模块组合，但允许在明确外部边界使用替身，位于 `tests/integration/`。以下任一条件命中就属于 Integration：
-
-- stub、fake、mock 模型或 Provider；
-- mini MCP、替代 Gateway 下游或替代网页服务；
-- 固定场景响应；
-- `page.route().fulfill()` 或修改产品依赖响应；
-- 模拟 Electron bridge；
-- React Native Web 替代原生运行面。
-
-浏览器本身是真的、Gateway/后端大部分是真的，均不能抵消关键链路存在替身这一事实。
+验证生产组件之间的协作、协议与故障边界，位于 `tests/integration/`。可使用真实依赖，也可在明确外部边界使用模型回放、mini MCP、响应故障注入等替身；有无替身不单独决定目录归属。模拟 Electron bridge 或 React Native Web 只证明相应模拟／Web 运行面，不能代表原生平台验收。
 
 常驻事件的网络证据观察 `/api/gateway/realtime` 的真实订阅、响应头、字节、结束与取消帧，复用 `tests/support/workbench/realtime.mjs`；不能等待已删除的 observation HTTP 请求，或把多个逻辑订阅计为多条物理连接。后端 SSE owner、有限请求流和 PTY／DAP 等专用连接分别验证，不能把取消或连接建立当成业务完成。多视图验收须同时保留普通 HTTP 请求可达与原 owner／游标隔离证据；架构边界见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
 
 ### E2E
 
-E2E 位于 `tests/e2e/`，必须使用场景要求的真实进程、真实传输和真实外部依赖。缺少真实模型、凭据、平台运行时或服务时，测试必须失败、跳过或报告 `UNMET_PREREQUISITE`；不得切换到 stub 后继续报告 E2E 通过。
+E2E 位于 `tests/e2e/`，承载用户主动说明的完整业务流程验收。新增用例在说明中写明公开入口、关键业务步骤和可观察的最终结果，不另建审批或来源账本。客户端场景实际操作产品客户端并经过 Gateway／Workspace；后端系统场景按其公开入口验收，不宣称覆盖浏览器。
 
-以下测试设施不算替身：
+模型边界允许真实调用、上游录制重放或手工 SSE。三者共用已有 HTTP transport 回放入口、fixture 和业务驱动；同一文件切换模型参数时仍属于 E2E，不复制真实／回放两套场景。模型模式与验收目标是两个维度，目录不是依赖真实性的证明。
+
+运行产物注明实际模型模式、响应资产来源及被替换边界。实时录制是本次真实调用；上游重放和手工 SSE 可证明产品如何消费该响应，但不证明真实 Provider 的鉴权、连通性和生成能力。缺少已选择模式的凭据、资产、平台运行时或服务时，必须失败、跳过或报告 `UNMET_PREREQUISITE`，不得静默换模式。
+
+现有归属不明确的测试保留原目录与套件入口，后续触及时再按验证目标判断，不批量迁移。unit 与 contracts 也继续保留。Integration 和 E2E 共同复用 `tests/harness/`、`tests/support/` 的资源生命周期、隔离和清理机制，不各造一套装具。
+
+以下准备和观测设施不替代被验收的业务步骤：
 
 - 从 `asset/` 复制到隔离目录的测试工作区；
 - 通过真实 API 预置状态；

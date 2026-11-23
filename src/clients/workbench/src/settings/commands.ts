@@ -16,9 +16,8 @@ import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/p
 import { captureSettingsLocation, parseSettingsLocation } from './editor.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/common/editor.js';
-import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
-import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import type { ITextEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
 import type { TargetSettingsLocation } from './scope.js';
@@ -136,10 +135,10 @@ registerAction2(class extends Action2 {
   }
   async run(accessor: ServicesAccessor, request?: ConfigurationSourceOpenRequest): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService), files = accessor.get(IFileService);
-    const groups = accessor.get(IEditorGroupsService), configuration = accessor.get(IConfigurationService);
-    const groupId = request?.groupId ?? groups.activeGroup.id;
+    const groups = accessor.get(IEditorGroupsService);
+    const groupId = request?.editorOptions?.sourceGroup ?? request?.groupId ?? groups.activeGroup.id;
     const explicitLocation = request && parseSettingsLocation(request.location);
-    const openToSide = request?.openToSide, editorOptions = { ...(request?.editorOptions ?? { pinned: true }) };
+    const openToSide = request?.openToSide, editorOptions = { ...(request?.editorOptions ?? { pinned: true }), sourceGroup: groupId };
     const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
     try {
       const captured = explicitLocation ? { location: explicitLocation,
@@ -150,12 +149,11 @@ registerAction2(class extends Action2 {
       const { location, document } = captured;
       const source = groups.getGroup(groupId);
       if (!source) throw new Error(t('workbench.settings.originGroupClosed'));
-      const direction = preferredSideBySideGroupDirection(configuration);
-      const group = openToSide ? groups.findGroup({ direction }, source) ?? groups.addGroup(source, direction) : source;
+      const group = openToSide ? SIDE_GROUP : request?.groupId ?? ACTIVE_GROUP;
       const resource = configSourceFiles(files).prepareEditor(location, location.source_key, document);
-      const input = { resource, label: location.source_key + '.jsonc', description: `${location.gateway_id} · ${location.name}`,
+      const input = { resource,
         options: editorOptions, languageId: 'jsonc', forceFile: true } satisfies IUntypedFileEditorInput;
-      await editors.openEditor(input, group.id);
+      await editors.openEditor(input, group);
     } finally { lifecycle.dispose(); }
   }
 });
@@ -201,7 +199,7 @@ registerAction2(class extends Action2 {
       lifecycle.check();
       if (!captured) return;
       if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
-      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { ...options, pinned: true }, groupId);
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { ...options, pinned: true, sourceGroup: groupId });
     } finally { lifecycle.dispose(); }
   }
 });
@@ -232,9 +230,9 @@ for (const kind of ['providers', 'agents'] as const) registerAction2(class exten
       lifecycle.check();
       if (!captured) return;
       if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
-      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, definitionKind: kind, definitionId, definitionModelId };
+      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, sourceGroup: groupId, definitionKind: kind, definitionId, definitionModelId };
       await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document),
-        options, groupId);
+        options);
     } finally { lifecycle.dispose(); }
   }
 });

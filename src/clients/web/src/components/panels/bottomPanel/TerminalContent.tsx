@@ -56,7 +56,8 @@ export function TerminalContent({
   );
   const selectedIdRef = useRef(selectedTerminalId);
   selectedIdRef.current = selectedTerminalId;
-  const terminalErrorMessage = [selectedEntry?.error, controller.error]
+  const resourceWarning = selectedEntry?.reconciliation_status !== "verified" ? selectedEntry?.error : null;
+  const terminalErrorMessage = [resourceWarning ? null : selectedEntry?.error, controller.error]
     .filter((message): message is string => typeof message === "string" && message.length > 0)
     .join(" · ");
   const selectedIsStopped = selectedEntry ? isStoppedTerminal(selectedEntry.status) : false;
@@ -226,6 +227,12 @@ export function TerminalContent({
       <div className="terminal-panel-content">
         <article className="terminal-panel-viewer" aria-label={t("bottom.terminal.content")}>
           <div className="terminal-panel-error-slot">
+            {resourceWarning ? (
+              <details key={selectedEntry!.resource_id} className="terminal-panel-resource-warning">
+                <summary>{t(selectedIsStopped ? "bottom.terminal.recovery.history" : "bottom.terminal.recovery.unavailable")}</summary>
+                <div>{resourceWarning}</div>
+              </details>
+            ) : null}
             {terminalErrorMessage ? (
               <div role="alert" title={terminalErrorMessage}>
                 {terminalErrorMessage}

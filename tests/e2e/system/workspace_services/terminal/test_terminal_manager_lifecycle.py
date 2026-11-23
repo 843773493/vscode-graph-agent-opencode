@@ -17,7 +17,6 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
     create_terminal_scenario_workspace,
     prepare_empty_terminal_e2e_workspace,
     process_exists,
-    terminal_ports_with_offset,
     terminal_state_record,
     wait_terminal_process_metadata,
     wait_terminal_snapshot,
@@ -28,6 +27,7 @@ from tests.harness.python.terminal_backend import (
     stop_terminal_plugin_service,
 )
 from tests.harness.python.terminal_state import read_terminal_state
+from tests.support.ports import TestFilePorts
 
 
 class ProcessSnapshot(NamedTuple):
@@ -173,10 +173,10 @@ def _assert_preserved_transport(
 @pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ):
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 70)
+    backend_port = e2e_service_ports.port(70)
     root = create_terminal_scenario_workspace(e2e_workspace_root_path, "sigterm")
     plugin = start_terminal_plugin_service(
         backend_port=backend_port,
@@ -206,10 +206,10 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
 @pytest.mark.skipif(os.name != "posix", reason="该用例核验 POSIX 持久进程组")
 def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recovered(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ):
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 72)
+    backend_port = e2e_service_ports.port(72)
     root = create_terminal_scenario_workspace(e2e_workspace_root_path, "startup")
     plugin = start_terminal_plugin_service(
         backend_port=backend_port,

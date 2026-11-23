@@ -1,3 +1,4 @@
+import { mergeCanonicalParts } from "../timeline/responseParts";
 import type {
   SessionTurnBootstrap,
   TurnDetail,
@@ -11,7 +12,7 @@ import type {
 import { mergeInternalExecutions, type InternalExecutionRecord } from "./internalExecutionHistory";
 import { compactTurnBodies } from "./turnBodyRetention";
 
-export type TurnRecord = (TurnSummary | TurnDetail) & { bodyEvicted?: true };
+export type TurnRecord = (TurnSummary | TurnDetail) & { bodyEvicted?: true; activityOutline?: {beforeCursor: string | null} };
 export type TurnTimelinePhase = "idle" | "bootstrapping" | "ready" | "error";
 export type TurnProjectionState = NonNullable<
   SessionTurnBootstrap["projection_state"]
@@ -200,7 +201,7 @@ function mergeTurnItems(
 
   // 初始投影会用 tool_summary 生成没有 raw/content 的占位事件；详情请求
   // 返回真实 tool_call/tool_result 后，不能把两套事件同时交给 React。
-  // 否则同一个 part_id 会在 ThinkingSection 中出现两次，并触发重复 key。
+  // 否则同一个 part_id 会在 过程活动组 中出现两次，并触发重复 key。
   const isSummaryPlaceholder = (item: TurnDetailItem): boolean =>
     item.event_id.includes(":tool_summary:");
   const isMaterialized = (item: TurnDetailItem): boolean =>
@@ -330,7 +331,12 @@ function mergeSameRevisionTurn(
         currentRecord[field],
         incomingRecord[field],
       );
-      if (mergedResponseParts !== undefined) merged[field] = mergedResponseParts;
+      if (mergedResponseParts !== undefined) {
+        // 元数据页只覆盖本页来源；同一 binding 的常规详情不能撤销已补读的页外标记。
+        const ids = new Set(mergedResponseParts.map(partIdOf));
+        merged[field] = [...mergedResponseParts, ...(current.response_parts ?? [])
+          .filter(part => part.kind === "context_notice" && !ids.has(part.part_id))];
+      }
       continue;
     }
     const value = preferProjectionValue(
@@ -815,7 +821,7 @@ export function applyTurnHistoryPage(
   };
   const withSummaries = upsertTurns(pageTimeline, page.summaries ?? []);
   const next = upsertTurns(withSummaries, page.items);
-  const nextInternalExecutions = mergeInternalExecutions(next.internalExecutions, page.internal_executions ?? []);
+  const nextInternalExecutions = mergeInternalExecutions(next.internalExecutions, page.internal_executions ?? [], page);
   if (direction === "details") return { ...next, internalExecutions: nextInternalExecutions, error: null };
   if (direction === "around") {
     return {
@@ -973,4 +979,20 @@ export function writeTurnTimelineCache(
     next.delete(oldestKey);
   }
   return next;
+}
+
+/** 同一 canonical owner 的轮廓页/Item 片段只丰富成员，不覆盖整轮字段或主分页游标。 */
+export function applyHistoryFragment(timeline: SessionTurnTimeline, page: import("../../types/backend").TurnHistoryPage, outline = false): SessionTurnTimeline {
+  if (page.projection_epoch !== timeline.projectionEpoch || page.source_view_revision !== timeline.historyViewRevision) return timeline;
+  const items = page.items.flatMap(detail => {
+    const current = timeline.turnsById[detail.turn_id];
+    if (!current || current.source_view_id !== page.source_view_id || current.source_view_revision !== page.source_view_revision) return [];
+    return [{ ...current, response_parts: mergeCanonicalParts(current.response_parts ?? [], detail.response_parts ?? []),
+      ...(outline ? {activityOutline: {beforeCursor: page.before_cursor ?? null}} : {}) }];
+  });
+  const executions = (page.internal_executions ?? []).filter(execution => timeline.internalExecutions.some(current =>
+    current.execution_id === execution.execution_id && current.sourceViewId === page.source_view_id && current.sourceViewRevision === page.source_view_revision));
+  return { ...upsertTurns(timeline, items), internalExecutions: mergeInternalExecutions(timeline.internalExecutions, executions, page).map(execution =>
+    outline && executions.some(incoming => incoming.execution_id === execution.execution_id)
+      ? {...execution, activityOutline: {beforeCursor: page.before_cursor ?? null}} : execution) };
 }

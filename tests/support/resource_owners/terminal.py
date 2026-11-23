@@ -77,7 +77,7 @@ class TerminalTransportFake:
     async def get_resource(self, terminal_id: str) -> dict[str, object]:
         return dict(self.records[terminal_id])
 
-    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool, retained_associations: list[str | None] | None = None) -> None:
         self.revisions[terminal_id] = owner_revision
         self.records[terminal_id]["transport_owner_revision"] = owner_revision
         self.grants = {

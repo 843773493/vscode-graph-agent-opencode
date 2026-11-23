@@ -17,8 +17,8 @@ import { PickerQuickAccessProvider, TriggerAction, type IPickerQuickAccessItem }
 import { Extensions, type IQuickAccessRegistry } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
-import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
-import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO, SessionChangesetListDTO, ThreadAttachmentListDTO, ThreadToolResultListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
@@ -43,7 +43,7 @@ import { ConfigurationSourceOwner } from '../settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
 interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string; resource?: URI; resourceOwner?: ResourceReferenceOwner }
-export interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread']; resourceRecipient?: ComposerResourceTarget | null; resourceReferencesOnly?: boolean; resourceReferenceBack?: () => void }
+export interface ResourceAccessOptions extends SearchInvocationOptions { resourceThread?: SourceRun['thread']; resourceRecipient?: ComposerResourceTarget | null; resourceReferencesOnly?: boolean; resourceReferenceBack?: () => void }
 interface SourceRun {
   picker: IQuickPick<SourcePick, { useSeparators: true }>;
   owners: readonly WorkspaceOwner[];
@@ -79,7 +79,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
   override provide(picker: SourceRun['picker'], token: CancellationToken, options: ResourceAccessOptions = {}) {
     const lifetime = new DisposableStore(), access = new CancellationTokenSource(token), controller = new AbortController();
     const run: SourceRun = { picker, owners: (options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : [])).map(owner => ({ ...owner })),
-      gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.resourceGroup ?? this.groups.activeGroup.id,
+      gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.searchGroup ?? this.groups.activeGroup.id,
       ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal, referencesOnly: options.resourceReferencesOnly === true,
       picks: [], loading: true, hasFocusedPick: false };
     this.run = run;
@@ -122,7 +122,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const owners = await chooseSearchOwners(this.quick, run.owners);
           if (invalidated) throw new Error(t('quickAccess.sources.workspaceCredentialsChanged'));
           this.assertAccess(run);
-          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread, resourceRecipient: run.recipient };
+          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, searchGroup: run.group, resourceThread: run.thread, resourceRecipient: run.recipient };
           this.quick.quickAccess.show(value, { providerOptions });
         } finally { releaseToken(); releaseGateway(); }
       })());
@@ -224,8 +224,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
             || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
           const openOptions: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
-            boxteamResourceOwner: { ...owner }, boxteamTargetGroup: run.group, openToSide: mods.alt || pinned && mods.ctrlCmd,
-            editorOptions: { pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground } };
+            boxteamResourceOwner: { ...owner }, openToSide: mods.alt || pinned && mods.ctrlCmd,
+            editorOptions: { sourceGroup: run.group, pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground } };
           this.report(this.opener.open(uri, openOptions));
         };
       }
@@ -254,19 +254,17 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const threadResourceAccept = (owner: WorkspaceOwner, viewState: Partial<ReturnType<ThreadInput['getViewState']>>, navigation?: ThreadEditorOptions['boxteamMessage']): SourcePick['accept'] => (mods, event) => {
       this.report((async () => {
         this.assertAccess(run);
-        const source = this.groups.getGroup(run.group), thread = run.thread!;
-        if (!source) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
+        const thread = run.thread!;
+        if (!this.groups.getGroup(run.group)) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
         const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
           || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
-        const direction = preferredSideBySideGroupDirection(this.configuration);
-        const destination = mods.alt || pinned && mods.ctrlCmd
-          ? this.groups.findGroup({ direction }, source) ?? this.groups.addGroup(source, direction) : source;
+        const destination = mods.alt || pinned && mods.ctrlCmd ? SIDE_GROUP : ACTIVE_GROUP;
         await this.editors.openEditor(new ThreadInput({ ...owner, workspaceKey: gatewayWorkspaceKey(owner),
           sessionId: thread.session_id, threadId: thread.thread_id, title: thread.thread_id }), {
-          pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground,
+          sourceGroup: run.group, pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground,
           ...(navigation ? { boxteamMessage: navigation } : {}),
           viewState: { resourcesVisible: !navigation, ...viewState },
-        }, destination.id);
+        }, destination);
       })());
     };
     const configurationPicks = async (target: GatewayRequestTarget, name: string): Promise<SourcePick[]> => {
@@ -296,8 +294,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
             const request: ConfigurationSourceOpenRequest = {
               location: { ...owner.target, version: 2, source_key: source.source_key!, name },
-              groupId: run.group, openToSide: mods.alt || pinned && mods.ctrlCmd,
-              editorOptions: { pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground },
+              openToSide: mods.alt || pinned && mods.ctrlCmd,
+              editorOptions: { sourceGroup: run.group, pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground },
             };
             this.report(this.commands.executeCommand(openConfigurationSourceCommand, request));
           },
@@ -509,7 +507,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       if (invalidated) throw new Error(t('quickAccess.sources.credentialsChanged'));
       this.assertAccess(run);
       if (!selected) {
-        const providerOptions: ResourceAccessOptions = { searchOwners: run.owners, resourceGroup: run.group, resourceThread: run.thread };
+        const providerOptions: ResourceAccessOptions = { searchOwners: run.owners, searchGroup: run.group, resourceThread: run.thread };
         this.quick.quickAccess.show(value, { providerOptions });
         return;
       }

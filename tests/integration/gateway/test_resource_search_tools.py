@@ -20,7 +20,6 @@ from app.schemas.search_federation import (
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     _job,
@@ -32,8 +31,7 @@ from tests.integration.gateway.test_federated_search import (
     network as network,  # noqa: PLC0414 - 复用原双后端隔离 fixture。
 )
 from tests.support.api_helpers import create_session
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -222,16 +220,11 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
 
 @pytest.fixture
 def agent_ports(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-                            tuple(ports.port(offset) for offset in (0, 20, 40, 42, 43)))
-    lease.acquire()
-    try:
-        yield
-    finally:
-        lease.release()
+    for offset in (0, 20, 40, 42, 43):
+        ports.port(offset)
+    yield
 
 
 @pytest.mark.parametrize("network", [{"model_stream": True}], indirect=True)

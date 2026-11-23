@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    strict_non_negative_int,
     strict_text,
 )
 
@@ -26,7 +25,7 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
         if not isinstance(item, dict):
             raise TypeError("activity item projection 必须是对象")
         created_at = item.get("created_at")
-        item["elapsed_ms"] = _item_elapsed_ms(created_at, previous_at)
+        item["elapsed_ms"] = _item_elapsed_ms(created_at, item.get("previous_created_at", previous_at))
         previous_at = created_at
         if item.get("kind") in {
             "reasoning",
@@ -66,10 +65,7 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
                 }
             )
         elif item.get("kind") == "text":
-            # assistant_output 正文只作为非 final text part 进入时间线，
-            # 不进入 thinking/tool 统计。completed Turn 的中间正文仍由 final
-            # pointer 承载避免双重投影；非 completed 终态 Turn 没有 final
-            # pointer，其 completed 正文也在此投影，否则历史会丢失正文。
+            # 非 final 正文属于过程成员，不混入 thinking/tool 专用列表。
             pass
         else:
             raise RuntimeError(f"未知 activity item kind: {item.get('kind')!r}")
@@ -133,32 +129,3 @@ def _authoritative_tool_coordinates(
             "result_message_sequence", "assistant_message_sequence", "call_index"
         )
     }
-
-
-def _logical_activity_key(item: dict[str, object], model_call_id: str | None) -> tuple[object, ...]:
-    """合并只使用 typed scope 与持久身份；未绑定 scope 的 item 独立。"""
-    kind = strict_text(item.get("kind"), field="activity_item.kind")
-    if kind in {"text", "compaction_summary"} or model_call_id is None:
-        return kind, strict_text(item.get("item_id"), field="item_id")
-    if kind in {"tool_call", "tool_result"}:
-        return kind, model_call_id, strict_text(item.get("tool_call_id"), field="tool_call_id")
-    block_id = item.get("block_id")
-    coordinate = block_id if block_id is not None else strict_non_negative_int(item.get("block_ordinal"), field="block_ordinal")
-    return kind, model_call_id, coordinate
-
-
-def _final_reasoning_source_refs(
-    model_call_id: str | None,
-    part_refs: dict[int, str],
-    *,
-    content_block_index: int,
-    item_index: int,
-    provider_item_id: object,
-) -> set[tuple[str | None, str]]:
-    """最终 reasoning 只按显式 scope/part 坐标与流式块去重。"""
-    refs: set[tuple[str | None, str]] = set()
-    if provider_item_id is not None:
-        refs.add((model_call_id, strict_text(provider_item_id, field="reasoning_blocks.item_id")))
-    if item_index == 0 and content_block_index in part_refs:
-        refs.add((model_call_id, part_refs[content_block_index]))
-    return refs

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import hashlib
 import json
 import os
@@ -11,8 +10,6 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +21,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.services.business.session_context_query.resources import session_resource_uri
+from app.testing.model_stream import load_model_stream_config
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式工作台构建装具
@@ -35,10 +33,10 @@ from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
-from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
+from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.plugin_package import install_plugin_async
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     reset_gateway_persistent_state,
@@ -104,39 +102,17 @@ def section8_runtime(request: pytest.FixtureRequest, section8_context: TestRunCo
 
 
 @pytest.fixture(scope="module", autouse=True)
-def section8_ports(request: pytest.FixtureRequest, section8_context: TestRunContext) -> Iterator[TestFilePortBlock]:
-    block = integration_port_block_for_file(Path(request.node.fspath))
-    # 只检查实际服务和 SSH 隧道池；模型回放不再启动独立 HTTP 服务。
-    offsets = (*(
-        offset + step for offset in SECTION8_NODE_PORT_OFFSETS for step in (0, 1, 4, 5, 6)
-    ), 60, *range(70, 80))
-    probes: list[dict[str, object]] = []
-    allocation = section8_context.artifacts_dir / "port-allocation.json"
-    lease_path = section8_context.runtime_root_for_node(request.node.nodeid) / "test-control/process-lease.json"
-    with ExitStack() as reservations:
-        for start in range(block.start, block.end - max(offsets) + 1):
-            selected = replace(block, start=start)
-            lease = E2EProcessLease(lease_path, tuple(selected.port(offset) for offset in offsets))
-            try:
-                lease.acquire()
-            except (RuntimeError, OSError) as error:
-                cause = error if isinstance(error, OSError) else error.__cause__
-                if not isinstance(cause, OSError) or (
-                    cause.errno != errno.EADDRINUSE and getattr(cause, "winerror", None) != 10048
-                ):
-                    raise
-                probes.append({"start": start, "available": False, "error": str(error)})
-            else:
-                reservations.callback(lease.release)
-                probes.append({"start": start, "available": True, "ports": lease.ports})
-            allocation.write_text(json.dumps({
-                "test_file": str(block.test_file), "block_index": block.index,
-                "block": {"start": block.start, "end": block.end}, "probes": probes,
-            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            if probes[-1]["available"]:
-                yield selected
-                return
-        raise RuntimeError(f"会话生命周期测试端口块无可用服务布局: block={block}, allocation={allocation}")
+def section8_ports(request: pytest.FixtureRequest, section8_context: TestRunContext) -> Iterator[TestFilePorts]:
+    ports = integration_ports_for_file(Path(request.node.fspath))
+    keys = (*(offset + step for offset in SECTION8_NODE_PORT_OFFSETS for step in (0, 1, 4, 5, 6)), 60)
+    allocated = {key: ports.port(key) for key in keys}
+    tunnels = ports.port_range("ssh-tunnels", count=10)
+    allocation = section8_context.run_root / "artifacts" / "port-allocation.json"
+    allocation.parent.mkdir(parents=True, exist_ok=True)
+    allocation.write_text(json.dumps({
+        "test_file": str(ports.test_file), "ports": allocated, "ssh_tunnels": tunnels,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    yield ports
 
 
 @pytest.fixture(scope="module")
@@ -193,7 +169,7 @@ def section8_model_stream_runtime_config_path(
     return str(prepare_e2e_model_stream_config(
         section8_model_stream_config_path,
         runtime_root=section8_runtime,
-        artifacts_dir=section8_context.artifacts_dir,
+        artifacts_dir=section8_context.run_root / "artifacts",
         mode="replay", exact_fixture_root=fixture_root,
     ))
 
@@ -230,7 +206,7 @@ async def section8_product_nodes(
     integration_workspace_config_path: str, section8_model_stream_runtime_config_path: str,
     web_workbench_assets: Path,
     section8_mcp_catalogs: dict[str, dict[str, Path]],
-    section8_ports: TestFilePortBlock,
+    section8_ports: TestFilePorts,
     prepared_developer_tools_package: Path,
     prepared_mcp_stdio_package: Path,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
@@ -344,6 +320,7 @@ async def test_conversation_lifecycle_through_real_workbench(
     request: pytest.FixtureRequest,
     section8_context: TestRunContext,
     section8_control: E2ETestControlHarness,
+    section8_model_stream_runtime_config_path: str,
     section8_product_nodes: dict[str, CommunicationNode],
     section8_browser_temporary_directory: str,
     section8_mcp_catalogs: dict[str, dict[str, Path]],
@@ -363,6 +340,9 @@ async def test_conversation_lifecycle_through_real_workbench(
     phase_path = section8_context.artifacts_dir / "basic-chat-tool-loop-phases.log"
     node = section8_product_nodes["a"]
     artifacts = section8_context.artifacts_dir
+    model_stream_artifacts = load_model_stream_config(
+        section8_model_stream_runtime_config_path,
+    ).transport.artifact_root
     artifacts.mkdir(parents=True, exist_ok=True)
     sources = (
         "tests/integration/clients/web/conversation_lifecycle/test_conversation_lifecycle.py",
@@ -411,6 +391,7 @@ async def test_conversation_lifecycle_through_real_workbench(
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
                 "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts),
+                "BOXTEAM_MODEL_STREAM_ARTIFACT_ROOT": str(model_stream_artifacts),
                 "TMPDIR": section8_browser_temporary_directory,
                 "TMP": section8_browser_temporary_directory,
                 "TEMP": section8_browser_temporary_directory,
@@ -568,7 +549,7 @@ async def test_conversation_lifecycle_through_real_workbench(
                 if item["actor"] == "rehydrate":
                     assert len(item["cold"]["graph"]["closed"]) == 1
         captures = {}
-        for path in sorted((artifacts / "model-stream").glob("*.json")):
+        for path in sorted(model_stream_artifacts.glob("*.json")):
             capture = json.loads(path.read_text(encoding="utf-8"))
             call = capture["identity"]["model_call_id"]
             assert call not in captures, f"transport产物包含重复ModelCall: {call}"

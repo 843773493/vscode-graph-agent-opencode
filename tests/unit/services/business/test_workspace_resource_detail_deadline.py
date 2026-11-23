@@ -127,8 +127,8 @@ async def test_detail_retains_committed_cold_recovery_when_the_shared_budget_exp
     entered, release = asyncio.Event(), asyncio.Event()
     revisions: list[int] = []
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-        await sync(resource_id, revision, for_stop=for_stop)
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
         revisions.append(revision)
         if deadlines:
             deadlines[0].reschedule(deadlines[0].when() - 20)

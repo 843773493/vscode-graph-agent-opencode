@@ -47,7 +47,7 @@ from tests.e2e.system.gateway.gateway_target import (
     start_remote_gateway_via_ssh,
     stop_remote_gateway,
 )
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -77,7 +77,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     if docker_error is not None:
         pytest.skip(f"Docker daemon 当前不可访问: {docker_error}")
 
-    port_block = e2e_port_block_for_file(Path(request.node.fspath))
+    port_block = e2e_ports_for_file(Path(request.node.fspath))
     local_workspace = Path(e2e_workspace_root_path).resolve()
     boxteam_home = local_workspace.parent / "boxteam-home"
     gateway_port = port_block.port(21)
@@ -95,7 +95,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     try:
         docker_target = ensure_gateway_ssh_container(
             known_hosts_path=(
-                local_workspace.parent / "artifacts" / "gateway_ssh_known_hosts"
+                docker_e2e_paths.artifacts / "gateway_ssh_known_hosts"
             ),
         )
         remote_gateway_pid = start_remote_gateway_via_ssh(
@@ -119,7 +119,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             ssh_port=docker_target.ssh_port,
             username=docker_target.username,
             remote_gateway_port=remote_gateway_port,
-            private_key_path=install_gateway_ssh_assets_for_e2e(local_workspace),
+            private_key_path=install_gateway_ssh_assets_for_e2e(docker_e2e_paths.artifacts),
             remote_pair_command=build_remote_pair_command(
                 docker_target,
                 remote_boxteam_home=remote_boxteam_home,

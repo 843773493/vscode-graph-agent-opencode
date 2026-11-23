@@ -1,5 +1,7 @@
 # 目录用途
 
+`test_artifact_lifecycle.py` 通过独立 pytest 进程验证统一现场 owner；子项目、原始输出和收据留在本用例的 artifacts，正常完成的子进程 runtime 才被回收。共享 fixture 结束时的现场明确区别于单用例结束现场，SQLite 用真实 WAL 验证完整保留。
+
 验证测试运行设施自身的跨模块、真实子进程和本地传输行为，包括进程归属、端口冲突及退出清理。
 
 ```text

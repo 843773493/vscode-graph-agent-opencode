@@ -343,9 +343,9 @@ async def test_cancelled_cold_preparation_finishes_single_frozen_version_before_
     revisions: list[int] = []
     sync = resource_owner.transport.sync_owner_revision
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         revisions.append(revision)
-        await sync(resource_id, revision, for_stop=for_stop)
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
     monkeypatch.setattr(resource_owner.transport, "sync_owner_revision", syncing)
     install(1)
@@ -428,8 +428,8 @@ async def test_cancel_during_failure_record_publication_keeps_original_batch_err
     blocked = asyncio.Event()
     sync = resource_owner.transport.sync_owner_revision
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-        await sync(resource_id, revision, for_stop=for_stop)
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if resource_id == ids[0]:
             # 从真实同步失败开始拦下一次写盘，不依赖冷准备的冗余写入次数。
             install(1)

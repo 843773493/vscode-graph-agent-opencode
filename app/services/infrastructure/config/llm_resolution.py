@@ -4,7 +4,6 @@ import os
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from copy import deepcopy
 from typing import Any
 
 from app.agents.provider_api_mode import parse_provider_api_mode
@@ -14,6 +13,7 @@ from app.agents.providers.request_parameters import (
     validate_configured_parameters,
     validate_extra_body,
 )
+from app.runtime.model_metadata import apply_model_metadata, model_metadata
 from app.schemas.gateway.secrets import ResolvedSecret
 from app.schemas.internal_v2.config import (
     ConfigModelInspectionDTO,
@@ -34,11 +34,13 @@ class LlmResolution:
     def __init__(
         self,
         *,
-        effective_config_provider: Callable[[], dict[str, Any]],
+        effective_config_provider: Callable[[], Mapping[str, Any]],
         default_agent_id_provider: Callable[[], str],
+        schema_provider: Callable[[], Mapping[str, Any]],
     ) -> None:
         self._effective_config_provider = effective_config_provider
         self._default_agent_id_provider = default_agent_id_provider
+        self._schema_provider = schema_provider
         self._secrets: ContextVar[dict[str, ResolvedSecret] | None] = ContextVar(
             f"llm_secrets_{id(self)}", default=None,
         )
@@ -51,20 +53,21 @@ class LlmResolution:
         finally:
             self._secrets.reset(token)
 
-    def resolve_default_model(self, config: dict[str, Any]) -> str:
+    def resolve_default_model(self, config: Mapping[str, Any]) -> str:
         default_agent_id = self._default_agent_id_provider()
         agents = config.get("agents", {})
-        if not isinstance(agents, dict):
+        if not isinstance(agents, Mapping):
             raise TypeError("agents 配置必须是对象")
         if default_agent_id not in agents:
             raise ValueError(f"default_agent 引用了不存在的 Agent: {default_agent_id}")
         agent_config = agents[default_agent_id]
-        if not isinstance(agent_config, dict):
+        if not isinstance(agent_config, Mapping):
             raise TypeError(f"agent {default_agent_id} 配置必须是对象")
         model_config = agent_config.get("model", {})
-        if not isinstance(model_config, dict):
+        if not isinstance(model_config, Mapping):
             raise TypeError(f"agent {default_agent_id} 的 model 配置必须是对象")
-        primary = ModelReferenceDTO.model_validate(model_config.get("primary"))
+        primary_value = model_config.get("primary")
+        primary = ModelReferenceDTO.model_validate(dict(primary_value) if isinstance(primary_value, Mapping) else primary_value)
         return self.resolve_model_reference(config, primary)["model"]
 
     def resolve_model_reference(
@@ -76,7 +79,7 @@ class LlmResolution:
         """先取来源合并后的 Provider，再合并其 defaults 与 Model overrides。"""
         model_ref = (
             reference if isinstance(reference, ModelReferenceDTO)
-            else ModelReferenceDTO.model_validate(reference)
+            else ModelReferenceDTO.model_validate(dict(reference))
         )
         provider = self._provider_definition(config, model_ref.provider_id)
         defaults = provider.get("defaults", {})
@@ -103,7 +106,7 @@ class LlmResolution:
                 f"Provider {model_ref.provider_id} 的 Model {model_ref.model_id} overrides 必须是对象"
             )
 
-        resolved = _merge_model_options(defaults, overrides)
+        resolved = self._merge_model_options(defaults, overrides, model_name=model_name)
         resolved["provider_id"] = model_ref.provider_id
         resolved["model_id"] = model_ref.model_id
         resolved["model"] = model_name
@@ -136,6 +139,7 @@ class LlmResolution:
         options = {key: value for key, value in resolved.items()
                    if key not in {"provider_id", "model_id", "model", "credential_source"}}
         option_origins: list[ConfigModelOptionOriginDTO] = []
+        catalog_info = model_metadata(resolved["custom_llm_provider"], resolved["model"])
 
         def original_path(raw: object, path: tuple[str, ...]) -> tuple[str, ...]:
             # 原文键可用参数别名或不同大小写的请求头，定位仍返回实际写入的键。
@@ -158,16 +162,32 @@ class LlmResolution:
                     visit(item, (*path, key))
                 return
             for definition, raw in definitions.items():
-                if at(raw, original_path(raw, path)) is missing:
+                raw_path = original_path(raw, path)
+                if at(raw, raw_path) is missing:
                     continue
                 prefix = ("defaults",) if definition == "defaults" else ("models", reference.model_id, "overrides")
-                definition_path = pointer((*provider_path, *prefix, *original_path(raw, path)))
+                definition_path = pointer((*provider_path, *prefix, *raw_path))
                 source_key = origins.get(definition_path)
                 if source_key is not None:
                     option_origins.append(ConfigModelOptionOriginDTO(path=pointer(path), source_key=source_key,
                         definition=definition, definition_path=definition_path))
                     return
-                break
+                raise ValueError(f"模型选项缺少可核对来源: {pointer(path)}")
+            if path[:2] in {("api_mode", "model_info"), ("api_mode", "supports_reasoning")}:
+                if path == ("api_mode", "model_info", "supports_reasoning") and any(
+                    at(raw, ("api_mode", "supports_reasoning")) is not missing for raw in definitions.values()
+                ):
+                    option_origins.append(ConfigModelOptionOriginDTO(path=pointer(path),
+                        source_key="api_mode.supports_reasoning", definition="builtin",
+                        definition_path="/api_mode/supports_reasoning"))
+                    return
+                catalog_default = bool(catalog_info) and (path[:2] == ("api_mode", "supports_reasoning")
+                    or len(path) == 3 and path[2] in catalog_info)
+                option_origins.append(ConfigModelOptionOriginDTO(path=pointer(path),
+                    source_key="LiteLLM" if catalog_default else "builtin",
+                    definition="catalog" if catalog_default else "builtin",
+                    definition_path=resolved["custom_llm_provider"] + "/" + resolved["model"]))
+                return
             raise ValueError(f"模型选项缺少可核对来源: {pointer(path)}")
 
         visit(options, ())
@@ -200,7 +220,7 @@ class LlmResolution:
         defaults = provider.get("defaults", {})
         if not isinstance(defaults, Mapping):
             raise TypeError(f"Provider {provider_id} 的 defaults 必须是对象")
-        resolved = _merge_model_options(defaults, {})
+        resolved = self._merge_model_options(defaults, {})
         resolved["provider_id"] = provider_id
         return self._expand_model_credentials(resolved)
 
@@ -260,31 +280,33 @@ class LlmResolution:
         return expanded
 
 
-def _merge_model_options(
-    defaults: Mapping[str, Any], overrides: Mapping[str, Any],
-) -> dict[str, Any]:
-    """合并模型选项；reasoning 线格式块是唯一整体替换的对象。"""
-    merged = merge_json_objects(
-        deepcopy(dict(defaults)), deepcopy(dict(overrides)),
-        _path=("llm", "providers", "resolved"),
-    )
-    protocol_mode = parse_provider_api_mode(merged)
-    request_options = merged.get("request_options", {})
-    if not isinstance(request_options, dict):
-        raise TypeError("request_options 必须是对象")
-    if "parameters" in request_options:
-        parameters = request_options["parameters"]
-        if not isinstance(parameters, Mapping):
-            raise TypeError("request_options.parameters 必须是对象")
-        request_options["parameters"] = normalize_request_parameters(parameters, protocol=protocol_mode.protocol)
-        validate_configured_parameters(request_options["parameters"])
-        validate_extra_body(request_options["parameters"], protocol=protocol_mode.protocol)
-    if "default_headers" in request_options:
-        headers = request_options["default_headers"]
-        if not isinstance(headers, Mapping):
-            raise TypeError("request_options.default_headers 必须是对象")
-        request_options["default_headers"] = normalize_request_headers(headers)
-    return merged
+    def _merge_model_options(
+        self, defaults: Mapping[str, Any], overrides: Mapping[str, Any],
+        *, model_name: str | None = None,
+    ) -> dict[str, Any]:
+        """沿当前快照 schema 合并，最后映射目标协议；不复制整个配置。"""
+        schema = self._schema_provider()
+        merged = merge_json_objects(dict(defaults), dict(overrides), schema={
+            "$ref": "#/$defs/modelOptions", "$defs": schema["$defs"],
+        })
+        merged = apply_model_metadata(merged, model_name)
+        protocol_mode = parse_provider_api_mode(merged)
+        request_options = merged.get("request_options", {})
+        if not isinstance(request_options, dict):
+            raise TypeError("request_options 必须是对象")
+        if "parameters" in request_options:
+            parameters = request_options["parameters"]
+            if not isinstance(parameters, Mapping):
+                raise TypeError("request_options.parameters 必须是对象")
+            request_options["parameters"] = normalize_request_parameters(parameters, protocol=protocol_mode.protocol)
+            validate_configured_parameters(request_options["parameters"])
+            validate_extra_body(request_options["parameters"], protocol=protocol_mode.protocol)
+        if "default_headers" in request_options:
+            headers = request_options["default_headers"]
+            if not isinstance(headers, Mapping):
+                raise TypeError("request_options.default_headers 必须是对象")
+            request_options["default_headers"] = normalize_request_headers(headers)
+        return merged
 
 
 __all__ = ["LlmResolution"]

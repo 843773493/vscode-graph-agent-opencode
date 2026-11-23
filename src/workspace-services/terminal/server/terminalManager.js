@@ -43,8 +43,8 @@ export function resolveWorkspaceRoot() {
  * Node持有的一次性终端传输授权；领域关联的合法性由工作区owner核实。
  * @typedef {object} TerminalTransportGrant
  * @property {string} terminalId 被授权连接的稳定终端ID，不是PTY进程ID。
- * @property {number} transportOwnerRevision 发放时冻结的owner版本影子，仅用于连接撤权。
- * @property {unknown} association 领域owner传入的不透明关联，Node不据此决定资源生命周期。
+ * @property {number} transportOwnerRevision 票据发放时冻结的版本；已连接资格仅由owner显式续准入新版本。
+ * @property {string | null} association 领域owner传入的不透明关联，Node不据此决定资源生命周期。
  * @property {number} expiresAtUnixMs 授权过期的Unix毫秒时刻，不是存活时长。
  */
 
@@ -371,8 +371,8 @@ export class TerminalManager {
     return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision, outcome: "not_created" };
   }
 
-  async syncOwnerRevision(id, transportOwnerRevision) {
-    this.get(id).syncOwnerRevision(transportOwnerRevision);
+  async syncOwnerRevision(id, transportOwnerRevision, retainedAssociations = []) {
+    this.get(id).syncOwnerRevision(transportOwnerRevision, retainedAssociations);
     for (const [token, grant] of this.transportGrants) {
       if (grant.terminalId === id && grant.transportOwnerRevision !== transportOwnerRevision) {
         this.transportGrants.delete(token);

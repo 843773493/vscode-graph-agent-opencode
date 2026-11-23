@@ -39,8 +39,7 @@ from app.gateway.lifespan import lifespan
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -174,7 +173,7 @@ class TargetGatewayNetwork:
 
 @pytest.fixture
 def target_gateway_port(request: pytest.FixtureRequest) -> Callable[[int], int]:
-    return integration_port_block_for_file(Path(request.node.path)).port
+    return integration_ports_for_file(Path(request.node.path)).port
 
 
 @pytest.fixture
@@ -208,9 +207,7 @@ def target_gateway_network(
     shutil.copyfile(Path.cwd() / "asset/gateway_ssh/boxteam_gateway_e2e_ed25519", private_key)
     private_key.chmod(0o600)
     with ExitStack() as cleanup:
-        lease = E2EProcessLease(runtime / "ports.json", tuple(target_gateway_port(offset) for offset in (0, 1, 20, 21, 22, 2)))
-        lease.acquire()
-        cleanup.callback(lease.release)
+        service_ports = tuple(target_gateway_port(key) for key in (0, 1, 20, 21, 22, 2))
         backends = []
         for index, (workspace, offset, home) in enumerate(zip((workspace_a, workspace_b), (0, 20), homes, strict=True)):
             role = "backend-a" if index == 0 else "backend-b"
@@ -290,7 +287,7 @@ def target_gateway_network(
             index: int, port: int | None, extra_env: dict[str, str],
         ) -> httpx.Client:
             if port is not None:
-                assert port in lease.ports
+                assert port in service_ports
                 gateway_ports[index] = port
             role = "gateway-b" if index else "gateway-a"
             stderr_path = observations[role].parent / "gateway.stderr.log"
@@ -358,7 +355,7 @@ def target_gateway_network(
         assert backends[0].process.pid != backends[1].process.pid
         (context.artifacts_dir / "topology.json").write_text(json.dumps({
             "workspace_id": workspace_id, "gateway_ids": gateway_ids, "native_routes": routes,
-            "ports": lease.ports, "backend_pids": [backend.process.pid for backend in backends],
+            "ports": service_ports, "backend_pids": [backend.process.pid for backend in backends],
             "private_key": str(private_key), "transport_boundary": "SSH 执行改为原 pairing CLI 本机执行，隧道改为 loopback URL",
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         yield TargetGatewayNetwork(

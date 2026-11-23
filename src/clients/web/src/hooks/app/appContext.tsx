@@ -1,3 +1,4 @@
+import type { ProcessDetailSelection } from "../../api/session/sessionTurnHistory";
 import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
 import React, { createContext, useContext } from "react";
 import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
@@ -62,6 +63,7 @@ export interface AppContextType {
     refreshAfterInFlight?: boolean,
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
   ) => Promise<void>;
   loadAgentStateMessageRawContent: (
     sessionId: string,

@@ -18,6 +18,7 @@ describe("TestRunContext", () => {
     expect(context.workspaceRoot).toBe(path.join(context.outputRoot, "workspace"));
     expect(context.runRoot).toMatch(path.join(context.outputRoot, "runs", "run-"));
     expect(context.artifactsDir).toBe(path.join(context.runRoot, "artifacts"));
+    expect(context.runtimeDir).toBe(path.join(context.outputRoot, "runtime", path.basename(context.runRoot)));
     expect(context.boxteamHome).toBe(path.join(context.outputRoot, "boxteam-home"));
   });
 
@@ -39,9 +40,12 @@ describe("TestRunContext", () => {
 
       expect(first.runRoot).toBe(sameRun.runRoot);
       expect(first.artifactsDir).toBe(sameRun.artifactsDir);
+      expect(first.runtimeDir).toBe(sameRun.runtimeDir);
       expect(first.runRoot).not.toBe(parallelWorker.runRoot);
       expect(first.runRoot).not.toBe(second.runRoot);
       expect(first.artifactsDir).not.toBe(second.artifactsDir);
+      expect(first.runtimeDir).not.toBe(second.runtimeDir);
+      expect(first.runtimeDir).not.toBe(parallelWorker.runtimeDir);
       expect(first.boxteamHome).toBe(second.boxteamHome);
       expect(first.workspaceRoot).toBe(second.workspaceRoot);
       await first.writeResult("passed", { run: "first" });
@@ -81,6 +85,9 @@ describe("TestRunContext", () => {
 
       expect(first.runRoot).toBe(second.runRoot);
       expect(first.artifactsDir).not.toBe(second.artifactsDir);
+      expect(first.runtimeDir).not.toBe(second.runtimeDir);
+      expect(first.runtimeDir).toBe(path.join(first.outputRoot, "runtime", path.basename(first.runRoot),
+        path.basename(path.dirname(first.artifactsDir))));
       const firstResult = JSON.parse(await readFile(
         path.join(first.artifactsDir, "result.json"), "utf8",
       ));
@@ -89,6 +96,9 @@ describe("TestRunContext", () => {
       ));
       expect(firstResult.details).toEqual({ case: "first" });
       expect(secondResult.details).toEqual({ case: "second" });
+      expect(firstResult.nodeId).toBe("tests/sample.py::first");
+      expect(secondResult.nodeId).toBe("tests/sample.py::second");
+      expect(secondResult.runId).toBe(path.basename(second.runRoot));
     } finally {
       if (previousRunId === undefined) delete process.env.BOXTEAM_TEST_RUN_ID;
       else process.env.BOXTEAM_TEST_RUN_ID = previousRunId;

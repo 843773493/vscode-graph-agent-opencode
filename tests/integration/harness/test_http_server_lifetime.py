@@ -9,6 +9,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from tests.integration.clients.web.test_mcp_gallery import (
+    mcp_registry as mcp_registry,  # noqa: PLC0414 - 不启动浏览器或Gateway。
+)
 
 from tests.integration.clients.web.itemized_context.test_provider_http_403 import (
     PROVIDER_API_KEY,
@@ -20,13 +23,10 @@ from tests.integration.clients.web.itemized_context.test_provider_http_403 impor
 from tests.integration.clients.web.itemized_context.test_provider_http_403 import (
     provider_403_server as provider_403_server,  # noqa: PLC0414 - 验证原场景HTTP装具。
 )
-from tests.integration.clients.web.test_mcp_gallery import (
-    mcp_registry as mcp_registry,  # noqa: PLC0414 - 不启动浏览器或Gateway。
-)
 from tests.integration.gateway import test_mcp_artifact_installation as artifact_case
 from tests.integration.stubs.http_stubs import generation_target_stub
 from tests.support.http_server import running_http_server
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import ensure_local_port_available
 
 
@@ -66,7 +66,7 @@ def test_http_context_serves_requests_and_releases_port(bound_server: HTTPServer
 
 
 def test_generation_stub_preserves_workspace_identity(request: pytest.FixtureRequest) -> None:
-    port = integration_port_block_for_file(Path(request.node.path)).port(20)
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
     with generation_target_stub(port, workspace_id="fixture-workspace") as state, httpx.Client(trust_env=False) as client:
         response = client.get(f"http://127.0.0.1:{port}/api/v1/health", headers={
             "X-BoxTeam-Workspace-Id": "fixture-workspace",

@@ -27,7 +27,7 @@ class SendMessageInput(BaseModel):
 
 
 def create_send_message_to_session_tool(
-    sender_session_id: str, *, communication_service: SessionCommunicationProtocol,
+    sender_session_id: str | None, *, communication_service: SessionCommunicationProtocol,
     invocation_context: ToolInvocationContext,
 ) -> BaseTool:
     @tool("send_message_to_session", args_schema=SendMessageInput)

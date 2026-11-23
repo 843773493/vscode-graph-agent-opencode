@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
@@ -8,8 +8,7 @@ import { TestRunContext } from "../../../../harness/js/run-context.mjs";
 
 const file = fileURLToPath(import.meta.url);
 const scope = await TestRunContext.fromTestFile(file).prepare();
-const runtime = join(scope.outputRoot, "runtime");
-await mkdir(runtime, { recursive: true });
+const runtime = scope.runtimeDir;
 for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtime;
 const observations = { classification: "Integration: 真实 ReactSurface 组件宿主，文件根与授权为显式 HTTP 替身，无 Gateway 或业务后端", errors: [], requests: [], apiRequests: [] };
 let page;

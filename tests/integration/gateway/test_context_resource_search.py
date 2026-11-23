@@ -52,7 +52,7 @@ from tests.integration.gateway.test_resource_search_tools import (
     agent_ports as agent_ports,  # noqa: PLC0414 - 沿当前测试文件隔离工作区、端口与产物。
 )
 from tests.support.api_helpers import create_session
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -68,7 +68,7 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
     case = restart_source_case
     backend = case.backends[-1]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=case.workspace,
-        default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_ports_for_file(Path(request.node.path)).port(20),
         artifacts_dir=case.artifacts_dir)
     transport = GatewaySessionContextClient(gateway_url=f"http://127.0.0.1:{gateway.port}",
                                             local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"])

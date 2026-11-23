@@ -13,7 +13,7 @@ import httpx
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from boxteam_plugin_sdk.request_context import get_current_request_id
 
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, report_failure
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.auth import get_gateway_local_token
@@ -1023,7 +1023,7 @@ class ConfigReloadMixin:
 
     def _report_apply_recovery_failure(self, task: asyncio.Task[None]) -> None:
         if not task.cancelled() and (error := task.exception()) is not None:
-            logger.error("workspace 配置启动对账失败", exc_info=(type(error), error, error.__traceback__))
+            report_failure(error, detail="workspace 配置启动对账失败", diagnostic_logger=logger)
 
     async def _recover_startup_apply(
         self, *, candidate_applier: ConfigCandidateApplier | None,
@@ -1101,7 +1101,7 @@ class ConfigReloadMixin:
         except Exception as error:  # noqa: BLE001 —— reload 已记录完整堆栈并继续监听的显式兜底
             # reload 已写入失败状态并发布 failed 事件；watcher 继续等待后续修复，
             # 同时必须记录完整堆栈，不能把失败静默转换成成功。
-            logger.exception("workspace 配置 watcher reload 失败", exc_info=error)
+            report_failure(error, detail="workspace 配置 watcher reload 失败", diagnostic_logger=logger)
             return
 
 

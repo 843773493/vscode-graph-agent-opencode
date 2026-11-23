@@ -159,7 +159,7 @@ async def test_relist_failure_blocks_registry_and_preserves_last_valid(catalog_r
     assert not unavailable.available
     assert unavailable.payload is None
     assert "RuntimeError" in unavailable.error
-    assert "controlled tools/list failed" not in unavailable.error
+    assert "controlled tools/list failed" in unavailable.error
     assert registry.last_valid_snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
     assert unavailable.members == before.members
     assert unavailable.retained_revision == before.revision
@@ -172,7 +172,7 @@ async def test_relist_failure_blocks_registry_and_preserves_last_valid(catalog_r
     r"\\?\UNC\server\private\mcp\catalog.json",
 ])
 @pytest.mark.parametrize("source", ["explicit", "notification"])
-async def test_catalog_failure_publishes_facts_and_keeps_raw_diagnostics(
+async def test_catalog_failure_publishes_safe_reason_and_bounded_diagnostics(
     catalog_runtime, native_path: str, source: str, caplog: pytest.LogCaptureFixture,
 ):
     owner, factory, registry, _scope = catalog_runtime
@@ -201,9 +201,10 @@ async def test_catalog_failure_publishes_facts_and_keeps_raw_diagnostics(
     assert "PermissionError" in public_error
     assert "errno=13" in public_error
     assert "winerror=5" in public_error
-    assert native_path not in public_error
-    assert "private server diagnostic" not in public_error
-    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+    summary = json.loads(public_error[public_error.index("{"):])
+    assert str(failure) == summary["message"]
+    assert "private server diagnostic" in public_error
+    assert all(record.exc_info is None for record in caplog.records)
     assert str(failure) in caplog.text
     assert not unavailable.available
     assert unavailable.payload is None

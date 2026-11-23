@@ -163,8 +163,8 @@ async def test_recovery_and_lock_share_one_deadline(
     synced, resume, locked = asyncio.Event(), asyncio.Event(), asyncio.Event()
     lock = owner._resource_lock(rid)
 
-    async def synchronizing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-        await sync(resource_id, revision, for_stop=for_stop)
+    async def synchronizing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
         synced.set()
         await resume.wait()
 

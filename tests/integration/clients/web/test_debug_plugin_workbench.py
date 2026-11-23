@@ -21,10 +21,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 from tests.support.workspaces import (
@@ -46,18 +45,11 @@ def debug_model(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
 @pytest.fixture
 def debug_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, probes = E2EProcessLease.acquire_available(
-        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
-        range(ports.port(20), ports.end + 1),
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
     )
-    try:
-        (context.artifacts_dir / "port-allocation.json").write_text(
-            json.dumps({"port": lease.ports[0], "probes": probes}), encoding="utf-8",
-        )
-        yield lease.ports[0]
-    finally:
-        lease.release()
+    yield port
 
 
 def _model_interactions() -> list[dict[str, object]]:

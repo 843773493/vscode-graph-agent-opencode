@@ -1,7 +1,8 @@
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { expect, test } from "bun:test";
-import ContextNotice from "./ContextNotice";
+import OriginalContextNotice from "./ContextNotice";
 import { ChatItemMenuContext, ChatItemOwnerContext,
   ContextNoticeContinuationContext,
   type ChatItemMenuRequest } from "./itemContextMenu";
@@ -103,3 +104,5 @@ test("元数据续页只由显式按钮触发，加载中禁用并展示失败",
     expect(button.props.disabled).toBe(false);
   } finally { act(() => renderer.unmount()); }
 });
+
+function ContextNotice(props: React.ComponentProps<typeof OriginalContextNotice>) { return <TranscriptTestView><OriginalContextNotice {...props} /></TranscriptTestView>; }

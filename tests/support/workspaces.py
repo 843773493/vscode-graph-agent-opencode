@@ -9,6 +9,7 @@ from stat import S_IRUSR, S_ISDIR, S_ISLNK, S_IWUSR, S_IXUSR
 import commentjson
 
 from app.core.atomic_fs import native_io_path
+from tests.harness.python.run_context import observe_test_path
 
 
 @lru_cache(maxsize=16)
@@ -52,6 +53,7 @@ def prepare_test_workspace(
 ) -> Path:
     """从只读模板创建隔离工作区；None复制完整模板，空tuple创建空目录。"""
 
+    observe_test_path(workspace_root, "workspace")
     if workspace_root.exists():
         _make_test_tree_writable(native_io_path(workspace_root))
         shutil.rmtree(native_io_path(workspace_root))

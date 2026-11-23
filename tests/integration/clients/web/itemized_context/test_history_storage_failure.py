@@ -24,7 +24,7 @@ from tests.integration.clients.web.itemized_context.test_fork_prefix_recovery im
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.sealed_request_audit import audit_sealed_requests
@@ -58,7 +58,7 @@ async def test_real_lock_permission_failure_is_visible_and_retry_preserves_histo
         thread_id = main.json()["data"]["thread_id"]
     resolver = get_session_path_resolver(workspace / ".boxteam/sessions")
     thread_root = resolver.resolve_thread_node(session_id, thread_id)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     responses = [
         ([{"role": "assistant", "tool_calls": [{"index": 0, "id": "history-permission-read", "type": "function",
             "function": {"name": "read_file", "arguments": '{"path":"README.md"}'}}]}], "tool_calls"),

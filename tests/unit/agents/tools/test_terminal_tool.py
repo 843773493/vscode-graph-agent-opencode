@@ -185,10 +185,10 @@ class _FakeTerminalClient:
     async def get_resource(self, terminal_id: str) -> dict[str, Any]:
         return dict(self.terminals[terminal_id])
 
-    async def list_resources(self) -> list[dict[str, Any]]:
-        return [dict(terminal) for terminal in self.terminals.values()]
+    async def list_resources(self, *, resource_ids: frozenset[str] | None = None) -> list[dict[str, Any]]:
+        return [dict(terminal) for rid, terminal in self.terminals.items() if resource_ids is None or rid in resource_ids]
 
-    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool, retained_associations: list[str | None] | None = None) -> None:
         self.terminals[terminal_id]["transport_owner_revision"] = owner_revision
 
     async def read_terminal(self, terminal_id: str) -> dict[str, Any]:

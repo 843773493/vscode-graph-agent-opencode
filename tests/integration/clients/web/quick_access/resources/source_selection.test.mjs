@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/source_selection.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'source-selection.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/source_selection.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>来源选择合同</title>')

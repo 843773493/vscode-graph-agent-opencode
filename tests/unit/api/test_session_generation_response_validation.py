@@ -8,6 +8,7 @@ from typing import NoReturn
 from unittest.mock import Mock
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -152,7 +153,7 @@ def test_internal_response_validation_uses_server_failure(
     assert response.status_code == 500, response.text
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(failure),
         "data": None,
         "request_id": REQUEST_ID,
     }
@@ -163,9 +164,9 @@ def test_internal_response_validation_uses_server_failure(
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and record.exc_info[1] is failure
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
-    assert len(diagnostics) == 1 and "gen-secret" in caplog.text
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
 
 
 @pytest.mark.parametrize("native", NATIVE_PATHS)
@@ -179,17 +180,16 @@ def test_real_preview_response_validation_can_be_retried_after_metadata_repair(
     response = case.client.post(BASE + "/preview-placement", json=PREVIEW)
     assert response.status_code == 500, response.text
     assert (
-        response.json()["message"]
-        == "请求处理失败: stage=http_request, error=ValidationError"
+        response.json()["message"].startswith("请求处理失败: stage=http_request, error=ValidationError, reason=")
     )
     assert (
         response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
     )
-    assert "gen-secret" not in response.text and "gen-secret" in caplog.text
+    assert "gen-secret" not in response.text and "ValidationError" in caplog.text
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and isinstance(record.exc_info[1], ValidationError)
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
     assert len(diagnostics) == 1
     case.catalog.workspace_id = WORKSPACE_ID
@@ -248,7 +248,7 @@ def test_deferred_user_naming_validation_keeps_400_without_input_echo(
     detail = response.json()["detail"]
     assert "stage=session-generation-naming, error=ValidationError" in detail
     assert (
-        f"{field}:{rule}" in detail
+        field in detail and rule in detail
         and "input_value" not in detail
         and "gen-secret" not in detail
     )
@@ -258,12 +258,11 @@ def test_deferred_user_naming_validation_keeps_400_without_input_echo(
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and isinstance(record.exc_info[1], ValidationError)
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
     assert len(diagnostics) == 1
-    failure = diagnostics[0].exc_info
-    assert failure is not None and isinstance(failure[1], ValidationError)
-    assert failure[1].errors()[0]["input"] == value
+    assert "ValidationError" in diagnostics[0].getMessage()
+    assert all(record.exc_info is None for record in diagnostics)
     healthy = generation_case.client.post(
         BASE + "/validate-definition", json=_definition()
     )
@@ -298,7 +297,7 @@ def test_persistent_task_input_rejection_precedes_writes(
         json=payload,
     )
     assert response.status_code == 400, response.text
-    assert f"{field}:string_too_" in response.json()["detail"]
+    assert field in response.json()["detail"] and "string_too_" in response.json()["detail"]
     assert "gen-secret" not in response.text
     assert (
         response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
@@ -345,10 +344,18 @@ def test_diagnostic_sink_failure_does_not_change_naming_rejection(
     captured: list[ValidationError] = []
     sink_error = OSError(5, "原始日志故障", "/private/gen-secret/service.log")
 
+    report = failures.report_failure
+
+    def capture_report(error: BaseException, **kwargs: object):
+        assert isinstance(error, ValidationError)
+        captured.append(error)
+        return report(error, **kwargs)
+
+    monkeypatch.setattr(failures, "report_failure", capture_report)
+
     def fail_log(*args: object, **kwargs: object) -> NoReturn:
-        original = kwargs["exc_info"]
-        assert isinstance(original, ValidationError)
-        captured.append(original)
+        assert "exc_info" not in kwargs
+        assert "ValidationError" in str(args)
         raise sink_error
 
     monkeypatch.setattr(failures.logger, "error", fail_log)

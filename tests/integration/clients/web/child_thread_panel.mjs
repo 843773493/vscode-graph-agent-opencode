@@ -333,6 +333,10 @@ try {
     "委派 Turn 中间 Item 展开",
     30_000,
   );
+  await expect(delegateTurn.locator(".chat-activity-group").first()).toBeVisible();
+  for (const group of await delegateTurn.locator('.chat-activity-group > button').all()) {
+    if (await group.getAttribute('aria-expanded') === 'false') await group.click();
+  }
   const completedTaskToolRow = delegateTurn
     .locator(".chat-tool-row.is-complete")
     .filter({ hasText: "已运行 task" })

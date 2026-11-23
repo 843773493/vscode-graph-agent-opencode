@@ -113,7 +113,7 @@ from tests.support.e2e_control.tool_observations import ObservedCanonicalItemSin
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.goal_control import goal_control_payload
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
@@ -316,7 +316,7 @@ async def source_case(
 ) -> AsyncIterator[RuntimeSourceCase]:
     monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port = integration_port_block_for_file(Path(request.node.path)).port(10)
+    port = integration_ports_for_file(Path(request.node.path)).port(10)
     options = getattr(request, "param", {})
     prepared_package_root = (
         request.getfixturevalue("prepared_developer_tools_package")
@@ -338,7 +338,7 @@ async def source_case(
             gateway_id, gateway_skill_source_owner = await managed_services.enter_async_context(
                 _managed_gateway_skill_source(
                     workspace=workspace, workspace_id=workspace_id, boxteam_home=boxteam_home,
-                    port=integration_port_block_for_file(Path(request.node.path)).port(11),
+                    port=integration_ports_for_file(Path(request.node.path)).port(11),
                     artifacts_dir=context.artifacts_dir,
                     prepared_package_root=prepared_package_root,
                     terminal=options.get("terminal", False),
@@ -347,7 +347,7 @@ async def source_case(
             )
             monkeypatch.setenv(
                 "BOXTEAM_GATEWAY_URL",
-                f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(11)}",
+                f"http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(11)}",
             )
         else:
             monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
@@ -378,7 +378,7 @@ async def source_case(
                 )
                 plugin_gateway = await managed_services.enter_async_context(terminal_plugin_gateway_for_workspace(
                     workspace_root=workspace, artifacts_dir=artifacts_dir,
-                    gateway_port=integration_port_block_for_file(Path(request.node.path)).port(40),
+                    gateway_port=integration_ports_for_file(Path(request.node.path)).port(40),
                     boxteam_home=boxteam_home,
                     plugin_ids=plugin_ids,
                     prepared_package_root=prepared_package_root,
@@ -2057,7 +2057,7 @@ async def restart_source_case(
 ) -> AsyncIterator[RestartRuntimeSourceCase]:
     monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))
     params = getattr(request, "param", {})
     if "agents_content" in params:

@@ -22,6 +22,7 @@ import psutil
 from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from configs.installer import install_user_configuration
+from tests.harness.python.run_context import observe_test_path
 from tests.support.processes.scope import (
     register_test_process,
     unregister_test_process,
@@ -350,6 +351,8 @@ def start_backend_process(
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
     boxteam_home = (boxteam_home or Path(workspace_root).resolve().parent / "boxteam-home").resolve()
+    observe_test_path(Path(workspace_root), "workspace")
+    observe_test_path(boxteam_home, "workspace")
     install_user_configuration(
         config_root=boxteam_home / "config",
         profile="default",

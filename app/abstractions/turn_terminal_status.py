@@ -4,6 +4,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionTerminalResult,
+)
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 
@@ -52,6 +56,10 @@ class ToolResultCompletion:
 
 class TurnTerminalStatusWriter(Protocol):
     """把已准入 execution 的控制终态交给唯一 convergence owner。"""
+
+    def execution_terminal_result(self, admission: ExecutionAdmission, *, checkpoint_ns: str = "") -> ExecutionTerminalResult | None: ...
+
+    def execution_admission_for_job(self, session_id: str, *, thread_id: str, job_id: str, checkpoint_ns: str = "") -> ExecutionAdmission | None: ...
 
     def commit_tool_result(
         self, *, session_id: str, thread_id: str, job_id: str,

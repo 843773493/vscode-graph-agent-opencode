@@ -122,8 +122,8 @@ async def test_real_orphan_reclaim_keeps_one_budget_and_reconciles_a_lost_delete
                 deadlines.append(context)
             return context
 
-        async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-            await original_sync(resource_id, revision, for_stop=for_stop)
+        async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+            await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
             if resource_id == rid and for_stop:
                 revision_entered.set()
                 await revision_release.wait()

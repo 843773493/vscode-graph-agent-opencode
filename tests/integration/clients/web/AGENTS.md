@@ -45,8 +45,8 @@ web/
 - 完整 Workbench 页面使用 Gateway 默认根 URL，不依赖测试专用的 Agent 查询参数；独立 MCP 授权仍使用既有授权路由。
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。
 - 运行产物必须写入 `out/tests/integration/clients/web/`。
-- `test_basic_chat_tool_loop.py` 使用 `web_workbench_assets` 构建完整 Workbench，由真实 Gateway 提供静态资源；浏览器从会话树及资源面板打开 main/child，按原版编辑器组和精确 owner 定位 ShadowRoot 内控件。模型使用显式 model_stream 回放，因此属于 Integration；保留工具循环封存请求和双 Thread 并行输入隔离断言。
-  - Backend 与 Gateway 共用本场景隔离 Home，保留 runtime control token，默认 Gateway URL 使用该测试端口块；显式非默认 URL 不改写。普通聊天复用 prepared immutable developer-tools 包，经正式绑定入口启用 Terminal 和 Browser；同轮正式 Workbench 资产可显式复用，不能依赖旧 Home 残留或重复下载安装。
+- `test_basic_chat_tool_loop.py` 使用 `web_workbench_assets` 构建完整 Workbench，由真实 Gateway 提供静态资源；浏览器从会话树及资源面板打开 main/child，按原版编辑器组和精确 owner 定位 ShadowRoot 内控件。模型使用显式 model_stream 回放，保留现有 Integration 归属；保留工具循环封存请求和双 Thread 并行输入隔离断言。模型回放本身不是目录分类依据。
+  - Backend 与 Gateway 共用本场景隔离 Home，保留 runtime control token，默认 Gateway URL 使用本测试实际申请的端口；显式非默认 URL 不改写。普通聊天复用 prepared immutable developer-tools 包，经正式绑定入口启用 Terminal 和 Browser；同轮正式 Workbench 资产可显式复用，不能依赖旧 Home 残留或重复下载安装。
   - 活动选择消费公开 `active_workspace`，与 health 的 Gateway 身份及工作区持久 UUID 交叉核验；业务请求同时携带 `X-BoxTeam-Target-Gateway-Id` 与同一 UUID。工作区及会话目录节点使用完整 owner 的复合键，证据不再保存路由／业务双 ID；原准备失败装具仍在业务访问之前触发。
   - 标签生命周期通过真实单击／双击核对预览替换与固定，原版关闭按钮按 Tab 内的可访问角色及名称定位，不依赖上游图标类；关闭后核后端会话仍存在并可从导航重开。分屏先验证同一 Thread 两组的资源展开状态独立，再验证 main／child 草稿、模型并行与回复隔离；新增检查不替代原封存请求、真实文件写入和磁盘哈希断言。
   - 删除刷新回归先真实保存同一 Session 的两个分屏标签，再执行真实目录删除并核 committed／settled、标签及宿主释放；随后立即刷新，不提前 flush、不额外等待保存，要求保留会话可操作且不重新读取已删除 Session。
@@ -57,7 +57,7 @@ web/
   - 会话右键复制失败只替换浏览器Clipboard API及既有兼容复制为显式拒绝；从真实会话树打开菜单，核原版通知完整错误及发起Gateway／工作区／Session身份、单次调用与输入草稿保持，随后恢复原浏览器方法并继续原聊天断言。没有业务HTTP替身，不能将浏览器能力拒绝称为系统剪贴板权限验收。
 
 - 历史边界及元数据初始化页面也使用正式 Workbench 产物；Thread 内正文通过可穿透 ShadowRoot 的作用域 locator 读取，不能以 document 全局查询的空结果证明成功。元数据在打开对应 Thread 后核对；边界状态、工具顺序及清理失败断言保持。
-  - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。通过原版命令打开主窗口当前工作区的底部终端面板，按需读取工作区元数据，核原 metadata／owner／request_id，再通过 native_output.mjs 验收真实日志通道、owner／request_id、原生窗口日志、筛选和隐藏停止读取，然后关闭面板继续原文件操作；不依赖聊天前置的重复查询。Vite 与 Gateway 在本测试获分配的端口块内使用 E2EProcessLease 选择并持续保留空闲绑定，服务关闭后再释放，将探测写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。
+  - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。通过原版命令打开主窗口当前工作区的底部终端面板，按需读取工作区元数据，核原 metadata／owner／request_id，再通过 native_output.mjs 验收真实日志通道、owner／request_id、原生窗口日志、筛选和隐藏停止读取，然后关闭面板继续原文件操作；不依赖聊天前置的重复查询。Vite 与 Gateway 通过公共 TestFilePorts 分别申请并持有端口，服务关闭后由公共 owner 释放，将实际端口写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。
   - 元数据场景还通过原版工作区设置编辑器连续三次保存并直接刷新，核对 JSON 与实际编辑器字体恢复；不预写 IndexedDB，不提前调用关闭 flush。设置可能使用原版 modal editor，按对话框与可见代码行定位；存储关闭错误仍须审计，不能由已知原版关闭日志豁免。
   - Vite 场景直接启动产品 dev 命令指定的 Node／scripts/dev.mjs，让 PID 监听探针观察实际服务 owner；不把 bun run 包装进程冒充监听者，也不移除监听归属检查或放宽原期限。
   - 主题迁移通过原生设置 JSON 编辑器保存网络背景，使用隔离 Gateway 中不存在的合法资源摘要取得原始 404／request_id，核对原版通知 toast 和导航／精确 Thread 宿主的无图片主题；恢复默认背景后聊天仍可操作。没有图片 HTTP 替身或数据库预写，组件 collector 不能代替此接线验收。
@@ -77,7 +77,7 @@ web/
 
 - `test_persistent_resource_lifecycle.py` 使用正式 Workbench 和显式精确模型回放；真实 Terminal/Browser 经 Gateway 管理。`unload-restart` 参数场景从 Thread 内创建，到工作区底部面板管理解除关联的保留资源，保留真实 PTY、Browser 导航、安全重启、跨 Thread 关联、确认期间并发修改的 409 与失败重读、删除来源 Session 后仍可操作的断言。`workspace-browser` 参数场景独立验证工作区 Browser 按当前 Thread 创建、预览、解除关联及删除，核对请求 owner、request_id 和确认前 revision；它不替代重启场景，也不修改退出期限。
 
-完整会话生命周期与 Section 8 唯一验收 owner 位于 `conversation_lifecycle/`；精确模型回放属于 Integration，复用正式 Workbench，不保留旧 E2E 入口。
+完整会话生命周期与 Section 8 唯一验收 owner 位于 `conversation_lifecycle/`；保留现有 Integration 归属，复用正式 Workbench，不因精确模型回放搬迁或复制旧 E2E 入口。
 
 `workbench_server.test.mjs` 在独立 Node 中调用 Electron 与独立静态服务共用的真实 HTTP 代理，Gateway 使用随机本地端口替身；核对 SSE 客户端关闭、响应头返回前取消、另一连接继续收事件，以及 JSON 正文／owner／cookie／request_id 透明传输。释放观察发生在 fixture 强制清理之前，原始 stdout、stderr、命令和退出结果归本测试的正式镜像目录。只关闭自己创建的连接；不启动产品 Gateway，不将此传输边界检查作为完整聊天、WebSocket 或原生窗口验收。Node 只停用 http-proxy 已知的 DEP0060 弃用告警，其余 stderr 必须为空。
 

@@ -77,6 +77,7 @@ def test_docker_setup_resets_workspace_but_preserves_previous_evidence(
     monkeypatch.setenv("BOXTEAM_TEST_RUN_ID", "second-docker-run")
     second = prepare(request)
 
+    assert first.artifacts == context.run_root / "artifacts"
     assert first.artifacts != second.artifacts
     assert historical.read_bytes() == b"previous evidence"
     assert evidence.read_bytes() == b"first run"

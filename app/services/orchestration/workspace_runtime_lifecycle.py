@@ -178,6 +178,16 @@ class WorkspaceRuntimeLifecycleService:
             if traced_owner is not None and traced_owner != owner:
                 raise RuntimeError(f"执行队列与 Trace owner 冲突: job_id={admission.job_id}, queue={owner}, trace={traced_owner}")
         for record in records:
+            admission = record.cursor.admission
+            if self._terminal_status_writer is None:
+                raise RuntimeError("启动恢复缺少 canonical terminal owner")
+            committed = await run_sync_shielded(
+                self._terminal_status_writer.execution_terminal_result, admission,
+            )
+            if committed is not None:
+                # 原 convergence 的 execution 更新已由同事务 trigger 收尾队列。
+                # 不重建 Job、不读取 checkpoint、不追加矛盾的失联 Trace。
+                continue
             if record.phase == "queued":
                 continue
             admission = record.cursor.admission
@@ -240,7 +250,7 @@ class WorkspaceRuntimeLifecycleService:
                 if not restored:
                     await claim.close()
         reconciled += await self._message_stream_store.reconcile_unfinished_streams(
-            resumed_job_ids=resumed_job_ids,
+            resumed_job_ids=resumed_job_ids, terminal_status_writer=self._terminal_status_writer,
         )
         return reconciled
 

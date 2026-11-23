@@ -12,7 +12,7 @@ from pathlib import Path
 from time import perf_counter_ns, process_time_ns
 from uuid import uuid4
 
-from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.run_context import TestRunContext, observe_test_path
 
 Scalar = str | int | float | bool | None
 _parent: ContextVar[str | None] = ContextVar("performance_parent", default=None)
@@ -48,6 +48,7 @@ class Perf:
             "clock": "perf_counter_ns",
         }
         if mode != "off":
+            observe_test_path(context.performance_dir_for_node(None), "artifact")
             self.directory.mkdir(parents=True, exist_ok=True)
             self._stream = self.path.open("x", encoding="utf-8", buffering=1)
             try:

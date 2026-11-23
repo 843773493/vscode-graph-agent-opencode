@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/configuration_sources.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'configuration-sources.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/configuration_sources.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>来源合同</title>')
@@ -76,8 +76,8 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'no-preview']) test(
   expect(result.errors).toEqual([]); expect(result.commands).toHaveLength(1);
   expect(result.commands[0]).toEqual({ id: 'boxteam.settings.openSource', request: {
     location: { gateway_id: result.owners[1].gatewayId, workspace_id: result.owners[1].workspaceId, version: 2,
-      source_key: 'mutable', name: '配置目标 2' }, groupId: 7, openToSide: mode === 'side',
-    editorOptions: { pinned: ['pinned', 'background', 'no-preview'].includes(mode), preserveFocus: mode === 'background' },
+      source_key: 'mutable', name: '配置目标 2' }, openToSide: mode === 'side',
+    editorOptions: { sourceGroup: 7, pinned: ['pinned', 'background', 'no-preview'].includes(mode), preserveFocus: mode === 'background' },
   } });
   expect(result.requests.every(item => item.method === 'GET' && !/\/config\/sources\//.test(item.path))).toBe(true);
 });
@@ -108,7 +108,7 @@ for (const mode of ['workspace', 'gateway', 'side', 'pinned', 'background', 'fre
     location: { gateway_id: result.owner.gatewayId, ...(mode === 'gateway' ? {} : { workspace_id: result.owner.workspaceId }),
       version: 2, source_key: mode === 'gateway' ? 'gateway-formal-owner-key' : 'workspace-formal-owner-key',
       name: mode === 'gateway' ? 'Gateway' : result.owner.workspaceId },
-    groupId: 7, openToSide: mode === 'side', editorOptions: { pinned: mode === 'pinned', preserveFocus: mode === 'background' },
+    openToSide: mode === 'side', editorOptions: { sourceGroup: 7, pinned: mode === 'pinned', preserveFocus: mode === 'background' },
   } }]);
   expect(result.requests.every(request => request.path.endsWith('/parse') || request.path.endsWith('/sources'))).toBe(true);
 });
@@ -128,7 +128,7 @@ test('远端reference URI由同一grammar按目标Gateway归一后匹配正式�
   expect(result.requests.filter(request => request.path.endsWith('/config/sources')).map(request => request.body)).toEqual([undefined]);
   expect(result.commands).toEqual([{ id: 'boxteam.settings.openSource', request: {
     location: { gateway_id: remoteGatewayId, version: 2, source_key: 'remote-gateway-formal-owner-key', name: 'Gateway' },
-    groupId: 7, openToSide: false, editorOptions: { pinned: false, preserveFocus: false },
+    openToSide: false, editorOptions: { sourceGroup: 7, pinned: false, preserveFocus: false },
   } }]);
   expect(sourceUri).toBe('boxteam://inline/source-development-0_0_2/resources/config/gateway_inline');
 });

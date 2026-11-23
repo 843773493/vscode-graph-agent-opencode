@@ -36,6 +36,7 @@ from tests.integration.workspace_services.test_resource_owner_crash_recovery imp
     _publish_barrier,
     _spawn,
 )
+from tests.support.ports import TestFilePorts
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -52,7 +53,7 @@ def _plugin_process(gateway: TerminalPluginGateway) -> subprocess.Popen[str]:
 
 @pytest.fixture
 async def browser_service(
-    request: pytest.FixtureRequest, integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest, integration_backend_port: int, integration_service_ports: TestFilePorts, monkeypatch: pytest.MonkeyPatch,
     prepared_developer_tools_package: Path,
 ) -> AsyncIterator[BrowserService]:
     with TestRunContext.from_test_file(Path(request.node.path)) as run:
@@ -119,7 +120,7 @@ if (path.basename(process.argv[1] || '') === 'backend.js') {
             env.setenv("NODE_OPTIONS", f"--import={preload.as_uri()}")
             env.setenv("BOXTEAM_TEST_BROWSER_CREATION_CONTROL", str(control))
             async with browser_plugin_gateway_for_workspace(
-                root, run.artifacts_dir / "gateway", integration_backend_port + 68,
+                root, run.artifacts_dir / "gateway", integration_service_ports.port(48),
                 run.boxteam_home_for_node(request.node.nodeid),
                 prepared_package_root=prepared_developer_tools_package,
             ) as gateway:

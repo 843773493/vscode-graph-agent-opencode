@@ -10,51 +10,140 @@
 .configuration-entity-content button:hover { background: var(--vscode-button-secondaryHoverBackground); }
 .configuration-entity-content button:disabled { opacity: .5; cursor: default; }
 .configuration-entity-content :is(button,input,textarea,select):focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-.configuration-entity-columns { display: grid; grid-template-columns: minmax(140px, 200px) minmax(0, 1fr); gap: 24px; }
-.configuration-entity-columns nav { display: flex; flex-direction: column; min-width: 0; align-self: start; }
+.configuration-entity-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.configuration-definition-selector { display: flex; align-items: start; gap: 8px; flex-wrap: wrap; }
+.configuration-definition-selector > nav { flex: 1 1 240px; }
+.configuration-definition-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.configuration-definition-heading > h2 { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.configuration-definition-heading .configuration-definition-details { max-width: 100%; }
+.configuration-entity-content .configuration-actions-button { display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; padding: 4px; color: var(--vscode-icon-foreground); background: transparent; border: 0; }
+.configuration-entity-content .configuration-actions-button:hover { background: var(--vscode-toolbar-hoverBackground); }
+.configuration-entity-columns nav { display: flex; flex-wrap: wrap; min-width: 0; max-height: 120px; overflow: auto; align-self: start; }
 .configuration-entity-columns nav button {
-  display: flex; flex-direction: column; flex-shrink: 0; text-align: left; overflow-wrap: anywhere;
+  display: flex; flex-direction: column; flex-shrink: 0; min-width: 0; max-width: min(220px, 100%); text-align: left;
   color: var(--vscode-foreground); background: transparent; border: 0; border-radius: 0; padding: 6px 8px;
 }
-.configuration-entity-columns nav button strong { font-weight: 400; }
+.configuration-entity-columns nav button strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 .configuration-entity-columns nav button:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-list-hoverForeground); }
 .configuration-entity-columns nav button[aria-pressed=true] { background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-list-inactiveSelectionForeground); }
 .configuration-entity-columns nav:focus-within button[aria-pressed=true] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 .configuration-entity-columns small { margin-top: 3px; font-size: var(--bt-font-size-small); color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
-.configuration-entity-columns article { min-width: 0; max-width: 730px; }
-.configuration-entity-columns article h2 { margin: 6px 0 16px; font-size: 20px; font-weight: 600; }
+.configuration-entity-columns article { min-width: 0; max-width: 640px; }
+.configuration-entity-columns article h2 { margin: 4px 0 8px; font-size: 18px; font-weight: 600; }
 .configuration-entity-columns article :is(h3,h4) { margin: 12px 0 6px; font-size: var(--bt-font-size); font-weight: 600; }
 .configuration-entity-columns article > button { margin-right: 8px; margin-bottom: 8px; }
 .configuration-entity-columns article p { margin: 4px 0 8px; line-height: 1.4; overflow-wrap: anywhere; }
-.configuration-entity-field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0 18px; font-weight: 600; }
+.configuration-entity-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 8px 0 12px; font-weight: 600; }
+.configuration-entity-field > label { display: flex; flex-direction: column; gap: 4px; }
+.configuration-field-control { display: flex; align-items: start; gap: 8px; width: 100%; max-width: 320px; min-width: 0; }
+.configuration-field-control > :is(input,textarea) { flex: 1; }
+.configuration-field-control > button { flex-shrink: 0; }
+.configuration-entity-field[data-search-key$="name"] > .configuration-field-control { max-width: 220px; }
+.configuration-entity-field[data-search-key$="endpoint"] > .configuration-field-control { max-width: 480px; }
+.configuration-field-control:has(> textarea) { max-width: 640px; }
 .configuration-entity-field :is(input,textarea,select) {
-  box-sizing: border-box; width: 100%; max-width: 480px; min-height: 26px; padding: 4px 6px;
+  box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 6px;
   color: var(--vscode-settings-textInputForeground, var(--vscode-input-foreground));
   background: var(--vscode-settings-textInputBackground, var(--vscode-input-background));
   border: 1px solid var(--vscode-settings-textInputBorder, var(--vscode-input-border, transparent));
   border-radius: 2px; font: inherit; font-weight: 400;
 }
 .configuration-entity-field textarea { max-width: 640px; resize: vertical; }
+.configuration-entity-field input { max-width: 320px; }
+.configuration-entity-field .configuration-field-control > :is(input,textarea) { max-width: 100%; }
+.configuration-entity-field select { max-width: 240px; }
+.configuration-entity-field select:has(> option[value=true]) { max-width: 160px; }
+.configuration-entity-field input[type=number] { max-width: 140px; }
 .configuration-entity-field small { font-weight: 400; }
 .configuration-entity-field > button { align-self: flex-start; font-weight: 400; }
+.configuration-catalog-select { display: flex; flex-direction: column; gap: 4px; max-width: 220px; min-width: 0; font-weight: 400; }
+.configuration-entity-content .configuration-catalog-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: start;
+  width: 100%; min-width: 0; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, transparent); }
+.configuration-catalog-trigger > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.configuration-catalog-popup { box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; padding: 6px; width: 360px;
+  max-width: var(--anchored-overlay-available-width); max-height: min(360px, var(--anchored-overlay-available-height));
+  color: var(--vscode-quickInput-foreground); background: var(--vscode-quickInput-background); border: 1px solid var(--vscode-widget-border);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow); font-size: var(--bt-font-size); }
+.configuration-catalog-popup > input { box-sizing: border-box; flex-shrink: 0; width: 100%; min-width: 0; padding: 5px 6px;
+  color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
+.configuration-catalog-popup :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.configuration-catalog-results { overflow: auto; min-height: 0; }
+.configuration-catalog-group { padding: 6px; color: var(--vscode-descriptionForeground); font-size: var(--bt-font-size-small); }
+.configuration-catalog-results button { display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; width: 100%; padding: 5px 6px;
+  color: inherit; background: transparent; border: 0; text-align: start; cursor: pointer; overflow-wrap: anywhere; font: inherit; }
+.configuration-catalog-results button[aria-selected=true] { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
+.configuration-catalog-results small { font-size: var(--bt-font-size-small); opacity: .8; }
+.configuration-add-model { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 180px) max-content;
+  gap: 8px; align-items: end; margin-block: 8px 12px; }
+.configuration-add-model .configuration-entity-field { min-width: 0; margin: 0; }
 .configuration-entity-content .configuration-field-reset {
-  color: var(--vscode-textLink-foreground); background: transparent; border: 0; padding: 0; min-height: 20px;
+  color: var(--vscode-textLink-foreground); background: transparent; border: 0; padding: 3px 0; min-height: 26px;
 }
 .configuration-entity-content .configuration-field-reset:hover { color: var(--vscode-textLink-activeForeground); background: transparent; text-decoration: underline; }
-.configuration-definition-details { margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
+.configuration-definition-details { margin: 0 0 8px; color: var(--vscode-descriptionForeground); }
 .configuration-entity-content summary { cursor: pointer; line-height: 26px; }
 .configuration-model-overrides { margin: 12px 0 18px; }
-.configuration-credential { margin: 12px 0 18px; }
+.configuration-provider-connection { margin-block: 12px 18px; }
+.configuration-credential { margin: 8px 0 12px; }
 .configuration-credential h4 { margin-bottom: 6px; }
 .configuration-credential p { margin: 6px 0; }
 .configuration-credential button { margin-inline-end: 8px; }
-.configuration-credential small { display: block; margin-top: 8px; }
-.configuration-entity-content [role=alert] { color: var(--vscode-errorForeground); }
-/* 依据编辑器内的实际宽度收起列表列，分屏时不借用整个浏览器的宽度。 */
-@container (max-width: 650px) {
-  .configuration-entity-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .configuration-entity-columns nav { max-height: 120px; overflow: auto; }
+.configuration-credential-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.configuration-credential-controls p { flex: 0 1 auto; min-width: 0; }
+.configuration-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 280px)); column-gap: 16px; }
+.configuration-connection-section > .configuration-form-grid .configuration-entity-field,
+.configuration-model-detail > .configuration-form-grid .configuration-entity-field {
+  display: grid; grid-template-columns: minmax(max-content, 6em) minmax(0, 1fr); align-items: start; gap: 4px 8px; margin-block: 4px 8px;
 }
+.configuration-connection-section > .configuration-form-grid .configuration-entity-field > label,
+.configuration-provider-field > span:first-child,
+.configuration-model-detail > .configuration-form-grid .configuration-entity-field > label { padding-block: 5px; white-space: nowrap; }
+.configuration-connection-section > .configuration-form-grid .configuration-entity-field > small,
+.configuration-model-detail > .configuration-form-grid .configuration-entity-field > small { grid-column: 2; }
+.configuration-connection-section > .configuration-credential { display: grid; grid-template-columns: minmax(max-content, 6em) minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.configuration-connection-section > .configuration-credential h4 { margin-block: 4px; white-space: nowrap; }
+.configuration-field-wide { grid-column: 1 / -1; }
+.configuration-connection-section, .configuration-models-section { padding-block: 8px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-settings-headerBorder)); }
+.configuration-section-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.configuration-section-heading > h4 { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.configuration-section-heading > input { box-sizing: border-box; width: 180px; max-width: 100%; min-width: 0; padding: 4px 6px;
+  color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
+.configuration-entity-columns .configuration-provider-search { margin: 0; width: 180px; max-width: 100%; }
+.configuration-entity-columns .configuration-model-list { display: flex; flex-direction: column; flex-wrap: nowrap;
+  width: max-content; max-height: 180px; max-width: min(360px, 100%);
+  border-block: 1px solid var(--vscode-widget-border); margin-top: 6px; }
+.configuration-entity-columns .configuration-model-list button { display: flex; flex-direction: row; align-items: center; gap: 8px; flex-shrink: 0; width: 100%; max-width: 100%; }
+.configuration-model-list button strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.configuration-model-list button > span:not(.codicon) { max-width: 45%; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.configuration-model-detail { padding: 4px 0; border-top: 1px solid var(--vscode-widget-border); }
+.configuration-model-detail > .configuration-section-heading { flex-wrap: nowrap; }
+.configuration-option-section { border-top: 1px solid var(--vscode-widget-border); padding: 4px 8px; margin-top: 4px; }
+.configuration-option-section > summary { font-weight: 600; }
+.configuration-parameter-add { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 180px) max-content; gap: 8px; align-items: end; }
+.configuration-parameter-add .configuration-entity-field { margin: 0; }
+.configuration-probe-more { margin-block: 8px; padding-block: 4px; border-top: 1px solid var(--vscode-widget-border); }
+@container (max-width: 520px) {
+  .configuration-definition-selector { flex-direction: column; align-items: stretch; }
+  .configuration-definition-selector > nav { flex-basis: auto; }
+  .configuration-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .configuration-model-list button > span:not(.codicon) { display: none; }
+}
+@container (max-width: 320px) {
+  .configuration-connection-section > .configuration-form-grid .configuration-entity-field,
+  .configuration-model-detail > .configuration-form-grid .configuration-entity-field,
+  .configuration-connection-section > .configuration-credential { grid-template-columns: minmax(0, 1fr); }
+  .configuration-connection-section > .configuration-form-grid .configuration-entity-field > small,
+  .configuration-model-detail > .configuration-form-grid .configuration-entity-field > small { grid-column: 1; }
+}
+@container (max-width: 400px) {
+  .configuration-add-model { grid-template-columns: minmax(0, 1fr) max-content; }
+  .configuration-add-model .configuration-entity-field { grid-column: 1 / -1; }
+  .configuration-parameter-add { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .configuration-parameter-add > button { grid-column: 1 / -1; justify-self: start; }
+}
+.configuration-entity-content [role=alert] { color: var(--vscode-errorForeground); }
 
 .configuration-entity-feedback { position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px; max-height: 120px; overflow: auto; padding: 4px 8px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWidget-border); }
 .configuration-entity-feedback p { margin: 0; }
@@ -66,18 +155,50 @@
 .configuration-probe-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .configuration-probe-models { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; margin: 12px 0; }
 .configuration-probe-models label { overflow-wrap: anywhere; }
+.configuration-upstream-metadata { white-space: pre-line; }
 .configuration-probe-result { padding: 8px 0; border-bottom: 1px solid var(--vscode-widget-border); }
 .configuration-probe-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 
-.configuration-model-options { margin: 16px 0; }
+.configuration-model-options { margin: 8px 0; }
 .configuration-model-options summary { cursor: pointer; }
-.configuration-model-options :is(button, small) { margin-block: 4px; margin-inline-end: 8px; }
+.configuration-model-options small { margin-block: 4px; }
+.configuration-option-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-block: 6px; }
 .configuration-option-json textarea { font-family: var(--monaco-monospace-font); font-weight: 400; }
 .configuration-request-parameter { border-top: 1px solid var(--vscode-widget-border); padding-block: 12px; }
 .configuration-request-parameter .configuration-entity-field { margin-block: 8px; }
 .configuration-option-json small { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .configuration-model-inspection { margin-block: 16px; min-width: 0; }
-.configuration-model-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.configuration-model-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 .configuration-model-inspection dd { margin-inline-start: 0; overflow-wrap: anywhere; }
 .configuration-model-inspection table { width: 100%; border-collapse: collapse; }
 .configuration-model-inspection th, .configuration-model-inspection td { text-align: start; vertical-align: top; padding: 4px; overflow-wrap: anywhere; }
+
+.configuration-draft-status { color: var(--vscode-descriptionForeground); font-size: var(--bt-font-size-small); }
+.configuration-search-status { position: sticky; top: 0; z-index: 2; background: var(--vscode-editor-background); padding-block: 6px; }
+.configuration-search-match { scroll-margin-top: 40px; outline: 1px solid var(--vscode-editor-findMatchHighlightBorder, var(--vscode-focusBorder)); background: var(--vscode-editor-findMatchHighlightBackground); }
+.configuration-models-section .configuration-model-probe { margin-top: 0; border-top: 0; }
+.configuration-models-section .configuration-model-probe > .configuration-section-heading h3 { display: none; }
+.configuration-model-probe .configuration-probe-actions { margin-block: 4px 8px; }
+.configuration-upstream-candidates { margin-block: 8px; padding: 4px 8px; border: 1px solid var(--vscode-widget-border); }
+.configuration-probe-models > label { display: flex; align-items: center; gap: 8px; padding: 4px; }
+.configuration-probe-models > label:hover { background: var(--vscode-list-hoverBackground); }
+.configuration-upstream-name { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.configuration-upstream-name small { display: block; }
+.configuration-probe-models > label > small { max-width: 45%; text-align: end; }
+.configuration-entity-content .configuration-request-parameter { display: grid; grid-template-columns: minmax(100px, 1fr) auto; column-gap: 8px; padding-block: 6px; }
+.configuration-request-parameter > .configuration-option-json { grid-column: 1 / -1; }
+.configuration-option-scalar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.configuration-option-scalar form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 240px; min-width: 0; }
+.configuration-option-scalar .configuration-entity-field { flex: 1 1 120px; max-width: 320px; min-width: 0; margin-block: 4px; }
+.configuration-option-scalar .configuration-entity-field:has(> input[type=number]) { max-width: 140px; }
+.configuration-option-scalar .configuration-entity-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.configuration-option-scalar small { flex-basis: 100%; }
+@container (max-width: 520px) {
+  .configuration-probe-models > label { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; }
+  .configuration-probe-models > label > small { grid-column: 2; max-width: none; text-align: start; }
+  .configuration-option-scalar form { flex-basis: 100%; }
+}
+
+.configuration-capacity-input { display: flex; align-items: center; gap: 8px; width: 240px; max-width: 100%; min-width: 0; }
+.configuration-capacity-input > input { flex: 1; max-width: 140px; min-width: 0; font-variant-numeric: tabular-nums; }
+.configuration-capacity-input > small { flex-shrink: 0; white-space: nowrap; font-weight: 400; }

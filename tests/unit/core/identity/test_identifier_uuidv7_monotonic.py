@@ -21,6 +21,7 @@ import pytest
 
 from app.core import identifier
 from app.core.identifier import create_prefixed_id, create_uuid_hex
+from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import session_id_at
 from tests.support.catalog_session_bundle import (
     CatalogSessionBundleSpec,
@@ -164,7 +165,7 @@ def test_real_uuid7_allocator_keeps_session_and_child_dates_consistent_across_mi
     if compiler is None:
         pytest.skip("真实时钟 shim 需要 C 编译器 cc")
 
-    artifact_root = Path.cwd() / _UUID7_TEST_OUTPUT_ROOT / "artifacts"
+    artifact_root = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
     artifact_root.mkdir(parents=True, exist_ok=True)
     stem = f"u07-realtime-clock-{os.getpid()}"
     source_path = artifact_root / f"{stem}.c"

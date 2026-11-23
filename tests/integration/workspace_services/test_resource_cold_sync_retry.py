@@ -93,15 +93,15 @@ async def test_real_failed_cold_sync_keeps_unknown_discoverable_and_management_r
         effects: list[tuple[str, str]] = []
         failures = 2
 
-        async def syncing(resource_id: str, version: int, *, for_stop: bool) -> None:
+        async def syncing(resource_id: str, version: int, *, for_stop: bool, **revision_options: object) -> None:
             nonlocal failures
             calls.append((resource_id, version, for_stop))
             if resource_id == rid and failures:
                 failures -= 1
                 if accepted:
-                    await sync(resource_id, version, for_stop=for_stop)
+                    await sync(resource_id, version, for_stop=for_stop, **revision_options)
                 raise ConnectionError("冷恢复同步回执未确认")
-            await sync(resource_id, version, for_stop=for_stop)
+            await sync(resource_id, version, for_stop=for_stop, **revision_options)
 
         async def stopping(resource_id: str, *, reason: str | None = None):
             effects.append((resource_id, "stop"))

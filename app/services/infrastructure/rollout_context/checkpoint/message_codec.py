@@ -714,6 +714,11 @@ class LangChainMessageCodec:
             : 64 * 1024
         ]
 
+    def activity_outline(self, items: Sequence[CanonicalItemRecord]) -> dict[str, list[dict[str, object]]]:
+        from app.services.mapping.turn_response_parts import internal_item_outline
+        return {item.item_id: internal_item_outline(item) for item in items
+            if item.semantic_kind in {"assistant_output", "reasoning", "tool_call", "tool_result", "compaction_summary"}}
+
     def reasoning_rows(self, message: Mapping[str, object]) -> list[dict[str, object]]:
         data = message.get("data")
         content = data.get("content") if isinstance(data, Mapping) else None

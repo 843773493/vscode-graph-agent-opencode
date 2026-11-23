@@ -25,7 +25,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -54,14 +54,14 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=backend_url,
         boxteam_home=chat_backend_boxteam_home,
-        port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        port=integration_ports_for_file(Path(request.node.path)).port(20),
         artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     result_path = context.artifacts_dir / "message-content.json"
     command = ["node", "tests/integration/clients/web/quick_access/message_content.mjs"]
     model = "browser-chat-tool-loop-stub"
-    endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
+    endpoint = integration_ports_for_file(Path(request.node.path)).port(10)
     interactions = [cast(list[dict[str, object]], build_cassette(
         asset_id="message-content", model=model, url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
         frames=chat_completion_frames(response_id=f"message-content-{index}", model=model,

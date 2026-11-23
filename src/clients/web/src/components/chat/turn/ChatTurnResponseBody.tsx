@@ -5,8 +5,8 @@ import { isLiveConversationView } from "../../../state/trace/traceAggregation";
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import type { ConversationView } from "../../../types/frontend";
 import type { ChatTurnActions } from "./useChatTurnActions";
-import type { LoadToolDetails, LoadTurnDetails } from "./types";
-import { RewindStatusPart, MessageStreamStatusPart, HistoricalBoundaryStatusPart, ExecutionLostRecoveryPart } from "./responseStatusParts";
+import type { LoadTurnDetails } from "./types";
+import { RewindStatusPart, MessageStreamStatusPart, ExecutionLostRecoveryPart } from "./responseStatusParts";
 import { TurnActivitySummary } from "./TurnActivitySummary";
 import type { ChatTurnHandlers } from "./types";
 
@@ -16,7 +16,6 @@ export default function ChatTurnResponseBody({
   showRawDetails,
   actions,
   onLoadTurnDetails,
-  onLoadToolDetails,
   onForkConversation,
 }: {
   conversation: ConversationView;
@@ -24,7 +23,6 @@ export default function ChatTurnResponseBody({
   showRawDetails: boolean;
   actions: ChatTurnActions;
   onLoadTurnDetails?: LoadTurnDetails;
-  onLoadToolDetails?: LoadToolDetails;
   onForkConversation?: ChatTurnHandlers["onForkConversation"];
 }): React.ReactNode {
   const running = isLiveConversationView(conversation)
@@ -75,13 +73,11 @@ export default function ChatTurnResponseBody({
       {workspaceId && hasConnectionOperation ? <a target="_blank" rel="noopener noreferrer"
         href={`/?mcp_workspace=${encodeURIComponent(workspaceId)}`}>{t("chat.turn.mcpStatus")}</a> : null}
       <TurnActivitySummary
-          live={!historyTurn}
           conversation={conversation}
           groups={renderGroups}
           usage={usage}
           showRawDetails={showRawDetails}
           onLoadTurnDetails={onLoadTurnDetails}
-          onLoadToolDetails={onLoadToolDetails}
           onForkItem={onForkItem}
       />
       {summaryOnly && !historyTurn ? (
@@ -91,7 +87,6 @@ export default function ChatTurnResponseBody({
         </div>
       ) : null}
       <MessageStreamStatusPart conversation={conversation} />
-      {!historyTurn ? <HistoricalBoundaryStatusPart conversation={conversation} /> : null}
       <ExecutionLostRecoveryPart
         conversation={conversation}
         actions={actions}

@@ -21,7 +21,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -55,7 +55,7 @@ async def test_persistent_resources_through_real_workbench(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     if chromium is None:
         pytest.fail("持久资源 Web Integration 需要真实 Chromium")
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     workspace_config_path = workspace / ".boxteam" / "workspace.jsonc"
     workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
     workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[

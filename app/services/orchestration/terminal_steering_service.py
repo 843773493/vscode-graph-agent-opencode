@@ -158,7 +158,7 @@ class TerminalSteeringService:
                 ),
                 source_id=f"terminal:{terminal_id}:completion",
                 idempotency_key=completion_event_id,
-                delivery_policy="after_tool_result",
+                delivery_policy="after_turn",
                 thread_id=thread_id,
             )
             dispatched = True

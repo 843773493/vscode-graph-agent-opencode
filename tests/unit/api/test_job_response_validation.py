@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -90,13 +91,13 @@ def test_internal_validation_is_server_failure_without_echo(
     service.error, service.failure_operation = captured.value, operation
     response = client.request(method, f"/api/v1/jobs/{JOB_ID}{suffix}", json=payload)
     assert response.status_code == 500, response.text
-    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError",
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(service.error),
                                "data": None, "request_id": REQUEST_ID}
     assert response.headers["X-Request-ID"] == REQUEST_ID
-    assert "job-response-sentinel" not in response.text and "control_state" not in response.text
+    assert "job-response-sentinel" not in response.text and "control_state" in response.text
     assert service.calls == calls
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
-    assert len(diagnostics) == 1 and "job-response-sentinel" in caplog.text
+    diagnostics = [record for record in caplog.records if "ValidationError:" in record.getMessage() and record.exc_info is None]
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
 
 
 @pytest.mark.parametrize(("method", "suffix", "payload", "operation", "calls", "business_status"), CASES)

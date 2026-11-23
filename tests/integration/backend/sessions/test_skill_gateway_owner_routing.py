@@ -31,7 +31,7 @@ from tests.support.communication.federation import (
     open_communication_triad,
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import start_backend_process
 
 SKILL_NAME = "owner-proof"
@@ -152,7 +152,7 @@ class SkillGatewayCase:
         main = await self.nodes[gateway].client.get(f"/api/v1/sessions/{session_id}/main-thread")
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
-        port = integration_port_block_for_file(self.context.test_file).port(10)
+        port = integration_ports_for_file(self.context.test_file).port(10)
         interactions = [build_cassette(
             asset_id="skill-gateway-owner", model="e2e-stub-model",
             url=f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -197,7 +197,7 @@ async def skill_gateways(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     base = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     run_node = base.runtime_root_for_node(request.node.nodeid).relative_to(base.output_root)
     context = replace(base, workspace_root=base.workspace_root / run_node).prepare()
-    ports = integration_port_block_for_file(context.test_file)
+    ports = integration_ports_for_file(context.test_file)
     barrier = getattr(request, "param", None)
     observation_environment = {"BOXTEAM_TEST_SKILL_OBSERVATION_DIR": str(context.artifacts_dir / "skill-request-identity")}
     environment = {**observation_environment, "BOXTEAM_TEST_SKILL_OBSERVATION_ROLE": "backend"}

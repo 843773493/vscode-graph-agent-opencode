@@ -18,7 +18,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -68,10 +68,10 @@ def integration_backend_process(
     replay_config = prepare_e2e_model_stream_config(
         Path.cwd() / "configs/tests/model_stream/model_stream_web_child_thread_delegate.jsonc",
         runtime_root=context.runtime_root_for_node(request.node.nodeid),
-        artifacts_dir=context.artifacts_dir,
+        artifacts_dir=context.run_root / "artifacts",
         mode="replay",
     )
-    gateway_port = integration_port_block_for_file(Path(request.node.path)).port(22)
+    gateway_port = integration_ports_for_file(Path(request.node.path)).port(22)
     backend = start_backend_process(
         workspace_root=integration_workspace_root_path,
         port=integration_backend_port,
@@ -109,7 +109,7 @@ async def test_child_thread_panel_delegate_flow_through_real_web_surface(
     if chromium_path is None:
         pytest.fail("子会话线程面板 Web Integration 需要 Chromium")
 
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(22)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(22)
     backend_url = f"http://127.0.0.1:{integration_backend_port}"
     gateway = start_gateway_process(
         workspace_root=workspace_root,

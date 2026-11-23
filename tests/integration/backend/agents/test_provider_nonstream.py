@@ -355,7 +355,7 @@ async def test_turn_cancel_closes_nonstream_http_before_first_content(
 @pytest.mark.parametrize("protocol", ["responses", "anthropic_messages"])
 async def test_canonical_history_replays_private_blocks_only_to_same_model_over_real_http(
     nonstream_upstream: tuple[str, list[dict[str, object]]], nonstream_workspace: str,
-    monkeypatch: pytest.MonkeyPatch, protocol: Protocol,
+    monkeypatch: pytest.MonkeyPatch, protocol: Protocol, workspace_config_schema: dict,
 ) -> None:
     endpoint, requests = nonstream_upstream
     monkeypatch.setenv("NONSTREAM_MODEL_KEY", "fixture-only-value")
@@ -373,7 +373,7 @@ async def test_canonical_history_replays_private_blocks_only_to_same_model_over_
         },
         "models": {"main": {"model": "test-model"}, "fallback": {"model": "test-model"}},
     }}}}
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default")
+    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
     with resolver.use_secrets({}):
         models = [build_model_from_provider(
             resolver.get_model({"provider_id": "service", "model_id": model_id}), {},
@@ -538,7 +538,7 @@ async def test_product_job_nonstream_tool_loop_and_model_source_match_sealed_wir
 @pytest.mark.parametrize("nonstream_job_backend", ["chat_completions"], indirect=True)
 async def test_product_jobs_freeze_credentials_and_rotate_only_new_execution(
     nonstream_job_backend, nonstream_auth_headers: list[dict[str, str]], nonstream_response_gate: tuple[Event, Event],
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, workspace_config_schema: dict,
 ) -> None:
     """真实密钥 writer、配置 CAS、Job、SDK 与 TCP；只观测 vault 读取，不替代其实现。"""
     client, workspace, requests, context, _protocol, gateway_id = nonstream_job_backend
@@ -547,9 +547,9 @@ async def test_product_jobs_freeze_credentials_and_rotate_only_new_execution(
     resolved_ids: list[list[str]] = []
     resolve = SecretVault.resolve
 
-    def observe_resolve(vault: SecretVault, ids: list[str]):
+    def observe_resolve(vault: SecretVault, ids: list[str], workspace_config_schema: dict):
         resolved_ids.append(list(ids))
-        return resolve(vault, ids)
+        return resolve(vault, ids, workspace_config_schema=workspace_config_schema)
 
     monkeypatch.setattr(SecretVault, "resolve", observe_resolve)
 

@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/skill_sources.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'skill-sources.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/skill_sources.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>Skill 来源合同</title>')
@@ -144,7 +144,7 @@ test('不可用来源保留原 error_code、优先级和 URI，且不可接受',
 });
 for (const mode of ['scope-change', 'scope-cancel', 'scope-pending']) test(`${mode}经原范围按钮重开并结束旧发现`, async () => {
   const result = await exercise(mode);
-  expect(result.shows).toHaveLength(1); expect(result.shows[0].options.providerOptions.resourceGroup).toBe(7);
+  expect(result.shows).toHaveLength(1); expect(result.shows[0].options.providerOptions.searchGroup).toBe(7);
   expect(workspaceReads(result)).toHaveLength(2);
   expect(result.shows[0].options.providerOptions.searchOwners).toHaveLength(mode === 'scope-cancel' ? 2 : 1);
   expect(result.rows).toHaveLength(mode === 'scope-cancel' ? 6 : 3);
@@ -157,7 +157,7 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'freeze']) test(`${m
   expect(parses[0].body.resource_gateway_id).toBe(`gateway_${'b'.repeat(32)}`);
   expect(result.opened[0].source.gatewayId).toBe(`gateway_${'b'.repeat(32)}`);
   expect(result.opened[0].source.uri).toBe(parses[0].body.uri.replace('boxteam://', `boxteam://gateway_${'b'.repeat(32)}/`));
-  expect(result.opened[0].group).toBe(mode === 'side' ? 8 : 7);
+  expect(result.opened[0].group).toBe(mode === 'side' ? -2 : -1);
   expect(result.opened[0].options).toMatchObject({ preserveFocus: mode === 'background', pinned: ['pinned', 'background'].includes(mode) });
   expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
 });

@@ -14,6 +14,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from boxteam_plugin_sdk.failures import (
+    DIAGNOSTIC_BYTES,
+    bounded_failure_text,
+    format_failure_diagnostic,
+)
+
 ReleaseCallback: TypeAlias = Callable[[], Awaitable[None] | None]
 
 
@@ -164,10 +170,12 @@ class LifetimeScope:
             # close() 正在收集该任务的结果，并将错误交给本次关闭调用。
             return
         # scope 仍开放时没有 close 调用负责该失败，交给事件循环报告。
+        detail = bounded_failure_text(f"LifetimeScope 后台任务失败: scope={self._name}", max_bytes=1024)
         task.get_loop().call_exception_handler({
-            "message": f"LifetimeScope 后台任务失败: scope={self._name}",
-            "exception": error,
-            "task": task,
+            "message": detail + "\n" + format_failure_diagnostic(
+                error, max_bytes=DIAGNOSTIC_BYTES - len(detail.encode("utf-8")) - 1,
+            ),
+            "task_name": bounded_failure_text(task.get_name() if isinstance(task, asyncio.Task) else self._tasks[task]),
         })
 
     def register(self, callback: ReleaseCallback, *, label: str = "resource") -> LifetimeHandle:
@@ -232,10 +240,12 @@ class LifetimeScope:
         else:
             error = task.exception()
         if error is not None:
+            detail = bounded_failure_text(f"LifetimeScope 清理失败: scope={self._name}", max_bytes=1024)
             task.get_loop().call_exception_handler({
-                "message": f"LifetimeScope 清理失败: scope={self._name}",
-                "exception": error,
-                "task": task,
+                "message": detail + "\n" + format_failure_diagnostic(
+                    error, max_bytes=DIAGNOSTIC_BYTES - len(detail.encode("utf-8")) - 1,
+                ),
+                "task_name": bounded_failure_text(task.get_name()),
             })
 
     def child(self, name: str) -> LifetimeScope:

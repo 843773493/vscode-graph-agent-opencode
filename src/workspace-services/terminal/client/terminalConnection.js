@@ -60,6 +60,21 @@ export class TerminalConnection {
     this.onStatus("已 detach，终端仍在后台运行");
   }
 
+  scheduleReconnect(reason) {
+    if (!this.desiredAttached || !this.canReconnect() || !this.isVisible() || this.reconnectTimer !== null) return;
+    if (this.reconnectAttempts >= 6) {
+      this.desiredAttached = false;
+      this.onStatus(`${reason}；自动重连失败，请点击连接重试`, true);
+      return;
+    }
+    const delay = Math.min(500 * 2 ** this.reconnectAttempts++, 5000);
+    this.onStatus(`${reason}，${delay}ms 后自动重连...`, true);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.attach();
+    }, delay);
+  }
+
   async attach() {
     if (!this.isVisible()) return;
     if (!this.terminalId) { this.onStatus("URL 缺少 terminalId 参数", true); return; }
@@ -68,17 +83,22 @@ export class TerminalConnection {
       this.onStatus("正在连接终端...");
       return;
     }
+    if (!this.desiredAttached) this.reconnectAttempts = 0;
     this.desiredAttached = true;
     if (this.grantLoading) return;
     this.grantLoading = true;
     let grant;
     try { grant = await this.requestGrant(); }
-    finally { this.grantLoading = false; }
-    if (!grant) {
-      this.desiredAttached = false;
+    catch (error) {
       this.onMode("detached");
+      if (error.retryable) this.scheduleReconnect(error.message);
+      else {
+        this.desiredAttached = false;
+        this.onStatus(error.message, true);
+      }
       return;
     }
+    finally { this.grantLoading = false; }
     if (!this.desiredAttached || !this.isVisible()) return;
     const currentSocket = new WebSocket(this.socketUrl(grant.service));
     this.socket = currentSocket;
@@ -122,15 +142,7 @@ export class TerminalConnection {
         this.desiredAttached = false;
         this.onRevoked();
       }
-      if (this.desiredAttached && this.canReconnect()) {
-        this.reconnectAttempts += 1;
-        const delay = Math.min(500 * 2 ** (this.reconnectAttempts - 1), 5000);
-        this.onStatus(`连接已断开，${delay}ms 后自动重连...`);
-        this.reconnectTimer = window.setTimeout(() => {
-          this.reconnectTimer = null;
-          void this.attach();
-        }, delay);
-      }
+      this.scheduleReconnect("连接已断开");
     });
     currentSocket.addEventListener("error", () => {
       if (this.socket === currentSocket && this.isVisible()) this.onStatus("WebSocket 连接失败", true);

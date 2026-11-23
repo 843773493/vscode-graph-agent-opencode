@@ -11,7 +11,10 @@ await build({ stdin: { contents: `
 import './tests/harness/js/workbench-locale.ts';
 export { showFileOpenMenu } from './src/clients/workbench/src/fileOpenMenu.js';
 export { workspaceFileSource } from './src/clients/workbench/src/workspaceFiles.js';
-export { GroupDirection } from './src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+export { IEditorGroupsService, GroupDirection } from './src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+export { findGroup } from './src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupFinder.js';
+export { ACTIVE_GROUP, SIDE_GROUP } from './src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
+export { EditorActivation } from './src/clients/workbench/upstream/src/vs/platform/editor/common/editor.js';
 export { IConfigurationService } from './src/clients/workbench/upstream/src/vs/platform/configuration/common/configuration.js';
 `, resolveDir: resolve('.') }, outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
   plugins: [buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))],
@@ -23,21 +26,25 @@ const path = `${rootUri}/file.txt`;
 
 // 执行真实菜单 Action；仅组服务、编辑器 writer 和打开方式选择结果为边界装具。
 function fixture(direction = 'right', existing = true) {
-  const source = { id: 1 }, other = { id: 2 }, side = { id: 3 }, live = new Map([[1, source], [2, other]]);
+  const makeGroup = id => ({ id, editors: [], isLocked: false, isActive: () => false });
+  const source = makeGroup(1), other = makeGroup(2), side = makeGroup(3), live = new Map([[1, source], [2, other]]);
   const opened = [], located = [], added = [], picking = Promise.withResolvers();
   let menu;
   const groups = { activeGroup: source, getGroup: id => live.get(id),
+    getGroups: () => [...live.values()],
     findGroup(location, from) { located.push({ location, from }); return existing ? side : undefined; },
-    addGroup(from, direction) { added.push({ from, direction }); return side; } };
-  const instantiation = { createInstance: () => ({ pick: () => picking.promise }),
-    invokeFunction: callback => callback({ get: service => {
-      expect(service).toBe(m.IConfigurationService);
-      return { getValue: key => { expect(key).toBe('workbench.editor.openSideBySideDirection'); return direction; } };
-    } }) };
+    addGroup(from, direction) { added.push({ from, direction }); live.set(side.id, side); return side; } };
+  const configuration = { getValue: key => key === 'workbench.editor.openSideBySideDirection' ? direction
+    : key === 'workbench.editor.useModal' ? 'off' : false };
+  const accessor = { get: service => service === m.IEditorGroupsService ? groups : configuration };
+  const instantiation = { createInstance: () => ({ pick: () => picking.promise }) };
   m.showFileOpenMenu(path, { x: 3, y: 5 }, owner, { showContextMenu: value => { menu = value; } },
-    { openEditor: async (input, target) => { opened.push({ input, target }); } }, groups, instantiation, source);
+    { openEditor: async (input, preferred) => {
+      const [target, activation] = await m.findGroup(accessor, input, preferred);
+      opened.push({ input, target: target.id, preferred, activation });
+    } }, groups, instantiation, source);
   groups.activeGroup = other;
-  return { source, side, live, opened, located, added, picking,
+  return { source, side, other, groups, configuration, accessor, live, opened, located, added, picking,
     action: name => menu.getActions().find(action => action.id === `boxteam.file.${name}`),
     dispose: () => menu.onHide() };
 }
@@ -47,7 +54,7 @@ for (const [name, pinned] of [['open', true], ['preview', false]]) test(`${name}
   try {
     await f.action(name).run();
     expect(f.opened).toHaveLength(1); expect(f.opened[0].target).toBe(f.source.id);
-    expect(f.opened[0].input.options).toEqual({ pinned });
+    expect(f.opened[0].input.options).toEqual({ pinned, sourceGroup: f.source.id });
     expect(m.workspaceFileSource(f.opened[0].input.resource)).toEqual({ gatewayId: owner.gatewayId, workspaceId: owner.workspaceId, path, root: rootUri });
     expect(f.located).toEqual([]);
   } finally { f.dispose(); }
@@ -69,6 +76,7 @@ test('下方打开固定原组并忽略侧开方向设置', async () => {
   try {
     await f.action('openBelow').run();
     expect(f.located).toEqual([{ location: { direction: m.GroupDirection.DOWN }, from: f.source }]);
+    expect(f.added).toEqual([]);
     expect(f.opened[0].target).toBe(f.side.id);
   } finally { f.dispose(); }
 });
@@ -90,7 +98,64 @@ test('打开方式取消零打开，确认后保留原组、编辑器选择和�
     try {
       const pending = f.action('openWith').run(); f.picking.resolve(options); await pending;
       expect(f.opened).toHaveLength(options ? 1 : 0);
-      if (options) expect(f.opened[0]).toMatchObject({ target: f.source.id, input: { options: { ...options, pinned: true } } });
+      if (options) expect(f.opened[0]).toMatchObject({ target: f.source.id, input: { options: { ...options, pinned: true, sourceGroup: f.source.id } } });
     } finally { f.picking.resolve(); f.dispose(); }
   }
+});
+
+
+test('普通打开避开锁定发起组，原生复用已打开编辑器', async () => {
+  const f = fixture();
+  try {
+    f.source.isLocked = true;
+    await f.action('open').run();
+    expect(f.opened[0].target).toBe(f.other.id);
+    expect(f.opened[0].preferred).toBe(m.ACTIVE_GROUP);
+    f.configuration.getValue = key => key === 'workbench.editor.revealIfOpen' ? true : 'off';
+    f.side.editors = [{ matches: () => true }];
+    f.live.set(f.side.id, f.side);
+    await f.action('open').run();
+    expect(f.opened[1].target).toBe(f.side.id);
+    expect(f.added).toEqual([]);
+  } finally { f.dispose(); }
+});
+
+test('锁定相邻组不接收新文件；已有文件可在锁定相邻组后台侧开', async () => {
+  const f = fixture();
+  try {
+    f.side.isLocked = true;
+    await f.action('openSide').run();
+    expect(f.added).toEqual([{ from: f.source, direction: m.GroupDirection.RIGHT }]);
+    expect(f.opened[0].preferred).toBe(m.SIDE_GROUP);
+    f.side.editors = [{ matches: () => true }];
+    f.added.length = 0;
+    const [group, activation] = await m.findGroup(f.accessor, { resource: {}, options: { sourceGroup: 1, preserveFocus: true } }, m.SIDE_GROUP);
+    expect(group).toBe(f.side); expect(activation).toBeUndefined(); expect(f.added).toEqual([]);
+  } finally { f.dispose(); }
+});
+
+test('明确目标可进入锁定组；未传发起组保持原活动组行为，失效发起组零建组', async () => {
+  const f = fixture();
+  try {
+    f.source.isLocked = true;
+    expect((await m.findGroup(f.accessor, { resource: {} }, f.source.id))[0]).toBe(f.source);
+    expect((await m.findGroup(f.accessor, { resource: {} }, m.ACTIVE_GROUP))[0]).toBe(f.other);
+    f.live.delete(f.source.id);
+    expect(() => m.findGroup(f.accessor, { resource: {}, options: { sourceGroup: 1 } }, m.SIDE_GROUP)).toThrow('closed');
+    expect(f.added).toEqual([]); expect(f.located).toEqual([]);
+  } finally { f.dispose(); }
+});
+
+
+test('普通后台打开沿原激活规则，全组锁定时只在发起组旁创建一次', async () => {
+  const f = fixture();
+  try {
+    const [, activation] = await m.findGroup(f.accessor, { resource: {}, options: { sourceGroup: 1, preserveFocus: true } }, m.ACTIVE_GROUP);
+    expect(activation).toBe(m.EditorActivation.ACTIVATE);
+    f.source.isLocked = f.other.isLocked = true;
+    const [created] = await m.findGroup(f.accessor, { resource: {}, options: { sourceGroup: 1 } }, m.ACTIVE_GROUP);
+    expect(created).toBe(f.side); expect(f.added).toEqual([{ from: f.source, direction: m.GroupDirection.RIGHT }]);
+    f.source.editors = [{ matches: () => true }];
+    expect((await m.findGroup(f.accessor, { resource: {}, options: { sourceGroup: 1 } }, m.ACTIVE_GROUP))[0]).toBe(f.source);
+  } finally { f.dispose(); }
 });

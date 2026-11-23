@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -67,7 +67,7 @@ class SourceGateway:
 def source_gateway(request: pytest.FixtureRequest, integration_workspace_root_path: str) -> Iterator[SourceGateway]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     reset_gateway_persistent_state(workspace_root=workspace)
     with ExitStack() as resources:
         backend = start_backend_process(workspace_root=str(workspace), port=ports.port(0), log_name="source-edit-backend")

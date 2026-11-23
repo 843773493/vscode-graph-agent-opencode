@@ -30,22 +30,24 @@ export function coalesceWorkspaceSymbols(all: readonly WorkspaceSymbolItem[]): W
 	// de-duplicate entries`);
   }
   if (path === join(root, 'upstream', extensionWorkspaceSymbolsSourcePaths[1])) {
-    let contents = "import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';\n" + source;
-    contents = replaceOnce(contents, '@IChatWidgetService private readonly chatWidgetService: IChatWidgetService', '@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,\n    @IWorkspaceContextService protected readonly workspaceContextService: IWorkspaceContextService');
+    let contents = "import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';\nimport { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';\n" + source;
+    contents = replaceOnce(contents, '@IChatWidgetService private readonly chatWidgetService: IChatWidgetService', '@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,\n    @IWorkspaceContextService protected readonly workspaceContextService: IWorkspaceContextService,\n    @IEditorGroupsService protected readonly editorGroupService: IEditorGroupsService');
     contents = replaceOnce(contents, 'private delayer =', 'protected delayer =');
     contents = replaceOnce(contents, 'protected _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Array<ISymbolQuickPickItem>> {', 'protected _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Array<ISymbolQuickPickItem>> | Array<ISymbolQuickPickItem> {');
     contents = replaceOnce(contents, 'getWorkspaceSymbols, IWorkspaceSymbol, IWorkspaceSymbolProvider', 'getWorkspaceSymbols, IWorkspaceSymbol, IWorkspaceSymbolProvider, WorkspaceSymbolItem');
-    contents = contents.replaceAll('skipLocal?: boolean; skipSorting?: boolean', 'skipLocal?: boolean; skipSorting?: boolean; editorGroup?: (side: boolean) => number; openToken?: CancellationToken; providers?: readonly IWorkspaceSymbolProvider[]; onProviderError?: (provider: IWorkspaceSymbolProvider, error: unknown) => void');
+    contents = contents.replaceAll('skipLocal?: boolean; skipSorting?: boolean', 'skipLocal?: boolean; skipSorting?: boolean; sourceGroup?: number; openToken?: CancellationToken; providers?: readonly IWorkspaceSymbolProvider[]; onProviderError?: (provider: IWorkspaceSymbolProvider, error: unknown) => void');
     contents = replaceOnce(contents, '\t\t// Split between symbol and container query', `    const symbolQuery = query.values && query.values.length > 1 ? pieceToQuery(query.values[0]) : query;
     const items = await getWorkspaceSymbols(symbolQuery.original, token, options?.providers, options?.onProviderError);
     return this.toSymbolPicks(query, options, token, items);
   }
 
-  protected toSymbolPicks(query: IPreparedQuery, options: { skipLocal?: boolean; skipSorting?: boolean; editorGroup?: (side: boolean) => number; openToken?: CancellationToken } | undefined, token: CancellationToken, workspaceSymbols: readonly WorkspaceSymbolItem[]): ISymbolQuickPickItem[] {
+  protected toSymbolPicks(query: IPreparedQuery, options: { skipLocal?: boolean; skipSorting?: boolean; sourceGroup?: number; openToken?: CancellationToken } | undefined, token: CancellationToken, workspaceSymbols: readonly WorkspaceSymbolItem[]): ISymbolQuickPickItem[] {
 		// Split between symbol and container query`);
-    contents = contents.replaceAll('this.openSymbol(provider, symbol, token, { keyMods', 'this.openSymbol(provider, symbol, options?.openToken ?? token, { editorGroup: options?.editorGroup, keyMods');
-    contents = replaceOnce(contents, 'options: { keyMods: IKeyMods;', 'options: { editorGroup?: (side: boolean) => number; keyMods: IKeyMods;');
-    contents = replaceOnce(contents, 'options?.forceOpenSideBySide ? SIDE_GROUP : ACTIVE_GROUP', 'options?.forceOpenSideBySide ? (options.editorGroup?.(true) ?? SIDE_GROUP) : (options.editorGroup?.(false) ?? ACTIVE_GROUP)');
+    contents = contents.replaceAll('this.openSymbol(provider, symbol, token, { keyMods', 'this.openSymbol(provider, symbol, options?.openToken ?? token, { sourceGroup: options?.sourceGroup, keyMods');
+    contents = replaceOnce(contents, 'trigger: (buttonIndex, keyMods) => {', 'trigger: async (buttonIndex, keyMods) => {');
+    contents = replaceOnce(contents, 'this.openSymbol(provider, symbol, options?.openToken ?? token, { sourceGroup: options?.sourceGroup, keyMods, forceOpenSideBySide: true });', 'await this.openSymbol(provider, symbol, options?.openToken ?? token, { sourceGroup: options?.sourceGroup, keyMods, forceOpenSideBySide: true });');
+    contents = replaceOnce(contents, 'options: { keyMods: IKeyMods;', 'options: { sourceGroup?: number; keyMods: IKeyMods;');
+    contents = replaceOnce(contents, 'preserveFocus: options?.preserveFocus,', 'preserveFocus: options?.preserveFocus, sourceGroup: options.sourceGroup,');
     return replaceOnce(contents, `		// Run the workspace symbol query
 		const workspaceSymbols = await getWorkspaceSymbols(symbolQuery.original, token);
 `, '');

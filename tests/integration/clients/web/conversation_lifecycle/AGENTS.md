@@ -1,6 +1,6 @@
 # 目录用途
 
-Section 8 完整会话生命周期的唯一 Python owner、浏览器驱动和独立历史 oracle。通过正式 Workbench、真实 Gateway／Backend／SSH 和精确模型回放验证聊天、子 Thread、fork、恢复及跨工作区协作，属于 Integration。
+Section 8 完整会话生命周期的唯一 Python owner、浏览器驱动和独立历史 oracle。通过正式 Workbench、真实 Gateway／Backend／SSH 和精确模型回放验证聊天、子 Thread、fork、恢复及跨工作区协作，保留现有 Integration 归属；模型回放不再作为归类依据，不因此搬迁或复制场景。
 
 # 可修改内容
 
@@ -14,7 +14,7 @@ Section 8 完整会话生命周期的唯一 Python owner、浏览器驱动和独
 # 规范
 
 - Python owner、focus CLI及诊断自检统一通过Node／`--expose-gc`执行唯一MJS驱动；矩阵和依赖仍使用Bun。Bun/JSC在同一4GiB数据段保护下预留大量可写映射，不能以扩大上限、缩小完整场景或自动运行时回退掩盖失败。导航operation及barrier身份统一使用既有受控identifier工厂的独立namespace，保留UUIDv7格式；只在诊断内存自检中显式GC。
-- `section8_ports` 仅在本文件获分配的端口块内平移服务布局，持续持有同一组租约并将选定布局传给三工作区装具；只跳过真实地址占用，保留探测记录，不终止已有监听者或扩展端口块边界。
+- `section8_ports` 复用公共 `TestFilePorts` 独立申请各服务端口，SSH 隧道池显式连续申请；三工作区装具共享实际端口计划，不平移基准端口、不另写扫描和重复租约。服务先关闭，公共 owner 再归还端口；保留实际分配记录，不终止已有监听者。
 - 活动选择消费公开 `active_workspace` 的 `(gateway_id, workspace_id)`，业务请求同时携带原 UUID 与 `X-BoxTeam-Target-Gateway-Id`；目录节点和 outbox 按完整 owner 索引，不再保存路由／业务双 ID。恢复 Tab 的真实 bootstrap 正文须与 UUID 请求头相等，并核同目标 Gateway；相同 UUID 的其它 Gateway 不能混入。Gateway 崩溃回执仍核原 UUID；失败诊断通过日志路径取大小，支持故意重启后已关闭的旧日志句柄，不能覆盖原浏览器失败。
 - 正式工作区与产物镜像本测试路径；控制端、配置、临时目录和日志按 run／node 隔离。
 - 长流程诊断正文按原响应的 X-Request-ID、URL、方法及状态绑定 CDP request，等原请求完整结束后读取；不得用额外 HTTP 请求补造正文，也不得让 Playwright 长期缓存完整历史。读取失败仍记录在原 fact，保留 owner 与错误分类断言。

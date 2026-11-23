@@ -22,12 +22,13 @@ from tests.harness.python.terminal_plugin import (
     TerminalPluginGateway,
     browser_plugin_gateway_for_workspace,
 )
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 async def browser_service(
-    request: pytest.FixtureRequest, integration_backend_port: int,
+    request: pytest.FixtureRequest, integration_backend_port: int, integration_service_ports: TestFilePorts,
     monkeypatch: pytest.MonkeyPatch,
     prepared_developer_tools_package: Path,
 ) -> AsyncIterator[tuple[TerminalPluginGateway, BrowserManagerClient, Path, TestRunContext, Path]]:
@@ -42,7 +43,7 @@ async def browser_service(
         )
         artifacts = run.artifacts_dir / uuid4().hex
         async with browser_plugin_gateway_for_workspace(
-            root, artifacts, integration_backend_port + 60,
+            root, artifacts, integration_service_ports.port(60),
             run.boxteam_home_for_node(request.node.nodeid),
             prepared_package_root=prepared_developer_tools_package,
         ) as handle:

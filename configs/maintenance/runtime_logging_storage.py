@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -66,8 +67,9 @@ def migrated_payload(
 def migrated_active_payload(
     payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
     inline_config: dict[str, object], connection_entries: list[dict[str, object]] | None = None,
+    *, schema: Mapping[str, object],
 ) -> dict[str, object]:
-    changed = merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries))
+    changed = merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries), schema=schema)
     if domain == "workspace":
         return changed
     logging = changed.setdefault("logging", {})
@@ -101,7 +103,7 @@ def migrate_database(
     connection: sqlite3.Connection, *, domain: ConfigDomain,
     source_path: Path, plan: RuntimeLoggingMigrationPlan,
     file_digests: dict[str, tuple[str | None, str | None]],
-    inline_config: dict[str, object],
+    inline_config: dict[str, object], schema: Mapping[str, object],
     connection_entries: list[dict[str, object]] | None = None,
 ) -> None:
     connection.row_factory = sqlite3.Row
@@ -151,18 +153,18 @@ def migrate_database(
     old_active_revision = int(row["active_revision"]) if row is not None else None
     if row is None:
         _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                         old_active_revision, old_active_revision)
+                         old_active_revision, old_active_revision, schema=schema)
         return
     old = dict(row)
     payload = json.loads(str(old["payload_json"]))
-    changed = migrated_active_payload(payload, domain, plan, inline_config, connection_entries)
+    changed = migrated_active_payload(payload, domain, plan, inline_config, connection_entries, schema=schema)
     # Workspace 启动按还原后的用户配置校验摘要，不能对 env:NAME 存储格式记账。
     effective = restore_environment_secret_references(changed) if domain == "workspace" else changed
     effective_digest = config_revision(cast(dict[str, object], effective))
     if (payload == changed and not references and old["schema_version"] == TARGET_CONFIG_VERSIONS[domain]
             and old["effective_digest"] == effective_digest):
         _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                         old_active_revision, old_active_revision)
+                         old_active_revision, old_active_revision, schema=schema)
         return
     baseline = json.loads(str(old["source_baseline_json"]))
     revisions = json.loads(str(old["layer_revisions_json"]))
@@ -194,7 +196,7 @@ def migrate_database(
          _dump(revisions), _dump(digests), effective_digest, TARGET_CONFIG_VERSIONS[domain], domain),
     )
     _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                     old_active_revision, revision)
+                     old_active_revision, revision, schema=schema)
 
 
 def _migrate_pending(
@@ -202,13 +204,14 @@ def _migrate_pending(
     inline_config: dict[str, object], references: dict[str, tuple[dict[str, object], dict[str, object]]],
     file_digests: dict[str, tuple[str | None, str | None]], connection_entries: list[dict[str, object]] | None,
     old_active_revision: int | None, active_revision: int | None,
+    *, schema: Mapping[str, object],
 ) -> None:
     """待生效正文与 active 使用同一转换；不复用旧运行时的健康证明。"""
     for row in connection.execute(
         "SELECT * FROM config_pending_candidate WHERE config_domain=? "
         "AND state NOT IN ('active','rejected','discarded') ORDER BY pending_revision", (domain,),
     ).fetchall():
-        payload = migrated_active_payload(json.loads(row["payload_json"]), domain, plan, inline_config, connection_entries)
+        payload = migrated_active_payload(json.loads(row["payload_json"]), domain, plan, inline_config, connection_entries, schema=schema)
         effective = restore_environment_secret_references(payload) if domain == "workspace" else payload
         digest = config_revision(cast(dict[str, object], effective))
         baseline = json.loads(row["source_baseline_json"])

@@ -37,9 +37,6 @@ from tests.integration.clients.web.quick_access.test_recent_history import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
 from tests.integration.clients.web.quick_access.test_recent_history import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
-from tests.integration.clients.web.quick_access.test_recent_history import (
     metadata_web_assets as metadata_web_assets,  # noqa: PLC0414
 )
 from tests.integration.clients.web.quick_access.test_recent_history import (
@@ -49,11 +46,11 @@ from tests.integration.clients.web.quick_access.test_recent_history import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock
+from tests.support.ports import TestFilePorts
 
 
 @pytest.fixture(scope="module", autouse=True)
-def recent_history_service_ports(electron_service_ports: TestFilePortBlock) -> None:
+def recent_history_service_ports(electron_service_ports: TestFilePorts) -> None:
     """复用包时也在模型回放和 Backend 前保留实际使用的服务端口。"""
 
 

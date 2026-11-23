@@ -19,12 +19,13 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 def terminal_service(
-    request: pytest.FixtureRequest, integration_backend_port: int,
+    request: pytest.FixtureRequest, integration_backend_port: int, integration_service_ports: TestFilePorts,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[TerminalPluginService, int, Path, TestRunContext]]:
     with TestRunContext.from_test_file(Path(request.path)) as run:
@@ -36,7 +37,7 @@ def terminal_service(
             workspace_root=run.workspace_root / uuid4().hex,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
         )
-        port = integration_backend_port + 62
+        port = integration_service_ports.port(62)
         process = start_terminal_plugin_service(
             backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
         )

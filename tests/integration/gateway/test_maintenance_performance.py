@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.processes.workspace import (
     close_backend_process,
@@ -33,7 +33,7 @@ def test_activity_prune_gateway_pagination_budget(request: pytest.FixtureRequest
                                                  integration_backend_port: int, integration_workspace_root_path: str) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(1)
+    port = integration_ports_for_file(Path(request.node.path)).port(1)
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=f"http://127.0.0.1:{integration_backend_port}",
                                     port=port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
     try:

@@ -18,6 +18,7 @@ from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
+    ExecutionTerminalResult,
     InternalExecutionIntent,
 )
 from app.domain.itemized.execution_queue import (
@@ -356,6 +357,7 @@ class RuntimeExecutionOwnerMixin:
         self, wakeup: RuntimeExecutionWakeup, *, source_kind: str,
         intent: InternalExecutionIntent, message: HumanMessage,
         state_message: PreparedInternalMessage | None = None,
+        background: bool = False,
     ) -> RuntimeExecutionWakeup:
         notice, _request = self._internal_execution_input(intent, message)
         if notice is None:
@@ -373,7 +375,7 @@ class RuntimeExecutionOwnerMixin:
             model=message.response_metadata.get("boxteam_session_model"),
             delivery_policy=wakeup.delivery_policy, gateway_id=wakeup.gateway_id,
             request_id=wakeup.request_id, created_at=wakeup.message_created_at,
-            background=wakeup.source_id.startswith(("goal:", "persistent-task:", "persistent-task-check:")),
+            background=background,
         )
         state = None if state_message is None else runtime_context_decision(
             wakeup.session_id, wakeup.thread_id, state_message, source_id=wakeup.source_id,
@@ -717,6 +719,12 @@ class RuntimeExecutionOwnerMixin:
             checkpoint_ns=checkpoint_ns,
         )
 
+    def execution_terminal_result(
+        self, admission: ExecutionAdmission, *, checkpoint_ns: str = "",
+    ) -> ExecutionTerminalResult | None:
+        """读取精确准入已提交的执行终态，不触发恢复或写入。"""
+        return self._storage.executions.execution_terminal_result(admission, checkpoint_ns=checkpoint_ns)
+
     def converge_execution(
         self,
         session_id: str,
@@ -731,6 +739,7 @@ class RuntimeExecutionOwnerMixin:
         assembly_id: str | None = None,
         checkpoint_ns: str = "",
         loss_reason: str | None = None,
+        failure: Mapping[str, object] | None = None,
     ) -> int:
         """通过 Saver 原子收敛 execution、output item、assembly 与 Turn。"""
         return self._storage.executions.converge_execution(
@@ -745,6 +754,7 @@ class RuntimeExecutionOwnerMixin:
             assembly_id=assembly_id,
             checkpoint_ns=checkpoint_ns,
             loss_reason=loss_reason,
+            failure=failure,
         )
 
     def resume_turn(
@@ -773,6 +783,7 @@ class RuntimeExecutionOwnerMixin:
         execution_id: str | None = None,
         checkpoint_ns: str = "",
         reason: str = "provider_result_commit_missing",
+        failure: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """通过 Saver 记录 provider dispatch 后丢失的 execution。"""
         return self._storage.executions.mark_execution_lost(
@@ -782,4 +793,5 @@ class RuntimeExecutionOwnerMixin:
             execution_id=execution_id,
             checkpoint_ns=checkpoint_ns,
             reason=reason,
+            failure=failure,
         )

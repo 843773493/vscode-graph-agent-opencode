@@ -14,6 +14,8 @@
 
 使用唯一文件投影及现有 Gateway 传输；查询发起前限制根、extraFileResources 和模型。取消和 dispose 释放实际操作；不支持的选项明确拒绝。原生虚拟容器沿原服务，业务资源不进入浏览器文件 handle worker。
 
+Quick Access 统一入口从原 EditorGroupsService 捕获发起组，包括没有活动 Pane 的空组；模式转接及二级选择沿同一 `searchGroup` 传递。文件、来源、符号和历史接受将它交给原 `IEditorOptions.sourceGroup`，不在异步完成时重采活动组，也不在各 Provider 建立第二套选组算法。
+
 已打开模型的正则查询及结果自动更新共用 OpenModelSearch，在本次计算独占的 worker 中执行原 TextModelSearch，并从同一快照生成预览和上下文；保留未保存正文、整词／多行／UTF-16 坐标和原结果配额。首次结果直接消费已计算命中，不在结果模型重新匹配。取消、身份或模型变化及总期限到达时终止对应 worker，不等待同步正则返回，不持久保存模型副本。结果模型关闭时仍可完成最后一次快照更新；重新绑定、变更或释放结果时取消旧计算。普通字面量仍沿模型原生快速匹配。
 
 编辑器 Ctrl+F 的正则查找、导航和捕获组替换共用该 worker；大批量替换的整篇正则替换也只在 worker 执行。多光标的“选择所有匹配项”沿同一查找模型取得正则结果，保留其原搜索范围及主光标选择。原查找模型按序结算操作，正文、查询、光标变化及关闭立即取消旧计算；保留原装饰、选区、替换命令和撤销 owner，不建立模型正文缓存。构建与开发通过 `findTransform.mjs` 接入同一原版查找链路，普通字面量查找保留原生实现。
@@ -40,4 +42,6 @@ Thread 名称与最近候选的分支按钮直接交同一 Session Command，保
 
 明确范围沿原 getWorkspaceSymbols 的可选失败回调保留成功候选并报告具体原因；取消后不发布迟到错误。原无范围查询、公开符号命令和未传回调的消费者保持原宽容语义，不复制聚合或维护第二份符号索引。原聚合器公布逐 Provider 结果，增量与最终结果共用原去重和评分；原 Picker 的逐次 token 管输入、关闭及重试取消，失败按钮只重读对应 Provider，不重查成功分支。
 
-默认 Quick Access 的 `search.quickOpen.includeSymbols` 与 `#` 共用明确范围符号查询、原 Provider、评分及单分支重试；默认入口保留原全局符号过滤，附在文件组后。两组结果共用查询 token 和加载状态，文件限定／调用方 delegate／行列定位不启动符号查询。接受和侧开沿原 resolve 与修饰键，并固定发起编辑器组；不复制符号打开链。
+默认 Quick Access 的 `search.quickOpen.includeSymbols` 与 `#` 共用明确范围符号查询、原 Provider、评分及单分支重试；默认入口保留原全局符号过滤，附在文件组后。两组结果共用查询 token 和加载状态，文件限定／调用方 delegate／行列定位不启动符号查询。接受和侧开沿原 resolve 与修饰键，通过原生 sourceGroup 固定发起组作为选组起点；不强制目标组或复制符号打开链。
+
+Quick Access 的 PickerEditorState 沿原 Anything Provider 归 Provider 持有，每次 provide 重置；接受时原 Controller 先隐藏并释放 Picker，再执行打开，侧开须等待预览恢复。符号行按钮沿原 Promise<TriggerAction> 等异步 resolve／打开完成后再关闭，Esc 仍取消迟到打开。侧开图标和文案跟随原分屏方向设置。

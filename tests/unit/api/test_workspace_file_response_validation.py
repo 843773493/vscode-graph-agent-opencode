@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -123,9 +124,9 @@ def test_collection_native_error_without_filename_keeps_status_and_diagnostic(
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == REQUEST_ID
     assert f"error={type(failure).__name__}" in response.json()["detail"]
     assert f"errno={number}" in response.json()["detail"]
-    assert native not in response.text and "file-validation-secret" not in response.text
-    assert "private-strerror" not in response.text
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is failure]
+    assert "private-strerror" in response.json()["detail"]
+    assert native in response.json()["detail"]
+    diagnostics = [record for record in caplog.records if str(failure) in record.getMessage() and record.exc_info is None]
     assert len(diagnostics) == 1 and native in diagnostics[0].getMessage() + caplog.text
     assert failure.args == original_args and failure.__cause__ is None
     target.assert_called_once()
@@ -149,14 +150,14 @@ def test_internal_file_validation_keeps_original_diagnostic(
     response = _request(client, method, suffix, payload)
     assert response.status_code == 500, response.text
     assert response.json() == {
-        "code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(failure),
         "data": None, "request_id": REQUEST_ID,
     }
     assert response.headers["X-Request-ID"] == REQUEST_ID
     assert "file-validation-secret" not in response.text
     assert failure.__cause__ is cause
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is failure]
-    assert len(diagnostics) == 1 and "file-validation-secret" in caplog.text
+    diagnostics = [record for record in caplog.records if "ValidationError:" in record.getMessage() and record.exc_info is None]
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
     target.assert_called_once()
 
 
@@ -196,11 +197,10 @@ def test_multipart_input_validation_stays_400_before_service_and_can_retry(
     assert "file-validation-secret" not in response.text and "input_value" not in response.text
     assert response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
     service.upload_file_entries.assert_not_called()
-    diagnostics = [record for record in caplog.records if record.exc_info and isinstance(record.exc_info[1], ValidationError)]
+    diagnostics = [record for record in caplog.records if "ValidationError:" in record.getMessage() and record.exc_info is None]
     assert len(diagnostics) == 1
-    original = diagnostics[0].exc_info
-    assert original is not None and isinstance(original[1], ValidationError)
-    assert "file-validation-secret" in repr(original[1].errors())
+    assert "ValidationError" in diagnostics[0].getMessage()
+    assert all(record.exc_info is None for record in diagnostics)
     service.upload_file_entries.return_value = WorkspaceFileOperationReceiptDTO(
         operation_id=OPERATION_ID, client_sequence=1, queue_seq=1, kind="upload",
         state="queued", receipt_revision=1, effect="none",
@@ -223,10 +223,18 @@ def test_multipart_input_log_failure_does_not_replace_original_400(
     original_errors: list[ValidationError] = []
     sink_error = OSError(5, "日志不可写", "/private/file-validation-secret/service.log")
 
-    def fail_log(*args: object, **kwargs: object) -> None:
-        error = kwargs["exc_info"]
+    report = failures.report_failure
+
+    def capture_report(error: BaseException, **kwargs: object):
         assert isinstance(error, ValidationError)
         original_errors.append(error)
+        return report(error, **kwargs)
+
+    monkeypatch.setattr(failures, "report_failure", capture_report)
+
+    def fail_log(*args: object, **kwargs: object) -> None:
+        assert "exc_info" not in kwargs
+        assert "ValidationError" in str(args)
         raise sink_error
 
     monkeypatch.setattr(failures.logger, "error", fail_log)
@@ -260,11 +268,11 @@ def test_real_file_response_validation_can_retry_without_modifying_source(
     uri = f"boxteam://workspace/{workspace_id}/resources/files/root/entry.txt"
     response = client.get(BASE + "/content", params={"path": uri})
     assert response.status_code == 500, response.text
-    assert response.json()["message"] == "请求处理失败: stage=http_request, error=ValidationError"
+    assert response.json()["message"].startswith("请求处理失败: stage=http_request, error=ValidationError, reason=")
     assert response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
     assert "file-validation-secret" not in response.text and source.read_bytes() == content
-    diagnostics = [record for record in caplog.records if record.exc_info and isinstance(record.exc_info[1], ValidationError)]
-    assert len(diagnostics) == 1 and "file-validation-secret" in caplog.text
+    diagnostics = [record for record in caplog.records if "ValidationError:" in record.getMessage() and record.exc_info is None]
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
     language.return_value = "plaintext"
     healthy = client.get(BASE + "/content", params={"path": uri})
     assert healthy.status_code == 200, healthy.text

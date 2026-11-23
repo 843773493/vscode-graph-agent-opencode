@@ -61,6 +61,12 @@ class RecordingTurnStatusWriter:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
+    def execution_terminal_result(self, _admission):
+        return None
+
+    def execution_admission_for_job(self, *args, **kwargs):
+        return None
+
     def mark_job_terminal_status(
         self,
         *,
@@ -525,6 +531,7 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
     runtime, jobs = build_runtime(
         pending_checkpoint_inspector=_pending_checkpoint,
         tmp_path=tmp_path,
+        terminal_status_writer=RecordingTurnStatusWriter(),
         session_lifecycle_guard=session_lifecycle_guard,
     )
     store = runtime._trace_event_store

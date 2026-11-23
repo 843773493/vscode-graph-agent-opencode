@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -29,7 +29,7 @@ async def test_corrupt_receipt_stays_explicit_and_never_replays_file_effect(
     workspace = Path(integration_workspace_root_path)
     directory = workspace / "receipt-case"
     directory.mkdir()
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     backend = start_backend_process(workspace_root=str(workspace), port=port, log_name="receipt-backend")
     database = workspace / ".boxteam/navigation/workspace-files.sqlite"
     operation_id = "op_" + uuid4().hex

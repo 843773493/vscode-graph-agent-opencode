@@ -7,6 +7,11 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
+from app.gateway.runtime import local_workspace
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+)
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     ManagedProcess,
@@ -426,7 +431,7 @@ def test_native_shutdown_transport_is_requested_once_and_still_waits_for_owned_e
 ) -> None:
     calls: list[str] = []
     if adopted:
-        handle = AdoptedManagedProcess(pid=4321, shutdown_request=lambda: calls.append("request"))
+        handle = AdoptedManagedProcess(pid=4321)
         monkeypatch.setattr(AdoptedManagedProcess, "_close_target_is_alive", lambda self: "wait" not in calls)
         def wait_closed(*_args, **_kwargs):
             calls.append("wait")
@@ -434,9 +439,25 @@ def test_native_shutdown_transport_is_requested_once_and_still_waits_for_owned_e
         monkeypatch.setattr("app.gateway.runtime.process_lifecycle._wait_until_closed", wait_closed)
     else:
         process = managed_process_stub_factory(timeout_once=False)
-        handle = ManagedProcess(process, _LogFile(), shutdown_request=lambda: calls.append("request"))
+        handle = ManagedProcess(process, _LogFile())
         monkeypatch.setattr(ManagedProcess, "_close_target_is_alive", lambda self: "wait" not in calls)
         monkeypatch.setattr(ManagedProcess, "_wait_closed", lambda self, timeout: calls.append("wait"))
+    contract = ManagedBackendContract(
+        gateway_id="gateway_00000000000040008000000000000001",
+        owner_id="backend-owner", generation="backend-generation",
+        members=(ManagedBackendMember("00000000-0000-4000-8000-000000000001"),),
+        backend_url="http://127.0.0.1:41000",
+    )
+
+    def request_shutdown(url, payload, token):
+        assert url == "http://127.0.0.1:41000/api/internal/runtime/shutdown"
+        assert payload.process_id == 4321 and payload.backend_generation == contract.generation
+        assert token == "test-local-token"
+        calls.append("request")
+
+    monkeypatch.setattr(local_workspace, "_request_runtime_shutdown", request_shutdown)
+    monkeypatch.setattr(local_workspace, "get_gateway_local_token", lambda: "test-local-token")
+    local_workspace._bind_backend_shutdown(handle, contract)
     handle.request_terminate()
     handle.close()
     assert calls == ["request", "wait"]

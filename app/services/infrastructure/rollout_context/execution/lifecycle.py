@@ -145,6 +145,10 @@ class RolloutTurnLifecycleMixin:
                 admission.session_id, thread_id=admission.thread_id,
                 turn_id=admission.turn_id, execution_id=admission.execution_id,
                 outcome=outcome, turn_status=turn_status, checkpoint_ns=checkpoint_ns,
+                failure=(
+                    {"code": "execution_lost", "message": "工作区后端重启，无法安全续接原 AgentLoop 执行"}
+                    if status == "execution_lost" else None
+                ),
                 loss_reason=(
                     "execution_lost"
                     if status == "execution_lost" and admission.turn_id is not None

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,16 +22,18 @@ from app.services.business.agent_tool_settings.service import (
     ToolNotFoundError,
     ToolSelectionError,
 )
+from app.services.infrastructure.config import ConfigSnapshot, build_config_snapshot
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
 class _ToolCatalogStub:
     def __init__(self) -> None:
-        self.agent_ids: list[str] = []
+        self.agent_ids: list[str | None] = []
 
-    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
+    def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
         self.agent_ids.append(agent_id)
-        return [
+        return build_config_snapshot({}, source_paths=()), [
             {
                 "id": "read_file",
                 "name": "read_file",
@@ -46,8 +50,8 @@ class _ToolCatalogStub:
 
 
 class _DependencyToolCatalogStub(_ToolCatalogStub):
-    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
-        tools = super().list_tool_definitions(agent_id)
+    def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
+        snapshot, tools = super().list_tool_definitions(agent_id)
         tools.extend(
             {
                 "id": tool_id,
@@ -61,12 +65,12 @@ class _DependencyToolCatalogStub(_ToolCatalogStub):
                 "create_team_member",
             )
         )
-        return tools
+        return snapshot, tools
 
 
 class _DebuggingToolCatalogStub(_ToolCatalogStub):
-    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
-        tools = super().list_tool_definitions(agent_id)
+    def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
+        snapshot, tools = super().list_tool_definitions(agent_id)
         tools.append(
             {
                 "id": "start_debugging",
@@ -78,7 +82,7 @@ class _DebuggingToolCatalogStub(_ToolCatalogStub):
                 "kind": "debugging",
             }
         )
-        return tools
+        return snapshot, tools
 
 
 def _service(
@@ -88,6 +92,7 @@ def _service(
     default_agent_id: str = "default",
 ) -> AgentToolSettingsService:
     config_service = MagicMock()
+    config_service.get_active_snapshot.return_value = build_config_snapshot({}, source_paths=())
     config_service.validate_agent_id.side_effect = (
         lambda agent_id: default_agent_id if agent_id is None else agent_id
     )
@@ -111,6 +116,67 @@ def _service(
         config_service=config_service,
         test_supported_tools={"read_file"},
     )
+
+
+@pytest.fixture
+def published_tools_case(tmp_path: Path, empty_workspace_scope):
+    config = ConfigService(config_dir=Path.cwd() / "configs", config_path=tmp_path / "workspace.jsonc")
+    payload = config.get_snapshot().to_dict()
+    payload["agents"]["coder"] = deepcopy(payload["agents"]["default"])
+    old = build_config_snapshot(payload, source_paths=())
+    payload["default_agent"] = "coder"
+    current = build_config_snapshot(payload, source_paths=())
+    with config.publication_lock:
+        config._snapshot_store.initialize(current)
+
+    class PublishedCatalog(_ToolCatalogStub):
+        def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
+            _, definitions = super().list_tool_definitions(agent_id)
+            return config.get_active_snapshot(), definitions
+
+    catalog = PublishedCatalog()
+    store = ToolSelectionStore(boxteam_root=empty_workspace_scope[1] / ".boxteam")
+    service = AgentToolSettingsService(tool_catalog=catalog, config_service=config,
+        selection_store=store, test_supported_tools=set())
+    return SimpleNamespace(service=service, config=config, store=store, catalog=catalog, old=old, current=current)
+
+
+async def test_missing_tool_uses_the_catalog_agent_not_outer_pinned_config(published_tools_case):
+    case = published_tools_case
+    with case.config.use_snapshot(case.old), pytest.raises(ToolNotFoundError, match="Agent 'coder' 不存在工具 'missing'"):
+        await case.service.get("missing")
+
+
+async def test_selection_resolves_default_from_catalog_snapshot(published_tools_case):
+    case = published_tools_case
+    with case.config.use_snapshot(case.old):
+        changed = await case.service.update_selection(ToolSelectionPatchRequest(changes=[
+            ToolSelectionChange(tool_id="write_file", execution_enabled=False, model_visible=False),
+        ]))
+    assert [(tool.tool_id, tool.execution_enabled) for tool in changed] == [("write_file", False)]
+    assert case.store.snapshot("coder").execution_overrides == {"write_file": False}
+    assert case.store.snapshot("default").execution_overrides == {}
+
+
+async def test_selection_rejects_config_change_before_commit_without_writing(published_tools_case, monkeypatch):
+    case = published_tools_case
+    payload = case.current.to_dict()
+    payload["tooling"]["restrictions"]["execution_disabled"] = ["write_file"]
+    newer = build_config_snapshot(payload, source_paths=())
+    original = case.store.snapshot
+
+    def read_and_publish(agent_id):
+        selection = original(agent_id)
+        with case.config.publication_lock:
+            case.config._snapshot_store.initialize(newer)
+        return selection
+
+    monkeypatch.setattr(case.store, "snapshot", read_and_publish)
+    with pytest.raises(ToolSelectionError, match="配置已更新"):
+        await case.service.update_selection(ToolSelectionPatchRequest(agent_id="coder", changes=[
+            ToolSelectionChange(tool_id="write_file", execution_enabled=True, model_visible=True),
+        ]))
+    assert original("coder").execution_overrides == {}
 
 
 async def test_source_debugging_is_model_hidden_by_default(tmp_path: Path) -> None:
@@ -236,7 +302,7 @@ async def test_update_selection_persists_and_reports_changed_tool(
     }
 
 
-async def test_omitted_agent_id_uses_resolved_agent_for_catalog_and_selection(
+async def test_omitted_agent_id_uses_catalog_default_for_selection(
     tmp_path: Path,
 ) -> None:
     catalog = _ToolCatalogStub()
@@ -261,7 +327,7 @@ async def test_omitted_agent_id_uses_resolved_agent_for_catalog_and_selection(
     assert [(tool.tool_id, tool.execution_enabled) for tool in changed] == [
         ("write_file", False)
     ]
-    assert catalog.agent_ids and set(catalog.agent_ids) == {"coder"}
+    assert catalog.agent_ids == [None]
     assert service._config_service.validate_agent_id.call_args_list[0].args == (None,)
     assert service._selection_store.snapshot("coder").execution_overrides == {
         "write_file": False
@@ -286,7 +352,7 @@ async def test_tool_list_api_passes_omitted_agent_to_default_resolution(
     )
 
     assert [tool.tool_id for tool in response.data] == ["read_file", "write_file"]
-    assert catalog.agent_ids == ["coder"]
+    assert catalog.agent_ids == [None]  # 默认 Agent 由捕获配置的 catalog 解析。
 
 
 async def test_update_selection_maps_unknown_agent_to_http_400(
@@ -414,7 +480,7 @@ async def test_cold_list_does_not_block_or_overlap_catalog_builds(
     calls: list[str] = []
 
     class BlockingCatalog(_ToolCatalogStub):
-        def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
+        def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
             calls.append(agent_id)
             if len(calls) == 1:
                 started.set()

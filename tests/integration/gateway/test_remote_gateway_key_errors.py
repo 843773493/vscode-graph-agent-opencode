@@ -13,7 +13,7 @@ import pytest
 
 from app.gateway.federation import build_remote_gateway_connection_id
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -45,7 +45,7 @@ def gateway(
     clear_test_provider_api_keys(config)
     config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     handle = start_gateway_process(
         workspace_root=context.workspace_root, default_backend_url=None,
         port=port, artifacts_dir=context.artifacts_dir,

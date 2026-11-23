@@ -43,7 +43,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication.federation import open_communication_triad
 from tests.support.model_stream.config import model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.processes.workspace import close_backend_process
 
@@ -256,7 +256,7 @@ async def test_real_agent_cancellation_persists_original_unknown_tool_result(mut
     main = await source.client.get(f"/api/v1/sessions/{session}/main-thread")
     assert main.status_code == 200, main.text
     thread = main.json()["data"]["thread_id"]
-    port = integration_port_block_for_file(Path(request.node.path)).port(10)
+    port = integration_ports_for_file(Path(request.node.path)).port(10)
     cassette = build_cassette(
         asset_id="cancel-text-mutation", model="e2e-stub-model",
         url=f"http://127.0.0.1:{port}/v1/chat/completions",

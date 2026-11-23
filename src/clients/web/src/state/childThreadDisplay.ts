@@ -1,8 +1,12 @@
 import { t } from "../../../shared/core/i18n/index.js";
 import type { ChildThreadStatus, TurnHistoryPage } from "../types/protocol";
 import { mergeInternalExecutions, type InternalExecutionRecord } from "./session/internalExecutionHistory";
+import { mergeCanonicalParts } from "./timeline/responseParts";
 
-export type ChildThreadHistoryPage = Omit<TurnHistoryPage, "internal_executions"> & { internal_executions?: InternalExecutionRecord[] };
+export type ChildThreadHistoryPage = Omit<TurnHistoryPage, "internal_executions" | "items"> & {
+  internal_executions?: InternalExecutionRecord[];
+  items: Array<TurnHistoryPage["items"][number] & {activityOutline?: {beforeCursor: string | null}}>;
+};
 
 const STATUS_LABELS: Record<ChildThreadStatus, string> = {
   idle: t("child.idle"),
@@ -41,15 +45,28 @@ export function childThreadStatusClass(status: ChildThreadStatus): string {
 }
 
 /** 同一冻结历史游标的续页只合并展示成员，每个权威对象使用最新完整投影。 */
-export function mergeChildThreadHistory(previous: ChildThreadHistoryPage | null, page: TurnHistoryPage): ChildThreadHistoryPage {
-  if (!previous || previous.projection_epoch !== page.projection_epoch) return page;
-  const turns = new Map<string, TurnHistoryPage["items"][number]>();
-  for (const turn of previous.items) turns.set(turn.turn_id, turn);
-  for (const turn of page.items) turns.set(turn.turn_id, turn);
-  return {
+export function mergeChildThreadHistory(previous: ChildThreadHistoryPage | null, page: TurnHistoryPage, fragment = false, outline = false): ChildThreadHistoryPage {
+  if (fragment && (!previous || previous.source_view_id !== page.source_view_id || previous.source_view_revision !== page.source_view_revision
+    || previous.thread_id !== page.thread_id || previous.projection_epoch !== page.projection_epoch)) throw new Error("子 Thread 详情来源已变化");
+  if (!previous || previous.projection_epoch !== page.projection_epoch) return {
     ...page,
+    internal_executions: mergeInternalExecutions([], page.internal_executions ?? [], page),
+  };
+  const turns = new Map<string, ChildThreadHistoryPage["items"][number]>();
+  for (const turn of previous.items) turns.set(turn.turn_id, turn);
+  for (const turn of page.items) {
+    const current = turns.get(turn.turn_id);
+    if (fragment && current) turns.set(turn.turn_id, {...current,
+      response_parts: mergeCanonicalParts(current.response_parts ?? [], turn.response_parts ?? []),
+      ...(outline ? {activityOutline: {beforeCursor: page.before_cursor ?? null}} : {})});
+    else if (!fragment) turns.set(turn.turn_id, turn);
+  }
+  return {
+    ...(fragment ? previous : page),
     items: [...turns.values()].sort((left, right) => left.ordinal - right.ordinal),
-    internal_executions: mergeInternalExecutions(previous.internal_executions ?? [], page.internal_executions ?? [])
+    internal_executions: mergeInternalExecutions(previous.internal_executions ?? [], page.internal_executions ?? [], page)
+      .map(execution => outline && page.internal_executions?.some(item => item.execution_id === execution.execution_id)
+        ? {...execution, activityOutline: {beforeCursor: page.before_cursor ?? null}} : execution)
       .sort((left, right) => left.created_at.localeCompare(right.created_at)),
   };
 }

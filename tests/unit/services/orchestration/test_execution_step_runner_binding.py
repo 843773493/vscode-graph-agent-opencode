@@ -11,6 +11,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.core.failures import public_error
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
@@ -23,9 +24,29 @@ from app.services.orchestration.execution_step.failures import (
 from app.services.orchestration.execution_step.runner import StepRunner
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.diagnostic_failures import DiagnosticFailure
-from tests.support.diagnostic_failures import (
-    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414
-)
+
+
+@pytest.fixture
+def diagnostic_sink(tmp_path, monkeypatch: pytest.MonkeyPatch) -> DiagnosticFailure:
+    """在真实安全日志出口触发文件写入故障，不依赖已移除的原始 exc_info。"""
+    blocker = tmp_path / "diagnostic-log-secret"
+    blocker.write_text("普通文件不能作为日志目录")
+    failure = DiagnosticFailure(blocker / "service.log")
+    call_handlers = logging.Logger.callHandlers
+
+    def emit(logger, record):
+        call_handlers(logger, record)
+        if failure.primary is not None and type(failure.primary).__name__ in record.getMessage():
+            assert record.exc_info is None
+            failure.records.append(record)
+            try:
+                failure.destination.write_text(record.getMessage())
+            except OSError as error:
+                failure.errors.append(error)
+                raise
+
+    monkeypatch.setattr(logging.Logger, "callHandlers", emit)
+    return failure
 
 
 async def test_failure_before_execution_is_logged_and_publishes_only_system_reason(
@@ -47,7 +68,7 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
         "phase": "agent_execution",
     })
     assert str(missing) in caplog.text
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert any("FileNotFoundError" in record.getMessage() and record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.parametrize("boundary", ["before-execution", "execution", "interrupted"])
@@ -75,24 +96,25 @@ async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
     message = "执行系统 I/O 失败: error=OSError, errno=5, reason=执行读取失败, filename='/private/execution-secret', diagnostic_sink_error=NotADirectoryError"
     if boundary == "interrupted":
         runtime.finalize_interruption_facts.assert_awaited_once_with()
-        writer.close_interrupted.assert_awaited_once_with("interrupt")
-        writer.close_failed.assert_not_awaited()
+        writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
         publish.assert_not_awaited()
-        checkpointer.converge_execution.assert_not_called()
+        checkpointer.converge_execution.assert_called_once_with(
+            "session", thread_id="thread", turn_id="turn", execution_id="execution",
+            outcome="cancelled", turn_status="cancelled", checkpoint_ns="",
+        )
     else:
         publish.assert_awaited_once_with(EventType.ERROR, {"error": message, "phase": "agent_execution"})
         if execution_id is None:
-            writer.close_failed.assert_not_awaited()
+            writer.close_from_execution.assert_not_awaited()
             runtime.fail_model.assert_not_awaited()
             checkpointer.converge_execution.assert_not_called()
         else:
             runtime.fail_model.assert_awaited_once_with(code="execution_error", message=message)
-            writer.close_failed.assert_awaited_once_with(
-                code="execution_error", message=message, after_interrupt_requested=False, resumable=False,
-            )
+            writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
             checkpointer.converge_execution.assert_called_once_with(
                 "session", thread_id="thread", turn_id="turn", execution_id="execution",
                 outcome="failed", turn_status="failed", checkpoint_ns="",
+                failure=public_error(original, code="execution_error", stage="agent_execution"),
             )
     checkpointer.mark_execution_lost.assert_not_called()
 
@@ -283,6 +305,7 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
         thread_id="thread",
         turn_id=None,
         execution_id="execution_internal",
+        failure={"code": "execution_error", "message": "internal execution failed", "details": {"error_type": "RuntimeError", "stage": "agent_execution"}},
         outcome="failed",
         turn_status=None,
         checkpoint_ns="",
@@ -391,6 +414,5 @@ async def test_user_interrupt_with_exception_closes_original_turn_stream() -> No
         publish=publish, logger=MagicMock(spec=logging.Logger),
     )
     runtime.finalize_interruption_facts.assert_awaited_once_with()
-    writer.close_interrupted.assert_awaited_once_with("interrupt-original")
-    writer.close_failed.assert_not_awaited()
+    writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
     publish.assert_not_awaited()

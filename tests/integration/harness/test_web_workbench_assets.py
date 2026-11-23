@@ -172,6 +172,7 @@ def test_one_build_per_pytest_session_and_original_failures(
     receipts = list((project / "out/tests/harness/python/web_workbench").rglob("workbench-build.json"))
     assert len(receipts) == 1
     receipt_path, = receipts
+    assert receipt_path.parent.parent.parent.name == "runs"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert receipt["command"] == json.loads(calls[0])
     assert receipt["timeout_seconds"] == 3
@@ -187,6 +188,7 @@ def test_one_build_per_pytest_session_and_original_failures(
         for name in ("first", "second"):
             module_receipts = list((project / f"out/tests/test_{name}").rglob("workbench-build.json"))
             assert len(module_receipts) == 1
+            assert module_receipts[0].parent.parent.parent.name == "runs"
             consumed = json.loads(module_receipts[0].read_text(encoding="utf-8"))
             assert consumed["shared_build_receipt"] == str(receipt_path)
             assert consumed["assets"] == receipt["assets"]

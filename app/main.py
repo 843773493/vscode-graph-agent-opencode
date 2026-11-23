@@ -22,6 +22,7 @@ from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
 from app.api.context import router as context_router
 from app.api.deps import get_workspace_container, workspace_container_scope
+from app.api.errors import client_error_message
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
 from app.api.message_stream import router as message_stream_router
@@ -184,7 +185,7 @@ async def workspace_base_api_exception_handler(
     return JSONResponse(
         status_code=error.status_code,
         headers=response_headers,
-        content={"detail": error.readable_message(), "request_id": request_id},
+        content={"detail": client_error_message(error), "request_id": request_id},
     )
 
 

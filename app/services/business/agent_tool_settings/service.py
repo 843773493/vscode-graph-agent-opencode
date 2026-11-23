@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from app.agents.policy import (
     DEFAULT_TOOL_GROUP,
@@ -48,19 +49,19 @@ class AgentToolSettingsService:
             return await run_sync_shielded(self._list, agent_id)
 
     def _list(self, agent_id: str | None) -> list[ToolDTO]:
-        resolved_agent_id = self._config_service.validate_agent_id(agent_id)
-        return self._list_resolved(resolved_agent_id)
+        snapshot, definitions = self._tool_catalog.list_tool_definitions(agent_id)
+        with self._config_service.use_snapshot(snapshot):
+            agent_id = self._config_service.validate_agent_id(agent_id)
+            return self._project_tools(agent_id, definitions)
 
-    def _list_resolved(self, agent_id: str) -> list[ToolDTO]:
-        definitions = self._tool_catalog.list_tool_definitions(agent_id)
+    def _project_tools(self, agent_id: str, definitions: list[dict[str, Any]]) -> list[ToolDTO]:
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
         selection = self._selection_store.snapshot(agent_id)
         execution_overrides = selection.execution_overrides
         visibility_overrides = selection.model_visibility_overrides
         return [
             self._build_tool_dto(
-                tool,
-                resolver=resolver,
+                tool, resolver=resolver,
                 execution_overrides=execution_overrides,
                 visibility_overrides=visibility_overrides,
             )
@@ -116,14 +117,15 @@ class AgentToolSettingsService:
             )
 
     def _get(self, tool_id: str, agent_id: str | None) -> ToolDTO:
-        resolved_agent_id = self._config_service.validate_agent_id(agent_id)
-        tools = {tool.tool_id: tool for tool in self._list_resolved(resolved_agent_id)}
-        tool = tools.get(tool_id)
-        if tool is None:
-            raise ToolNotFoundError(
-                f"Agent {resolved_agent_id!r} 不存在工具 {tool_id!r}"
-            )
-        return tool
+        snapshot, definitions = self._tool_catalog.list_tool_definitions(agent_id)
+        with self._config_service.use_snapshot(snapshot):
+            resolved_agent_id = self._config_service.validate_agent_id(agent_id)
+            definition = next((tool for tool in definitions if tool["id"] == tool_id), None)
+            if definition is None:
+                raise ToolNotFoundError(
+                    f"Agent {resolved_agent_id!r} 不存在工具 {tool_id!r}"
+                )
+            return self._project_tools(resolved_agent_id, [definition])[0]
 
     async def update_selection(
         self,
@@ -133,52 +135,60 @@ class AgentToolSettingsService:
             return await run_sync_shielded(self._update_selection, request)
 
     def _update_selection(self, request: ToolSelectionPatchRequest) -> list[ToolDTO]:
-        try:
+        # 只将请求中的无效 Agent 映射为选择错误，不把 factory／schema 错误改成输入错误。
+        with self._config_service.use_snapshot(self._config_service.get_active_snapshot()):
+            try:
+                self._config_service.validate_agent_id(request.agent_id)
+            except ValueError as error:
+                raise ToolSelectionError(str(error)) from error
+        snapshot, definitions = self._tool_catalog.list_tool_definitions(request.agent_id)
+        with self._config_service.use_snapshot(snapshot):
             agent_id = self._config_service.validate_agent_id(request.agent_id)
-        except ValueError as error:
-            raise ToolSelectionError(str(error)) from error
-        current_tools = self._list_resolved(agent_id)
-        tools_by_id = {tool.tool_id: tool for tool in current_tools}
-        changes = {
-            change.tool_id: (change.execution_enabled, change.model_visible)
-            for change in request.changes
-        }
-        unknown = set(changes) - tools_by_id.keys()
-        if unknown:
-            raise ToolSelectionError(
-                f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
-            )
-        for tool_id, (execution_enabled, model_visible) in changes.items():
-            tool = tools_by_id[tool_id]
-            if tool.execution_locked:
-                raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止执行")
-            if model_visible and tool.model_visibility_locked:
-                raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
-        candidate_enabled = {
-            tool.tool_id for tool in current_tools if tool.execution_enabled
-        }
-        for tool_id, (execution_enabled, model_visible) in changes.items():
-            if not execution_enabled and model_visible:
+            current_tools = self._project_tools(agent_id, definitions)
+            tools_by_id = {tool.tool_id: tool for tool in current_tools}
+            changes = {
+                change.tool_id: (change.execution_enabled, change.model_visible)
+                for change in request.changes
+            }
+            unknown = set(changes) - tools_by_id.keys()
+            if unknown:
                 raise ToolSelectionError(
-                    f"工具 {tool_id!r} 未启用执行能力时不能对模型可见"
+                    f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
                 )
-            if execution_enabled:
-                candidate_enabled.add(tool_id)
-            else:
-                candidate_enabled.discard(tool_id)
-        try:
-            validate_tool_dependencies(
-                candidate_enabled,
-                context=f"Agent {agent_id!r} 的工具开关",
-            )
-        except ValueError as error:
-            raise ToolSelectionError(str(error)) from error
-        try:
-            self._selection_store.apply_changes(
-                agent_id=agent_id,
-                changes=changes,
-            )
-        except ValueError as error:
-            raise ToolSelectionError(str(error)) from error
-        refreshed = {tool.tool_id: tool for tool in self._list_resolved(agent_id)}
-        return [refreshed[tool_id] for tool_id in changes]
+            for tool_id, (execution_enabled, model_visible) in changes.items():
+                tool = tools_by_id[tool_id]
+                if tool.execution_locked:
+                    raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止执行")
+                if model_visible and tool.model_visibility_locked:
+                    raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
+            candidate_enabled = {
+                tool.tool_id for tool in current_tools if tool.execution_enabled
+            }
+            for tool_id, (execution_enabled, model_visible) in changes.items():
+                if not execution_enabled and model_visible:
+                    raise ToolSelectionError(
+                        f"工具 {tool_id!r} 未启用执行能力时不能对模型可见"
+                    )
+                if execution_enabled:
+                    candidate_enabled.add(tool_id)
+                else:
+                    candidate_enabled.discard(tool_id)
+            try:
+                validate_tool_dependencies(
+                    candidate_enabled,
+                    context=f"Agent {agent_id!r} 的工具开关",
+                )
+            except ValueError as error:
+                raise ToolSelectionError(str(error)) from error
+            # 仅提交持已有发布锁；目录构造始终在锁外，避免与 catalog 构造锁倒置。
+            with self._config_service.publication_lock:
+                if self._config_service.get_active_snapshot().revision != snapshot.revision:
+                    raise ToolSelectionError("工具配置已更新，请重新读取后重试")
+                try:
+                    self._selection_store.apply_changes(agent_id=agent_id, changes=changes)
+                except ValueError as error:
+                    raise ToolSelectionError(str(error)) from error
+                refreshed = {tool.tool_id: tool for tool in self._project_tools(agent_id, [
+                    definition for definition in definitions if definition["id"] in changes
+                ])}
+            return [refreshed[tool_id] for tool_id in changes]

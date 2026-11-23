@@ -12,7 +12,7 @@ from app.core.workspace_identity import read_workspace_id
 from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -27,7 +27,7 @@ async def information_client(
     e2e_workspace_root_path: str,
 ) -> AsyncIterator[httpx.AsyncClient]:
     # 信息投影真实读取资源 owner，由 Gateway 生命周期启动工作区及辅助服务。
-    port = e2e_port_block_for_file(Path(request.node.path)).port(21)
+    port = e2e_ports_for_file(Path(request.node.path)).port(21)
     gateway = await asyncio.to_thread(
         start_gateway_process,
         workspace_root=Path(e2e_workspace_root_path), port=port,

@@ -37,7 +37,7 @@ function pointReference(point: OverlayPoint): VirtualElement {
 }
 
 /**
- * 将锚点浮层提升到 document.body，避免被工作台分栏的 overflow 裁切。
+ * 将锚点浮层提升到所属宿主的 Portal 根，避免被工作台分栏的 overflow 裁切。
  * Floating UI 负责翻转、视口边界移动、可用尺寸约束和布局变化跟随。
  */
 export default function AnchoredOverlayFloating({
@@ -92,10 +92,28 @@ export default function AnchoredOverlayFloating({
   });
   const dismiss = useDismiss(context, {
     enabled: dismissible,
-    escapeKey: true,
+    escapeKey: !manageFocus,
     outsidePress: true,
   });
   const { getFloatingProps } = useInteractions([dismiss]);
+
+  useEffect(() => {
+    const floating = refs.floating.current;
+    if (!open || !dismissible || !manageFocus || !floating) return;
+    // 原生模态编辑器在捕获阶段处理 Esc；先关闭拥有焦点的浮层，不能连带关闭编辑器。
+    const onKeyDown = (event: KeyboardEvent) => {
+      const path = event.composedPath();
+      const reference = refs.domReference.current;
+      if (event.key !== 'Escape' || event.isComposing
+        || !path.includes(floating) && !(reference && path.includes(reference))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    const owner = floating.ownerDocument;
+    owner.addEventListener('keydown', onKeyDown, true);
+    return () => owner.removeEventListener('keydown', onKeyDown, true);
+  }, [open, dismissible, manageFocus, onClose, refs]);
 
   useIsomorphicLayoutEffect(() => {
     if (virtualReference) {

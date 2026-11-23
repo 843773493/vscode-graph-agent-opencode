@@ -739,6 +739,7 @@ async def test_fork_inherited_internal_interrupt_is_historical_not_target_contro
 async def test_internal_failure_after_accepted_interrupt_keeps_real_outcome(
     internal_interrupt_case, memory_published, failure_kind,
 ):
+    from app.core.failures import public_error
     from app.core.turn_execution_scope import ScopeCancelledError
     from app.services.orchestration.execution_step.failures import handle_step_failure
 
@@ -768,15 +769,19 @@ async def test_internal_failure_after_accepted_interrupt_keeps_real_outcome(
     ) == expected_outcome
     runtime.fail_model.assert_awaited_once()
     runtime.complete_model.assert_not_awaited()
-    writer.close_failed.assert_awaited_once()
-    assert writer.close_failed.await_args.kwargs["after_interrupt_requested"] is True
-    writer.close_interrupted.assert_not_awaited()
+    writer.close_from_execution.assert_awaited_once_with(case.saver, case.admission)
+    terminal = case.saver.execution_terminal_result(case.admission)
+    assert terminal is not None and terminal.after_interrupt_requested is True
+    failure_code = "execution_error" if failure_kind == "execution_error" else "scope_deadline_exceeded"
+    failure = public_error(error, code=failure_code, stage="agent_execution")
+    assert terminal.failure == failure
     with case.saver._storage.storage.read_connection(case.session_id, case.binding.thread_id, "") as connection:
         metadata = json.loads(connection.execute(
             "SELECT metadata_json FROM storage_commits WHERE commit_kind='terminal_convergence' AND subject_id=?",
             (case.admission.execution_id,),
         ).fetchone()[0])
-        assert metadata == {"after_interrupt_requested": True, "interrupt_request_id": accepted.interrupt_request_id}
+        assert metadata == {"after_interrupt_requested": True,
+            "interrupt_request_id": accepted.interrupt_request_id, "failure": failure}
     with RolloutCheckpointSaver(case.saver._storage.storage.sessions_dir) as cold:
         assert await cold.recover_internal_interrupts() == 0
         assert cold.runtime_execution_outcome(

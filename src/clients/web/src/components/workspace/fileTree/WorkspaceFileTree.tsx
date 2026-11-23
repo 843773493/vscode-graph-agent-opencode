@@ -22,7 +22,7 @@ import {
   type WorkspaceFileChangesEventDetail,
 } from "../../../state/workspaceFileTreeEvents";
 import { useWorkspaceFileWatch } from "../../../hooks/workspace/useWorkspaceFileWatch";
-import { errorDisplayMessage } from "../../../utils/errorMessage";
+import { errorMessage } from "../../../utils/errorMessage";
 import { formatByteSize } from "../../../utils/format";
 import {
   restoreDirectoriesInOrder,
@@ -120,7 +120,7 @@ export default function WorkspaceFileTree({
     void getWorkspaceFileRoots(port, workspaceId).then((result) => {
       if (!cancelled) setRoots(result);
     }).catch((error: unknown) => {
-      if (!cancelled) setRootsError(errorDisplayMessage(error));
+      if (!cancelled) setRootsError(errorMessage(error));
     });
     return () => { cancelled = true; };
   }, [port, workspaceId, rootsReloadNonce]);
@@ -324,7 +324,7 @@ export default function WorkspaceFileTree({
       if (detail.directories.length > 0) {
         acceptSnapshots(detail.snapshots);
         void reconcileDirectories(detail.directories).catch((error: unknown) => {
-          onStatusChange(t("fileTree.status.directorySyncFailed", errorDisplayMessage(error)));
+          onStatusChange(t("fileTree.status.directorySyncFailed", errorMessage(error)));
         });
       }
       for (const change of detail.changes) {
@@ -391,7 +391,7 @@ export default function WorkspaceFileTree({
         })
         .catch((error: unknown) => {
           if (!cancelled) {
-            const message = errorDisplayMessage(error);
+            const message = errorMessage(error);
             setSettingsError(message);
             onStatusChange(t("fileTree.status.shortcutLoadFailed", message));
           }

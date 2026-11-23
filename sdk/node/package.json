@@ -38,6 +38,10 @@
       "types": "./src/http.ts",
       "default": "./dist/http.js"
     },
+    "./failures": {
+      "types": "./src/failures.ts",
+      "default": "./dist/failures.js"
+    },
     "./maintenance": {
       "types": "./src/maintenance.ts",
       "default": "./dist/maintenance.js"

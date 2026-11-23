@@ -337,30 +337,44 @@ class InterruptRejected(_message.Message):
     def __init__(self, interrupt_request_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class StreamCompleted(_message.Message):
-    __slots__ = ("status",)
+    __slots__ = ("status", "terminal_commit_id", "terminal_outcome")
     STATUS_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_COMMIT_ID_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_OUTCOME_FIELD_NUMBER: _ClassVar[int]
     status: StreamStatus
-    def __init__(self, status: _Optional[_Union[StreamStatus, str]] = ...) -> None: ...
+    terminal_commit_id: int
+    terminal_outcome: str
+    def __init__(self, status: _Optional[_Union[StreamStatus, str]] = ..., terminal_commit_id: _Optional[int] = ..., terminal_outcome: _Optional[str] = ...) -> None: ...
 
 class StreamInterrupted(_message.Message):
-    __slots__ = ("interrupt_request_id", "status")
+    __slots__ = ("interrupt_request_id", "status", "terminal_commit_id", "terminal_outcome")
     INTERRUPT_REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_COMMIT_ID_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_OUTCOME_FIELD_NUMBER: _ClassVar[int]
     interrupt_request_id: str
     status: StreamStatus
-    def __init__(self, interrupt_request_id: _Optional[str] = ..., status: _Optional[_Union[StreamStatus, str]] = ...) -> None: ...
+    terminal_commit_id: int
+    terminal_outcome: str
+    def __init__(self, interrupt_request_id: _Optional[str] = ..., status: _Optional[_Union[StreamStatus, str]] = ..., terminal_commit_id: _Optional[int] = ..., terminal_outcome: _Optional[str] = ...) -> None: ...
 
 class StreamFailure(_message.Message):
-    __slots__ = ("code", "message", "after_interrupt_requested", "resumable")
+    __slots__ = ("code", "message", "after_interrupt_requested", "resumable", "details", "terminal_commit_id", "terminal_outcome")
     CODE_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     AFTER_INTERRUPT_REQUESTED_FIELD_NUMBER: _ClassVar[int]
     RESUMABLE_FIELD_NUMBER: _ClassVar[int]
+    DETAILS_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_COMMIT_ID_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_OUTCOME_FIELD_NUMBER: _ClassVar[int]
     code: str
     message: str
     after_interrupt_requested: bool
     resumable: bool
-    def __init__(self, code: _Optional[str] = ..., message: _Optional[str] = ..., after_interrupt_requested: _Optional[bool] = ..., resumable: _Optional[bool] = ...) -> None: ...
+    details: _struct_pb2.Struct
+    terminal_commit_id: int
+    terminal_outcome: str
+    def __init__(self, code: _Optional[str] = ..., message: _Optional[str] = ..., after_interrupt_requested: _Optional[bool] = ..., resumable: _Optional[bool] = ..., details: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., terminal_commit_id: _Optional[int] = ..., terminal_outcome: _Optional[str] = ...) -> None: ...
 
 class MessageBlockSnapshot(_message.Message):
     __slots__ = ("block_id", "block_index", "carrier_type", "status", "text", "items", "redacted", "projection", "model_call_id", "completion_reason", "partial", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at")
@@ -585,7 +599,7 @@ class RecoveryState(_message.Message):
     def __init__(self, status: _Optional[str] = ..., code: _Optional[str] = ..., message: _Optional[str] = ..., resumable: _Optional[bool] = ...) -> None: ...
 
 class StreamSnapshot(_message.Message):
-    __slots__ = ("snapshot_seq", "stream_status", "agent_loop_status", "current_model_call_id", "current_attempt", "blocks", "tool_executions", "interrupt_request_id", "interrupt_status", "failure", "resumable", "tool_calls", "model_calls", "activities", "resource_refs", "active_state", "interrupt_state", "recovery", "workspace_id")
+    __slots__ = ("snapshot_seq", "stream_status", "agent_loop_status", "current_model_call_id", "current_attempt", "blocks", "tool_executions", "interrupt_request_id", "interrupt_status", "failure", "resumable", "tool_calls", "model_calls", "activities", "resource_refs", "active_state", "interrupt_state", "recovery", "workspace_id", "terminal_commit_id", "terminal_outcome")
     SNAPSHOT_SEQ_FIELD_NUMBER: _ClassVar[int]
     STREAM_STATUS_FIELD_NUMBER: _ClassVar[int]
     AGENT_LOOP_STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -605,6 +619,8 @@ class StreamSnapshot(_message.Message):
     INTERRUPT_STATE_FIELD_NUMBER: _ClassVar[int]
     RECOVERY_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_COMMIT_ID_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_OUTCOME_FIELD_NUMBER: _ClassVar[int]
     snapshot_seq: int
     stream_status: StreamStatus
     agent_loop_status: str
@@ -624,7 +640,9 @@ class StreamSnapshot(_message.Message):
     interrupt_state: InterruptState
     recovery: RecoveryState
     workspace_id: str
-    def __init__(self, snapshot_seq: _Optional[int] = ..., stream_status: _Optional[_Union[StreamStatus, str]] = ..., agent_loop_status: _Optional[str] = ..., current_model_call_id: _Optional[str] = ..., current_attempt: _Optional[int] = ..., blocks: _Optional[_Iterable[_Union[MessageBlockSnapshot, _Mapping]]] = ..., tool_executions: _Optional[_Iterable[_Union[ToolExecutionSnapshot, _Mapping]]] = ..., interrupt_request_id: _Optional[str] = ..., interrupt_status: _Optional[str] = ..., failure: _Optional[_Union[StreamFailure, _Mapping]] = ..., resumable: _Optional[bool] = ..., tool_calls: _Optional[_Iterable[_Union[ToolCall, _Mapping]]] = ..., model_calls: _Optional[_Iterable[_Union[ModelCallSnapshot, _Mapping]]] = ..., activities: _Optional[_Iterable[_Union[Activity, _Mapping]]] = ..., resource_refs: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ..., active_state: _Optional[_Union[ActiveState, _Mapping]] = ..., interrupt_state: _Optional[_Union[InterruptState, _Mapping]] = ..., recovery: _Optional[_Union[RecoveryState, _Mapping]] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+    terminal_commit_id: int
+    terminal_outcome: str
+    def __init__(self, snapshot_seq: _Optional[int] = ..., stream_status: _Optional[_Union[StreamStatus, str]] = ..., agent_loop_status: _Optional[str] = ..., current_model_call_id: _Optional[str] = ..., current_attempt: _Optional[int] = ..., blocks: _Optional[_Iterable[_Union[MessageBlockSnapshot, _Mapping]]] = ..., tool_executions: _Optional[_Iterable[_Union[ToolExecutionSnapshot, _Mapping]]] = ..., interrupt_request_id: _Optional[str] = ..., interrupt_status: _Optional[str] = ..., failure: _Optional[_Union[StreamFailure, _Mapping]] = ..., resumable: _Optional[bool] = ..., tool_calls: _Optional[_Iterable[_Union[ToolCall, _Mapping]]] = ..., model_calls: _Optional[_Iterable[_Union[ModelCallSnapshot, _Mapping]]] = ..., activities: _Optional[_Iterable[_Union[Activity, _Mapping]]] = ..., resource_refs: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ..., active_state: _Optional[_Union[ActiveState, _Mapping]] = ..., interrupt_state: _Optional[_Union[InterruptState, _Mapping]] = ..., recovery: _Optional[_Union[RecoveryState, _Mapping]] = ..., workspace_id: _Optional[str] = ..., terminal_commit_id: _Optional[int] = ..., terminal_outcome: _Optional[str] = ...) -> None: ...
 
 class MessageStreamEvent(_message.Message):
     __slots__ = ("event_id", "session_id", "turn_id", "turn_stream_id", "event_seq", "emitted_at", "type", "model_call_id", "block_id", "tool_execution_id", "job_id", "workspace_id", "tool_call_id", "tool_invocation_id", "tool_attempt_id", "thread_id", "stream_opened", "model_started", "model_completed", "model_retrying", "model_failed", "block_started", "block_delta", "block_completed", "tool_call", "tool_call_delta", "tool_call_completed", "tool_started", "tool_completed", "interrupt_requested", "interrupt_rejected", "stream_completed", "stream_interrupted", "stream_failed", "stream_snapshot", "activity")

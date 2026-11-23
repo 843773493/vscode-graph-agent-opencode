@@ -12,6 +12,7 @@ import pytest
 from mcp import types
 from mcp.shared.exceptions import McpError
 
+from tests.harness.python.run_context import TestRunContext
 from tests.support.mcp.configuration import write_mcp_config
 from tests.support.mcp.http_endpoint import HttpSchemaEndpoint
 from tests.support.processes.workspace import (
@@ -32,9 +33,9 @@ def use_test_gateway_home(
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
 
-@pytest.fixture(scope="module")
-def catalog_artifacts(integration_workspace_root_path: str) -> Path:
-    artifacts = Path(integration_workspace_root_path).parent / "artifacts"
+@pytest.fixture
+def catalog_artifacts(request: pytest.FixtureRequest) -> Path:
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     return artifacts
 
@@ -80,7 +81,7 @@ async def catalog_case(
     ) as endpoint:
         generated_config = Path(
             write_mcp_config(
-                workspace_root=workspace_root,
+                artifacts_dir=catalog_artifacts,
                 servers={
                     "mini": {
                         "enabled": True,

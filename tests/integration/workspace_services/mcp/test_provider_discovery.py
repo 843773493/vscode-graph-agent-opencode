@@ -37,6 +37,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from configs.runtime import read_jsonc_object
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     _package,
     _plugin,
@@ -44,6 +45,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 )
 from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.plugin_package import install_plugin_async
+from tests.support.ports import TestFilePorts
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -79,14 +81,15 @@ def _save(path: Path, value: object) -> None:
 
 @pytest.fixture
 async def provider_case(
+    request: pytest.FixtureRequest,
     integration_workspace_root_path: str, integration_workspace_config_path: str,
-    integration_backend_port: int, prepared_mcp_stdio_package: Path,
+    integration_backend_port: int, integration_service_ports: TestFilePorts, prepared_mcp_stdio_package: Path,
 ) -> AsyncIterator[ProviderCase]:
     if not os.environ.get("CCTQ_API_KEY"):
         pytest.fail("UNMET_PREREQUISITE: CCTQ_API_KEY 未配置；本验收不能回退到模型回放")
     workspace = Path(integration_workspace_root_path)
-    artifacts = workspace.parent / "artifacts"
-    artifacts.mkdir(exist_ok=True)
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
+    artifacts.mkdir(parents=True, exist_ok=True)
     definitions, receipts = artifacts / "definitions.json", artifacts / "receipts.jsonl"
     _save(definitions, {"probe": _SCHEMA})
     config_path = Path(integration_workspace_config_path)
@@ -100,7 +103,7 @@ async def provider_case(
     config["agents"]["default"]["tools"]["confirmation_required"] = []
     config["mcp"] = {"servers": {}}
     _save(config_path, config)
-    gateway_port = integration_backend_port + 1
+    gateway_port = integration_service_ports.port(1)
     package = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
     backend = await asyncio.to_thread(
         start_backend_process, workspace_root=str(workspace), port=integration_backend_port,

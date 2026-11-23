@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -59,7 +59,7 @@ def health_stub(
     control = context.runtime_root_for_node(request.node.nodeid) / "health-response.json"
     control.parent.mkdir(parents=True, exist_ok=True)
     control.write_text(json.dumps({"status": "ok", "workspace_id": expected_workspace_id}))
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     ensure_local_port_available(ports.port(0), service_name="健康协议替身")
     with ExitStack() as lifetime:
         log = lifetime.enter_context((context.artifacts_dir / "health-stub.log").open("a"))

@@ -299,15 +299,23 @@ export class TerminalSession {
     return true;
   }
 
-  syncOwnerRevision(transportOwnerRevision) {
+  syncOwnerRevision(transportOwnerRevision, retainedAssociations = []) {
     if (!Number.isSafeInteger(transportOwnerRevision) || transportOwnerRevision < this.transportOwnerRevision) {
       throw new Error(`终端传输 owner revision 过期或无效: terminal_id=${this.id}, revision=${transportOwnerRevision}`);
     }
-    if (transportOwnerRevision !== this.transportOwnerRevision) {
-      this.transportOwnerRevision = transportOwnerRevision;
-      this.closeTransports("terminal owner changed");
-      this.touch();
+    const changed = transportOwnerRevision !== this.transportOwnerRevision;
+    this.transportOwnerRevision = transportOwnerRevision;
+    const retained = new Set(retainedAssociations);
+    for (const [client, grant] of this.transports) {
+      if (retained.has(grant.association)) {
+        // 原grant不变；owner重新确认的现有连接取得新版本资格。
+        this.transports.set(client, { ...grant, transportOwnerRevision });
+      } else {
+        this.transports.delete(client);
+        client.close(4009, "terminal owner changed");
+      }
     }
+    if (changed) this.touch();
   }
 
   closeTransports(reason) {

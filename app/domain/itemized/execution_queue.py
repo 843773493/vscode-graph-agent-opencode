@@ -42,7 +42,8 @@ class ExecutionQueueInput:
     created_at: str
     # 普通消息操作复用 admission key；hash 只校验同身份的原始请求，不复制正文。
     submission_hash: str | None = None
-    # 仅持久任务创建新执行的请求降为后台；控制与工具结果保持原调度语义。
+    # 提交方显式将持续任务设为后台；其余按 execution binding 区分用户输入和内部通知。
+    # background 只影响下一项领取，不抢占正在运行的执行。
     background: bool = False
 
     def __post_init__(self) -> None:

@@ -17,7 +17,7 @@ from tests.e2e.system.gateway.gateway_target import (
     wait_for_remote_gateway_ready,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32",
@@ -110,7 +110,7 @@ ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
         "ssh_command",
         lambda _target, remote_command: remote_command.split(),
     )
-    port_block = integration_port_block_for_file(Path(__file__).resolve())
+    port_block = integration_ports_for_file(Path(__file__).resolve())
     return WindowsGatewayCase(
         target=target,
         workspace_root=remote_workspace,

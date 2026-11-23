@@ -389,6 +389,35 @@ describe("HttpRequestError 错误体诊断", () => {
     expect((error as Error).message).toContain("目录读取失败");
   });
 
+  test("顶层公共错误保留 details，巨型 data 不进入展示摘要", async () => {
+    const port = 49_346;
+    installWindow(port);
+    const detail = { code: "upstream_failed", message: "上游策略拒绝", details: { stage: "model", data: "x".repeat(100_000) } };
+    installErrorResponse(port, JSON.stringify(detail), "application/json");
+    const failure = await requestJson(port, "/upstream").catch(error => error) as HttpRequestError;
+    expect(failure.detail).toEqual(detail);
+    expect(failure.message).toContain("上游策略拒绝");
+    expect(new TextEncoder().encode(failure.message).length).toBeLessThanOrEqual(8192);
+  });
+
+  test("状态文本与关联后缀不能突破展示字节预算", () => {
+    const failure = new HttpRequestError(500, "状态".repeat(10_000), "原因".repeat(10_000), "/" + "路径".repeat(10_000), "request-original");
+    expect(new TextEncoder().encode(failure.message).length).toBeLessThanOrEqual(8192);
+    expect(failure.message).toContain("原因");
+    expect(failure.message).toContain("request_id=request-original");
+    expect(failure.requestId).toBe("request-original");
+  });
+
+  test("非 JSON 摘要在截断前清除 URL 凭据", async () => {
+    const port = 49_347;
+    installWindow(port);
+    const secret = "credential".repeat(180);
+    installErrorResponse(port, `连接失败 https://user:${secret}@example.invalid/path`, "text/plain");
+    const failure = await requestJson(port, "/upstream").catch(error => error) as HttpRequestError;
+    expect(failure.message).toContain("[redacted]@");
+    expect(failure.message).not.toContain("credential");
+  });
+
   test.each(["request-original", null])("HTTP 错误保留原 request_id，不从正文补造身份：%s", async (requestId) => {
     const port = 49_345;
     installWindow(port);

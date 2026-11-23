@@ -56,9 +56,9 @@ async def cold_publication(
     calls: list[tuple[str, int]] = []
     sync = bundle.transport.sync_owner_revision
 
-    async def synced(resource_id: str, version: int, *, for_stop: bool) -> None:
+    async def synced(resource_id: str, version: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((resource_id, version))
-        await sync(resource_id, version, for_stop=for_stop)
+        await sync(resource_id, version, for_stop=for_stop, **revision_options)
 
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", synced)
     path = bundle.leases._state_path
@@ -199,9 +199,9 @@ async def cold_preparation(
     calls: list[tuple[str, int]] = []
     sync = bundle.transport.sync_owner_revision
 
-    async def synced(resource_id: str, version: int, *, for_stop: bool) -> None:
+    async def synced(resource_id: str, version: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((resource_id, version))
-        await sync(resource_id, version, for_stop=for_stop)
+        await sync(resource_id, version, for_stop=for_stop, **revision_options)
 
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", synced)
     path = bundle.leases._state_path

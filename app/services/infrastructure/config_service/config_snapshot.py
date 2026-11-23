@@ -92,7 +92,7 @@ class ConfigSnapshotMixin:
                 source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
                 source_details=source_details,
                 schema_path=schema_path,
-                origins=source_origins(layers, config),
+                origins=source_origins(layers, config, schema=schema),
             )
         except Exception as error:
             if import_sources:
@@ -468,6 +468,10 @@ class ConfigSnapshotMixin:
 
     def get_snapshot(self) -> ConfigSnapshot:
         return self._require_snapshot()
+
+    def get_active_snapshot(self) -> ConfigSnapshot:
+        """读取已发布配置；与其它 owner 联合捕获时由调用方持原 publication_lock。"""
+        return self._snapshot_store.current()
 
     def get_workspace_plugin_binding_snapshot(self) -> tuple[list[PluginBinding], list[PluginBinding]]:
         """返回 active 绑定与仍未结清候选引用，不把 pending 当作启用事实。"""

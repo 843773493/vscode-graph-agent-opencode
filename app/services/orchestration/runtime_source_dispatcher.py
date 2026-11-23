@@ -192,6 +192,7 @@ class RuntimeSourceDispatcher:
         *, source_id: str, idempotency_key: str,
         delivery_policy: DeliveryPolicy = "after_turn",
         context_mode: RuntimeContextMode = "event",
+        background: bool = False,
     ) -> MessageRunAccepted:
         validate_internal_message(message.content, message.metadata)
         state_message = message if context_mode == "state" else None
@@ -201,7 +202,10 @@ class RuntimeSourceDispatcher:
                 sections=(PromptSection("control_context", {
                     "source_id": source_id,
                     "content_revision": sha256_jcs({"content": state_message.content, "metadata": state_message.metadata}),
-                }),), metadata={"source": "runtime_state"},
+                }),), metadata={"source": "runtime_state", **{
+                    key: state_message.metadata[key] for key in ("task_id", "task_revision", "task_check_only")
+                    if key in state_message.metadata
+                }},
             )
         kind = message.metadata["structured_prompt_kind"]
         if not isinstance(kind, str):
@@ -264,7 +268,7 @@ class RuntimeSourceDispatcher:
                             "created_at": created_at,
                         },
                     ),
-                    state_message=state_message,
+                    state_message=state_message, background=background,
                 )
                 if lease.state == "settling":
                     control.settle_lease(

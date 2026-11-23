@@ -211,14 +211,21 @@ def test_context_internal_validation_is_server_failure_without_echo(
     service.error = captured.value
     response = client.post(f"/api/v1/context/{operation}", json=_context_body(operation))
     assert response.status_code == 500, response.text
-    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError",
+    uri_reason = "URI 不得包含反斜杠" if "\\" in native else "URI 只接受 boxteam:// scheme"
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=ValidationError, "
+                                   f"reason=['display_uri']: Value error, {uri_reason} (value_error); "
+                                   "['<extra>']: Extra inputs are not permitted (extra_forbidden)",
                                "data": None, "request_id": "req-context-boundary"}
     assert response.headers["X-Request-ID"] == "req-context-boundary"
-    assert "context-response-sentinel" not in response.text and "display_uri" not in response.text
+    assert "context-response-sentinel" not in response.text
+    assert "input_value" not in response.text and "input_type" not in response.text
     assert service.calls == 1
-    # 路由不改写内部校验正文，原异常实例及动态字段位置只进入统一诊断。
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
-    assert len(diagnostics) == 1 and "context-response-sentinel" in caplog.text
+    # 只输出一次安全字段／原因和诊断栈，不把原始校验 input 重新交给 logger。
+    diagnostics = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert len(diagnostics) == 1 and diagnostics[0].exc_info is None
+    assert "ValidationError:" in diagnostics[0].getMessage()
+    assert f"path=/api/v1/context/{operation}" in diagnostics[0].getMessage()
+    assert "context-response-sentinel" not in caplog.text
 
 
 @pytest.mark.parametrize("operation", ["read", "search"])
@@ -239,13 +246,16 @@ def test_context_internal_serialization_is_server_failure_without_echo(
     service.error = captured.value
     response = client.post(f"/api/v1/context/{operation}", json=_context_body(operation))
     assert response.status_code == 500, response.text
-    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=PydanticSerializationError",
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=PydanticSerializationError, "
+                                   "reason=" + str(service.error),
                                "data": None, "request_id": "req-context-boundary"}
     assert response.headers["X-Request-ID"] == "req-context-boundary"
     assert "context-response-sentinel" not in response.text and "display_uri" not in response.text
     assert service.calls == 1 and resource.display_uri == native
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
-    assert len(diagnostics) == 1
+    diagnostics = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert len(diagnostics) == 1 and diagnostics[0].exc_info is None
+    assert "PydanticSerializationError:" in diagnostics[0].getMessage()
+    assert "context-response-sentinel" not in caplog.text
 
 
 @pytest.mark.parametrize("operation", ["read", "search"])

@@ -27,7 +27,7 @@ from app.services.business.session_context_query.resources import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.diagnostic_sink import install_failing_diagnostic_sink
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -169,7 +169,7 @@ def catalog_upstream(
     runtime.mkdir(parents=True, exist_ok=True)
     control = runtime / "resource-response.json"
     control.write_text(json.dumps({"mode": "ready", "requests_path": str(context.artifacts_dir / "upstream-requests.jsonl")}))
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     ensure_local_port_available(ports.port(0), service_name="资源目录 HTTP 替身")
     with ExitStack() as lifetime:
         log = lifetime.enter_context((context.artifacts_dir / "upstream.log").open("a"))

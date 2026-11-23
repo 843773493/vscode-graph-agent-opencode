@@ -70,6 +70,27 @@ function event(
 }
 
 describe("message stream reducer", () => {
+  test("原失联提交允许后续已提交取消修正，旧快照保留失败", () => {
+    const initial = createMessageStreamState("ses_1", "turn_1", "strm_1", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
+    const failed = applyMessageStreamEvent(initial, event(1, "stream.failed", {
+      code: "execution_lost", message: "原执行丢失", details: { stage: "agent_execution" },
+      terminal_commit_id: 10, terminal_outcome: "execution_lost",
+    }));
+    expect(failed.failure?.details).toEqual({ stage: "agent_execution" });
+    const sameCommit = applyMessageStreamEvent(failed, event(2, "stream.interrupted", {
+      status: "interrupted", terminal_commit_id: 10, terminal_outcome: "cancelled",
+    }));
+    expect(sameCommit).toBe(failed);
+    const corrected = applyMessageStreamEvent(failed, event(2, "stream.interrupted", {
+      status: "interrupted", terminal_commit_id: 11, terminal_outcome: "cancelled",
+    }));
+    expect(corrected.streamStatus).toBe("interrupted");
+    expect(corrected.failure).toBeNull();
+    expect(corrected.terminalCommitId).toBe(11);
+    expect(failed.streamStatus).toBe("failed");
+    expect(failed.failure?.message).toBe("原执行丢失");
+  });
+
   test("同一 Session 的 sibling 在首帧前独立缓存，晚到终态不进入另一个 thread", () => {
     const main = createMessageStreamState("ses_1", "turn_1", "strm_1", "workspace::ses_1", "thr_main");
     const child = createMessageStreamState("ses_1", "turn_1", "strm_1", "workspace::ses_1", "thr_child");

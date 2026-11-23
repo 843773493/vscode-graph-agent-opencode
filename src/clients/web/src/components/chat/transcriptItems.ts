@@ -102,7 +102,7 @@ export function chatTranscriptItems(
   const displayItemIds = new Set<string>();
   const displayItemSequences = new Set<number>();
   for (const execution of executions) {
-    if (includeExecutionResponses) {
+    if (includeExecutionResponses && execution.response_parts.every(part => part.kind === "context_notice")) {
       let firstOrdinal = Infinity;
       for (const part of execution.display_parts) firstOrdinal = Math.min(firstOrdinal, part.logical_item_ordinal);
       for (const part of execution.response_parts) firstOrdinal = Math.min(firstOrdinal,
@@ -113,8 +113,9 @@ export function chatTranscriptItems(
     }
     for (const event of responsePartsToTimelineItems(execution.response_parts)) {
       if (event.kind !== "context_event") continue;
+      const position = event.notices.find(notice => notice.context_before_item_id) ?? event.notices[0];
       orderedHistory.push({ item: { kind: "context_event", key: event.id, notices: event.notices },
-        ordinal: logicalItemOrdinal(event.notices[0].context_anchor_ordinal, "context_notice.anchor_ordinal") });
+        ordinal: logicalItemOrdinal(position.context_anchor_ordinal, "context_notice.anchor_ordinal") });
     }
     for (const displayPart of execution.display_parts) {
       if (!displayPart.item_id || !Number.isSafeInteger(displayPart.item_sequence)
@@ -165,16 +166,19 @@ export function chatTranscriptItems(
         partsByItem.set(itemId, parts);
       }
       for (const [itemId, parts] of partsByItem) {
-        if (!parts.some(part => part.kind === "text" || part.kind === "final_text")) continue;
-        orderedHistory.push({ item: { kind: "execution_response", key: `response:${itemId}`,
-          executionId: execution.execution_id, itemId, parts, bodyEvicted: parts.some(part => part.bodyEvicted) },
+        orderedHistory.push({ item: { kind: "execution_response", key: `response:${parts[0].source.process_segment_item_id ?? itemId}`,
+          executionId: execution.execution_id, itemId: parts[0].source.process_segment_item_id ?? itemId, parts, bodyEvicted: parts.some(part => part.bodyEvicted) },
           ordinal: logicalItemOrdinal(parts[0].source.logical_item_ordinal, "response_part.logical_item_ordinal") });
       }
     }
   }
   orderedHistory.sort((left, right) => left.ordinal - right.ordinal);
-  return [
-    ...orderedHistory.map(({ item }) => item),
-    ...otherTurns,
-  ];
+  const segments: ChatTranscriptItem[] = [];
+  for (const {item} of orderedHistory) {
+    const previous = segments.at(-1);
+    if (item.kind === "execution_response" && previous?.kind === "execution_response" && item.executionId === previous.executionId && item.itemId === previous.itemId) {
+      segments[segments.length-1] = {...previous, parts:[...previous.parts, ...item.parts], bodyEvicted: previous.bodyEvicted || item.bodyEvicted};
+    } else segments.push(item);
+  }
+  return [...segments, ...otherTurns];
 }

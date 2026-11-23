@@ -26,7 +26,8 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 
 import { manageConfig, setPluginBindings, type Scope } from '../settings/pluginConfiguration.js';
 
-import { PluginScope, pluginActions, pluginStateLabel, type PackagePlugin } from './pluginScope.js';
+import { PluginScope, pluginActions, pluginStateLabel, pluginIcon, pluginDescription } from './pluginScope.js';
+import { installedPluginGroups, type InstalledPlugin } from './pluginInventory.js';
 import { PluginEditorInput, readPluginInstanceLog } from './pluginEditor.js';
 import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -79,7 +80,7 @@ export class ServicePluginPackagesView extends ViewPane {
   private gatewaySelector: ManagementTargetSelect | undefined;
   private workspaceSelector: ManagementTargetSelect | undefined;
   private selectorWorkspaces: string[] = [];
-  private readonly lists: WorkbenchList<PackagePlugin>[] = [];
+  private readonly lists: WorkbenchList<InstalledPlugin>[] = [];
   private bodyWidth = 0;
   private get runtimeStatus(): PluginRuntimeStatusDTO | undefined { return this.state?.runtime; }
 
@@ -147,9 +148,9 @@ export class ServicePluginPackagesView extends ViewPane {
         t(scope === 'workspace' ? 'plugins.scopeWorkspace' : scope === 'gateway' ? 'plugins.scopeGateway' : 'plugins.scopeDefaults'), undefined, true,
         async () => { if (scope !== this.scope && this.content) clearNode(this.content); this.scope = scope; await this.refresh(); }));
       actions.push(new Action('plugins.install', t('plugins.installPackage'), undefined, true,
-        () => this.commands.executeCommand('boxteam.plugins.installPackage', target)));
+        () => this.runOperation(() => this.commands.executeCommand('boxteam.plugins.installPackage', target))));
       actions.push(new Action('plugins.sources', t('plugins.manageSources'), undefined, true,
-        () => this.commands.executeCommand('boxteam.plugins.manageSources', target)));
+        () => this.runOperation(() => this.commands.executeCommand('boxteam.plugins.manageSources', target))));
       this.pluginMenus.showContextMenu({ getAnchor: () => toolbar.domNode.querySelector<HTMLElement>('.action-item:last-child')!, getActions: () => actions,
         onHide: () => actions.forEach(action => action.dispose()) });
     }));
@@ -267,9 +268,8 @@ export class ServicePluginPackagesView extends ViewPane {
       if (!packageId || !pluginId) continue;
       const status = this.state.slot(packageId, pluginId);
       const output = row.querySelector<HTMLElement>('[data-plugin-runtime-value]');
-      if (output) output.textContent = row.dataset.scope === 'defaults'
-        ? t('plugins.defaultRuntimeValue', this.state.binding(packageId, pluginId)?.enabled ? t('plugins.enabledOnCreate') : this.state.binding(packageId, pluginId) ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), this.state.binding(packageId, pluginId) ? ` @${this.state.binding(packageId, pluginId)!.package_version}` : '')
-        : this.state.label(packageId, pluginId, row.dataset.runtime === 'true');
+      row.title = [this.state.label(packageId, pluginId, row.dataset.runtime === 'true'), status?.error, this.state.error].filter(Boolean).join('\n');
+      if (output) output.textContent = this.state.summary(packageId, pluginId, row.dataset.runtime === 'true');
       const failure = row.querySelector<HTMLElement>('[data-plugin-runtime-error]');
       if (failure) {
         failure.hidden = !(status?.error || this.state.error);
@@ -279,6 +279,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const workspace = container.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
     if (workspace) {
       const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
+      workspace.hidden = state?.state === 'ready';
       workspace.textContent = t('plugins.workspaceHandoffSummary', state ? pluginStateLabel(state.state) : t('plugins.notReceived'));
       workspace.title = t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
     }
@@ -322,19 +323,24 @@ export class ServicePluginPackagesView extends ViewPane {
     if (scope === 'workspace' && !workspace) { this.packageActions.clear(); this.lists.length = 0; clearNode(container); container.inert = false; append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
     const state = this.state = new PluginScope(scope, pluginTarget, workspace, this.notifications);
-    state.onDidChange(() => { if (state === this.state) this.updateRuntimeStatusPresentation(); });
     const [inventory] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
       state.load(),
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
     const runtime = state.runtime, scopeBindings = state.bindings;
+    const boundVersions = () => JSON.stringify(state.bindings.map(item => [item.package_id, item.plugin_id, item.package_version]));
+    const renderedVersions = boundVersions();
+    state.onDidChange(() => {
+      if (state !== this.state) return;
+      if (boundVersions() !== renderedVersions) void this.refresh();
+      else this.updateRuntimeStatusPresentation();
+    });
     const scrollTop = container.scrollTop;
     this.packageActions.clear();
     this.lists.length = 0;
     clearNode(container);
     container.inert = false;
-    append(container, $('p')).textContent = t(inventory.sources?.configured ? 'plugins.sourcesConfigured' : 'plugins.emptySources');
     if (scope === 'defaults') append(container, $('p')).textContent = t('plugins.defaultsFutureOnly');
     if (workspace) {
       const handoff = runtime!.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
@@ -342,32 +348,47 @@ export class ServicePluginPackagesView extends ViewPane {
       summary.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       summary.dataset.pluginWorkspaceHandoff = 'true';
       summary.dataset.workspaceId = workspace.workspace_id;
+      summary.hidden = handoff?.state === 'ready';
       summary.textContent = t('plugins.workspaceHandoffSummary', handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'));
       summary.title = t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : '');
     }
     const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
     const bindings = scopeBindings.filter(item => scope === 'workspace'
       ? item.workspace_id === workspace?.workspace_id : item.workspace_id == null);
-    for (const pkg of inventory.packages) {
-      const manifest = pkg.manifest;
-      if (!manifest) continue;
-      const matching = manifest.plugins.filter(plugin => plugin.instance_scope === pluginScope);
+    for (const group of installedPluginGroups(inventory, bindings, pluginScope)) {
+      const { manifest } = group;
+      const matching = group.plugins.map(item => item.plugin);
+      if (!matching.length) continue;
       const packageSection = append(container, $('section.service-plugin-package'));
-      packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${manifest.plugins.map(plugin => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
+      packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${group.plugins.map(({ plugin }) => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
       const packageHeading = append(packageSection, $('h3'));
-      append(packageHeading, $('span')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
-      packageHeading.title = `${manifest.package_id}@${manifest.version}`;
+      append(packageHeading, $('span')).textContent = manifest.name;
+      packageHeading.title = manifest.package_id;
       const packageMenu = append(packageHeading, $('div'));
       const packageBar = this.packageActions.add(new ActionBar(packageMenu));
-      if (!matching.length) append(packageSection, $('p')).textContent = t('plugins.noMatchingScope', manifest.plugins.map(plugin => t('plugins.scopeEntry', plugin.id, plugin.instance_scope)).join(t('plugins.listSeparator')));
+      const openVersion = async (pluginId?: string) => {
+        const versions = group.versions.filter(item => item.plugins.some(plugin => plugin.instance_scope === pluginScope && (!pluginId || plugin.id === pluginId)));
+        const selected = await this.quickInput.pick(versions.map(manifest => ({ label: manifest.version,
+          description: bindings.some(binding => binding.package_id === manifest.package_id && binding.package_version === manifest.version && (!pluginId || binding.plugin_id === pluginId)) ? t('plugins.boundVersion') : undefined,
+          manifest })), { title: t('plugins.installedVersions'), placeHolder: manifest.name }, state.lifecycle.token);
+        if (!selected) return;
+        const plugins = selected.manifest.plugins.filter(plugin => plugin.instance_scope === pluginScope && (!pluginId || plugin.id === pluginId));
+        const plugin = plugins.length === 1 ? plugins[0] : (await this.quickInput.pick(plugins.map(plugin => ({ label: plugin.name, plugin })),
+          { title: manifest.name }, state.lifecycle.token))?.plugin;
+        if (!plugin) return;
+        state.lifecycle.check();
+        await this.editors.openEditor(new PluginEditorInput(pluginTarget, workspace, scope, manifest.package_id, selected.manifest.version, plugin.id, plugin.name));
+      };
       const packageActions: Action[] = [];
-      const batchButtons = matching.length ? [true, false].map(enabled => {
+      if (group.versions.length > 1) packageActions.push(new Action('plugin.package.versions', t('plugins.installedVersions'), undefined, true,
+        () => openVersion().catch(error => this.notifications.error(errorsText(error)))));
+      const batchButtons = [true, false].map(enabled => {
         const button = new Action(`plugin.package.${enabled}`, enabled ? t('plugins.enableAll') : t('plugins.disableAll'), undefined, true, () => this.runTargetOperation(async lifecycle => {
           batchButtons.forEach(item => { item.enabled = false; });
           try {
-            const batchBindings = matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id,
-              package_version: state.binding(manifest.package_id, plugin.id)?.package_version
-                ?? manifest.version, enabled }));
+            const batchBindings = group.plugins.map(item => ({ package_id: manifest.package_id, plugin_id: item.plugin.id,
+              package_version: state.binding(manifest.package_id, item.plugin.id)?.package_version
+                ?? item.manifest.version, enabled }));
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
             const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''} · ${scope}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''}`;
             const confirmation = await this.dialogs.confirm({ message: t('plugins.confirmBatch', enabled ? t('plugins.enableAction') : t('plugins.disableAction'), manifest.package_id),
@@ -403,14 +424,16 @@ export class ServicePluginPackagesView extends ViewPane {
         }, entryGatewayId));
         packageActions.push(button);
         return button;
-      }) : [];
+      });
       packageActions.push(new Action('plugin.package.install', t('plugins.reinstall'), undefined, true, () => this.runOperation(() => installPackageFromView(
         this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId))));
       const uninstall = new Action('plugin.package.uninstall', t('plugins.uninstallWholePackage'), undefined, true, async () => {
         uninstall.enabled = false;
         try {
-          await this.runTargetOperation(lifecycle => uninstallPackageFromView(
-            this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version, lifecycle), entryGatewayId);
+          const selected = group.versions.length === 1 ? group.versions[0] : (await this.quickInput.pick(
+            group.versions.map(manifest => ({ label: manifest.version, manifest })), { title: t('plugins.uninstallWholePackage'), placeHolder: manifest.name }, state.lifecycle.token))?.manifest;
+          if (selected) await this.runTargetOperation(lifecycle => uninstallPackageFromView(
+            this.quickInput, this.notifications, pluginTarget, manifest.package_id, selected.version, lifecycle), entryGatewayId);
         } finally { uninstall.enabled = true; }
       });
       packageActions.push(uninstall);
@@ -419,62 +442,61 @@ export class ServicePluginPackagesView extends ViewPane {
       packageBar.push(packageAction, { icon: true, label: false });
       for (const action of packageActions) this.packageActions.add(action);
       const listContainer = append(packageSection, $('.service-plugin-package-list'));
-      const list = this.packageActions.add(this.instantiationService.createInstance(WorkbenchList<PackagePlugin>, 'ServicePluginPackages', listContainer,
+      const list = this.packageActions.add(this.instantiationService.createInstance(WorkbenchList<InstalledPlugin>, 'ServicePluginPackages', listContainer,
         { getHeight: () => 72, getTemplateId: () => 'plugin' }, [{
           templateId: 'plugin',
           renderTemplate: (container: HTMLElement) => ({ container, disposables: new DisposableStore() }),
-          renderElement: (plugin: PackagePlugin, _index: number, template: { container: HTMLElement; disposables: DisposableStore }) => {
+          renderElement: (item: InstalledPlugin, _index: number, template: { container: HTMLElement; disposables: DisposableStore }) => {
             template.disposables.clear(); clearNode(template.container);
-            const binding = bindings.find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id);
+            const { plugin, manifest } = item;
             const row = append(template.container, $('.extension-list-item'));
             const icon = append(append(row, $('.icon-container')), $('.extension-icon'));
-            append(icon, $('span.codicon.codicon-extensions')).setAttribute('aria-hidden', 'true');
+            append(icon, $(`span.codicon.${pluginIcon(plugin)}`)).setAttribute('aria-hidden', 'true');
             const body = append(row, $('.details'));
             row.dataset.pluginRuntimeRow = 'true';
             row.dataset.packageId = manifest.package_id;
             row.dataset.pluginId = plugin.id;
+            row.dataset.packageVersion = manifest.version;
+            row.title = state.label(manifest.package_id, plugin.id, Boolean(plugin.runtime));
             row.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
             row.dataset.scope = scope;
             row.dataset.runtime = String(Boolean(plugin.runtime));
-            const initialRuntimeValue = scope === 'defaults'
-              ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
-              : state.label(manifest.package_id, plugin.id, Boolean(plugin.runtime));
-            row.dataset.initialRuntimeValue = initialRuntimeValue;
             const header = append(append(body, $('.header-container')), $('.header'));
             const open = append(header, $('span.name'));
             open.textContent = plugin.name;
             open.title = `${manifest.package_id}/${plugin.id} @${manifest.version}`;
-            append(body, $('.description.ellipsis')).textContent = manifest.description ?? plugin.id;
+            append(body, $('.description.ellipsis')).textContent = pluginDescription(plugin, manifest);
             const footer = append(body, $('.footer'));
             const publisher = append(footer, $('.publisher-container.ellipsis'));
             const gearBar = template.disposables.add(new ActionBar(footer));
             const gear = template.disposables.add(new Action('plugins.plugin.manage', t('plugins.managePlugin', plugin.name), 'extension-action icon codicon codicon-gear', true, () => {
               const actions = pluginActions(state, manifest, plugin, this.quickInput, this.notifications);
+              if (group.versions.filter(item => item.plugins.some(candidate => candidate.id === plugin.id && candidate.instance_scope === pluginScope)).length > 1) actions.push(new Action('plugin.versions', t('plugins.installedVersions'), undefined, true, () => openVersion(plugin.id).catch(error => this.notifications.error(errorsText(error)))));
               this.pluginMenus.showContextMenu({ getAnchor: () => footer, getActions: () => actions,
                 onHide: () => actions.forEach(action => action.dispose()) });
             }));
             gearBar.push(gear, { icon: true, label: false });
             const runtimeValue = append(publisher, $('span.publisher-name'));
             runtimeValue.dataset.pluginRuntimeValue = 'true';
-            runtimeValue.textContent = initialRuntimeValue;
+            runtimeValue.textContent = state.summary(manifest.package_id, plugin.id, Boolean(plugin.runtime));
             const failure = append(publisher, $('span'));
             failure.dataset.pluginRuntimeError = 'true';
             failure.hidden = true;
           },
           disposeTemplate: (template: { disposables: DisposableStore }) => template.disposables.dispose(),
         }], { multipleSelectionSupport: false, setRowLineHeight: false, horizontalScrolling: false, openOnSingleClick: true,
-          accessibilityProvider: { getWidgetAriaLabel: () => manifest.name, getAriaLabel: (plugin: PackagePlugin) => `${plugin.name} · ${plugin.id}` },
-          keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: (plugin: PackagePlugin) => plugin.name },
+          accessibilityProvider: { getWidgetAriaLabel: () => manifest.name, getAriaLabel: (item: InstalledPlugin) => item.plugin.name },
+          keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: (item: InstalledPlugin) => item.plugin.name },
         }));
       this.packageActions.add(list.onDidOpen(event => {
         if (!event.element) return;
-        const plugin = event.element;
+        const { plugin, manifest } = event.element;
         void this.editors.openEditor(new PluginEditorInput(pluginTarget, workspace, scope, manifest.package_id, manifest.version, plugin.id, plugin.name), event.editorOptions, event.sideBySide ? SIDE_GROUP : undefined)
           .catch(error => this.notifications.error(errorsText(error)));
       }));
       this.lists.push(list);
-      list.splice(0, 0, matching);
-      list.layout(matching.length * 72, this.bodyWidth || container.clientWidth);
+      list.splice(0, 0, group.plugins);
+      list.layout(group.plugins.length * 72, this.bodyWidth || container.clientWidth);
     }
     for (const binding of bindings) {
       const installed = inventory.packages.some(pkg => pkg.manifest?.package_id === binding.package_id
@@ -736,7 +758,7 @@ export async function manageServicePluginSources(accessor: ServicesAccessor, exp
     lifecycle.check();
     if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
     const options: ISettingsEditorOptions = { pinned: true, query: 'plugins.sources.entries' };
-    if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), options, groupId);
+    if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { ...options, sourceGroup: groupId });
   } finally { lifecycle.dispose(); }
 }
 

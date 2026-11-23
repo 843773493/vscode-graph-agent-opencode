@@ -68,7 +68,7 @@ class McpConnectionOperationStore:
                     connection.commit()
                     return operation, False
                 connection.execute(
-                    "INSERT INTO mcp_connection_operations VALUES (?, ?, ?, ?, ?, 'pending', 'queued', ?, ?, ?, NULL)",
+                    "INSERT INTO mcp_connection_operations (operation_id, connection_id, server_id, action, configuration_ref, status, stage, created_at, deadline, updated_at, error_code) VALUES (?, ?, ?, ?, ?, 'pending', 'queued', ?, ?, ?, NULL)",
                     (operation_id, connection_id, server_id, action, configuration_ref, now, deadline, now),
                 )
                 connection.execute("INSERT INTO mcp_connection_operation_aliases VALUES (?, ?)", (operation_id, operation_id))
@@ -78,21 +78,21 @@ class McpConnectionOperationStore:
                 raise
         return self.get(operation_id), True
 
-    def advance(self, operation_id: str, *, status: str, stage: str, error_code: str | None = None) -> McpConnectionOperationDTO:
+    def advance(self, operation_id: str, *, status: str, stage: str, error_code: str | None = None, error_message: str | None = None) -> McpConnectionOperationDTO:
         """终态不可被晚回调改写；真实目录提交前的资格由同一行核实。"""
         with closing(self._store.connection()) as connection:
             connection.execute(
-                "UPDATE mcp_connection_operations SET status = ?, stage = ?, error_code = ?, updated_at = ? "
+                "UPDATE mcp_connection_operations SET status = ?, stage = ?, error_code = ?, error_message = ?, updated_at = ? "
                 "WHERE operation_id = ? AND status IN ('pending', 'waiting_user', 'verifying')",
-                (status, stage, error_code, time.time(), operation_id),
+                (status, stage, error_code, error_message, time.time(), operation_id),
             )
         return self.get(operation_id)
 
-    def record_cleanup_failure(self, operation_id: str, error_code: str) -> None:
+    def record_cleanup_failure(self, operation_id: str, error_code: str, *, error_message: str | None = None) -> None:
         """取消／过期不恢复准入；清理失败作为同一终态的诊断补全。"""
         with closing(self._store.connection()) as connection:
             connection.execute(
-                "UPDATE mcp_connection_operations SET stage = 'cleanup', error_code = ?, updated_at = ? "
+                "UPDATE mcp_connection_operations SET stage = 'cleanup', error_code = ?, error_message = ?, updated_at = ? "
                 "WHERE operation_id = ? AND status IN ('cancelled', 'expired')",
-                (error_code, time.time(), operation_id),
+                (error_code, error_message, time.time(), operation_id),
             )

@@ -543,7 +543,7 @@ test("grant 一次消费，过期或 owner 版本变化立即失效", async () =
   manager.transportGrants.get(expired.grant_token).expiresAtUnixMs = Date.now() - 1;
   assert.throws(() => manager.consumeTransportGrant(id, expired.grant_token), /过期/);
   const old = manager.issueTransportGrant(id, { ownerRevision: 1, association: null });
-  await manager.syncOwnerRevision(id, 2);
+  await manager.syncOwnerRevision(id, 2, [null]);
   assert.throws(() => manager.consumeTransportGrant(id, old.grant_token), /无效/);
   assert.throws(() => manager.issueTransportGrant(id, { ownerRevision: 1, association: null }), /revision 冲突/);
 });

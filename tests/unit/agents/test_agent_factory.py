@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,25 +8,15 @@ import pytest
 
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.policy import ToolPolicyResolver, parse_custom_tool_specs
+from app.agents.policy import ToolPolicyResolver
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
-)
-from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
-    WorkspaceFileResourceRegistry,
-)
-from app.services.infrastructure.rollout_context.checkpoint.saver import (
-    RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.workspace_file_watch_service import (
-    WorkspaceFileWatchService,
-)
 
 
 @pytest.fixture
@@ -98,6 +87,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
         patch.object(agent_factory, "ModelCallExecution"),
+        patch.object(agent_factory, "prepare_agent_model", side_effect=AssertionError("override 不应构造配置模型")),
         patch.object(
             agent_factory, "create_model_call_agent", return_value=built_agent
         ) as create_agent,
@@ -122,102 +112,107 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
     create_invoker.assert_called_once()
     assert create_invoker.call_args.args[0] == []
     provider_tools = create_agent.call_args.kwargs["tools"]
+    assert create_agent.call_args.args[0] is required["model"]
     assert [tool.name for tool in provider_tools] == [EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME]
 
 
-def test_agent_factory_omits_all_csm_ports_without_durable_owner(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """合成 session 没有 durable owner 时不装配 CSM 持久端口或事件发布。"""
 
-    config_service = MagicMock()
-    config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
-        policy_defaults={},
-        policy_rules={"by_group": {"extension:testing": {"execution_enabled": False}}},
-        restrictions={},
-    )
-    checkpointer = RolloutCheckpointSaver(tmp_path / "sessions")
-    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
-    resource_registry = ResourceRegistry()
-    file_registry = WorkspaceFileResourceRegistry(
-        workspace_root=tmp_path,
-        watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
-    )
-    required = {
-        "model": None,
-        "instruction_producers": runtime_instruction_producers(
-            agent_id="default", content="测试提示词", config_revision="config:1",
-            runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
-        ),
-        "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
-        "checkpointer": checkpointer,
-        "session_id": "tools_inspection_session",
-        "assembly_mode": "tool_catalog",
-        "thread_id": "thr_00000000400070008000000000000002",
-        "agent_id": "default",
-        "custom_tool_specs": parse_custom_tool_specs([{"tool_id": "test_tool_2"}]),
-        "browser_resource_owner": MagicMock(),
-        "enabled_tool_names": {"read_file"},
-        "background_task_registry": MagicMock(),
-        "background_mailbox": MagicMock(),
-        "job_event_bus": MagicMock(),
-        "job_service": MagicMock(),
-        "message_service": MagicMock(),
-        "session_service": MagicMock(),
-        "session_orchestrator": MagicMock(),
-        "session_subagent_service": MagicMock(),
-        "team_service": MagicMock(),
-        "session_context_query_service": MagicMock(),
-        "workspace_session_context_client": MagicMock(),
-        "config_service": config_service,
-        "resource_registry": resource_registry,
-        "resource_activation": None,
-        "resource_navigation": MagicMock(),
-        "text_mutations": MagicMock(),
-        "workspace_root": tmp_path,
-        "workspace_file_resource_registry": file_registry,
-        "middleware": [],
+@pytest.fixture
+def local_factory_arguments(empty_workspace_scope):
+    from types import SimpleNamespace
+
+    from app.agents.policy import parse_custom_tool_specs
+
+    root = empty_workspace_scope[1]
+    config = MagicMock()
+    config.get_tool_policy_resolver.return_value = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={})
+    session = MagicMock()
+    thread = "thr_00000000400070008000000000000002"
+    session.path_resolver.main_thread_id.return_value = thread
+    return {
+        "model": None, "instruction_producers": (), "tool_selection_reader": ToolSelectionStore(boxteam_root=root / ".boxteam"),
+        "session_id": "ses_local_factory", "thread_id": thread, "agent_id": "default", "checkpointer": MagicMock(),
+        "custom_tool_specs": parse_custom_tool_specs([{"name": "dynamic", "factory": "builtins:str"}]),
+        "config_service": config, "session_service": session, "background_task_registry": MagicMock(),
+        "background_mailbox": MagicMock(), "job_event_bus": MagicMock(), "job_service": MagicMock(), "message_service": MagicMock(),
+        "session_orchestrator": MagicMock(), "session_subagent_service": MagicMock(), "terminal_resource_owner": MagicMock(),
+        "browser_resource_owner": MagicMock(), "session_communication_service": MagicMock(),
+        "session_context_query_service": MagicMock(), "workspace_session_context_client": MagicMock(),
+        "resource_registry": ResourceRegistry(), "resource_activation": None, "workspace_root": root,
+        "resource_navigation": MagicMock(), "text_mutations": MagicMock(),
+        "skill_catalog": SimpleNamespace(entries=(), sources=(), gateway_id=None),
     }
 
-    with (
-        patch.object(
-            checkpointer,
-            "context_source_control_owner_available",
-            return_value=False,
-        ),
-        patch.object(agent_factory, "ContextSourceManager", wraps=ContextSourceManager) as context_manager,
-        patch.object(agent_factory, "build_workspace_backend"),
-        patch.object(agent_factory, "build_default_tools", return_value=[]),
-        patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
-        patch.object(
-            agent_factory, "build_deep_agent_middleware", side_effect=AssertionError("目录不构建执行中间件")
-        ) as build_middleware,
-        patch.object(agent_factory, "ToolOutputMiddleware"),
-        patch.object(agent_factory, "ToolInvocationContextMiddleware"),
-        patch.object(agent_factory, "ContextSourceReactor") as reactor,
-        patch.object(agent_factory, "ModelCallExecution"),
-        patch.object(agent_factory, "create_model_call_agent", side_effect=AssertionError("目录不编译图")),
-    ):
-        gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
-        try:
-            tools = agent_factory.assemble_deep_agent(**required)
-        finally:
-            reset_current_gateway_id(gateway_token)
 
-    call = context_manager.call_args.kwargs
-    assert call["owner"] is None
-    assert call["control_state_port"] is None
-    assert call["lifecycle_event_sink"] is None
-    reactor.assert_not_called()
-    build_catalog.assert_not_called()
-    build_middleware.assert_not_called()
-    invoker = next(tool for tool in tools if tool.name == EXTENSION_TOOL_INVOKER_NAME)
-    result = asyncio.run(invoker.ainvoke({
-        "type": "tool_call", "id": "call_disabled_extension", "name": invoker.name,
-        "args": {"tool_name": "test_tool_2", "arguments": {}},
-    }))
-    assert result.status == "error"
-    assert result.text == "扩展工具 'test_tool_2' 已被策略禁用"
-    names = {tool.name for tool in tools}
-    assert {"read_file", "write_todos", "compact_conversation", "read_compaction_history"} <= names
+def test_local_factory_error_precedes_model_construction_and_graph(local_factory_arguments, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("本地 factory 失败不能构造模型或图")
+
+    monkeypatch.setattr(agent_factory, "prepare_agent_model", forbidden)
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", forbidden)
+    with pytest.raises(TypeError, match="dynamic"):
+        agent_factory.assemble_deep_agent(**local_factory_arguments)
+
+
+def test_dynamic_factory_constructed_once_before_model_failure(local_factory_arguments, monkeypatch):
+    from langchain_core.tools import StructuredTool
+
+    built = []
+    failure = RuntimeError("选定模型构造失败")
+
+    def construct(context):
+        built.append(context.invocation_context.thread_binding)
+        return StructuredTool(name="dynamic", description="动态工具", args_schema={"type": "object"})
+
+    def fail_model(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr("app.agents.custom_tools.load_custom_tool_factory", lambda _: construct)
+    monkeypatch.setattr(agent_factory, "prepare_agent_model", fail_model)
+    with pytest.raises(RuntimeError) as observed:
+        agent_factory.assemble_deep_agent(**local_factory_arguments)
+    assert observed.value is failure
+    assert [(binding.session_id, binding.thread_id) for binding in built] == [
+        (local_factory_arguments["session_id"], local_factory_arguments["thread_id"]),
+    ]
+
+
+@pytest.mark.parametrize("tool_name", [
+    "exec_command", "read_file", "write_todos", "skill_load",
+    "compact_conversation", "read_compaction_history",
+])
+@pytest.mark.parametrize("hidden", [False, True])
+def test_builtin_collision_still_fails_before_model(local_factory_arguments, monkeypatch, tool_name, hidden):
+    from langchain_core.tools import StructuredTool
+
+    from app.agents.policy import parse_custom_tool_specs
+
+    local_factory_arguments["custom_tool_specs"] = parse_custom_tool_specs([
+        {"name": tool_name, "factory": "builtins:str"},
+    ])
+    local_factory_arguments["tool_denylist"] = {tool_name} if hidden else set()
+    monkeypatch.setattr("app.agents.custom_tools.load_custom_tool_factory", lambda _: lambda context: StructuredTool(
+        name=tool_name, description="与内置注册重名", args_schema={"type": "object"},
+    ))
+    monkeypatch.setattr(agent_factory, "prepare_agent_model", lambda **_: pytest.fail("注册冲突不能准备模型"))
+    with pytest.raises(ValueError, match="重复工具名"):
+        agent_factory.assemble_deep_agent(**local_factory_arguments)
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_runtime_middleware_tools_checked_before_model(local_factory_arguments, monkeypatch, conflict):
+    from jsonschema.exceptions import SchemaError
+    from langchain.agents.middleware.types import AgentMiddleware
+    from langchain_core.tools import StructuredTool
+
+    item = AgentMiddleware()
+    item.tools = [StructuredTool(
+        name="read_file" if conflict else "runtime_tool",
+        description="运行中间件工具",
+        args_schema={"type": "object"} if conflict else {"type": "invalid"},
+    )]
+    local_factory_arguments.update(custom_tool_specs=(), middleware=[item])
+    monkeypatch.setattr(agent_factory, "prepare_agent_model", lambda **_: pytest.fail("本地注册错误不能准备模型"))
+    monkeypatch.setattr(agent_factory, "create_model_call_agent", lambda **_: pytest.fail("本地注册错误不能编译图"))
+    with pytest.raises(ValueError if conflict else SchemaError):
+        agent_factory.assemble_deep_agent(**local_factory_arguments)

@@ -4,7 +4,7 @@ import base64
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.internal_v2.turn import TurnResponsePartDTO
+from app.schemas.internal_v2.turn import ContextNoticeAnchorDTO, TurnResponsePartDTO
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     ContextChain,
     RolloutContextReader,
@@ -13,6 +13,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_history.errors import (
+    HistoryContextUnavailableError,
     InvalidTurnCursorError,
     StaleTurnCursorError,
 )
@@ -36,6 +37,7 @@ class ContextNoticeCursor(BaseModel):
     call_upper_bound: int = Field(ge=1)
     after_call: int = Field(ge=1)
     after_plan: int = Field(ge=0)
+    anchor_context: ContextNoticeAnchorDTO | None = None
 
 
 def decode_context_cursor(token: str, snapshot: RolloutReadSnapshot, view_id: str | None) -> ContextNoticeCursor:
@@ -61,10 +63,17 @@ def decode_context_cursor(token: str, snapshot: RolloutReadSnapshot, view_id: st
 
 def read_notice_parts(reader: RolloutContextReader, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
                       turn_ids: list[str], execution_ids: list[str],
-                      cursor: ContextNoticeCursor | None = None) -> dict[str, list[TurnResponsePartDTO]]:
+                      cursor: ContextNoticeCursor | None = None,
+                      anchor_context: ContextNoticeAnchorDTO | None = None) -> dict[str, list[TurnResponsePartDTO]]:
+    anchor_context = cursor.anchor_context if cursor else anchor_context
     rows = reader.read_context_notices(snapshot, chain, turn_ids=turn_ids, execution_ids=execution_ids,
         after=(cursor.after_call, cursor.after_plan) if cursor else (0, -1),
-        call_upper_bound=cursor.call_upper_bound if cursor else None)
+        call_upper_bound=cursor.call_upper_bound if cursor else None,
+        model_call_id=anchor_context.model_call_id if anchor_context else None,
+        anchor=anchor_context.anchor if anchor_context else None)
+    if anchor_context and cursor is None and not rows:
+        raise HistoryContextUnavailableError(session_id=snapshot.session_id, thread_id=snapshot.thread_id,
+            model_call_id=anchor_context.model_call_id, anchor=anchor_context.anchor)
     continuation = None
     if rows and rows[-1].truncated:
         last = rows[-1]
@@ -73,6 +82,6 @@ def read_notice_parts(reader: RolloutContextReader, snapshot: RolloutReadSnapsho
             view_id=reader.context_view_id(chain), projection_epoch=snapshot.manifest.projection_epoch,
             history_view_revision=snapshot.manifest.history_view_revision,
             turn_ids=turn_ids, execution_ids=execution_ids, call_upper_bound=last.call_upper_bound,
-            after_call=last.call_order, after_plan=last.plan_ordinal)
+            after_call=last.call_order, after_plan=last.plan_ordinal, anchor_context=anchor_context)
         continuation = base64.urlsafe_b64encode(next_cursor.model_dump_json().encode()).decode().rstrip("=")
     return context_notice_parts(rows, continuation=continuation)

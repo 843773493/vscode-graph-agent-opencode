@@ -2,6 +2,7 @@ import type { APIResponse, CursorPage } from "../types/backend";
 import { gatewayWorkspaceOwner, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "./workspaceIdentity";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
 import { truncateDisplayText } from "../utils/displayText";
+import { boundedFailureText, failureMessage } from "@boxteam/plugin-sdk/failures";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
 export const DEFAULT_BACKEND_PORT = 8014;
@@ -106,8 +107,14 @@ export class HttpRequestError extends Error {
         location = `；错误来源元数据无效: ${cause instanceof Error ? cause.message : String(cause)}`;
       }
     }
-    super(`请求失败 ${status} ${statusText}: ${httpErrorDetailMessage(detail, path)}${location}`
-      + `；请求=${path}${requestId ? `；request_id=${requestId}` : ""}`);
+    const association = requestId ? `；request_id=${boundedFailureText(requestId, { maxBytes: 256 })}` : "";
+    const suffix = boundedFailureText(`${location}；请求=${path}`, {
+      maxBytes: 2048 - new TextEncoder().encode(association).length,
+    }) + association;
+    const prefix = `请求失败 ${status} ${boundedFailureText(statusText, { maxBytes: 128 })}: `;
+    super(prefix + boundedFailureText(httpErrorDetailMessage(detail, path), {
+      maxBytes: Math.max(0, 8192 - new TextEncoder().encode(prefix + suffix).length),
+    }) + suffix);
     this.name = "HttpRequestError";
     this.context = context;
   }
@@ -134,16 +141,31 @@ export function isTransientNetworkError(error: unknown): boolean {
 }
 
 function httpErrorDetailMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
+  if (typeof detail === "string" && detail.trim()) return boundedFailureText(detail);
   if (detail && typeof detail === "object" && "message" in detail) {
     const message = detail.message;
-    if (typeof message === "string" && message.trim()) return message;
+    if (typeof message === "string" && message.trim()) return boundedFailureText(message);
   }
-  if (detail !== undefined && detail !== null) {
-    const serialized = JSON.stringify(detail);
-    if (serialized) return serialized;
+  // FastAPI 的标准校验信封只映射路径、规则与原因，不复制 input/context。
+  if (Array.isArray(detail)) {
+    const messages: string[] = [];
+    let remaining = 8192;
+    for (const issue of detail.slice(0, 32)) {
+      if (!issue || typeof issue !== "object") continue;
+      const { loc, type, msg } = issue as { loc?: unknown; type?: unknown; msg?: unknown };
+      if (typeof msg !== "string") continue;
+      const path = Array.isArray(loc) ? loc.slice(0, 32).map(part =>
+        typeof part === "string" ? boundedFailureText(part, { maxBytes: 128 })
+          : typeof part === "number" ? String(part) : "?",
+      ).join(".") : "";
+      const text = boundedFailureText(`${path}: ${msg}${typeof type === "string" ? ` (${type})` : ""}`, { maxBytes: Math.min(1024, remaining) });
+      messages.push(text);
+      remaining -= new TextEncoder().encode(text).length + 2;
+      if (remaining < 128) break;
+    }
+    if (messages.length) return boundedFailureText(messages.join("; "));
   }
-  return fallback;
+  return boundedFailureText(fallback);
 }
 
 /** 非 JSON 错误响应保留的原始文本片段上限：HTML 错误页可能极长，不能整段带进错误文案。 */
@@ -155,24 +177,52 @@ const ERROR_BODY_SNIPPET_LIMIT = 200;
  * 下用户才能看到真实原因。
  */
 export async function readHttpErrorDetail(response: Response): Promise<unknown> {
-  const raw = await response.text().catch(() => null);
-  if (raw === null) return "响应体不可读取";
+  const reader = response.body?.getReader();
+  if (!reader) return "响应体为空";
+  let raw = "";
+  let json = response.headers.get("Content-Type")?.includes("json") ?? false;
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) { raw += decoder.decode(); break; }
+      if (!json) {
+        const prefix = new TextDecoder().decode(chunk.value);
+        json = /^[\s]*[\[{]/.test(raw + prefix);
+        if (!json) {
+          raw += boundedFailureText(prefix);
+          // HTML／文本只消费摘要，避免把整份错误页读入内存。
+          await reader.cancel();
+          break;
+        }
+      }
+      // JSON detail 仍是原业务合同；摘要预算不截断它或改写原响应。
+      raw += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch (error) {
+    return `响应体不可读取: ${failureMessage(error)}`;
+  } finally {
+    reader.releaseLock();
+  }
   const trimmed = raw.trim();
   if (!trimmed) return "响应体为空";
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
-      ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…`
-      : trimmed;
+    const safe = boundedFailureText(trimmed);
+    const snippet = safe.length > ERROR_BODY_SNIPPET_LIMIT
+      ? `${truncateDisplayText(safe, ERROR_BODY_SNIPPET_LIMIT)}…`
+      : safe;
     return `响应体不是 JSON: ${snippet}`;
   }
   if (parsed && typeof parsed === "object") {
     const envelope = parsed as { detail?: unknown; message?: unknown };
-    return envelope.detail ?? envelope.message;
+    // 保留业务 detail 原结构；顶层公共 Error 的 code/details 也不能在解析时丢失。
+    return envelope.detail ?? parsed;
   }
-  return `响应体不是 JSON 对象: ${trimmed.length > ERROR_BODY_SNIPPET_LIMIT ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…` : trimmed}`;
+  const safe = boundedFailureText(trimmed);
+  return `响应体不是 JSON 对象: ${safe.length > ERROR_BODY_SNIPPET_LIMIT ? `${truncateDisplayText(safe, ERROR_BODY_SNIPPET_LIMIT)}…` : safe}`;
 }
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
@@ -284,7 +334,9 @@ export function getGatewayToken(port: number): Promise<string> {
   })
     .then(async (response) => {
       if (!response.ok) {
-        throw new Error(`获取 Gateway 本地凭据失败: HTTP ${response.status}`);
+        throw new HttpRequestError(response.status, response.statusText,
+          await readHttpErrorDetail(response), path, response.headers.get("X-Request-ID"),
+          response.headers.get("X-BoxTeam-Error-Context"));
       }
       const payload = await awaitWithAbort(
         response.json() as Promise<APIResponse<{ token: string }>>,

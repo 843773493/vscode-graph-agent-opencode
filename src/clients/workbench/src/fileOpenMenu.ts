@@ -2,10 +2,9 @@ import { Action, Separator } from '../upstream/src/vs/base/common/actions.js';
 import { t } from '../../shared/core/i18n/index.js';
 import type { IContextMenuService } from '../upstream/src/vs/platform/contextview/browser/contextView.js';
 import type { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import type { IEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
-import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { GroupDirection, IEditorGroup, IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorGroup, IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { OpenWithEditorPicker } from '../upstream/src/vs/workbench/services/editor/browser/openWithEditorPicker.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import type { ThreadOwner } from './agentApi.js';
@@ -20,12 +19,9 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
   const root = resourceFileRootUri(path);
   if (!root) throw new Error(t('workbench.fileMenu.rootMissing'));
   const resource = workspaceFileUri(owner, path, root);
-  const open = (options: IEditorOptions, direction?: GroupDirection) => {
-    const source = groups.getGroup(group.id);
-    if (!source) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
-    const target = direction === undefined ? source
-      : groups.findGroup({ direction }, source) ?? groups.addGroup(source, direction);
-    return editors.openEditor({ resource, options }, target.id);
+  const open = (options: IEditorOptions, targetGroup = ACTIVE_GROUP) => {
+    if (!groups.getGroup(group.id)) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
+    return editors.openEditor({ resource, options: { ...options, sourceGroup: group.id } }, targetGroup);
   };
   const actions = [
     new Action('boxteam.file.open', t('workbench.fileMenu.open'), '', true,
@@ -33,10 +29,9 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
     new Action('boxteam.file.preview', t('workbench.fileMenu.preview'), '', true,
       () => open({ pinned: false })),
     new Action('boxteam.file.openSide', t('workbench.fileMenu.openSide'), '', true,
-      () => open({ pinned: true }, instantiation.invokeFunction(accessor =>
-        preferredSideBySideGroupDirection(accessor.get(IConfigurationService))))),
+      () => open({ pinned: true }, SIDE_GROUP)),
     new Action('boxteam.file.openBelow', t('workbench.fileMenu.openBelow'), '', true,
-      () => open({ pinned: true }, GroupDirection.DOWN)),
+      () => open({ pinned: true, sideBySideDirection: 'down' }, SIDE_GROUP)),
     new Separator(),
     new Action(COPY_RESOURCE_URI, t('workbench.resource.copyUri'), '', true,
       () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource))),

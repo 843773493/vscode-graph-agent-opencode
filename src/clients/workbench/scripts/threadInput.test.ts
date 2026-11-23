@@ -4,6 +4,8 @@ import { gateway, type ThreadOwner } from '../src/agentApi.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import type { GatewayWorkspace, GatewayWorkspaceList } from '../../web/src/types/backend.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { Verbosity } from '../upstream/src/vs/workbench/common/editor.js';
+import { workspaceContext } from '../src/workspaceContext.js';
 import type { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 
 const owner: ThreadOwner = { gatewayId: 'gateway_00000000000000000000000000000001', workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -21,6 +23,14 @@ const instantiation = undefined as unknown as IInstantiationService;
 describe('Thread 编辑器稳定身份', () => {
   test('改名与工作区键解析不复制标签，不同 Gateway 和精确 child 保持隔离', () => {
     const input = new ThreadInput({ ...owner });
+    const previous = workspaceContext.getSnapshot();
+    try {
+      workspaceContext.publish({ ...previous, workspaces: [workspace] });
+      expect(input.getDescription()).toBe(workspace.name);
+      expect(input.getDescription(Verbosity.LONG)).toBe(workspace.name);
+      expect(input.getTitle(Verbosity.LONG)).toContain(input.resource.toString());
+      expect(input.getTitle(Verbosity.SHORT)).toBe(owner.title);
+    } finally { workspaceContext.publish(previous); }
     expect(input.matches(new ThreadInput({ ...owner, workspaceKey, title: '新名称' }))).toBe(true);
     expect(input.matches(input.toUntyped())).toBe(true);
     expect(input.matches(new ThreadInput({ ...owner, gatewayId: 'gateway_00000000000000000000000000000002' }))).toBe(false);

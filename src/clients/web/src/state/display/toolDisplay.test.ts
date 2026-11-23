@@ -55,10 +55,10 @@ test("exec_command 使用持久终端专用展示", () => {
   const display = deriveToolRowDisplay(item, true);
 
   expect(display.previewText).toBe("命令已完成，终端仍可打开");
-  expect(display.detailsContent).toContain("term_exec_command");
-  expect(display.detailsContent).toContain("终端关闭");
-  expect(display.detailsContent).toContain("/workspace");
-  expect(display.detailsContent).toContain("10000");
+  expect(display.detailsContent?.result).toContain("term_exec_command");
+  expect(display.detailsContent?.result).toContain("终端关闭");
+  expect(display.detailsContent?.result).toContain("/workspace");
+  expect(display.detailsContent?.input).toContain("10000");
 });
 
 test("exec_command 优先使用新协议的参数和结果字段，并识别 exit_code 为 0", () => {
@@ -75,9 +75,9 @@ test("exec_command 优先使用新协议的参数和结果字段，并识别 exi
   const display = deriveToolRowDisplay(item, true);
 
   expect(display.previewText).toBe("命令已完成，终端仍可打开");
-  expect(display.detailsContent).toContain("ls -la");
-  expect(display.detailsContent).toContain("README.md");
-  expect(display.detailsContent).toContain("命令已完成");
+  expect(display.detailsContent?.input).toContain("ls -la");
+  expect(display.detailsContent?.result).toContain("README.md");
+  expect(display.detailsContent?.result).toContain("命令已完成");
 });
 
 test("展开终端工具行时预览和详情共用一次参数与结果解析", () => {
@@ -102,8 +102,8 @@ test("展开终端工具行时预览和详情共用一次参数与结果解析",
   expect(observation.parsedPayloads.filter((payload) => payload === item.inputText)).toHaveLength(1);
   expect(observation.parsedPayloads.filter((payload) => payload === item.resultText)).toHaveLength(1);
   expect(observation.display.previewText).toBe("命令已完成，终端仍可打开");
-  expect(observation.display.detailsContent).toContain("bun run dev");
-  expect(observation.display.detailsContent).toContain("x".repeat(100_000));
+  expect(observation.display.detailsContent?.input).toContain("bun run dev");
+  expect(observation.display.detailsContent?.result).toContain("x".repeat(100_000));
 });
 
 test("后台 exec_command 只返回 session_id 时显示仍在运行", () => {
@@ -118,8 +118,8 @@ test("后台 exec_command 只返回 session_id 时显示仍在运行", () => {
   const display = deriveToolRowDisplay(item, true);
 
   expect(display.previewText).toBe("命令仍在运行，终端可 attach");
-  expect(display.detailsContent).toContain("命令运行中");
-  expect(display.detailsContent).toContain("term_background");
+  expect(display.detailsContent?.result).toContain("命令运行中");
+  expect(display.detailsContent?.result).toContain("term_background");
 });
 
 test("已移除的 filesystem execute 不再属于常规内部工具", () => {
@@ -141,8 +141,8 @@ test("write_stdin 使用模型熟悉的 session_id 展示持续终端", () => {
   const display = deriveToolRowDisplay(item, true);
 
   expect(display.previewText).toBe("已写入，命令仍在运行");
-  expect(display.detailsContent).toContain("term_running");
-  expect(display.detailsContent).toContain("yes");
+  expect(display.detailsContent?.result).toContain("term_running");
+  expect(display.detailsContent?.result).toContain("yes");
 });
 
 test("未知工具结果不使用会误导为成功的折叠文案", () => {

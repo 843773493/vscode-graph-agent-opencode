@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from app.gateway.credentials import FederationCredentialStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.diagnostic_sink import install_failing_diagnostic_sink
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     close_gateway_process,
     reset_gateway_persistent_state,
@@ -51,7 +51,7 @@ async def test_federation_credential_and_log_failures_keep_http_classification_a
     blocked.write_text("日志路径阻塞文件", encoding="utf-8")
     control = runtime / "sink-enabled"
     audit = context.artifacts_dir / "credential-sink-diagnostics.jsonl"
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     evidence = {}
     with ExitStack() as processes:
         gateway = start_gateway_process(
@@ -132,7 +132,7 @@ async def test_local_token_corruption_and_log_failures_keep_http_errors_and_orig
     control = runtime / "local-token-sink-enabled"
     audit = context.artifacts_dir / "local-token-sink-diagnostics.jsonl"
     audit.unlink(missing_ok=True)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     evidence = []
     with ExitStack() as processes:
         gateway = start_gateway_process(

@@ -42,7 +42,7 @@ from tests.support.plugin_package import (
     install_plugin,
     native_plugin_target,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import terminate_process, wait_for_http_ok
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -109,7 +109,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
     application = package / manifest["application_root"]
     python = package / manifest["python_executable"]
     node = package / manifest["node"]["executable"]
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     gateway_port = 8014 if launcher_input else ports.port(21)
     backend_port = 8010 if launcher_input else ports.port(20)
     gateway_url = f"http://127.0.0.1:{gateway_port}"

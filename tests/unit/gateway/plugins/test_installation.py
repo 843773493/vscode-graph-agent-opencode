@@ -278,7 +278,8 @@ async def test_source_zip_identity_is_checked_before_publish_and_url_is_not_pers
         assert result.status == expected_status
         assert "private-query-token" not in (result.error or "")
         if http_status == 403:
-            assert result.error == "插件来源请求失败: HTTP 403"
+            assert result.error is not None and result.error.startswith("插件来源请求失败: HTTP 403:")
+            assert "403 Forbidden" in result.error and "[redacted]" in result.error
         connection = database.connection()
         try:
             row = connection.execute(

@@ -270,8 +270,8 @@ class RolloutMessageProjectionMixin:
         connection.execute(
             "INSERT INTO message_projections(message_sequence, text_preview, visible_text, "
             "visible_text_length, visible_text_truncated, has_reasoning, "
-            "has_encrypted_reasoning, has_tool_calls, phase, projection_version, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            "has_encrypted_reasoning, has_tool_calls, phase, projection_version, updated_at, response_outline_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?, ?)",
             (
                 sequence,
                 visible[:512],
@@ -287,6 +287,7 @@ class RolloutMessageProjectionMixin:
                 if message_type == "ai"
                 else None,
                 timestamp,
+                _json(codec.activity_outline(canonical_items)),
             ),
         )
         for row in reasoning:

@@ -6,7 +6,8 @@ import hashlib
 import json
 import logging
 from dataclasses import replace
-from unittest.mock import Mock
+from pathlib import Path
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from langchain_core.messages import ToolCall, ToolMessage
@@ -16,6 +17,8 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
 from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp import McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
@@ -36,6 +39,22 @@ from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实原生日志写入故障。
 )
 from tests.support.mcp.session_doubles import drain_pending_relists
+
+
+@pytest.fixture
+def management_catalog(catalog_workspace, catalog_runtime):
+    owner, _factory, _registry, _scope = catalog_runtime
+    config_path = catalog_workspace / "workspace.jsonc"
+    config_path.write_text("{}", encoding="utf-8")
+    config = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
+    config.get_snapshot()
+    dependencies = MagicMock()
+    dependencies.get_mcp_catalog_owner.return_value = owner
+    return AgentToolCatalog(
+        config_service=config, dependency_provider=dependencies,
+        background_task_registry=MagicMock(), background_mailbox=MagicMock(),
+        job_event_bus=MagicMock(), workspace_root=catalog_workspace,
+    )
 
 
 async def test_task_search_is_deterministic_cross_origin_and_keeps_hidden_schema(discovery_case):
@@ -277,7 +296,9 @@ async def test_materialization_failure_is_paired_and_never_forges_reference(
     assert message.artifact is None
     assert failure.args == original_args
     diagnostic, = [record for record in caplog.records if record.name == "app.services.infrastructure.mcp.tool_search"]
-    assert diagnostic.exc_info is not None and diagnostic.exc_info[1] is failure
+    assert diagnostic.exc_info is None
+    assert type(failure).__name__ + ":" in diagnostic.getMessage()
+    assert "test_search.py" in diagnostic.getMessage() and "in failed" in diagnostic.getMessage()
     assert str(failure) in caplog.text
     if log_fails:
         sink_error, = diagnostic_sink.errors
@@ -426,14 +447,22 @@ async def test_cursor_fences_query_policy_and_catalog_changes(discovery_case, di
 
 async def test_full_definition_freeze_survives_owner_update_delete_and_cold_saver(
     discovery_case, catalog_runtime, prepare_tool_context, registry_db, discovery_tool_factory,
+    management_catalog,
 ):
     tool, original, _policies, frozen, read = discovery_case
     _owner, factory, registry, _scope = catalog_runtime
     before = await tool.ainvoke({"tool_ids": ["mcp__mini__echo"]})
+    assert "mcp__mini__echo" in {item["id"] for item in management_catalog.list_tool_definitions()[1]}
+    query = {"query": "CI", "limit": 1}
+    cursor = json.loads(await tool.ainvoke(query))["next_cursor"]
+    assert cursor
+    continuation = await tool.ainvoke({**query, "cursor": cursor})
     factory.session.minimum = 10
     factory.session.empty = True
     factory.changed()
     await drain_pending_relists(_owner)
+    assert "mcp__mini__echo" not in {item["id"] for item in management_catalog.list_tool_definitions()[1]}
+    assert await tool.ainvoke({**query, "cursor": cursor}) == continuation
     assert definition_resource_id("mcp__mini__echo") not in {item.resource_id for item in registry.capture().snapshots}
     _wire, same_turn = prepare_tool_context("discovery:same-turn", boundary="turn")
     assert same_turn == frozen

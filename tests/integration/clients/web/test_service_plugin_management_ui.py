@@ -26,10 +26,9 @@ from tests.integration.gateway.test_plugin_install_operations import (
     plugin_source as plugin_source,  # noqa: PLC0414 - 复用真实HTTP来源和同一套目录／制品响应。
 )
 from tests.integration.gateway.test_service_plugins import NODE_PLUGIN, PYTHON_PLUGIN
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import native_plugin_target
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -45,18 +44,11 @@ from tests.support.workspaces import (
 @pytest.fixture
 def plugin_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, probes = E2EProcessLease.acquire_available(
-        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
-        range(ports.port(20), ports.end + 1),
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
     )
-    try:
-        (context.artifacts_dir / "port-allocation.json").write_text(json.dumps({
-            "gateway_port": lease.ports[0], "bind_probes": probes,
-        }, indent=2) + "\n", encoding="utf-8")
-        yield lease.ports[0]
-    finally:
-        lease.release()
+    yield port
 
 
 @pytest.mark.asyncio

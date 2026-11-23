@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,8 +12,7 @@ const runContext = await TestRunContext.fromTestFile(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 ).prepare();
 const projectRoot = runContext.projectRoot;
-const runtimeDirectory = join(runContext.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
+const runtimeDirectory = runContext.runtimeDir;
 for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 const resultPath = join(runContext.artifactsDir, "structured-user-message-attachments-result.json");
 const screenshotPath = join(runContext.artifactsDir, "structured-user-message-attachments-failure.png");

@@ -51,10 +51,13 @@ async def test_provider_failures_publish_facts_and_preserve_original_errors(
     primary, backup = _model(), _model()
     middleware = CapabilityRoutingMiddleware([_candidate("primary", primary), _candidate("backup", backup)])
     locations = ("/private/provider.sqlite", r"C:\private\provider.sqlite", r"\\target\private\provider.sqlite")
-    original = "原始 Provider 故障: " + " | ".join(locations)
-    first = mark_provider_failure(OSError(13, original, locations[0]))
-    final = mark_provider_failure(RuntimeError(original))
+    secret = "unit-routing-credential-589620"
+    original = "Incorrect API key provided: " + secret + "; " + " | ".join(locations)
+    first = OSError(13, original, locations[0])
+    final = RuntimeError(original)
     final.__cause__ = first
+    for error in (first, final):
+        mark_provider_failure(error, secrets=(secret,), diagnostic_logger=logging.getLogger(__name__))
     events: list[tuple[str, dict[str, str]]] = []
     requested: list[BaseChatModel] = []
 
@@ -94,10 +97,13 @@ async def test_provider_failures_publish_facts_and_preserve_original_errors(
         assert payload["provider_id"] == provider and payload["model"] == provider
         assert payload["error_type"] == type(error).__name__
         assert "stage=model-provider" in payload["error"] and "provider_id=" + provider in payload["error"]
-        assert "provider.sqlite" not in json.dumps(payload)
-        assert any(record.name == "app.core.failures" and record.exc_info is not None
-                   and record.exc_info[1] is error for record in caplog.records)
-    assert "errno=13" in events[0][1]["error"] and str(first) in caplog.text
+        assert "Incorrect API key provided" in payload["error"] and "[redacted]" in payload["error"]
+        assert secret not in json.dumps(payload)
+        assert any(record.exc_info is None and type(error).__name__ in record.getMessage() for record in caplog.records)
+    assert "errno=13" in events[0][1]["error"]
+    assert secret not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+    assert str(first) == str(OSError(13, original, locations[0]))
 
 
 def test_provider_capabilities_accept_only_canonical_names() -> None:
@@ -319,7 +325,7 @@ async def test_text_request_falls_back_in_configured_order(monkeypatch: pytest.M
                 "provider_id": "primary",
                 "model": "primary",
                 "error_type": "RuntimeError",
-                "error": "模型候选调用失败: provider_id=primary, model=primary: stage=model-provider, error=RuntimeError",
+                "error": "模型候选调用失败: provider_id=primary, model=primary: stage=model-provider, error=RuntimeError, reason=primary failed",
             },
         )
     ]
@@ -515,7 +521,7 @@ def test_sync_router_falls_back_for_provider_failure_and_preserves_final_error(
         "provider_id": "fallback",
         "model": "fallback",
         "error_type": "RuntimeError",
-        "error": "模型候选调用失败: provider_id=fallback, model=fallback: stage=model-provider, error=RuntimeError",
+        "error": "模型候选调用失败: provider_id=fallback, model=fallback: stage=model-provider, error=RuntimeError, reason=fallback failed",
     }
 
 

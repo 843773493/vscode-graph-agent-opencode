@@ -18,22 +18,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from _thread import RLock
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
+from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
+from boxteam_plugin_sdk.failures import PublicError, bounded_failure_text, public_error
 from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import metadata_for_tool
+from app.core.failures import report_failure
 from app.core.identifier import create_uuid_hex
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
@@ -170,16 +174,12 @@ McpPublicationCallback: TypeAlias = Callable[[McpCatalogPublication], None]
 def _catalog_failure_text(
     error: BaseException, *, server_id: str | None, stage: str,
 ) -> str:
-    """普通出口只发布类型和数值事实，不能复制异常自由正文或路径。"""
-    failures: list[str] = []
-    pending = [error]
-    visited: set[int] = set()
+    """原目录摘要采用公共预算；协议数字事实只沿已选节点映射一次。"""
+    summary = public_error(error, code="mcp_catalog_failed", stage=stage)
+    facts: list[str] = []
+    pending = [(error, summary)]
     while pending:
-        current = pending.pop()
-        if id(current) in visited:
-            continue
-        visited.add(id(current))
-        facts = [type(current).__name__]
+        current, selected = pending.pop()
         if isinstance(current, OSError):
             for name in ("errno", "winerror"):
                 value = getattr(current, name, None)
@@ -189,12 +189,17 @@ def _catalog_failure_text(
             facts.append(f"rpc_code={current.error.code}")
         if isinstance(current, HTTPStatusError):
             facts.append(f"http_status={current.response.status_code}")
-        failures.append(" ".join(facts))
-        if isinstance(current, BaseExceptionGroup):
-            pending.extend(reversed(current.exceptions))
-        if current.__cause__ is not None:
-            pending.append(current.__cause__)
-    return f"MCP 目录失败: server_id={server_id} stage={stage} errors=[{'; '.join(failures)}]"
+        details = selected["details"]
+        cause = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+        if cause is not None and "cause" in details:
+            pending.append((cause, cast(PublicError, details["cause"])))
+        if isinstance(current, BaseExceptionGroup) and "errors" in details:
+            children = cast(list[PublicError], details["errors"])
+            pending.extend(zip(islice(current.exceptions, len(children)), children))
+    return bounded_failure_text(
+        f"MCP 目录失败: server_id={server_id} stage={stage} {' '.join(facts)} "
+        + json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def _compute_catalog_revision(
@@ -365,7 +370,7 @@ class McpCatalogOwner:
                             candidate_descriptors={},
                         )
         except (Exception, asyncio.CancelledError) as error:
-            logger.exception("MCP Server 启动或工具目录发现失败: server_id=%s", failed_server_id)
+            report_failure(error, detail=f"MCP Server 启动或工具目录发现失败: server_id={failed_server_id}", diagnostic_logger=logger)
             failure: BaseException = error
             try:
                 await session_scope.close()
@@ -418,8 +423,8 @@ class McpCatalogOwner:
         if self._session_scope is not None:
             try:
                 await self._session_scope.close()
-            except Exception as error:
-                logger.exception("MCP 生命周期或 publication callback 失败")
+            except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                report_failure(error, detail="MCP 生命周期或 publication callback 失败", diagnostic_logger=logger)
                 errors.append(error)
             else:
                 self._retirement.clear_closed()
@@ -637,7 +642,7 @@ class McpCatalogOwner:
                     key, remote_tools, connection_ref=self._connection_ref(runtime), foreign_tool_ids=unchanged_ids | tools.keys(),
                 )
             except Exception as error:
-                logger.exception("MCP 配置候选连接准备失败: server_id=%s", key)
+                report_failure(error, detail=f"MCP 配置候选连接准备失败: server_id={key}", diagnostic_logger=logger)
                 raise McpCatalogError(_catalog_failure_text(error, server_id=key, stage="configuration")) from error
             tools.update(server_tools)
 
@@ -999,7 +1004,7 @@ class McpCatalogOwner:
     # ------------------------------------------------------------------
 
     def _handle_session_failure(self, runtime: McpServerRuntime, error: BaseException) -> None:
-        logger.error("MCP session 生命周期异常: server_id=%s", runtime.server.server_id, exc_info=error)
+        report_failure(error, detail=f"MCP session 生命周期异常: server_id={runtime.server.server_id}", diagnostic_logger=logger)
         with self._publication_lock:
             if self._runtimes.get(runtime.server.server_id) is not runtime:
                 return
@@ -1131,7 +1136,7 @@ class McpCatalogOwner:
                             raise ExceptionGroup(
                                 "MCP relist 与失效广播失败", [error, invalidation_error]
                             ) from error
-                logger.exception("MCP relist 失败，保留旧 valid 目录: servers=%s source=%s", server_ids, source)
+                report_failure(error, detail=f"MCP relist 失败，保留旧 valid 目录: servers={server_ids} source={source}", diagnostic_logger=logger)
                 if source == "notification":
                     return
                 raise McpCatalogRelistError(error_text) from error
@@ -1166,8 +1171,8 @@ class McpCatalogOwner:
         for callback in tuple(self._publication_subscribers.values()):
             try:
                 callback(publication)
-            except Exception as error:
-                logger.exception("MCP 生命周期或 publication callback 失败")
+            except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                report_failure(error, detail="MCP 生命周期或 publication callback 失败", diagnostic_logger=logger)
                 errors.append(error)
         return errors
 

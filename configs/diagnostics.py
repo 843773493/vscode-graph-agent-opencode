@@ -15,7 +15,11 @@ from app.core.distribution_identity import load_distribution_id
 from app.core.user_identity import user_scope_id
 from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.config.source_uri import config_file_uri
-from configs.runtime import merge_json_objects, validate_config
+from configs.runtime import (
+    merge_json_objects,
+    read_jsonc_object,
+    validate_config_payload,
+)
 
 _REDACTED_JSON_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -204,11 +208,12 @@ def _jsonc_domain_diagnostic(
         return result
     try:
         effective: dict[str, object] = {}
+        schema = read_jsonc_object(schema_path)
         for payload in parsed_layers:
-            effective = merge_json_objects(effective, payload)
-        validated = validate_config(
+            effective = merge_json_objects(effective, payload, schema=schema)
+        validated = validate_config_payload(
             effective,
-            schema_path=schema_path,
+            schema=schema,
         )
         canonical = json.dumps(
             validated,

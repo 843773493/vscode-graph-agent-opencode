@@ -119,13 +119,20 @@ async function assertRestored(thread, saved) {
   await expect(thread.getByRole("button", { name: "切换会话资源", exact: true })).toHaveAttribute("aria-expanded", "true");
   await expect(thread.getByRole("tab", { name: "更改", exact: true })).toHaveAttribute("aria-selected", "true");
   const scroller = thread.locator(".chat-virtual-list");
-  const anchor = thread.locator(`article.chat-turn[data-turn-id="${saved.turn_anchor}"]`);
-  await expect(anchor).toBeVisible();
-  await waitUntil(async () => {
-    const viewport = await scroller.boundingBox();
-    const item = await anchor.boundingBox();
-    return viewport && item && Math.abs(viewport.y - item.y - saved.scroll_offset) < 5;
-  }, "真实滚动锚点恢复");
+  assert.equal(saved.projection_version, 2);
+  assert.ok(saved.reading_anchor?.node_key);
+  await waitUntil(() => scroller.evaluate((element, anchor) => {
+    const node = [...element.querySelectorAll('[data-transcript-node]')]
+      .find(node => node.dataset.transcriptNode === JSON.stringify(anchor.node_key));
+    if (!node || !node.getBoundingClientRect().height) return false;
+    const blocks = [...node.querySelectorAll('p, pre, li, blockquote, h1, h2, h3, h4, table, img')]
+      .filter(block => block.closest('[data-transcript-node]') === node
+        && !block.parentElement?.closest('p, pre, li, blockquote, h1, h2, h3, h4, table, img')?.closest('[data-transcript-node]')?.isSameNode(node));
+    const target = blocks[anchor.content_position.block] ?? node;
+    const box=target.getBoundingClientRect(), viewport=element.getBoundingClientRect();
+    const point=box.top+Math.min(anchor.content_position.offset_px,box.height);
+    return Math.abs(point-viewport.top-anchor.viewport_offset_px)<5;
+  }, saved.reading_anchor), "真实展示节点和节点内位置恢复");
 }
 
 /** 只暂停真实请求；新页面没有旧 JS 内存，先显内容只能来自浏览器持久缓存。 */
@@ -241,7 +248,7 @@ try {
   let saved;
   await waitUntil(async () => {
     saved = await readView(pageA, gatewayId);
-    return saved?.follow_latest === false && saved.turn_anchor !== null;
+    return saved?.follow_latest === false && saved.reading_anchor?.node_key !== undefined;
   }, "浏览器持久化滚动位置");
   assert.equal(saved.gateway_id, gatewayId);
   assert.equal(saved.workspace_id, workspaceId);

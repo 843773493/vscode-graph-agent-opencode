@@ -1,3 +1,4 @@
+import { nodeKey, nodeAttributes } from "../../../state/timeline/transcriptNodes";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { AttachmentRef, DeliveryPolicy } from "../../../types/backend";
@@ -131,6 +132,7 @@ export function ChatTurnUserSection({
     <div className={`chat-user-row${actions.isInternalDisplayMessage ? " is-internal" : ""}`}>
       <div
         className={`chat-user-bubble${actions.editing ? " is-editing" : ""}${actions.isInternalDisplayMessage ? " is-internal" : ""}${canInspectRawMessage ? " is-inspectable" : ""}`}
+        {...nodeAttributes(nodeKey({kind:"turn",id:conversation.turnId ?? conversation.conversationId},"user"))}
         role="group"
         aria-label={canInspectRawMessage ? rawMessageAriaLabel : t("chat.itemMenu.user")}
         data-chat-item-id={typeof userMessage.metadata?.last_item_message_id === "string" ? userMessage.metadata.last_item_message_id : userMessageId}

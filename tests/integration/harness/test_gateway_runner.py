@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
@@ -135,7 +135,7 @@ def runner_process(request: pytest.FixtureRequest) -> Iterator[RunnerProcess]:
     mode, control = parameter if isinstance(parameter, tuple) else (parameter, "signal")
     source = _APP_SOURCE.replace("ARTIFACTS_PATH", repr(str(artifacts))).replace("FAILURE_MODE", repr(mode))
     (workspace / "runner_fixture.py").write_text(source, encoding="utf-8")
-    port = integration_port_block_for_file(Path(__file__).resolve()).port(1)
+    port = integration_ports_for_file(Path(__file__).resolve()).port(1)
     ensure_local_port_available(port, service_name="Gateway runner隔离进程")
     command = [
         sys.executable, "-m", "app.runtime.http_server", "runner_fixture:app",

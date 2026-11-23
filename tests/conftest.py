@@ -27,7 +27,16 @@ pytest_plugins = [
     "tests.harness.performance.plugin",
     "tests.harness.python.integration_gate",
     "tests.harness.python.web_workbench",
+    "tests.harness.python.artifacts",
 ]
+
+
+@pytest.fixture(scope="session")
+def workspace_config_schema() -> dict[str, object]:
+    """配置与模型解析用例消费同一正式 schema，不复制合并规则。"""
+    from configs.runtime import read_jsonc_object
+
+    return read_jsonc_object(Path.cwd() / "configs/workspace_schema.jsonc")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -68,9 +77,9 @@ def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator
 
     from tests.harness.python.terminal_plugin import build_developer_tools_package
 
-    context = TestRunContext.from_test_file(Path(request.session.items[0].path)).prepare()
+    context = TestRunContext.from_test_file(Path("tests/conftest.py")).prepare()
     artifacts_dir = context.run_root / "artifacts" / "prepared-developer-tools"
-    runtime_dir = context.run_root / "runtime" / "prepared-developer-tools"
+    runtime_dir = context.runtime_root_for_node("prepared-developer-tools")
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     archive = artifacts_dir / "developer-tools.zip"
@@ -99,7 +108,7 @@ TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.json
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: Sequence[pytest.Item]) -> None:
-    """按测试所在目录分类；文件级共享服务只在所属层内分组。"""
+    """目录表达验证目标；模型模式不改变层级，文件级共享服务在所属层内分组。"""
     if config.getoption("keep_docker_runtime", default=False) and len(items) != 1:
         raise pytest.UsageError(
             "--keep-docker-runtime 只能配合一个已收集的测试使用，避免遗留大量端口进程"
@@ -226,11 +235,29 @@ def test_process_lifetime(test_module_process_lifetime: None) -> Iterator[None]:
         yield
 
 
-@pytest.fixture(scope="module", autouse=True)
-def test_module_process_lifetime() -> Iterator[None]:
-    """模块装具在函数装具之前启动，同样需要覆盖取消和准备失败。"""
-    with capture_test_processes():
+@pytest.fixture(scope="session")
+def test_session_port_lifetime() -> Iterator[None]:
+    from tests.support.ports import release_all_ports
+
+    try:
         yield
+    finally:
+        release_all_ports()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def test_module_process_lifetime(
+    request: pytest.FixtureRequest, test_session_port_lifetime: None,
+) -> Iterator[None]:
+    """模块装具的服务先退出，再归还端口；准备失败或中断也走同一清理。"""
+    from tests.support.ports import release_ports_for_file
+
+    del test_session_port_lifetime
+    try:
+        with capture_test_processes():
+            yield
+    finally:
+        release_ports_for_file(Path(request.node.path))
 
 
 @pytest.fixture(autouse=True)
@@ -320,7 +347,7 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
 def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
     """会话独占 manifest，不参与并发重写或 pytest basetemp 的跨会话清理。"""
     context = TestRunContext.from_test_file(Path("tests/conftest.py"))
-    manifest = context.run_root / "runtime" / f"runtime-manifest-{uuid4().hex}.json"
+    manifest = context.runtime_root_for_node("runtime-manifest") / f"runtime-manifest-{uuid4().hex}.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         json.dumps(

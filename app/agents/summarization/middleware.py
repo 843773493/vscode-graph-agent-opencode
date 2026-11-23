@@ -89,7 +89,6 @@ from app.services.mapping.itemized.canonical_langchain import (
 )
 from app.services.orchestration.message_stream.activities import (
     ActivityRuntime,
-    activity_failure_message,
     current_activity_runtime,
 )
 
@@ -682,12 +681,12 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
                 )
             )
         except Exception as error:
-            failure_detail(error, stage="context.compaction", label=f"上下文压缩活动失败: activity_id={activity_id}")
+            summary = failure_detail(error, stage="context.compaction", label=f"上下文压缩活动失败: activity_id={activity_id}")
             await activity_runtime.failed(
                 activity_id=activity_id,
                 kind="context.compaction",
                 outcome="outcome_unknown",
-                summary=activity_failure_message(error, phase="context.compaction"),
+                summary=summary,
                 detail={"phase": "failed"},
             )
             raise

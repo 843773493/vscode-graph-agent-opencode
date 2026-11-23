@@ -7,8 +7,8 @@ import sqlite3
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from app.core.sqlite_state import utc_now_text
 from app.core.identifier import create_prefixed_id
+from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
@@ -32,6 +32,15 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text,
+)
+
+# 用户输入先于内部完成通知，后台任务最后；沿用原冻结输入，不新增优先级账本。
+# 负位置只由显式继续分配，保证恢复原执行先于保留输入。活动执行始终不被抢占。
+_QUEUE_ORDER = (
+    "CASE phase WHEN 'queued' THEN 1 ELSE 0 END,"
+    "CASE WHEN queue_position<0 THEN -1 WHEN priority=1 THEN 2 "
+    "WHEN json_type(input_json,'$.execution_binding.turn_id')='text' THEN 0 ELSE 1 END,"
+    "queue_position,admission_commit_id"
 )
 
 if TYPE_CHECKING:
@@ -202,7 +211,7 @@ class RolloutExecutionQueueMixin:
                     raise RuntimeError("执行队列 revision 缺失")
                 ids = connection.execute(
                     "SELECT job_id FROM execution_queue WHERE checkpoint_ns=? AND phase<>'terminal' "
-                    "ORDER BY CASE phase WHEN 'queued' THEN 1 ELSE 0 END,priority,queue_position,admission_commit_id",
+                    f"ORDER BY {_QUEUE_ORDER}",
                     (checkpoint_ns,),
                 ).fetchall()
                 records = tuple(self._execution_queue_record(connection, session_id, thread_id, checkpoint_ns, row[0]) for row in ids)
@@ -249,7 +258,7 @@ class RolloutExecutionQueueMixin:
             if continuation_job_id is not None:
                 # 恢复原任务先于旧排队输入；不改原接受身份和其余项的相对顺序。
                 changed = connection.execute(
-                    "UPDATE execution_queue SET queue_position=(SELECT COALESCE(MIN(queue_position),1)-1 "
+                    "UPDATE execution_queue SET queue_position=(SELECT MIN(COALESCE(MIN(queue_position),0),0)-1 "
                     "FROM execution_queue WHERE checkpoint_ns='' AND phase='queued' AND priority=0) "
                     "WHERE checkpoint_ns='' AND job_id=? AND phase='queued' AND priority=0",
                     (continuation_job_id,),
@@ -332,7 +341,7 @@ class RolloutExecutionQueueMixin:
                 raise RuntimeError(f"执行领取 generation 冲突: job_id={job_id}")
             head = connection.execute(
                 "SELECT job_id FROM execution_queue WHERE checkpoint_ns=? AND phase<>'terminal' "
-                "ORDER BY CASE phase WHEN 'queued' THEN 1 ELSE 0 END,priority,queue_position,admission_commit_id LIMIT 1", (checkpoint_ns,),
+                f"ORDER BY {_QUEUE_ORDER} LIMIT 1", (checkpoint_ns,),
             ).fetchone()
             if head != (job_id,):
                 raise QueueOrderConflictError(f"调度队首已变化: job_id={job_id}")

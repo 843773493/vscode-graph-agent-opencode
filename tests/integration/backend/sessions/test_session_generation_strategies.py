@@ -22,7 +22,7 @@ from tests.support.api_helpers import create_session, with_message_run_operation
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -34,7 +34,7 @@ from tests.support.session_navigation.http_operations import submit_navigation_o
 @pytest.fixture(scope="module")
 def generation_replay(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
     context = TestRunContext.from_test_file(Path(request.node.path))
-    with model_stream_replay(context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="session-generation") as replay:
+    with model_stream_replay(context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="session-generation") as replay:
         yield replay
 
 
@@ -45,7 +45,7 @@ def generation_backend(
     integration_workspace_config_path: str,
     generation_replay: ModelStreamReplay,
 ) -> Generator[tuple[str, Path], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
@@ -68,7 +68,7 @@ def generation_backend(
         port=port_block.port(0),
         asgi_app="tests.support.e2e_control.gateway_app:app",
         extra_env={**generation_replay.environment, "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key"},
-        artifacts_dir=workspace_root.parent / "artifacts/gateway",
+        artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).run_root / "artifacts/gateway",
     )
     try:
         yield f"http://127.0.0.1:{gateway.port}", workspace_root
@@ -109,7 +109,7 @@ async def _plan_reply(client: httpx.AsyncClient, replay: ModelStreamReplay, sess
     main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
     assert main.status_code == 200, main.text
     thread_id = main.json()["data"]["thread_id"]
-    ports = integration_port_block_for_file(Path(__file__))
+    ports = integration_ports_for_file(Path(__file__))
     cassette = build_cassette(
         asset_id="session-generation", model="e2e-stub-model",
         url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
@@ -702,7 +702,9 @@ async def _fork_report_flow(
             break
         assert candidate["status"] in {"queued", "reporting"}, candidate
         await asyncio.sleep(0.1)
-    (generation_backend[1].parent / "artifacts" / f"{operation_key}-completion.json").write_text(json.dumps({
+    artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / f"{operation_key}-completion.json").write_text(json.dumps({
         "task_id": task["task_id"], "run_id": accepted["run_id"],
         "source_session_id": target_session_id, "generated_session_id": generated_session_id,
         "report_attempts": report_attempts, "elapsed_seconds": loop.time() - report_started, "statuses": statuses,

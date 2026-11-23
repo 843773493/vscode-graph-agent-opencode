@@ -12,7 +12,6 @@ import pytest
 
 from app.core import identifier
 from app.core.mounted_workspaces import MountedWorkspace
-from app.runtime.litellm_runtime import load_litellm
 from app.runtime.model_stream import (
     ModelStreamTransportController,
     configure_model_stream_from_environment,
@@ -22,7 +21,7 @@ from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import output_root_for_test
 from tests.support.plugin_package import native_plugin_target
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.processes.workspace import (
     close_backend_process,
@@ -52,9 +51,6 @@ async def inprocess_model_replay(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[ModelStreamReplay, ModelStreamTransportController]]:
     """普通进程内业务共用精确身份回放；HTTP/SDK专项仍由其网络装具负责。"""
-    litellm = load_litellm()
-    from litellm.caching.llm_caching_handler import LLMClientCache
-
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
@@ -62,9 +58,6 @@ async def inprocess_model_replay(
     ) as replay, monkeypatch.context() as replay_patch:
         for key, value in replay.environment.items():
             replay_patch.setenv(key, value)
-        # SDK 缓存按 loop ID 分区，pytest 会复用该 ID；每个回放 owner 独占缓存，
-        # 防止下一场景重用包装了已关闭 HTTP client 的 SDK。退出后恢复原缓存。
-        replay_patch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
         replay_patch.setattr(identifier, "_identifier_factory", identifier._identifier_factory)
         identifier.bind_identifier_factory(ControlledIdentifiers(
             json.loads(replay.environment["BOXTEAM_E2E_TEST_CONTROL"]),
@@ -110,7 +103,7 @@ def integration_is_debug() -> bool:
 def prepared_mcp_stdio_package() -> Path:
     """普通 MCP 集成用例共享一次完整的、不可变的本机目标包。"""
     project_root = Path.cwd().resolve()
-    context = TestRunContext.from_test_file(Path("tests/integration/conftest.py"))
+    context = TestRunContext.from_test_file(Path("tests/integration/conftest.py")).prepare()
     output = context.run_root / "runtime" / "mcp-stdio.zip"
     output.parent.mkdir(parents=True, exist_ok=True)
     python = str(resolve_workspace_python_executable(project_root))
@@ -185,8 +178,13 @@ def integration_workspace_config_path(
 
 
 @pytest.fixture(scope="module")
-def integration_backend_port(request: pytest.FixtureRequest) -> int:
-    return integration_port_block_for_file(Path(request.node.fspath)).backend_port
+def integration_service_ports(request: pytest.FixtureRequest) -> TestFilePorts:
+    return integration_ports_for_file(Path(request.node.fspath))
+
+
+@pytest.fixture(scope="module")
+def integration_backend_port(integration_service_ports: TestFilePorts) -> int:
+    return integration_service_ports.port(0)
 
 
 @pytest.fixture(scope="module")

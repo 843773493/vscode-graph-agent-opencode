@@ -211,3 +211,13 @@ __all__ = [
     "internal_execution_request_preimage",
     "user_turn_admission_payload_hash",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionTerminalResult:
+    """原 convergence 提交的只读结果；commit_id 也是消息镜像的稳定身份。"""
+
+    commit_id: int
+    outcome: str
+    failure: dict[str, object] | None = None
+    after_interrupt_requested: bool = False

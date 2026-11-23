@@ -138,6 +138,8 @@ export interface MessageStreamState {
   turnId: string;
   turnStreamId: string;
   lastEventSeq: number;
+  terminalCommitId?: number | null;
+  terminalOutcome?: string | null;
   streamStatus: "open" | "interrupting" | "completed" | "interrupted" | "failed";
   agentLoopStatus: string;
   currentModelCallId: string | null;
@@ -154,6 +156,7 @@ export interface MessageStreamState {
   failure: {
     code: string;
     message: string;
+    details?: Record<string, unknown>;
     afterInterruptRequested: boolean;
     resumable: boolean;
   } | null;

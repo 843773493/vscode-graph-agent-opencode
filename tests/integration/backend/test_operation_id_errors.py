@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -23,7 +23,7 @@ from tests.support.processes.workspace import (
 @pytest.fixture
 async def operation_client(request: pytest.FixtureRequest, integration_workspace_root_path: str):
     workspace = Path(integration_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     backend = start_backend_process(workspace_root=str(workspace), port=port, log_name="operation-id-backend")
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=30, headers={

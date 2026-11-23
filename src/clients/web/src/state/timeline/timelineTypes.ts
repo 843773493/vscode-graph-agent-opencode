@@ -1,7 +1,7 @@
 import type { AttachmentRef, Message, TurnResponsePart } from "../../types/backend";
 
 export type TimelineItem = {
-  responseSources?: Array<{ part_id: string; kind: string; source: TurnResponsePart["source"] }>;
+  responseSources?: Array<{ part_id: string; kind: string; source: TurnResponsePart["source"]; projection?: TurnResponsePart["projection"]; tool_call_id?: string | null }>;
 } & (
   | { kind: "context_event"; id: string; notices: TurnResponsePart[] }
   | {

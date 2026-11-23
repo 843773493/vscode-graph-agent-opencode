@@ -196,7 +196,14 @@ async function main() {
             error.statusCode = 400;
             throw error;
           }
-          await manager.syncOwnerRevision(terminalId, payload.owner_revision);
+          const retained = payload.retained_associations ?? [];
+          if (!Array.isArray(retained) || retained.some(value => value !== null && typeof value !== "string")
+            || (payload.for_stop && retained.length)) {
+            const error = new Error("Terminal保留连接必须是owner确认的关联，停止时不得保留连接");
+            error.statusCode = 400;
+            throw error;
+          }
+          await manager.syncOwnerRevision(terminalId, payload.owner_revision, retained);
           sendJson(response, 200, { data: manager.get(terminalId).snapshot() });
           return;
         }
@@ -405,10 +412,12 @@ async function main() {
       messageQueue = messageQueue
         .then(() => processMessage(raw))
         .catch((error) => {
-        client.sendJson({
-          type: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
+          client.sendJson({
+            type: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          // 握手失败必须结束连接，让页面重新向owner核验并取得新票据。
+          if (!attachedTerminal) client.close(4008, "terminal attach failed");
         });
     });
 

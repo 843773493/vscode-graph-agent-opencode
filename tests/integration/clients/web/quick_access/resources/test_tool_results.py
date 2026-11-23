@@ -24,7 +24,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -58,7 +58,7 @@ async def test_real_child_tool_result_quick_access_locates_original_tool_row(
     )
     assert chromium, "工具结果 Quick Access 页面验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace,

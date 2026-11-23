@@ -1,8 +1,11 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
-from app.runtime.agent_runtime import assemble_agent
+from app.runtime.agent_runtime import assemble_agent, prepare_agent_model
 
 
 def test_assemble_agent_injects_job_service() -> None:
@@ -64,3 +67,52 @@ def test_assemble_agent_injects_job_service() -> None:
         is visibility_overrides
     )
     assert create_runtime.call_args.kwargs["workspace_root"] == Path("/workspace")
+
+
+@pytest.mark.asyncio
+async def test_thread_lifetime_closes_all_candidate_model_pools() -> None:
+    """真实模型工厂与 SDK 池归现有 scope，包含尚未被路由选中的回退模型。"""
+    config_service = MagicMock()
+    config_service.get_revision.return_value = "config:lifetime"
+    config_service.get_agent_runtime_config.return_value = {
+        "system_prompt": "test", "runtime_identity_description": "test",
+        "models": [{
+            "provider_id": "test", "model_id": name, "model": "test-model",
+            "endpoint": "http://model.invalid/v1", "api_key": "test-key", "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "model_info": {}, "supports_reasoning": {}},
+        } for name in ("primary", "fallback")],
+    }
+    scope = LifetimeScope("thread-models")
+    setup = prepare_agent_model("default", config_service, lifetime_scope=scope)
+    pools = []
+    try:
+        for candidate in setup.routing_middleware._candidates:
+            pools.append(candidate.model._provider_http_client(is_async=True)._client)
+            pools.append(candidate.model._provider_http_client(is_async=False)._client)
+        assert all(not pool.is_closed for pool in pools)
+    finally:
+        await scope.close()
+    assert all(pool.is_closed for pool in pools)
+
+
+async def test_candidate_binding_failure_keeps_created_model_in_scope(monkeypatch) -> None:
+    config = MagicMock()
+    config.get_agent_runtime_config.return_value = {
+        "models": [{"provider_id": "test", "model_id": "primary"}],
+    }
+    model = MagicMock(aclose=AsyncMock())
+    failure = ValueError("候选能力解析失败")
+
+    def fail_candidate(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", lambda *_a, **_k: model)
+    monkeypatch.setattr("app.agents.model_capability_routing.build_provider_model_candidate", fail_candidate)
+    scope = LifetimeScope("candidate-binding-failure")
+    try:
+        with pytest.raises(ValueError) as observed:
+            prepare_agent_model("default", config, lifetime_scope=scope)
+        assert observed.value is failure
+    finally:
+        await scope.close()
+    model.aclose.assert_awaited_once()

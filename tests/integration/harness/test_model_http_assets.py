@@ -12,18 +12,19 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 
 from app.testing.model_stream import get_protocol_codec, load_cassette
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.stubs.http_stubs import (
     HTTPStubState,
     openai_chat_stub,
     openai_chat_tool_loop_stub,
 )
 from tests.support.http_server import running_http_server
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture(params=["text", "tool"])
 def chat_http_stub(request: pytest.FixtureRequest) -> Iterator[tuple[str, HTTPStubState]]:
-    port = integration_port_block_for_file(Path(request.node.path)).port(20)
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
     factory = openai_chat_stub if request.param == "text" else openai_chat_tool_loop_stub
     with factory(port) as state:
         yield f"http://127.0.0.1:{port}/v1", state
@@ -71,7 +72,7 @@ async def test_http_chat_assets_preserve_sdk_text_tools_and_terminal(
 def test_http_chat_json_failure_and_authorization_share_scenario_asset(
     request: pytest.FixtureRequest,
 ) -> None:
-    port = integration_port_block_for_file(Path(request.node.path)).port(21)
+    port = integration_ports_for_file(Path(request.node.path)).port(21)
     reply = {"content": "JSON 正文 Ω", "finish_reason": "length"}
     with openai_chat_stub(port, failure_marker="reject-this-request") as state:
         state.response_callback = lambda _request: reply
@@ -99,7 +100,8 @@ def model_protocol(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
-def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
+def model_replay(request: pytest.FixtureRequest, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
+    context = TestRunContext.from_test_file(Path(request.node.path))
     requests: list[dict[str, object]] = []
     protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
     fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
@@ -127,8 +129,8 @@ def model_replay(integration_workspace_root_path: str, model_protocol: str) -> I
         with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
             yield f"http://127.0.0.1:{server.server_port}/v1", requests
     finally:
-        output = Path(integration_workspace_root_path).parent / "artifacts"
-        output.mkdir(exist_ok=True)
+        output = context.run_root / "artifacts" / model_protocol
+        output.mkdir(parents=True, exist_ok=True)
         (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
 
 

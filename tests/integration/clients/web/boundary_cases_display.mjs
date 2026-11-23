@@ -20,7 +20,7 @@ const CASES = [
     sessionId: "ses_019bed0e9f8f7b27a213abe862c0b31a",
     turnId: "boundary-turn-0002",
     apiStatus: "cancelled",
-    finalText: "我准备读取配置文件。",
+    processText: "我准备读取配置文件。",
     statusText: "已由用户中断",
     forbiddenTexts: ["工具执行结果未知", "后端未返回结果，无法确认是否成功"],
     expandedTexts: ["read_file 调用未完成"],
@@ -30,8 +30,8 @@ const CASES = [
     sessionId: "ses_019bc1148cec71b78b1aaa3b19b60363",
     turnId: "boundary-turn-0003",
     apiStatus: "failed",
-    finalText: "我已经启动大输出工具，正在等待结果。",
-    statusText: "工具执行结果未知",
+    processText: "我已经启动大输出工具，正在等待结果。",
+    statusText: "本轮执行失败",
     expandedTexts: ["large_test_output 结果未知", "未确认返回结果"],
   },
   {
@@ -39,7 +39,7 @@ const CASES = [
     sessionId: "ses_019c5123cafb789e8fdf8704f6464f74",
     turnId: "boundary-turn-0004",
     apiStatus: "cancelled",
-    finalText: "我已经开始分析这个问题，但回答在这里被用户中断……",
+    processText: "我已经开始分析这个问题，但回答在这里被用户中断……",
     statusText: "已由用户中断",
     forbiddenTexts: ["生成已中断", "重试失败轮次"],
   },
@@ -57,7 +57,8 @@ const CASES = [
     turnId: "boundary-turn-0006",
     apiStatus: "completed",
     finalText: "两个工具都已返回，结果已合并到最终答复。",
-    expandedTexts: ["read_file", "search_files"],
+    expandedTexts: ["read_file", "search_files", "README ok", '"matches": 3'],
+    expectedToolRows: 4,
   },
 ];
 
@@ -153,7 +154,7 @@ async function loadBoundaryCase(page, item) {
   const turn = thread.locator(`.chat-turn[data-turn-id="${item.turnId}"]`);
   await turn.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
-    async () => (await turn.innerText()).includes(item.finalText),
+    async () => item.finalText ? (await turn.innerText()).includes(item.finalText) : turn.locator(".chat-turn-activity > .chat-thinking-toggle").isVisible(),
     `${item.name} 正文`,
   );
   const collapsedText = await turn.innerText();
@@ -171,22 +172,36 @@ async function loadBoundaryCase(page, item) {
     }
   }
 
+  if (item.processText && collapsedText.includes(item.processText)) throw new Error(`${item.name} 折叠时泄漏过程正文`);
   let expandedText = collapsedText;
-  if (item.expandedTexts?.length) {
-    await turn.getByRole("button", { name: /^展开 Turn 中间消息/ }).click();
+  if (item.expandedTexts?.length || item.processText) {
+    await turn.locator(".chat-turn-activity > .chat-thinking-toggle").click();
+    if (item.expandedTexts?.length) await expect(turn.locator(".chat-activity-group").first()).toBeVisible();
+    for (const group of await turn.locator('.chat-activity-group > button').all()) {
+      if (await group.getAttribute('aria-expanded') === 'false') await group.click();
+    }
+    for (const tool of await turn.locator('.chat-tool-summary').all()) {
+      if (await tool.getAttribute('aria-expanded') === 'false') await tool.click();
+    }
     await waitUntil(
       async () => {
         const text = await turn.innerText();
-        return item.expandedTexts.every((expected) => text.includes(expected));
+        return [...item.expandedTexts ?? [], ...item.processText ? [item.processText] : []].every(expected => text.includes(expected));
       },
       `${item.name} 中间消息`,
     );
+    await expect(turn.locator('.chat-tool-summary[aria-busy="true"]')).toHaveCount(0);
+    if (item.apiStatus === 'completed') {
+      await expect(turn.locator('.chat-tool-row.is-failed, .chat-tool-row.is-unknown')).toHaveCount(0);
+    }
+    if (item.expectedToolRows) await expect(turn.locator('.chat-tool-row')).toHaveCount(item.expectedToolRows);
     expandedText = await turn.innerText();
   }
   return {
     name: item.name,
     apiStatus: historyItem.status,
-    finalTextVisible: collapsedText.includes(item.finalText),
+    finalTextVisible: item.finalText ? collapsedText.includes(item.finalText) : true,
+    processTextInsideDisclosure: item.processText ? !collapsedText.includes(item.processText) && expandedText.includes(item.processText) : true,
     statusVisible: item.statusText ? collapsedText.includes(item.statusText) : true,
     forbiddenTextsAbsent: (item.forbiddenTexts ?? []).every((text) => !collapsedText.includes(text)),
     expandedTextsVisible: (item.expandedTexts ?? []).every((text) => expandedText.includes(text)),

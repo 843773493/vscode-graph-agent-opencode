@@ -31,7 +31,7 @@ from tests.unit.agents.tools.test_debugging_tools import (
 @pytest.fixture(params=["missing", "permission", "rename", "business", "timeout", "sqlite"])
 def failure_case(request: pytest.FixtureRequest, sqlite_failure: sqlite3.OperationalError) -> tuple[Exception, str, str]:
     if request.param == "sqlite":
-        return sqlite_failure, "DEBUG_TOOL_FAILED", "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+        return sqlite_failure, "DEBUG_TOOL_FAILED", "执行数据库失败: error=OperationalError, sqlite_errorcode=14, reason=" + str(sqlite_failure)
     location = "/private/debug-tool-secret"
     if request.param == "missing":
         return (
@@ -129,10 +129,12 @@ async def test_debug_tool_failure_keeps_action_and_result_consistent(
         message=message,
     )
     assert ("debug-tool-secret" in result["error"]["message"]) == (isinstance(original, OSError) and original.filename is not None)
-    assert "diagnostic-log-secret" not in json.dumps(result) and "sqlite-execution-private" not in json.dumps(result)
-    assert any(
-        record.exc_info and record.exc_info[1] is original for record in caplog.records
-    )
+    assert "diagnostic-log-secret" not in json.dumps(result)
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert type(original).__name__ + ":" in diagnostic.getMessage()
+    assert "app/agents/tools/debugging/factory.py" in diagnostic.getMessage()
+    assert str(original) in diagnostic.getMessage()
     if sink_fails:
         assert len(diagnostic_sink.errors) == 1
         assert any(

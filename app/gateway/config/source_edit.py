@@ -91,18 +91,19 @@ class GatewaySourceEditMixin:
         text = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
         payloads: dict[str, dict[str, object]] = {}
         source_config = self._source_config(payloads=payloads)
+        if source_config.schema_path is None or service._gateway_id is None:
+            raise RuntimeError("Gateway 来源 owner 缺少 schema 或目标身份")
+        schema = read_jsonc_object(source_config.schema_path)
         source_payload: dict[str, object] = {}
         for payload in payloads.values():
-            source_payload = merge_json_objects(source_payload, payload)
+            source_payload = merge_json_objects(source_payload, payload, schema=schema)
         parameters = plugin_parameters(source_payload)
         source_payload = source_config.payload
         if parameters:
             source_payload = merge_json_objects(source_payload, {
                 "plugins": {"configuration": {"values": parameters}},
-            })
+            }, schema=schema)
         verify_stable_config_file(file)
-        if source_config.schema_path is None or service._gateway_id is None:
-            raise RuntimeError("Gateway 来源 owner 缺少 schema 或目标身份")
         store = service._state_store
         record = store.get_source_layer(source_key)
         active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
@@ -125,14 +126,14 @@ class GatewaySourceEditMixin:
             layer_revision=record.layer_revision if record else None, layer_digest=record.layer_digest if record else None,
             source_generation=record.source_generation if record else None,
             active_revision=active.active_revision if active else None, active_digest=active.effective_digest if active else None,
-            json_schema=read_jsonc_object(source_config.schema_path),
+            json_schema=schema,
             effective=cast(dict[str, object], redact_source_payload(service.config.payload)),
             source_effective=cast(dict[str, object], redact_source_payload(source_payload)),
             layers=[GatewayConfigSourceLayerViewDTO(
                 source_key=key, layer=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][0], precedence=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][1],
                 writable=key != "inline:0", payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in payloads.items()],
-            origins=[GatewayConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(payloads, source_payload)],
+            origins=[GatewayConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(payloads, source_payload, schema=schema)],
             status=self.get_reload_status_dto(), edit=edit,
         )
 

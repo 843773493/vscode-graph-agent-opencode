@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 from collections.abc import Generator
-from contextlib import ExitStack
 from pathlib import Path
 
 import commentjson
@@ -21,10 +20,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -61,7 +59,7 @@ def chat_backend(
     integration_workspace_config_path: str,
     chat_backend_boxteam_home: Path,
 ) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
@@ -84,17 +82,13 @@ def chat_backend(
         encoding="utf-8",
     )
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    with ExitStack() as services, model_stream_replay(
-        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+    with model_stream_replay(
+        context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="real-web-composer-read-file-tool-loop",
     ) as replay:
         # 整个服务组保留绑定，避免等待闸门或启动其它服务时被客户端临时源端口抢占。
-        lease = E2EProcessLease(
-            context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-            tuple(port_block.port(offset) for offset in (0, 10, 20)),
-        )
-        lease.acquire()
-        services.callback(lease.release)
+        for offset in (0, 10, 20):
+            port_block.port(offset)
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
@@ -134,7 +128,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         pytest.fail("浏览器 Composer 集成需要 Chromium")
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
@@ -249,6 +243,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         assert result["completedToolVisible"] is True
         assert "read_file" in result["completedToolText"]
         assert result["finalTextVisible"] is True
+        assert result["autoFoldPreservedComposer"] is True
         assert result["noPageErrors"] is True, result["pageErrors"]
         assert result["workbenchLoaded"] is True
         clipboard_failure = result["clipboardFailure"]

@@ -185,7 +185,10 @@ export async function runFileCanonical({ run, launch }) {
     const fileRow = thread.getByTitle(targets[0].rootUri + '/Mixed/Doc.json', { exact: true }).and(thread.locator('button.files-tree-item'));
     const tabsBeforePreview = await groups().getByRole('tab').count();
     await observe('tree.file.singleClick', () => fileRow.click());
-    await observe('tree.file.sessionPreview', () => expect(thread.locator('.workspace-preview-panel .workspace-preview-text-editor')).toHaveValue('{"diskOwner":1}\n'));
+    await observe('tree.file.sessionPreview', async () => {
+      const previewSlot = await thread.locator('.workspace-preview-text-editor-shell slot').getAttribute('name');
+      await expect(page.locator(`[slot="${previewSlot}"] .view-line`)).toHaveText(['{"diskOwner":1}', '']);
+    });
     await expect(docTabs()).toHaveCount(0);
     await expect(groups().getByRole('tab')).toHaveCount(tabsBeforePreview);
     result.treeSingleClickPreview = true;

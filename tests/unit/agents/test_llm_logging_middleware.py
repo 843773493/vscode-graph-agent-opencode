@@ -403,18 +403,18 @@ def test_llm_log_persists_failed_upstream_attempt(
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("internal_schema", [False, True], ids=["sqlite", "canonical"])
-def test_llm_log_internal_failure_keeps_native_path_out_of_both_error_records(
+def test_llm_log_internal_failure_preserves_same_reason_in_both_error_records(
     tmp_path: Path, log_session, log_dispatch_reference,
     sqlite_failure: sqlite3.OperationalError, asynchronous: bool, internal_schema: bool,
 ) -> None:
     error: Exception = sqlite_failure
-    expected = "执行数据库失败: error=OperationalError, sqlite_errorcode=14"
+    expected = "执行数据库失败: error=OperationalError, sqlite_errorcode=14, reason=" + str(error)
     marker = "sqlite-execution-private"
     if internal_schema:
         with pytest.raises(ItemSchemaError) as rejected:
             canonical_json_bytes({"/private/llm-canonical-field.sqlite": float("nan")})
         error = rejected.value
-        expected = "执行数据校验失败: error=ItemSchemaError"
+        expected = str(error)
         marker = "llm-canonical-field.sqlite"
     session_id = "ses_019c47af8f1a75e08243db221ad02820"
     session_dir = log_session(tmp_path, session_id)
@@ -458,4 +458,77 @@ def test_llm_log_internal_failure_keeps_native_path_out_of_both_error_records(
     assert attempt["error"] == payload["response"]["error"]
     assert attempt["sealed_dispatch"]["assembly_id"] == reference.assembly_id
     assert attempt["sealed_dispatch"]["callback_model_call_id"] == reference.callback_model_call_id
-    assert str(error) not in raw and marker not in raw
+    assert str(error) in payload["response"]["error"] and marker in raw
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("failure_stage", ["mkdir", "unlink"])
+def test_real_log_failure_keeps_original_provider_and_safe_sink_reason(
+    tmp_path: Path, log_session, caplog: pytest.LogCaptureFixture, asynchronous: bool,
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.failures import mark_provider_failure, public_error, report_failure
+
+    session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
+    session_dir = log_session(tmp_path, session_id)
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    logs = session_dir / "logs"
+    logs.mkdir(exist_ok=True)
+    blocker = logs / "llm_requests"
+    if failure_stage == "mkdir":
+        blocker.write_text("普通文件阻塞原日志目录")
+    else:
+        blocker.mkdir()
+        # 真实 unlink 目录产生 IsADirectoryError，不替换生产 Path 方法。
+        (blocker / "000.json").mkdir()
+        (blocker / "001.json").write_text("旧日志")
+        monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_FILES", 2)
+    runtime = Runtime(execution_info=ExecutionInfo(checkpoint_id="checkpoint", checkpoint_ns="",
+        task_id="task", thread_id=thread_id))
+    request = ModelRequest(model=None, messages=[HumanMessage(content="hello")], runtime=runtime)
+    middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
+    secret = "unit-log-source-credential-629014"
+    cause = ValueError("上游cause包含裸值 " + secret)
+    original = RuntimeError("Incorrect API key provided: " + secret)
+    original.__cause__ = cause
+    mark_provider_failure(original, secrets=(secret,))
+    identity = (original.args, original.__cause__, original.__context__)
+
+    def invoke(_request):
+        raise original
+
+    async def invoke_async(_request):
+        return invoke(_request)
+
+    with pytest.raises(RuntimeError) as caught:
+        if asynchronous:
+            asyncio.run(middleware.awrap_model_call(request, invoke_async))
+        else:
+            middleware.wrap_model_call(request, invoke)
+    assert caught.value is original
+    assert (original.args, original.__cause__, original.__context__) == identity
+    if failure_stage == "mkdir":
+        assert blocker.read_text() == "普通文件阻塞原日志目录"
+        assert len(original.__notes__) == 1
+        assert "LLM 请求日志写入失败" in original.__notes__[0]
+        assert "FileExistsError" in original.__notes__[0] and str(blocker) in original.__notes__[0]
+    else:
+        assert (blocker / "000.json").is_dir() and not (blocker / "001.json").exists()
+        written, = [path for path in blocker.glob("*.json") if path.is_file()]
+        assert json.loads(written.read_text())["response"]["error"].endswith("Incorrect API key provided: [redacted]")
+        assert not getattr(original, "__notes__", [])
+    failure = public_error(original, code="execution_error", stage="agent_execution")
+    assert failure["details"]["error_type"] == "RuntimeError"
+    assert failure["details"]["cause"]["details"]["error_type"] == "ValueError"
+    assert "Incorrect API key provided" in failure["message"]
+    report_failure(original, detail="原执行失败")
+    import logging
+
+    rendered_logs = [logging.Formatter().format(record) for record in caplog.records]
+    assert secret not in json.dumps([failure, getattr(original, "__notes__", []), rendered_logs])
+    label = "LLM 请求日志写入失败" if failure_stage == "mkdir" else "LLM 日志轮转失败"
+    sink_records = [record for record in caplog.records if label in record.getMessage()]
+    assert len(sink_records) == 1 and sink_records[0].exc_info is None
+    if failure_stage == "unlink":
+        assert "IsADirectoryError" in sink_records[0].getMessage()
+        assert str(blocker / "000.json") in sink_records[0].getMessage()

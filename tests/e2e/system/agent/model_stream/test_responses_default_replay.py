@@ -14,7 +14,7 @@ from tests.support.api_helpers import (
 )
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.paths import output_root_for_test
+from tests.harness.python.run_context import TestRunContext
 from tests.support.sse import read_sse_events_until
 from tests.support.trace import get_trace_payload
 
@@ -83,8 +83,7 @@ def _load_default_cassette_review() -> dict[str, object]:
 
 def _write_review_artifact(review: dict[str, object]) -> Path:
     output_path = (
-        output_root_for_test(Path(__file__), test_layer="e2e")
-        / "artifacts"
+        TestRunContext.from_test_file(Path(__file__)).artifacts_dir
         / "responses-default-e2e-review.json"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)

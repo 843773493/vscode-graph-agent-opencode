@@ -90,7 +90,7 @@ export async function chooseProviderCredential(target: GatewayRequestTarget, qui
   const selected = await quick.pick([
     ...pendingCreations(storage, target).map(item => ({ label: t('settings.secrets.queryCreation'),
       description: item.id, action: 'recover:' + item.id })),
-    ...items.map(item => ({ label: `$(key) ${item.name}`, description: reference(item), action: reference(item) })),
+    ...items.map(item => ({ label: `$(key) ${item.name}`, description: t('settings.secrets.storedCredential'), action: reference(item) })),
     { label: t('settings.secrets.create'), action: 'create' },
     { label: t('settings.secrets.environment'), action: 'environment' },
     { label: t('configuration.entities.noAuthentication'), action: 'none' },
@@ -105,8 +105,11 @@ export async function chooseProviderCredential(target: GatewayRequestTarget, qui
     return selected.action;
   }
   const value = await quick.input({ title: t('settings.secrets.environment'), prompt: t('configuration.entities.environmentReference'),
-    validateInput: async value => /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value) ? undefined : t('configuration.entities.environmentRequired') }, lifetime.token);
-  lifetime.check(); return value;
+    validateInput: async value => /^(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(value.trim()) ? undefined : t('configuration.entities.environmentRequired') }, lifetime.token);
+  lifetime.check();
+  if (value === undefined) return;
+  const variableName = value.trim().replace(/^env:/, '').replace(/^\$\{(.+)\}$/, '$1');
+  return '${' + variableName + '}';
 }
 
 export async function manageSecrets(target: GatewayRequestTarget, quick: IQuickInputService, dialogs: IDialogService,

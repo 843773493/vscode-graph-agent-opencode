@@ -127,8 +127,11 @@ export class SettingsCategoryNavigation extends Disposable {
     };
     const selected = this.selectedNode;
     for (const node of this.nodes) if (node !== selected) node.children = [];
+    // 高级设置只接收没有专属分类的分组；目录与原设置搜索共用这份成员关系。
     const groups = root.children.filter((child): child is SettingsTreeGroupElement => child instanceof SettingsTreeGroupElement
-      && (this.category === 'client' || this.category === 'runtime' || (this.definition.groups as readonly string[]).includes(child.id)));
+      && (this.category === 'client' || (this.category === 'runtime'
+        ? !settingsCategories.some(category => (category.groups as readonly string[]).includes(child.id))
+        : (this.definition.groups as readonly string[]).includes(child.id))));
     selected.children = groups;
     this.tocChildren.set(this.category, groups.map(project));
     return this.nodes.map((element, index) => ({ element, children: this.tocChildren.get(settingsCategories[index].id)

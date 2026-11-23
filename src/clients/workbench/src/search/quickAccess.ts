@@ -22,8 +22,8 @@ import { isEditorInput } from '../../upstream/src/vs/workbench/common/editor.js'
 import type { EditorInput } from '../../upstream/src/vs/workbench/common/editor/editorInput.js';
 import type { IResourceEditorInput } from '../../upstream/src/vs/platform/editor/common/editor.js';
 import { extractRangeFromFilter, type IAnythingQuickAccessProviderRunOptions } from '../../upstream/src/vs/workbench/contrib/search/common/search.js';
-import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { GroupDirection, IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IHistoryService } from '../../upstream/src/vs/workbench/services/history/common/history.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
@@ -85,7 +85,6 @@ interface AccessRun {
 }
 interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {
   contentCategories?: readonly ContentSearchCategory[];
-  searchGroup?: number;
   searchRestore?: { query: string; activeId?: string };
 }
 
@@ -93,6 +92,7 @@ interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchIn
 export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick> {
   static readonly PREFIX: string = '';
   private run?: AccessRun;
+  private readonly editorState: PickerEditorState;
   protected get category(): NameSearchCategory | undefined { return undefined; }
   protected get contentMode(): boolean { return false; }
 
@@ -109,7 +109,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @INotificationService private readonly notifications: INotificationService,
     @IQuickChatService private readonly quickChat: IQuickChatService,
     @IViewsService private readonly views: IViewsService,
-  ) { super(new.target.PREFIX, { canAcceptInBackground: true, shouldSkipTrimPickFilter: new.target.PREFIX === 'content ', noResultsPick: { id: 'empty', label: t('quickAccess.noResults') } }); }
+  ) {
+    super(new.target.PREFIX, { canAcceptInBackground: true, shouldSkipTrimPickFilter: new.target.PREFIX === 'content ', noResultsPick: { id: 'empty', label: t('quickAccess.noResults') } });
+    this.editorState = this._register(instantiation.createInstance(PickerEditorState));
+  }
 
   get defaultFilterValue() {
     return this.configuration.getValue<boolean>('workbench.quickOpen.preserveInput') ? DefaultQuickAccessFilterValue.LAST : undefined;
@@ -117,7 +120,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   override provide(picker: AccessRun['picker'], token: CancellationToken, options: AccessOptions = {}) {
     options = { ...options, contentCategories: options.contentCategories && [...new Set(options.contentCategories)] };
-    const lifetime = new DisposableStore(), editorState = lifetime.add(this.instantiation.createInstance(PickerEditorState));
+    const lifetime = new DisposableStore(), editorState = this.editorState;
+    // 原 Controller 在调用接受动作前关闭 Picker；恢复对象归 Provider 持有。
+    editorState.reset();
     const access = new CancellationTokenSource(token);
     const rootAbort = new AbortController();
     lifetime.add(access.token.onCancellationRequested(() => rootAbort.abort()));
@@ -239,11 +244,16 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (openLink) {
       return accepted([{ id: 'link:' + filter, label: t('quickAccess.openLink'), description: filter,
         accept: (mods, event) => {
-          this.assertAccess(run);
-          const options: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
-            boxteamTargetGroup: run.group, openToSide: mods.alt || this.openPinned() && mods.ctrlCmd,
-            editorOptions: { pinned: mods.ctrlCmd || event.inBackground || this.openPinned(), preserveFocus: event.inBackground } };
-          this.report(this.opener.open(filter, options));
+          const openToSide = mods.alt || this.openPinned() && mods.ctrlCmd;
+          const open = async () => {
+            this.assertAccess(run);
+            if (openToSide) { await run.editorState.restore(); this.assertAccess(run); }
+            const options: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
+              openToSide,
+              editorOptions: { sourceGroup: run.group, pinned: mods.ctrlCmd || event.inBackground || this.openPinned(), preserveFocus: event.inBackground } };
+            await this.opener.open(filter, options);
+          };
+          this.report(open());
         } }]);
     }
     if (run.options.fileSearchDelegate) {
@@ -318,7 +328,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
             id: pick.symbol ? `workspace-symbol:${JSON.stringify([pick.symbol.location.uri.toString(), pick.symbol.location.range, pick.symbol.name, pick.symbol.kind, pick.symbol.containerName])}`
               : `workspace-symbol-status:${index}:${pick.description ?? pick.label}` }));
           refresh();
-        }, { skipLocal: true, openToken: run.token, editorGroup: side => this.targetGroup(run, { alt: false, ctrlCmd: false, shift: false }, side) });
+        }, { skipLocal: true, sourceGroup: run.group, openToken: run.token });
       }
     };
     // 历史同步展示；目标文件无本地索引，沿原 Anything 的冷查询延迟合并连续输入。
@@ -379,7 +389,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private async symbolPicks(run: AccessRun, active: ResourcePick, filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Pick<ResourcePick>[]> {
     run.editorState.set();
-    await run.editorState.openTransientEditor({ resource: active.resource!, options: { preserveFocus: true, revealIfOpened: true } }, run.group);
+    await run.editorState.openTransientEditor({ resource: active.resource!, options: { sourceGroup: run.group, preserveFocus: true, revealIfOpened: true } }, ACTIVE_GROUP);
     if (token.isCancellationRequested) return [];
     const reference = disposables.add(await this.instantiation.invokeFunction(accessor => accessor.get(ITextModelService).createModelReference(active.resource!)));
     if (token.isCancellationRequested) return [];
@@ -446,7 +456,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
       ariaLabel: `${title} ${description ?? ''}${dirty ? t('quickAccess.unsavedSuffix') : ''}`,
       iconClass: ThemeIcon.asClassName(resource.scheme === 'boxteam-thread' ? Codicon.commentDiscussion : Codicon.file),
-      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: t('quickAccess.openToSide') }] : []),
+      buttons: [...(side ? [this.sideButton] : []),
         ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: t('quickAccess.removeRecent'), alwaysVisible: !!dirty }] : []),
         ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') }] : []),
         ...(forkThread ? [{ iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: t('quickAccess.forkContext') }] : [])],
@@ -483,7 +493,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       requestLog ? { boxteamRequestLog: requestLog } : undefined);
     return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, sessionTarget: target, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
-      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: t('quickAccess.openToSide') }] : []),
+      buttons: [...(side ? [this.sideButton] : []),
         ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: t('quickAccess.renameSession') },
           { iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: t('quickAccess.forkContext') },
           { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: t('quickAccess.deleteSession') }] : [])],
@@ -539,18 +549,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     }
   }
 
-  private targetGroup(run: AccessRun, mods: IKeyMods, side = false): number {
-    const group = this.groups.getGroup(run.group);
-    if (!group) throw new Error(t('quickAccess.invokingGroupClosed'));
-    const pinned = this.openPinned();
-    if (!(side || mods.alt || pinned && mods.ctrlCmd)) return group.id;
-    const direction = this.configuration.getValue<string>('workbench.editor.openSideBySideDirection') === 'down' ? GroupDirection.DOWN : GroupDirection.RIGHT;
-    return (this.groups.findGroup({ direction }, group) ?? this.groups.addGroup(group, direction)).id;
-  }
-
   private openPinned(): boolean {
     return this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
       || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+  }
+
+  private get sideButton() {
+    const down = this.configuration.getValue<string>('workbench.editor.openSideBySideDirection') === 'down';
+    return { iconClass: ThemeIcon.asClassName(down ? Codicon.splitVertical : Codicon.splitHorizontal),
+      tooltip: t(down ? 'workbench.fileMenu.openBelow' : 'quickAccess.openToSide') };
   }
 
   private watchIdentity(lifetime: DisposableStore, invalidate: () => void): void {
@@ -568,17 +575,27 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private async openResource(run: AccessRun, uri: string, owner: WorkspaceOwner, title: string, mods: IKeyMods, background: boolean, side: boolean, location?: ResourceOpenOptions['editorOptions']): Promise<void> {
     this.assertAccess(run);
+    const openToSide = side || mods.alt || this.openPinned() && mods.ctrlCmd;
+    if (openToSide) {
+      await run.editorState.restore();
+      this.assertAccess(run);
+    }
     // 搜索只交原 owner 的公开地址与独立位置；解析、路由及精确 Thread 归原 Opener。
-    const options: ResourceOpenOptions = { fromUserGesture: true, boxteamResourceOwner: owner, boxteamResourceLabel: title, boxteamTargetGroup: run.group,
-      openToSide: side || mods.alt || this.openPinned() && mods.ctrlCmd,
-      editorOptions: { ...location, pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background } };
+    const options: ResourceOpenOptions = { fromUserGesture: true, boxteamResourceOwner: owner, boxteamResourceLabel: title,
+      openToSide,
+      editorOptions: { ...location, sourceGroup: run.group, pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background } };
     await this.opener.open(uri, options);
   }
 
   private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, selection?: IRange): Promise<void> {
     this.assertAccess(run);
-    const group = this.targetGroup(run, mods, side);
-    const options = { pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
+    if (!this.groups.getGroup(run.group)) throw new Error(t('quickAccess.invokingGroupClosed'));
+    const group = side || mods.alt || this.openPinned() && mods.ctrlCmd ? SIDE_GROUP : ACTIVE_GROUP;
+    if (group === SIDE_GROUP) {
+      await run.editorState.restore();
+      this.assertAccess(run);
+    }
+    const options = { sourceGroup: run.group, pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
       selection: editor.resource?.scheme === 'boxteam-thread' ? undefined : selection ?? run.range };
     if (isEditorInput(editor)) await this.editors.openEditor(editor, options, group);
     else await this.editors.openEditor({ ...editor, options: { ...editor.options, ...options } }, group);

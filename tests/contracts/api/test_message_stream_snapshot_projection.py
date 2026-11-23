@@ -115,11 +115,7 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
             model_call_id=model_call_id,
         )
     # 终态快照让订阅在推送控制帧后自然结束，同时覆盖 resumable=False。
-    await writer.close_failed(
-        code="execution_lost",
-        message="后端重启",
-        resumable=False,
-    )
+    await writer.commit("stream.failed", {"code": "execution_lost", "message": "后端重启", "resumable": False, "after_interrupt_requested": False})
 
     # 新 store 只读原持久快照及日志，不由测试补写恢复所需的块身份。
     cold_store = MessageStreamStore(path_resolver=store._path_resolver)

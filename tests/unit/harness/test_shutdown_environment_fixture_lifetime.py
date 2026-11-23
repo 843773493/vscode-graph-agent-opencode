@@ -52,7 +52,7 @@ def shutdown_lifetime(
     # 只验证装具资源归属；配置解析与schema校验是明确的替身边界。
     monkeypatch.setattr(shutdown_case, "read_jsonc_object", Mock(return_value=config))
     monkeypatch.setattr(shutdown_case, "validate_config", Mock())
-    monkeypatch.setattr(shutdown_case, "integration_port_block_for_file", Mock(return_value=Mock(port=Mock(return_value=9999))))
+    monkeypatch.setattr(shutdown_case, "integration_ports_for_file", Mock(return_value=Mock(port=Mock(return_value=9999))))
     original_open, original_close = os.open, os.close
     owned_descriptors: list[int] = []
 

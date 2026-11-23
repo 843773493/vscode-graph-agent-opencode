@@ -275,9 +275,10 @@ async def test_task_and_handle_failure_are_reported_without_skipping_release(mon
     assert scope.state == "close_failed"
     assert scope.snapshot().resource_count == 1
     assert scope.snapshot().task_count == 0
-    task_reports = [item for item in reported if item.get("task") is task]
+    task_reports = [item for item in reported if item.get("task_name") == task.get_name()]
     assert len(task_reports) == 1
-    assert task_reports[0]["exception"] is task.exception()
+    assert "task failure" in str(task_reports[0]["message"])
+    assert "exception" not in task_reports[0] and "task" not in task_reports[0]
 
 
 @pytest.mark.asyncio
@@ -299,10 +300,10 @@ async def test_close_settles_finished_task_failure_only_once(monkeypatch) -> Non
     assert len(first.value.exceptions) == 1
     assert first.value.exceptions[0].__cause__ is task.exception()
     assert scope.snapshot().task_count == 0
-    assert len([item for item in reported if item.get("task") is task]) == 1
+    assert len([item for item in reported if item.get("task_name") == task.get_name()]) == 1
 
     await scope.close()
-    assert len([item for item in reported if item.get("task") is task]) == 1
+    assert len([item for item in reported if item.get("task_name") == task.get_name()]) == 1
 
 
 @pytest.mark.asyncio
@@ -331,7 +332,7 @@ async def test_inflight_task_failure_during_close_is_only_returned_to_close(monk
         await closing
 
     assert captured.value.exceptions[0].__cause__ is failure
-    assert [item for item in reported if item.get("task") is task] == []
+    assert [item for item in reported if item.get("task_name") == task.get_name()] == []
     assert task not in scope._tasks
 
 

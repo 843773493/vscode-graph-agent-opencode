@@ -22,7 +22,7 @@ TEST_TOOL_SPEC = {
 
 def _context() -> CustomToolFactoryContext:
     return CustomToolFactoryContext(
-        session_id="ses_test",
+
         agent_id="default",
         sender_agent_id="default",
         workspace_root=Path.cwd(),

@@ -289,7 +289,7 @@ async def test_scan_dispatches_one_terminal_completion_message(
 
     assert len(session_orchestrator.calls) == 1
     assert session_orchestrator.calls[0]["session_id"] == "session_owner"
-    assert session_orchestrator.calls[0]["delivery_policy"] == "after_tool_result"
+    assert session_orchestrator.calls[0]["delivery_policy"] == "after_turn"
     message = session_orchestrator.calls[0]["message"]
     assert message.metadata["structured_prompt_kind"] == (
         "terminal_execution_completed"

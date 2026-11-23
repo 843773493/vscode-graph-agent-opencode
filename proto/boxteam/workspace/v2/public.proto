@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package boxteam.workspace.v2;
 
+import "boxteam/common/v1/error.proto";
 import "boxteam/gateway/v2/service_plugin.proto";
 import "boxteam/workspace/v2/message.proto";
 import "google/protobuf/struct.proto";
@@ -229,9 +230,41 @@ message LlmProbeObservationDTO {
   string observed_at = 13;
 }
 
+message LlmModelMetadataDTO {
+  optional int64 max_input_tokens = 1;
+  optional bool supports_vision = 2;
+  optional bool supports_video_input = 3;
+  optional bool supports_audio_input = 4;
+  optional bool supports_audio_output = 5;
+  optional bool supports_function_calling = 6;
+  optional bool supports_reasoning = 7;
+  // 逐字段标记 provider／upstream／litellm；目录声明均不代表实测通过。
+  map<string, string> sources = 8;
+  optional string catalog_provider = 9;
+}
+
+message LlmModelCatalogDTO {
+  string provider = 1;
+  repeated LlmDiscoveredModelDTO models = 2;
+}
+
+message LlmProviderDTO {
+  string provider = 1;
+  int64 model_count = 2;
+  int64 chat_model_count = 3;
+  optional string default_endpoint = 4;
+  optional string protocol = 5;
+  bool upstream_discovery = 6;
+}
+
+message LlmProvidersDTO {
+  repeated LlmProviderDTO providers = 1;
+}
+
 message LlmDiscoveredModelDTO {
   string model = 1;
   optional string name = 2;
+  optional LlmModelMetadataDTO metadata = 3;
 }
 
 message LlmProbeErrorDTO {
@@ -861,6 +894,7 @@ message McpConnectionOperationDTO {
   double deadline = 8;
   double updated_at = 9;
   optional string error_code = 10;
+  optional string error_message = 11;
 }
 
 message McpConnectionRequestDTO {
@@ -2867,6 +2901,7 @@ message TurnDetailDTO {
   int64 source_view_revision = 27;
   // 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
   optional bool tool_summary_truncated = 28;
+  optional boxteam.common.v1.Error failure = 29;
 }
 
 // 原历史视图的工具结果元数据；发现不读 canonical 正文。
@@ -2956,6 +2991,11 @@ message WorkspaceMessageSearchResultsDTO {
   int64 scanned_bytes = 9;
 }
 
+message ContextNoticeAnchorDTO {
+  string model_call_id = 1;
+  string anchor = 2;
+}
+
 message TurnHistoryLoadRequest {
   optional string direction = 1;
   optional string cursor = 2;
@@ -2970,8 +3010,13 @@ message TurnHistoryLoadRequest {
   optional TurnMessageReferenceDTO anchor_message = 11;
   optional string anchor_tool_result = 12;
   optional string context_cursor = 13;
-  // 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。
-  repeated string execution_item_ids = 14;
+  // 同一 Turn 或 execution 内最多四个 canonical Item 的正文回补；不推进历史游标。
+  repeated string item_ids = 14;
+  optional string anchor_item_id = 15;
+  optional string source_view_id = 16;
+  optional int64 source_view_revision = 17;
+  // 在原过程窗口内定点读取上下文标记元数据，不扫描 context_cursor。
+  optional ContextNoticeAnchorDTO anchor_context = 18;
 }
 
 message ContextNoticeBatchDTO {
@@ -2997,6 +3042,7 @@ message TurnHistoryPageDTO {
   optional TurnMessageLocationDTO located_message = 14;
   optional TurnToolResultDTO located_tool_result = 15;
   repeated ContextNoticeBatchDTO context_notices = 16;
+  optional ThreadItemLocationDTO located_item = 17;
 }
 
 message InternalExecutionHistoryDTO {
@@ -3016,6 +3062,9 @@ message InternalExecutionHistoryDTO {
   google.protobuf.Timestamp updated_at = 9;
   reserved 10;
   reserved "logical_item_ordinal";
+  optional boxteam.common.v1.Error failure = 11;
+  // 原 terminal convergence 的提交；未提交时不根据 Job 或 outcome 推断终态。
+  optional int64 terminal_commit_id = 12;
 }
 
 message InternalExecutionDisplayPartDTO {
@@ -3108,6 +3157,11 @@ message TurnResponseSourceDTO {
   optional int64 elapsed_ms = 11;
   optional int64 logical_item_ordinal = 12;
   optional string model_call_id = 13;
+  optional string activity_group_item_id = 14;
+  optional int64 activity_group_part_ordinal = 15;
+  optional string turn_id = 16;
+  optional string execution_id = 17;
+  optional string process_segment_item_id = 18;
 }
 
 message TurnSummaryDTO {
@@ -3145,6 +3199,7 @@ message TurnSummaryDTO {
   int64 source_view_revision = 28;
   // 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
   optional bool tool_summary_truncated = 29;
+  optional boxteam.common.v1.Error failure = 30;
 }
 
 message TurnThinkingBlockDTO {

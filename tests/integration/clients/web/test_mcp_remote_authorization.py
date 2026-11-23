@@ -35,13 +35,13 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
 )
 from tests.support.model_stream.config import model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture
 def product_case(request: pytest.FixtureRequest):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(context.test_file)
+    ports = integration_ports_for_file(context.test_file)
     boundary = request.param
 
     @asynccontextmanager

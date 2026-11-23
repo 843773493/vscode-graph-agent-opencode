@@ -108,6 +108,9 @@ def test_history_export_rejects_drift_before_publishing(
     {"direction": "around"},
     {"turn_ids": ["turn", "turn"]},
     {"execution_id": "execution", "turn_ids": ["turn"]},
+    {"anchor_context": {"model_call_id": "call", "anchor": "before_model_call"}},
+    {"direction": "around", "anchor_turn_id": "turn", "context_cursor": "cursor",
+     "anchor_context": {"model_call_id": "call", "anchor": "before_model_call"}},
 ])
 def test_history_business_selection_still_rejects_invalid_combinations(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):

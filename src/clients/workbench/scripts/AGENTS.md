@@ -62,3 +62,5 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 内容地址文本资源的 gzip 表示在构建时生成，并与原件一起登记在同一 immutable 清单。Gateway 与本地静态宿主按 Accept-Encoding 选择已有表示，保留原 MIME、独立 ETag、HEAD／304 和 Vary；普通请求不压缩正文，也不建立第二份缓存清单。
 
 `searchModelTransform.mjs` 接线原 FileMatch 与全部派生类的 worker 依赖；首次结果直接消费已有匹配，自动更新及替换后的单行重算沿同一快照 worker。变更／重新绑定／释放取消旧计算，模型关闭仍能完成最后一份快照；替换后的单行计算取消此前排队的全模型刷新，避免自己的结果刷新被抢先取消。
+
+`editorGroupTransform.mjs` 为原 IEditorOptions 增加可选 sourceGroup 和单次 sideBySideDirection，交原 finder 确定普通／侧开起点及方向；不复制锁定、复用和焦点算法。业务入口不自行查找相邻组。缺失发起组明确拒绝；未传选项的原生调用保持原行为。构建、Vite 和转换源码类型检查共用同一接缝。

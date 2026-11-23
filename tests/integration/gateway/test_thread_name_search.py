@@ -8,7 +8,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     _job,
@@ -19,8 +18,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     restart_source_case as restart_source_case,  # noqa: PLC0414 - 复用进程/回放生命周期
 )
 from tests.support.api_helpers import create_session
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -33,18 +31,11 @@ def reserved_service_ports(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[None]:
     """在 Backend 及其 HTTP 客户端之前保留端口，覆盖 Gateway 启动与重启。"""
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
-    lease = E2EProcessLease(
-        context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-        tuple(ports.port(offset) for offset in (0, 20, 40, 42, 43)),
-    )
-    lease.acquire()
-    try:
-        yield
-    finally:
-        lease.release()
+    for offset in (0, 20, 40, 42, 43):
+        ports.port(offset)
+    yield
 
 
 @pytest.mark.asyncio
@@ -59,7 +50,7 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
         start_gateway_process,
         workspace_root=case.workspace,
         default_backend_url=f"http://127.0.0.1:{backend.port}",
-        port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        port=integration_ports_for_file(Path(request.node.path)).port(20),
     )
     original_client = case.client
     try:

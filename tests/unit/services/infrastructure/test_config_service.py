@@ -1409,7 +1409,7 @@ def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.parametrize("preferred", [None, "backup"])
 @pytest.mark.parametrize("agent_id", [None, "default"])
-def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_isolated(
+def test_runtime_provider_resolution_reuses_snapshot_and_keeps_results_isolated(
     runtime_provider_service: ConfigService, monkeypatch: pytest.MonkeyPatch, preferred: str | None,
     agent_id: str | None,
 ) -> None:
@@ -1425,7 +1425,7 @@ def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_iso
     preferred_model = BACKUP_MODEL if preferred else None
     with service.use_llm_credentials({}):
         first = service.get_agent_runtime_config(agent_id, preferred_model=preferred_model)
-    assert len(reads) == 1
+    assert reads == []
     expected_order = ["backup", "primary"] if preferred else ["primary", "backup"]
     assert [model["provider_id"] for model in first["models"]] == expected_order
     assert all(model["model_id"] == "default" for model in first["models"])
@@ -1437,12 +1437,49 @@ def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_iso
     monkeypatch.setenv("TEST_API_KEY", "updated-key")
     with service.use_llm_credentials({}):
         second = service.get_agent_runtime_config(agent_id, preferred_model=preferred_model)
-    assert len(reads) == 2 and len(set(reads)) == 1
+    assert reads == []
     assert [model["provider_id"] for model in second["models"]] == expected_order
     assert all(model["api_key"] == "updated-key" for model in second["models"])
     assert second["models"][0]["request_options"]["default_headers"]["x-runtime"] == "original"
     with service.use_llm_credentials({}):
         assert service.get_llm_model(PRIMARY_MODEL)["api_key"] == "updated-key"
+
+
+def test_model_catalog_warm_reads_do_not_read_sources_or_copy_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _base_config()
+    template = config["llm"]["providers"]["primary"]
+    config["llm"]["providers"] = {
+        provider_id: {"defaults": template["defaults"], "models": {
+            model_id: {"model": "upstream-model"} for model_id in
+            ("default", *(f"model-{index}" for index in range(9)))
+        }} for provider_id in ("primary", *(f"provider-{index}" for index in range(19)))
+    }
+    inline = config_source_layers_module.read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
+    inline["llm"]["providers"] = {}
+    inline_path = tmp_path / "workspace_inline.jsonc"
+    inline_path.write_text(json.dumps(inline), encoding="utf-8")
+    service = ConfigService(config_dir=Path.cwd() / "configs", inline_config_path=inline_path,
+                            config_path=_write_workspace_config(tmp_path, config))
+    initial = service.list_llm_models()
+    assert len(initial) == 200
+    with pytest.raises(TypeError):
+        service.get_snapshot().read_only["llm"]["providers"]["primary"]["defaults"]["endpoint"] = "https://changed.invalid"
+
+    def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail("模型暖读不得读取来源或重新物化整份工作区配置")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(ConfigSnapshot, "to_dict", forbidden)
+    initial[0]["api_mode"]["model_info"]["supports_reasoning"] = False
+    for _ in range(20):
+        models = service.list_llm_models()
+        assert len(models) == 200
+        assert all(model["api_mode"]["model_info"]["supports_reasoning"] for model in models)
+        assert service.get_llm_model(PRIMARY_MODEL)["model"] == "upstream-model"
+        assert service.get_agent_runtime_config()["models"][0]["model"] == "upstream-model"
 
 
 @pytest.mark.parametrize("agent_id", ["deep_agent", "removed", ""])
@@ -1483,8 +1520,10 @@ def test_instruction_inputs_use_merged_configuration_without_python_prompt_defau
     # 实际加载结果缺少指令不能退回另一份隐藏的英文正文。
     damaged = service._get_effective_config()
     damaged["agents"]["default"]["instructions"].pop("system_prompt")
-    monkeypatch.setattr(service, "_get_effective_config", lambda: damaged)
-    with pytest.raises(KeyError, match="system_prompt"):
+    with (
+        service.use_snapshot(replace(service.get_snapshot(), canonical_json=json.dumps(damaged))),
+        pytest.raises(KeyError, match="system_prompt"),
+    ):
         service.get_agent_runtime_config("default")
 
 

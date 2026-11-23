@@ -63,15 +63,15 @@ async def test_failed_sync_remains_manageable_without_replaying_an_unknown_opera
     effects: list[tuple[str, str]] = []
     failures = 2
 
-    async def syncing(resource_id: str, version: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, version: int, *, for_stop: bool, **revision_options: object) -> None:
         nonlocal failures
         calls.append((resource_id, version, for_stop))
         if resource_id == rid and failures:
             failures -= 1
             if accepted:
-                await sync(resource_id, version, for_stop=for_stop)
+                await sync(resource_id, version, for_stop=for_stop, **revision_options)
             raise failure
-        await sync(resource_id, version, for_stop=for_stop)
+        await sync(resource_id, version, for_stop=for_stop, **revision_options)
 
     async def stopping(resource_id: str, *, reason: str | None = None) -> dict[str, object]:
         effects.append((resource_id, "stop"))

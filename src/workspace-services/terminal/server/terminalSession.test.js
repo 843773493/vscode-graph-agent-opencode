@@ -889,6 +889,45 @@ test("提升传输版本立即撤销旧连接而不终止 PTY", (t) => {
   assert.throws(() => session.syncOwnerRevision(1), /过期或无效/);
 });
 
+test("关联变更只撤权失效连接，不修改原票据；恢复同版本仍撤销全部连接", t => {
+  const session = completedSession(t);
+  const closed = [];
+  const clients = ["thread-a", "thread-b", null].map(association => ({
+    close: code => closed.push({ association, code }),
+  }));
+  const original = { transportOwnerRevision: 1, association: "thread-b" };
+  session.transports.set(clients[0], { transportOwnerRevision: 1, association: "thread-a" });
+  session.transports.set(clients[1], original);
+  session.transports.set(clients[2], { transportOwnerRevision: 1, association: null });
+  session.syncOwnerRevision(2, ["thread-b", null]);
+  assert.deepEqual(closed, [{ association: "thread-a", code: 4009 }]);
+  assert.throws(() => session.assertTransport(clients[0]), /授权已过期/);
+  session.assertTransport(clients[1]);
+  session.assertTransport(clients[2]);
+  assert.equal(original.transportOwnerRevision, 1);
+  session.syncOwnerRevision(2);
+  assert.equal(session.transports.size, 0);
+  assert.equal(closed.length, 3);
+  assert.equal(session.snapshot().status, "running");
+});
+
+test("握手正在持久化时，仍合法的关联沿新资格完成握手", async t => {
+  const session = completedSession(t);
+  const entered = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  session.manager.persist = async () => { entered.resolve(); await resume.promise; };
+  const sent = [];
+  const client = { sendJson(message) { sent.push(message); return true; },
+    close() { assert.fail("合法连接不应被关闭"); } };
+  const pending = session.attach(client, { grant: { transportOwnerRevision: 1, association: "thread-a" } });
+  await entered.promise;
+  session.syncOwnerRevision(2, ["thread-a"]);
+  resume.resolve();
+  await pending;
+  session.assertTransport(client);
+  assert.equal(sent.some(message => message.type === "attached"), true);
+});
+
 
 test("owner 待核实时拒绝 resize 且保留原尺寸", (t) => {
   const session = completedSession(t);

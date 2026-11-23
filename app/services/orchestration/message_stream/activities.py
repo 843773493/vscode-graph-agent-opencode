@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from app.core.failures import failure_detail
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.services.infrastructure.message_stream_store import MessageStreamWriter
-
-logger = logging.getLogger(__name__)
-
-
-def activity_failure_message(error: BaseException, *, phase: str) -> str:
-    """活动事件只记录失败事实，原异常及位置交给关联诊断日志。"""
-    facts = [f"phase={phase}", f"error={type(error).__name__}"]
-    if isinstance(error, OSError):
-        for name in ("errno", "winerror"):
-            value = getattr(error, name, None)
-            if value is not None:
-                facts.append(f"{name}={value}")
-    return "活动处理失败: " + ", ".join(facts)
 
 
 def current_activity_runtime() -> ActivityRuntime | None:
@@ -307,11 +294,12 @@ class ActivityRuntime:
         registered = self.registry.resolve(kind)
         try:
             normalized = dict(registered.handler.normalize(payload))
-        except Exception as error:
-            logger.exception("Activity Handler 投影失败: kind=%s", kind)
+        except Exception as error:  # noqa: BLE001 — 投影失败保留原活动事实，并经统一出口交付原因。
             normalized = dict(DefaultActivityHandler().normalize(payload))
             normalized["detail_available"] = False
-            normalized["detail_error"] = activity_failure_message(error, phase="projection")
+            normalized["detail_error"] = failure_detail(
+                error, stage="projection", label=f"Activity Handler 投影失败: kind={kind}",
+            )
         normalized.setdefault("kind", kind)
         normalized.setdefault("updated_at", self._now())
         return normalized

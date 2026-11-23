@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
@@ -36,13 +37,13 @@ class ConfigAgentsMixin:
                 raise ValueError(f"工作区默认模型不再属于 Agent {agent_id}: field=model_by_agent")
 
     @staticmethod
-    def _agent_model_references(agent: dict[str, Any]) -> list[ModelReferenceDTO]:
+    def _agent_model_references(agent: Mapping[str, Any]) -> list[ModelReferenceDTO]:
         model = agent["model"]
-        return [ModelReferenceDTO.model_validate(value) for value in
+        return [ModelReferenceDTO.model_validate(dict(value)) for value in
                 (model["primary"], *model.get("fallbacks", []))]
 
     def get_default_agent_id(self) -> str:
-        config = self._get_effective_config()
+        config = cast("ConfigService", self)._require_snapshot().read_only
         default_agent_id = config["default_agent"]
         if default_agent_id not in config["agents"]:
             raise ValueError(f"default_agent 引用了不存在的 Agent: {default_agent_id}")
@@ -78,7 +79,7 @@ class ConfigAgentsMixin:
 
     def validate_agent_id(self, agent_id: str | None) -> str:
         resolved_agent_id = self._normalize_agent_id(agent_id)
-        config = self._get_effective_config()
+        config = cast("ConfigService", self)._require_snapshot().read_only
         agents = config.get("agents", {})
 
         if resolved_agent_id not in agents:
@@ -98,7 +99,7 @@ class ConfigAgentsMixin:
         agent_id: str | None = None,
         preferred_model: ModelReferenceDTO | None = None,
     ) -> dict[str, Any]:
-        config = self._get_effective_config()
+        config = cast("ConfigService", self)._require_snapshot().read_only
         agents = config["agents"]
         resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
         if resolved_agent_id not in agents:
@@ -108,7 +109,7 @@ class ConfigAgentsMixin:
         instructions = target_agent["instructions"]
         model_cfg = target_agent.get("model", {})
         execution_cfg = target_agent.get("execution", {})
-        if not isinstance(execution_cfg, dict):
+        if not isinstance(execution_cfg, Mapping):
             raise TypeError(f"agent {resolved_agent_id} 的 execution 配置必须是对象")
         require_delegated_report = execution_cfg.get(
             "require_delegated_report",
@@ -151,7 +152,8 @@ class ConfigAgentsMixin:
         model: ModelReferenceDTO | None = None,
     ) -> ModelReferenceDTO:
         resolved_agent_id = self.validate_agent_id(agent_id)
-        references = self._agent_model_references(self.list_agents()[resolved_agent_id])
+        agents = cast("ConfigService", self)._require_snapshot().read_only["agents"]
+        references = self._agent_model_references(agents[resolved_agent_id])
         if model is not None and model not in references:
             raise ValueError(f"agent {resolved_agent_id} 不允许使用模型: {model}")
         reference = references[0] if model is None else model

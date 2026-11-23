@@ -30,7 +30,6 @@ from app.agents.tools.extension_invocation import (
 )
 from app.agents.tools.testing import create_test_tool_2
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
-from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.infrastructure.config_service import ConfigService
 
 #: 16 个 DebugMCP 风格内层目标（不含 4 个方案管理目标）。
@@ -124,26 +123,6 @@ async def test_envelope_preserves_target_error_policy_and_original_call_identity
     assert isinstance(result, ToolMessage) and result.status == "error"
     assert result.tool_call_id == "error-contract-call" and result.name == envelope.name
     assert result.content == "目标回执：真实目标失败"
-
-
-class _RuntimeCatalog:
-    """只提供目录聚合所需的运行时工具投影。"""
-
-    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
-        return [
-            {
-                "id": "read_file",
-                "name": "read_file",
-                "description": "读取文件",
-                "parameters": {"type": "object"},
-            },
-            {
-                "id": EXTENSION_TOOL_INVOKER_NAME,
-                "name": EXTENSION_TOOL_INVOKER_NAME,
-                "description": "调用扩展工具",
-                "parameters": {"type": "object"},
-            },
-        ]
 
 
 def _idle_state() -> NodeDebugStateDTO:
@@ -311,40 +290,6 @@ def test_envelope_schema_is_stable_when_debugging_targets_change() -> None:
     )
 
 
-def test_catalog_keeps_debugging_targets_in_inner_directory(
-    tmp_path: Path,
-) -> None:
-    # 只覆盖无关字段，保留发行包 workspace_inline.jsonc 的 tools.custom 数组。
-    config_path = tmp_path / "workspace.jsonc"
-    config_path.write_text(
-        json.dumps({"agents": {"default": {"name": "信封目录检查"}}}),
-        encoding="utf-8",
-    )
-    catalog = AgentToolCatalog(
-        runtime_catalog=_RuntimeCatalog(),
-        config_service=ConfigService(
-            config_dir=Path.cwd() / "configs",
-            config_path=config_path,
-        ),
-    )
-
-    definitions = {item["id"]: item for item in catalog.list_tool_definitions()}
-
-    assert DEBUGGING_TOOL_NAMES <= definitions.keys()
-    for target_name in DEBUGGING_TOOL_NAMES:
-        definition = definitions[target_name]
-        assert definition["group_id"] == DEBUGGING_TOOL_GROUP.group_id
-        assert definition["kind"] == DEBUGGING_TOOL_GROUP.kind
-        assert definition["parameters"]["type"] == "object"
-        assert definition["parameters"]["additionalProperties"] is False
-    assert set(definitions["start_debugging"]["parameters"]["properties"]) == {
-        "fileFullPath",
-        "workingDirectory",
-        "testName",
-        "configurationName",
-        "debugConfigurationId",
-    }
-    assert EXTENSION_TOOL_INVOKER_NAME not in definitions
 
 
 def _debugging_custom_specs(tmp_path: Path) -> list[object]:
@@ -368,7 +313,7 @@ def _debugging_custom_specs(tmp_path: Path) -> list[object]:
 @pytest.fixture
 def custom_tool_factory_context(tmp_path: Path) -> CustomToolFactoryContext:
     return CustomToolFactoryContext(
-        session_id="ses_test",
+
         agent_id="default",
         sender_agent_id="default",
         workspace_root=tmp_path,
@@ -407,7 +352,8 @@ def test_configured_debugging_specs_resolve_into_envelope_targets(
     tools = build_custom_tools(
         specs,
         context=replace(
-            custom_tool_factory_context, session_id="ses_envelope", node_debug_service=service,
+            custom_tool_factory_context, node_debug_service=service,
+            invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding("ses_envelope", "thr_00000000400070008000000000000002")),
         ),
     )
 

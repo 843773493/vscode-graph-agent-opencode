@@ -83,3 +83,11 @@ class EntityRef(BaseModel):
 class TimestampedDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
+
+
+class PublicErrorDTO(BaseModel):
+    """公共 Error 的运行时校验，协议来源为 common/v1/error.proto。"""
+
+    code: str
+    message: str
+    details: dict[str, object] | None = None

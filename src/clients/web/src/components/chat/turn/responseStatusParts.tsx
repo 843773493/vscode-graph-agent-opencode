@@ -1,3 +1,5 @@
+import { useTranscriptDisclosure, useDisclosureFocus } from "../TranscriptViewContext";
+import { nodeAttributes, partNode, nodeKey, type TranscriptNodeKey } from "../../../state/timeline/transcriptNodes";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { ConversationView } from "../../../types/frontend";
@@ -9,6 +11,7 @@ import MarkdownContent from "../MarkdownContent";
 import ContextNotice from "../ContextNotice";
 import { responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
 import type { ChatTurnActions } from "./useChatTurnActions";
+import { MessageSearchLocationContext } from "../messageSearchLocation";
 
 export function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
   const message = [item.payload.error, item.payload.message, item.payload.detail]
@@ -101,22 +104,6 @@ export function ActivityHistory({
       {visibleActivities.map((activity) => (
         <ActivityStatusPart key={activity.activity_id} activity={activity} />
       ))}
-    </div>
-  );
-}
-
-export function HistoricalBoundaryStatusPart({ conversation }: { conversation: ConversationView }) {
-  const status = historicalBoundaryStatus(conversation);
-  if (!status) return null;
-  return (
-    <div
-      className={status.className}
-      role={status.role}
-      data-status-kind={status.kind}
-    >
-      <span className={`codicon ${status.icon}`} aria-hidden="true" />
-      <span>{status.title}</span>
-      {status.detail ? <span className="chat-working-detail">{status.detail}</span> : null}
     </div>
   );
 }
@@ -237,8 +224,9 @@ export function ExecutionLostRecoveryPart({
 
 export function ResponsePart({
   item,
-  onForkItem,
+  onForkItem, parentNode,
 }: {
+  parentNode?: TranscriptNodeKey;
   item: TimelineItem;
   onForkItem?: (itemId: string) => void;
 }): React.ReactNode {
@@ -246,24 +234,18 @@ export function ResponsePart({
   if (item.kind === "context_event") return <ContextNotice notices={item.notices} />;
   if (item.kind === "aggregated_text" && item.partKind === "markdown") {
     return (
-      <MarkdownContent
+      <div {...nodeAttributes(item.responseSources?.[0] ? partNode(item.responseSources[0]) : nodeKey({ kind: "stream", id: item.id }), parentNode)}><MarkdownContent
         value={item.text}
         className={`chat-response-bubble${item.active ? " is-streaming" : ""}`}
         streaming={item.active}
         preview="tail"
         responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}
         contextMenu={{ ...menu, "aria-label": t("chat.itemMenu.response") }}
-      />
+      /></div>
     );
   }
   if (item.kind === "aggregated_text" && item.partKind === "compaction") {
-    return (
-      <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined} {...menu}>
-        <summary>{t("chat.status.compactionSummary")}</summary>
-        {/* 摘要包含模型协议标签，按原文展示以免被 Markdown 当作 HTML 隐去正文。 */}
-        <MarkdownContent value={item.text} renderMode="plain" />
-      </details>
-    );
+    return <CompactionPart item={item} parentNode={parentNode} menu={menu} />;
   }
   if (
     item.kind === "trace"
@@ -278,4 +260,23 @@ export function ResponsePart({
     return <ErrorPart item={item} />;
   }
   return null;
+}
+
+function CompactionPart({item, parentNode, menu}: {
+  item: Extract<TimelineItem, {kind: "aggregated_text"}>; parentNode?: TranscriptNodeKey;
+  menu: ReturnType<typeof useChatItemMenu>;
+}) {
+  const key = item.responseSources?.[0] ? partNode(item.responseSources[0], "header") : nodeKey({kind: "stream", id: item.id}, "header");
+  const [open, setOpen] = useTranscriptDisclosure(key);
+  const focus = useDisclosureFocus(open);
+  const location = React.useContext(MessageSearchLocationContext);
+  const navigationTarget = location.item ?? location.tool ?? location.message;
+  const target = location.item?.item_id ?? location.tool?.item_id ?? location.message?.reference?.item_id;
+  const containsTarget = Boolean(target && item.responseSources?.some(part => part.source.item_id === target));
+  React.useEffect(() => { if (containsTarget) setOpen(true); }, [navigationTarget, containsTarget, setOpen]);
+  return <section ref={focus.root} className="chat-compaction-summary" {...menu}>
+    <button ref={focus.header} type="button" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.map(part => partNode(part).source_ref) ?? [key.source_ref])}
+      aria-expanded={open} onClick={() => { if (open && containsTarget) location.close(); setOpen(!open); }}>{t("chat.status.compactionSummary")}</button>
+    {open ? <div {...nodeAttributes({...key, slot: "body"}, key)}><MarkdownContent value={item.text} renderMode="plain" /></div> : null}
+  </section>;
 }

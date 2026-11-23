@@ -537,7 +537,13 @@ class WorkspaceResourceOwner:
                     await self._store.save(record)
                 if fork_attachment is not None:
                     await observe_phase(fork_attachment.creation_key, f"fork.live.dispatched.{self.kind}")
-                await self._advance_revision(record)
+                retained_associations: list[str | None] = [
+                    f"{ref.session_id}/{ref.thread_id}" for ref in record.thread_associations
+                    if action != "detach" or ref != thread
+                ]
+                if record.retention_scope == "workspace":
+                    retained_associations.append(None)
+                await self._advance_revision(record, retained_associations=retained_associations)
                 runtime = await self._transport.get_resource(resource_id)
                 observe_resource(record, runtime, self.kind)
                 self._verified(record)
@@ -567,13 +573,24 @@ class WorkspaceResourceOwner:
                 await self._sync_ledger(record)
                 return resource_projection(record, runtime, self.kind)
 
-    async def _advance_revision(self, record: OwnedResourceRecord, *, for_stop: bool = False) -> None:
+    async def _sync_owner_revision(
+        self, record: OwnedResourceRecord, *, for_stop: bool,
+        retained_associations: list[str | None] | None,
+    ) -> None:
+        await self._transport.sync_owner_revision(
+            record.resource_id, record.owner_revision, for_stop=for_stop,
+        )
+
+    async def _advance_revision(
+        self, record: OwnedResourceRecord, *, for_stop: bool = False,
+        retained_associations: list[str | None] | None = None,
+    ) -> None:
         record.owner_revision += 1
         record.updated_at = self._now()
         try:
             await self._store.save(record)
-            await self._transport.sync_owner_revision(
-                record.resource_id, record.owner_revision, for_stop=for_stop,
+            await self._sync_owner_revision(
+                record, for_stop=for_stop, retained_associations=retained_associations,
             )
         except BaseException:
             saved = self._store.get(record.resource_id)
@@ -676,7 +693,9 @@ class WorkspaceResourceOwner:
                         await self._stop_or_delete(record, delete=delete, lease_id=lease_id)
                     else:
                         async with resource_operation_dispatch(self, record, lease_id, operation=None):
-                            await self._advance_revision(record)
+                            await self._advance_revision(record, retained_associations=[
+                                None, *(f"{ref.session_id}/{ref.thread_id}" for ref in record.thread_associations if not matches(ref)),
+                            ])
                             record.thread_associations = [
                                 ref for ref in record.thread_associations if not matches(ref)
                             ]

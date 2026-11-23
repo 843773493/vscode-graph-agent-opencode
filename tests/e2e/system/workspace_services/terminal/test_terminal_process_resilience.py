@@ -20,7 +20,6 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
     create_terminal_scenario_workspace,
     prepare_empty_terminal_e2e_workspace,
     process_exists,
-    terminal_ports_with_offset,
     wait_process_gone,
 )
 from tests.harness.python.run_context import TestRunContext
@@ -28,6 +27,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.support.ports import TestFilePorts
 
 
 async def _transport_grant(client: httpx.AsyncClient, terminal_id: str) -> str:
@@ -73,10 +73,10 @@ async def _wait_for_output(
 @pytest.mark.asyncio
 async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 88)
+    backend_port = e2e_service_ports.port(88)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "utf8_output"
     )
@@ -150,10 +150,10 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
 @pytest.mark.asyncio
 async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 74)
+    backend_port = e2e_service_ports.port(74)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "worker_isolation"
     )
@@ -230,10 +230,10 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
 @pytest.mark.asyncio
 async def test_failed_terminal_start_rolls_back_session_and_worker(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 78)
+    backend_port = e2e_service_ports.port(78)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "failed_start"
     )
@@ -281,10 +281,10 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
 @pytest.mark.asyncio
 async def test_websocket_attach_messages_are_processed_in_order(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 80)
+    backend_port = e2e_service_ports.port(80)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "ordered_attach"
     )
@@ -362,10 +362,10 @@ async def test_websocket_attach_messages_are_processed_in_order(
 @pytest.mark.asyncio
 async def test_websocket_reconnect_replays_only_unacknowledged_output(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 76)
+    backend_port = e2e_service_ports.port(76)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "websocket_reconnect"
     )
@@ -466,10 +466,10 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
 )
 async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 82)
+    backend_port = e2e_service_ports.port(82)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "manager_sigkill"
     )
@@ -542,10 +542,10 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
 @pytest.mark.asyncio
 async def test_concurrent_kill_and_delete_share_one_release(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 84)
+    backend_port = e2e_service_ports.port(84)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "concurrent_release"
     )
@@ -598,10 +598,10 @@ async def test_concurrent_kill_and_delete_share_one_release(
 )
 async def test_normal_shell_exit_reaps_term_resistant_descendant(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 86)
+    backend_port = e2e_service_ports.port(86)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "normal_exit_cleanup"
     )
@@ -672,10 +672,10 @@ async def test_normal_shell_exit_reaps_term_resistant_descendant(
 )
 async def test_pre_ready_exit_reaps_term_resistant_descendant(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 88)
+    backend_port = e2e_service_ports.port(88)
     workspace_root = create_terminal_scenario_workspace(
         e2e_workspace_root_path, "pre_ready_cleanup"
     )
@@ -722,10 +722,10 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
 @pytest.mark.asyncio
 async def test_shutdown_persist_failure_allows_explicit_retry(
     e2e_workspace_root_path: str,
-    e2e_backend_port: int,
+    e2e_service_ports: TestFilePorts,
     terminal_run_context: TestRunContext,
 ) -> None:
-    backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 90)
+    backend_port = e2e_service_ports.port(90)
     workspace_root = create_terminal_scenario_workspace(e2e_workspace_root_path, "shutdown_failure")
     service = start_terminal_plugin_service(
         backend_port=backend_port, workspace_root=workspace_root, artifacts_dir=terminal_run_context.artifacts_dir,

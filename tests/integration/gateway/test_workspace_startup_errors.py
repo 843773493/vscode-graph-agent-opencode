@@ -15,7 +15,7 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -56,7 +56,7 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=primary)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     evidence = {}
     state_path = context.boxteam_home / "state/gateway/gateway.sqlite"
 
@@ -155,7 +155,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=primary)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     workspace = primary / f"managed-{failure}-failure"
     workspace.mkdir()
     gateway_root = context.boxteam_home / "state/gateway"

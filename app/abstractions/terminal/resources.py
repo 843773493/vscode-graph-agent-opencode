@@ -44,6 +44,11 @@ class TerminalRequestError(ResourceRequestError):
 
 
 class TerminalTransport(ResourceTransport, Protocol):
+    async def sync_owner_revision(
+        self, resource_id: str, owner_revision: int, *, for_stop: bool,
+        retained_associations: list[str | None] | None = None,
+    ) -> None: ...
+
     async def list_resources(self, *, resource_ids: frozenset[str] | None = None) -> list[TerminalSnapshot]: ...
 
     def changes(self) -> AsyncIterator[ResourceChanges]:

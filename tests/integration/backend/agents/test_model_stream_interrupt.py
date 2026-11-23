@@ -13,6 +13,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.agents.providers import provider_http_client
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import (
@@ -45,11 +46,6 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.runtime.litellm_runtime import (
-    AsyncHTTPHandler,
-    litellm,
-    litellm_http_handler,
-)
 from app.services.infrastructure.message_stream_store import (
     MessageStreamNotFoundError,
     MessageStreamStore,
@@ -523,38 +519,14 @@ def _protocol(provider: ProviderKind) -> Literal[
     return "openai_chat_sse" if provider == "chat" else "openai_responses_sse"
 
 
-def _install_litellm_client(
-    client: httpx.AsyncClient,
-) -> tuple[httpx.AsyncClient | None, object]:
-    previous_session = litellm.aclient_session
-    if previous_session is not None:
-        raise RuntimeError("测试开始前 LiteLLM async session 已存在")
-    injected_handler = AsyncHTTPHandler.__new__(AsyncHTTPHandler)
-    injected_handler.timeout = None
-    injected_handler.event_hooks = None
-    injected_handler.client_alias = "boxteam-provider-interrupt"
-    injected_handler.client = client
-    previous_factory = litellm_http_handler.get_async_httpx_client
+@pytest.fixture
+def install_provider_transport(monkeypatch: pytest.MonkeyPatch):
+    """只替换实际网络边界，保留实例 client、SDK 和请求封存链。"""
+    def install(transport: httpx.AsyncBaseTransport) -> None:
+        monkeypatch.setattr(provider_http_client, "model_stream_async_transport",
+                            lambda *_: httpx.MockTransport(transport.handle_async_request))
 
-    def get_injected_async_client(
-        *_args: object,
-        **_kwargs: object,
-    ) -> AsyncHTTPHandler:
-        return injected_handler
-
-    litellm_http_handler.get_async_httpx_client = get_injected_async_client
-    litellm.aclient_session = client
-    return previous_session, previous_factory
-
-
-def _restore_litellm_client(
-    client: httpx.AsyncClient,
-    previous_session: httpx.AsyncClient | None,
-    previous_factory: object,
-) -> None:
-    litellm_http_handler.get_async_httpx_client = previous_factory
-    if litellm.aclient_session is client:
-        litellm.aclient_session = previous_session
+    return install
 
 
 async def _read_until(
@@ -687,6 +659,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     provider: ProviderKind,
     stage: InterruptStage,
     frozen_provider_activation,
+    install_provider_transport,
 ) -> None:
     store, resolver, session_id = message_stream_context
     frames = _scenario_frames(provider, stage)
@@ -696,8 +669,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     target_index = _target_frame_index(frames, provider=provider, stage=stage)
     upstream = _GatedSSEStream(wire_frames, pause_after=target_index)
     transport = _SSETransport(upstream)
-    client = httpx.AsyncClient(transport=transport)
-    previous_session, previous_factory = _install_litellm_client(client)
+    install_provider_transport(transport)
 
     sessions_root = resolver.sessions_root
     saver = RolloutCheckpointSaver(sessions_root)
@@ -724,6 +696,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     sink_token = set_current_model_delta_sink(runtime)
     model_task: asyncio.Task[None] | None = None
     observed: list[dict[str, object]] = []
+    model = None
     try:
         model = _model(provider)
         prepared, snapshot, model_call_id, native_projection = (
@@ -801,7 +774,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
         assert upstream.read_calls == target_index + 2
 
         await runtime.finalize_interruption_facts()
-        await writer.close_interrupted(command_id)
+        await writer.commit("stream.interrupted", {"interrupt_request_id": command_id, "status": "interrupted"})
         await _read_until(
             subscription,
             observed,
@@ -878,8 +851,9 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
         reset_current_turn_execution_scope(scope_token)
         await store.unsubscribe(subscription)
         await scope.close()
-        _restore_litellm_client(client, previous_session, previous_factory)
-        await client.aclose()
+        if model is not None:
+            await model.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
@@ -888,6 +862,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
     message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
     provider: ProviderKind,
     frozen_provider_activation,
+    install_provider_transport,
 ) -> None:
     store, resolver, session_id = message_stream_context
     sessions_root = resolver.sessions_root
@@ -918,8 +893,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
         pause_after=None,
     )
     transport = _SSETransport(upstream)
-    client = httpx.AsyncClient(transport=transport)
-    previous_session, previous_factory = _install_litellm_client(client)
+    install_provider_transport(transport)
 
     writer = await store.open(thread_id=thread_id,
         session_id=session_id,
@@ -935,6 +909,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
     observed: list[dict[str, object]] = []
     tool_scope: TurnExecutionScope | None = None
     tool_task: asyncio.Task[str] | None = None
+    model = None
     try:
         model = _model(provider)
         ingress_message = HumanMessage(content="测试中断", id=ingress_id)
@@ -1089,7 +1064,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
         assert await asyncio.wait_for(tool_task, timeout=2) == "user_requested"
 
         await runtime.finalize_interruption_facts()
-        await writer.close_interrupted(command_id)
+        await writer.commit("stream.interrupted", {"interrupt_request_id": command_id, "status": "interrupted"})
         await _read_until(
             subscription,
             observed,
@@ -1147,8 +1122,9 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
         reset_current_turn_execution_scope(scope_token)
         await store.unsubscribe(subscription)
         await scope.close()
-        _restore_litellm_client(client, previous_session, previous_factory)
-        await client.aclose()
+        if model is not None:
+            await model.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
@@ -1166,8 +1142,6 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     target_index = _target_frame_index(frames, provider=provider, stage="reasoning")
     server = _TCPGatedSSEServer(wire_frames, pause_after=target_index)
     await server.start()
-    client = httpx.AsyncClient()
-    previous_session, previous_factory = _install_litellm_client(client)
 
     sessions_root = resolver.sessions_root
     saver = RolloutCheckpointSaver(sessions_root)
@@ -1193,6 +1167,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     scope_token = set_current_turn_execution_scope(scope)
     sink_token = set_current_model_delta_sink(runtime)
     model_task: asyncio.Task[None] | None = None
+    model = None
     try:
         model = _model(provider, api_base=server.endpoint)
         prepared, snapshot, model_call_id, native_projection = (
@@ -1270,8 +1245,8 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
         reset_current_turn_execution_scope(scope_token)
         await store.unsubscribe(subscription)
         await scope.close()
-        _restore_litellm_client(client, previous_session, previous_factory)
-        await client.aclose()
+        if model is not None:
+            await model.aclose()
         await server.close()
 
 
@@ -1327,7 +1302,7 @@ async def test_interrupt_during_block_delta_persistence_closes_started_block(
     with pytest.raises(MessageStreamTerminalError, match="中断闸门"):
         await asyncio.wait_for(delta_task, timeout=2)
     await runtime.finalize_interruption_facts()
-    await writer.close_interrupted(command.command_id)
+    await writer.commit("stream.interrupted", {"interrupt_request_id": command.command_id, "status": "interrupted"})
 
     events = await store.list_events(
         session_id=session_id,
@@ -1409,7 +1384,7 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
         assert process.returncode is not None
 
         await runtime.finalize_interruption_facts()
-        await writer.close_interrupted(command.command_id)
+        await writer.commit("stream.interrupted", {"interrupt_request_id": command.command_id, "status": "interrupted"})
         events = await store.list_events(
             session_id=session_id,
             turn_stream_id=writer.turn_stream_id,
@@ -1514,7 +1489,7 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
         assert server.sent_frame_count == target_index + 1
 
         restarted = MessageStreamStore(path_resolver=resolver)
-        assert await restarted.reconcile_unfinished_streams() == 1
+        assert await restarted.reconcile_unfinished_streams(terminal_status_writer=RolloutCheckpointSaver(resolver.sessions_root)) == 1
         recovered_writer = await restarted.open_existing(
             thread_id=restarted._path_resolver.main_thread_id(session_id), session_id=session_id,
             turn_id=turn_id,

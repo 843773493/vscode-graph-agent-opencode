@@ -95,9 +95,9 @@ def _powershell_command(script: str) -> str:
     )
 
 
-def install_gateway_ssh_assets_for_e2e(workspace_root: Path) -> Path:
+def install_gateway_ssh_assets_for_e2e(artifacts_dir: Path) -> Path:
     project_root = Path.cwd().resolve()
-    test_home = workspace_root.parent / "artifacts" / "home"
+    test_home = artifacts_dir / "home"
     install_gateway_development_assets(project_root=project_root, home=test_home)
     return test_home / ".ssh" / SSH_KEY_NAME
 

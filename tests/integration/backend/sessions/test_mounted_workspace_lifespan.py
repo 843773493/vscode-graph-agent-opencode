@@ -432,7 +432,7 @@ async def test_registry_failure_closes_configured_transport(
                 await _main_lifespan_state["after_http_startup"]()
                 raise AssertionError("registry 构造失败不得进入 ready")
         assert closed == ["transport"]
-        assert controller.client is None
+        assert not controller.installed
         assert not mounted_case.containers
         assert main.app.state.workspace_container_registry is None
     finally:
@@ -748,7 +748,7 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
             for index, (container, other, session_id, node) in enumerate(zip(
                 (a, b), (b, a), sessions, nodes, strict=True,
             )):
-                await writers[index].close_completed()
+                await writers[index].commit("stream.completed", {"status": "completed"})
                 state = await container.message_stream_store.get_state(writers[index].turn_stream_id)
                 assert state["blocks"][0]["text"] == ("仅 A" if index == 0 else "仅 B")
                 events = await container.message_stream_store.list_events(

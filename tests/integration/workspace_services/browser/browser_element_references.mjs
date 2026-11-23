@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import {
@@ -12,8 +10,7 @@ import { browserLaunchOptions } from "../../../../src/workspace-services/browser
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 const run = await TestRunContext.fromTestFile(fileURLToPath(import.meta.url)).prepare();
-const runtimeDirectory = path.join(run.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
+const runtimeDirectory = run.runtimeDir;
 for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 const results = [];
 const scenarios = [

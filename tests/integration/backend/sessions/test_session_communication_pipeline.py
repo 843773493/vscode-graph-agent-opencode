@@ -33,7 +33,7 @@ from tests.support.communication.federation import (
 )
 from tests.support.e2e_control.harness import control_request
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -182,7 +182,7 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
 @pytest.fixture
 async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[CommunicationCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     workspace = getattr(request, "param", {}).get("prepare_workspace", _prepare_workspace)(context, ports.port(10), ports.port(1))
     reset_gateway_persistent_state(workspace_root=workspace)
     artifacts = context.artifacts_dir / request.node.name

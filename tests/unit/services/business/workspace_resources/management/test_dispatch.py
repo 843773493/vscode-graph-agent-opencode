@@ -43,10 +43,10 @@ async def test_unknown_write_failure_protects_exact_management_lease(
     dispatched = False
     failures = 0
 
-    async def lost(resource_id: str, owner_revision: int, *, for_stop: bool) -> None:
+    async def lost(resource_id: str, owner_revision: int, *, for_stop: bool, **revision_options: object) -> None:
         nonlocal dispatched
         observed.extend(bundle.leases.leases_for_resource(resource_id))
-        await sync(resource_id, owner_revision, for_stop=for_stop)
+        await sync(resource_id, owner_revision, for_stop=for_stop, **revision_options)
         dispatched = True
         raise failure
 
@@ -123,11 +123,11 @@ async def test_successful_management_confirmation_and_original_cancellation(
     original = asyncio.CancelledError("原管理同步取消")
     observed: list[ResourceLease] = []
 
-    async def checked(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def checked(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         lease, = bundle.leases.leases_for_resource(resource_id)
         assert lease.status == "dispatching"
         observed.append(lease)
-        await sync(resource_id, revision, for_stop=for_stop)
+        await sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if cancel:
             raise original
 

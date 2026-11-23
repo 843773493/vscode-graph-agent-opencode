@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -64,7 +65,7 @@ def boundary_client() -> Iterator[tuple[TestClient, Mock]]:
         application.add_exception_handler(error_type, workspace_app.exception_handlers[error_type])
     application.dependency_overrides[verify_local_token] = lambda: "local"
     application.dependency_overrides[get_node_debug_service] = lambda: service
-    with TestClient(application, raise_server_exceptions=False, headers={"X-Request-ID": REQUEST_ID}) as client:
+    with TestClient(application, raise_server_exceptions=False, headers={"X-Request-ID": REQUEST_ID, "X-BoxTeam-Gateway-Id": "gateway_" + "1" * 32}) as client:
         yield client, service
 
 
@@ -94,7 +95,7 @@ def test_capability_publication_rejects_mutated_native_reference(
     assert response.headers["X-Request-ID"] == REQUEST_ID
     assert response.json()["request_id"] == REQUEST_ID
     assert "debug-secret" not in response.text
-    diagnostics = [record for record in caplog.records if record.exc_info]
+    diagnostics = [record for record in caplog.records if "PydanticSerializationError:" in record.getMessage() and record.exc_info is None]
     assert len(diagnostics) == 1
     assert "PydanticSerializationError" in caplog.text
     service.get_capabilities.assert_called_once()
@@ -123,14 +124,14 @@ def test_internal_validation_preserves_original_diagnostic(
     assert response.status_code == 500, response.text
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(failure),
         "data": None,
         "request_id": REQUEST_ID,
     }
     assert response.headers["X-Request-ID"] == REQUEST_ID
     assert "debug-secret" not in response.text
-    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is failure]
-    assert len(diagnostics) == 1 and "debug-secret" in caplog.text
+    diagnostics = [record for record in caplog.records if "ValidationError:" in record.getMessage() and record.exc_info is None]
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
     assert failure.__cause__ is cause
     getattr(service, operation).assert_called_once()
 

@@ -251,11 +251,98 @@ async def test_new_provider_without_models_uses_real_directory_and_never_saves(p
     body = response.json()
     result = body["data"]
     assert response.headers["X-Request-ID"] == body["request_id"] == "catalog-request"
-    assert result["complete"] and result["models"] == [{"model": "upstream-main", "name": None}]
+    assert result["complete"] and result["models"] == [{"model": "upstream-main", "name": None, "metadata": None}]
     assert result["observation"]["source_baseline"] == request["expected_source_baseline"]
     assert result["observation"]["mode"] == "draft" and result["observation"]["edit_version"] == 3
     assert catalog.requests[0][0] == "/v1/models"
     assert probe_case.source.read_bytes() == original and probe_case.rows() == before
+
+
+async def test_directory_enriches_available_models_and_catalog_is_not_account_authorization(
+    probe_case: ProbeCase, catalog: Catalog,
+) -> None:
+    catalog.pages = [{"data": [{"id": "gpt-6-luna"}, {"id": "unlisted-private-model"}]}]
+    before = probe_case.source.read_bytes()
+    response = await probe_case.client.post(URL, json=probe_case.draft())
+    assert response.status_code == 200, response.text
+    discovered = response.json()["data"]["models"]
+    assert [item["model"] for item in discovered] == ["gpt-6-luna", "unlisted-private-model"]
+    assert discovered[0]["metadata"]["supports_vision"] is True
+    assert discovered[0]["metadata"]["max_input_tokens"] > 0
+    assert discovered[0]["metadata"]["sources"]["max_input_tokens"] == "litellm"
+    assert discovered[0]["metadata"]["catalog_provider"] == "openai"
+    assert discovered[1]["metadata"] is None
+    previous_requests = len(catalog.requests)
+    response = await probe_case.client.get("/api/v1/config/llm/catalog?provider=openai")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert response.headers["X-Request-ID"] == body["request_id"]
+    assert any(item["model"] == "gpt-6-luna" for item in body["data"]["models"])
+    assert len(catalog.requests) == previous_requests
+    assert probe_case.source.read_bytes() == before
+
+
+async def test_directory_capabilities_keep_field_sources_and_provider_priority(
+    probe_case: ProbeCase, catalog: Catalog, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.runtime import model_metadata
+
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda: {"same-name": {
+        "litellm_provider": "openai", "mode": "chat", "max_input_tokens": 922000,
+        "supports_vision": True, "supports_function_calling": True,
+    }})
+    catalog.pages = [{"data": [{"id": "same-name", "max_input_tokens": 64000, "supports_vision": False,
+        "max_output_tokens": 999}, {"id": "unknown", "context_length": 1000000}]}]
+    request = probe_case.draft()
+    payload = json.loads(request["jsonc"])
+    payload["llm"]["providers"]["team"]["defaults"]["api_mode"]["model_info"] = {"max_input_tokens": 32000}
+    request["jsonc"] = json.dumps(payload)
+    before, original = probe_case.rows(), probe_case.source.read_bytes()
+    response = await probe_case.client.post(URL, json=request)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert result["complete"]
+    info = result["models"][0]["metadata"]
+    assert info["max_input_tokens"] == 32000
+    assert info["supports_vision"] is False
+    assert info["supports_function_calling"] is True
+    assert info["sources"] == {"max_input_tokens": "provider", "supports_vision": "upstream", "supports_function_calling": "litellm"}
+    assert info["catalog_provider"] == "openai" and "max_output_tokens" not in info
+    # 未知模型不会按总上下文猜输入容量；当前 Provider 的显式值仍适用。
+    assert result["models"][1]["metadata"]["max_input_tokens"] == 32000
+    assert result["models"][1]["metadata"]["sources"] == {"max_input_tokens": "provider"}
+    assert probe_case.source.read_bytes() == original and probe_case.rows() == before
+
+
+async def test_directory_invalid_explicit_capacity_is_not_replaced_by_reference(
+    probe_case: ProbeCase, catalog: Catalog,
+) -> None:
+    catalog.pages = [{"data": [{"id": "gpt-6-luna", "max_input_tokens": True}]}]
+    response = await probe_case.client.post(URL, json=probe_case.draft())
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert not result["complete"] and result["models"] == []
+    assert result["error"]["category"] == "protocol"
+
+
+async def test_full_provider_catalog_is_read_only_and_preserves_connection_gaps(probe_case: ProbeCase, catalog: Catalog) -> None:
+    from app.runtime.litellm_runtime import local_model_catalog
+
+    before = probe_case.source.read_bytes()
+    response = await probe_case.client.get("/api/v1/config/llm/providers")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert response.headers["X-Request-ID"] == body["request_id"]
+    providers = {item["provider"]: item for item in body["data"]["providers"]}
+    expected = {entry["litellm_provider"] for key, entry in local_model_catalog().items()
+                if key not in {"sample_spec", "fallback_generalizations"}
+                and isinstance(entry, dict) and isinstance(entry.get("litellm_provider"), str) and entry["litellm_provider"]}
+    assert set(providers) == expected
+    assert providers["openai"]["default_endpoint"] == "https://api.openai.com/v1"
+    assert providers["azure"]["default_endpoint"] is None
+    assert providers["azure"]["upstream_discovery"] is False
+    assert all(0 <= item["chat_model_count"] <= item["model_count"] for item in providers.values())
+    assert catalog.requests == [] and probe_case.source.read_bytes() == before
 
 
 async def test_other_saved_source_changes_reject_stale_baseline_then_uses_pending_file(probe_case: ProbeCase, catalog: Catalog) -> None:
@@ -349,7 +436,7 @@ async def test_anthropic_pages_share_limits_and_keep_completed_pages(probe_case:
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     assert not data["complete"] and data["error"]["category"] == category
-    assert data["models"] == [{"model": "first", "name": None}]
+    assert data["models"] == [{"model": "first", "name": None, "metadata": None}]
     assert [item[0] for item in catalog.requests] == ["/v1/models", "/v1/models?after_id=first"]
 
 

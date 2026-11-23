@@ -208,7 +208,7 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   } finally { act(() => mirror.unmount()); }
   expect(requests.every((request) => request.owner.gatewayId === OWNER_A.gatewayId
     && request.owner.workspaceId === OWNER_A.workspaceId && request.path.includes("/threads/thr_"))).toBe(true);
-  expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
+  expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "assistant_text", "final_response", "internal"] });
 });
 
 test("静默轮询只读版本，变化才补正文；失败恢复和手动刷新仍读完整历史", async () => {
@@ -239,7 +239,8 @@ test("静默轮询只读版本，变化才补正文；失败恢复和手动刷�
   await act(async () => { await drainMicrotasks(); });
   expect(current.snapshot.history?.source_view_revision).toBe(7);
   const fullRead = requests[0]!;
-  expect(fullRead.include).toContain("tool_result");
+  expect(fullRead.include).toContain("assistant_text");
+  expect(fullRead.include).not.toContain("tool_result");
   const initialHistory = current.snapshot.history;
   const renderedAfterInitialRead = renderCount;
 
@@ -474,7 +475,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
       body: {
         direction: "tail",
         execution_id: "execution-1",
-        include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
+        include: ["user", "metadata", "assistant_text", "final_response", "internal"],
       },
     },
     {
@@ -483,7 +484,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
         direction: "before",
         cursor: "cursor-before-256",
         execution_id: "execution-1",
-        include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
+        include: ["user", "metadata", "assistant_text", "final_response", "internal"],
       },
     },
   ]);

@@ -16,6 +16,7 @@ from app.services.infrastructure.message_stream_store import (
     MessageStreamStore,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.messages import admit_message_stream_writer
 
 MessageStreamStoreCase = tuple[MessageStreamStore, SessionCatalogPathResolver, str]
 
@@ -79,7 +80,7 @@ async def test_corrupt_read_keeps_diagnostics_and_rejects_again_without_partial_
     store, resolver, session_id = message_stream_store
     thread = resolver.main_thread_id(session_id)
     writer = await store.open(session_id=session_id, thread_id=thread, turn_id="turn_read_errors")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     await asyncio.gather(*store._snapshot_tasks.values())
     expected = await store.get_state(writer.turn_stream_id)
     paths = {
@@ -130,7 +131,7 @@ async def test_read_os_failure_keeps_original_cause_and_explicit_retry(
     store, resolver, session = message_stream_store
     thread = resolver.main_thread_id(session)
     writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_read_os_error")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     await asyncio.gather(*store._snapshot_tasks.values())
     paths = {
         "events": store._stream_path(session, writer.turn_stream_id),
@@ -240,6 +241,7 @@ async def test_startup_recovery_uses_full_cold_validation_before_any_publication
     job = "job_startup_read_validation"
     writer = await store.open(session_id=session, thread_id=thread,
                               turn_id="turn_startup_read_validation", job_id=job)
+    owner = admit_message_stream_writer(writer, resolver)
     first = await writer.commit("block.delta", {
         "block_id": "block_startup", "operation": "append", "text": "ORIGINAL",
     }, block_id="block_startup", event_id="evt_startup_original")
@@ -249,7 +251,7 @@ async def test_startup_recovery_uses_full_cold_validation_before_any_publication
             "block_id": "block_startup", "operation": "append", "text": ".",
         }, block_id="block_startup")
     if mode == "completed":
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
     await asyncio.gather(*store._snapshot_tasks.values())
     expected = await store.get_state(writer.turn_stream_id)
     state_path = store._state_path(session, writer.turn_stream_id)
@@ -273,14 +275,14 @@ async def test_startup_recovery_uses_full_cold_validation_before_any_publication
     try:
         for _ in range(2):
             with pytest.raises(MessageStreamError) as caught:
-                await cold.reconcile_unfinished_streams(resumed_job_ids=resumed)
+                await cold.reconcile_unfinished_streams(resumed_job_ids=resumed, terminal_status_writer=owner)
             assert f"session_id={session}" in str(caught.value)
             assert marker not in str(caught.value) and str(target) not in str(caught.value)
             assert not cold._states and not cold._event_ids and not cold._event_ids_loaded
             assert {p: p.read_bytes() for p in target.parent.iterdir() if p.is_file()} == originals
     finally:
         target.write_bytes(original)
-    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed) == (1 if mode == "lost" else 0)
+    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed, terminal_status_writer=owner) == (1 if mode == "lost" else 0)
     if mode == "completed":
         assert not cold._states and not cold._event_ids
     reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
@@ -294,7 +296,7 @@ async def test_startup_recovery_uses_full_cold_validation_before_any_publication
     assert await reopened.commit("block.delta", first["payload"],
                                  block_id="block_startup", event_id=first["event_id"]) == first
     before_second = store._stream_path(session, writer.turn_stream_id).read_bytes()
-    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed) == 0
+    assert await cold.reconcile_unfinished_streams(resumed_job_ids=resumed, terminal_status_writer=owner) == 0
     assert store._stream_path(session, writer.turn_stream_id).read_bytes() == before_second
 
 
@@ -329,7 +331,7 @@ async def test_stream_locator_rejects_native_values_before_read_or_fallback(
     store, resolver, session = message_stream_store
     thread = resolver.main_thread_id(session)
     writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_locator")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     await asyncio.gather(*store._snapshot_tasks.values())
     index = store._index_path(session)
     original_index = index.read_bytes()
@@ -394,7 +396,7 @@ async def test_existing_opaque_stream_labels_keep_same_storage_and_restore_contr
     with monkeypatch.context() as patch:
         patch.setattr(stream_module, "create_prefixed_id", lambda prefix: stream_id if prefix == "strm" else generate(prefix))
         writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_opaque_label")
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
     await asyncio.gather(*store._snapshot_tasks.values())
     cold = MessageStreamStore(path_resolver=resolver)
     reopened = await cold.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id,

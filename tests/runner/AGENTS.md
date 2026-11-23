@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-test-artifacts` 用真实 pytest 子进程验证参数证据、SQLite WAL 失败现场、module/session 装具边界、成功 runtime 回收及异常退出保护；固定90秒／4GiB，沿集成闸门。不启动产品服务，不代表 Windows/macOS 原生验收。
+
 `integration-context-history-markers` 经真实消息执行、原 Fork 服务和 SQLite／冻结正文验证来源元数据、续页及三个 Fork 模式的独立冷读，固定180秒／4GiB，沿原 Fork watchdog。`integration-web-context-history-markers` 经正式 Workbench 和真实 Gateway／Backend 验证新建、打断续发、查看／复制、刷新重开及20个暖正文样本，固定300秒／4GiB。两者复用集成独占闸门与 model_stream，不替代真实 Provider、Windows 或128 Turn浏览器锚点预算。
 
 `unit-named-secrets` 核对目标侧密文存储、命名引用及受信批量解析，固定60秒／4GiB；`integration-web-configuration-entities` 经真实 Gateway 和完整 Workbench 验证原设置表单、密钥复用、轮换与 Gateway 重启恢复，固定300秒／4GiB。后者不调用真实模型，不替代远端服务或原生客户端验收。
@@ -24,7 +26,7 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 
 `integration-search-scope-changes` 通过真实 Gateway／双后端与正式搜索 SDK，验 origin／A+B／all、控制面发现、独有正文、空／未知范围、移除 owner 和旧 route 被新离线 owner 复用后的冻结续查；核后端逐 request_id 的实际分发。固定180秒／4GiB及原集成闸门，不代替离线目标管理 UI、Web／Electron 或 Windows canonical 验收。
 
-`integration-web-search-coverage` 共用一次正式 Workbench 构建，先验出站故障装具的查询生命周期，再运行无替身文件覆盖 E2E；按较低证据层登记组合套件，原场景分别保留 Integration／E2E 分类与镜像产物。固定600秒／4GiB，沿集成独占闸门；不代表 Windows canonical 或完整 Quick Access 验收。
+`integration-web-search-coverage` 共用一次正式 Workbench 构建，先验出站故障装具的查询生命周期，再运行文件覆盖 E2E；组合套件保留原 Integration 注册，各场景保留自身验证目标分类与镜像产物，不以目录或模型模式推断证据强弱。固定600秒／4GiB，沿集成独占闸门；不代表 Windows canonical 或完整 Quick Access 验收。
 
 `unit-resource-activation-bodies` 定向验证资源正文批量冻结、manifest 原子登记、提交结果未知时正文保留、冷读取／保留依赖及 MCP member 的 fork／恢复；沿正式 fork watchdog，固定90秒／4GiB。它不代表真实 Agent／Gateway／Web 或完整生命周期验收。
 
@@ -127,7 +129,7 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 ## 不可修改内容
 
 - 不要隐藏失败、吞掉退出码或把未满足前置条件记为通过。
-- 不要让 E2E 套件回退执行 Integration stub 套件。
+- 套件 layer 表达验证目标，不表达模型真假；E2E 允许显式真实模型、上游重放或手工 SSE。不得因前置条件不足静默更换模式或执行另一套件；共用 harness/support，不为模型参数复制场景。产物注明实际模式、资产来源和被替换边界，不把回放通过当成真实 Provider 可用。
 
 ## 规范
 
@@ -239,7 +241,7 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 
 - `integration-mcp-tool-approval-recovery` 经真实 Gateway／消息／审批入口生成多工具等待，再硬退出并重启 Backend；验证旧决定失效、原资格释放、未知结果与原执行同事务归属、新执行唯一 MCP 收据及请求 hash，固定240秒／4GiB；不替代跨 execution 持续资源持有、跨 Gateway 授权或真实 Provider 验收。
 
-`integration-web-conversation-lifecycle` 是 Section 8 完整场景唯一入口，保留原 12600000ms／4GiB 与 focus collection preflight；`e2e-web` 不包含模型回放场景。
+`integration-web-conversation-lifecycle` 是 Section 8 完整场景唯一入口，保留原 12600000ms／4GiB 与 focus collection preflight；保留原路径和注册，不因模型回放重新分类或复制入口。`e2e-web` 继续选择既有 E2E 目录，不自动纳入 Section 8。
 
 `integration-process-port-lease` 在 Linux 上以真实 TCP 验证进程租约阻止自动客户端抢占端口、真实服务仍可复用监听、服务退出后保留至租约释放，以及既有监听者不受影响；固定60秒／4GiB。不修改宿主端口范围，内核不支持每 socket 的 IP_LOCAL_PORT_RANGE 时明确跳过竞争检查，不代替完整会话验收或其它平台证据。
 

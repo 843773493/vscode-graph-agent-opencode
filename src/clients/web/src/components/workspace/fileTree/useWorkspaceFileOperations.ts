@@ -18,7 +18,7 @@ import {
   type StoredFileIntent,
   type WorkspaceFileIntentStore,
 } from "../../../state/workspaceFiles/intentStore";
-import { errorDisplayMessage, isErrorReported } from "../../../utils/errorMessage";
+import { errorMessage, isErrorReported } from "../../../utils/errorMessage";
 import { localDatabaseError } from "../../../state/browserPersistence";
 
 interface FileOperationOptions {
@@ -153,7 +153,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         }
         } catch (error) {
           blocked.add(record.intent.client_operation_id);
-          if (current()) callbacks.current.onError(errorDisplayMessage(error));
+          if (current()) callbacks.current.onError(errorMessage(error));
         }
       }
       updatePending(await target.store.load(target.scope));
@@ -180,7 +180,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         if ((await store.loadForWorkspace(workspaceOwnerFromKey(workspaceId))).length > 0) await run();
       }
       catch (error) {
-        if (!stopped && !isErrorReported(error)) callbacks.current.onError(errorDisplayMessage(error));
+        if (!stopped && !isErrorReported(error)) callbacks.current.onError(errorMessage(error));
         // 存储故障需明确恢复，不能每 500ms 重开同一个受阻数据库。
         if (localDatabaseError(error)) return;
       }

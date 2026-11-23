@@ -34,7 +34,7 @@ from tests.support.api_waiters import wait_for_job_done
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
 from tests.support.model_stream.config import model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -110,7 +110,7 @@ def _tool_call(
 def scripted_model_replay(request: pytest.FixtureRequest) -> Iterator[ScriptedModelState]:
     """普通调试业务复用现有 model_stream，不监听模型端口或绕过真实 SDK。"""
     context = TestRunContext.from_test_file(Path(request.node.path))
-    with model_stream_replay(context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="debug-prompt-flow") as replay:
+    with model_stream_replay(context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="debug-prompt-flow") as replay:
         yield ScriptedModelState(replay.control, replay.config_path, replay.artifacts)
 
 
@@ -207,13 +207,13 @@ def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str
 
 @pytest.fixture(scope="module")
 def scripted_debug_backend_port(request: pytest.FixtureRequest) -> int:
-    # 文件专属端口块内避开本机常驻服务占用的起始端口，不回收未知进程。
-    return integration_port_block_for_file(Path(request.node.path)).port(20)
+    # 通过公共计划申请实际空闲端口，不回收未知进程。
+    return integration_ports_for_file(Path(request.node.path)).port(20)
 
 
 @pytest.fixture(scope="module")
 def scripted_debug_gateway_port(request: pytest.FixtureRequest) -> int:
-    return integration_port_block_for_file(Path(request.node.path)).port(21)
+    return integration_ports_for_file(Path(request.node.path)).port(21)
 
 
 @pytest.fixture(scope="module")
@@ -223,6 +223,7 @@ def scripted_model_info() -> dict[str, bool]:
 
 @pytest.fixture(scope="module")
 def scripted_gateway_process(
+    request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     scripted_debug_backend_port: int,
@@ -277,7 +278,9 @@ def scripted_gateway_process(
         encoding="utf-8",
     )
 
-    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     boxteam_home = context.boxteam_home_for_node("debug-prompt-flow")
     copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     gateway = start_gateway_process(
@@ -285,7 +288,7 @@ def scripted_gateway_process(
         default_backend_url=None,
         port=gateway_port,
         boxteam_home=boxteam_home,
-        artifacts_dir=context.artifacts_dir / "gateway",
+        artifacts_dir=artifacts / "gateway",
         extra_env={
             "BOXTEAM_DEFAULT_BACKEND_PORT": str(scripted_debug_backend_port),
             "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(state.config_path),

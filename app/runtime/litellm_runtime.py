@@ -13,6 +13,7 @@ import time
 from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
+from importlib.metadata import distribution
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import ModuleType
@@ -22,11 +23,10 @@ import httpx
 
 if TYPE_CHECKING:
     import litellm
-    import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
     from langchain_litellm import ChatLiteLLM
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-__all__ = ["AsyncHTTPHandler", "ChatLiteLLM", "HTTPHandler", "litellm", "litellm_http_handler"]
+__all__ = ["AsyncHTTPHandler", "ChatLiteLLM", "HTTPHandler", "litellm"]
 
 logger = logging.getLogger(__name__)
 _LOCAL_ONLY = "LITELLM_LOCAL_MODEL_COST_MAP"
@@ -144,17 +144,40 @@ class ModelMetadataRuntime:
         self._lock = Lock()
         self._finished = Event()
         self._sdk: ModuleType | None = None
+        self._catalog: dict[str, object] | None = None
         self._worker: Thread | None = None
         self._pending: dict[str, object] | None = None
         self._next_refresh = 0.0
         self._source_url = ""
         self._cache_path: Path | None = None
 
+    def catalog(self) -> Mapping[str, object]:
+        """配置读取只加载数据文件；不导入 SDK、不联网，也不另建缓存。"""
+        with self._lock:
+            if self._sdk is not None:
+                self._adopt_pending()
+                return self._sdk.model_cost
+            if self._catalog is None:
+                bundled = distribution("litellm").locate_file("litellm/model_prices_and_context_window_backup.json")
+                self._catalog = json.loads(bundled.read_text(encoding="utf-8"))
+                self._source_url = os.environ.get("LITELLM_MODEL_COST_MAP_URL",
+                    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
+                self._cache_path = self._cache_root / (sha256(self._source_url.encode()).hexdigest() + ".json")
+                if not _local_only_mode():
+                    self._load_cache()
+            self._adopt_pending()
+            return self._catalog
+
     def load(self) -> ModuleType:
         local_only = _local_only_mode()
         with self._lock:
             if self._sdk is None:
                 self._sdk = _import_litellm()
+                if self._catalog is not None and not local_only:
+                    # 进入执行时仍沿 SDK 的缓存校验和显式注册合同，不直接采纳只读投影。
+                    self._next_refresh = 0
+                    self._load_cache()
+                    self._catalog = self._sdk.model_cost
             sdk = self._sdk
             if local_only:
                 return sdk
@@ -174,14 +197,13 @@ class ModelMetadataRuntime:
 
     def _adopt_pending(self) -> None:
         if self._pending is not None:
-            assert self._sdk is not None
-            _adopt_catalog(self._sdk, self._pending)
+            self._catalog = self._pending
+            if self._sdk is not None:
+                _adopt_catalog(self._sdk, self._pending)
             self._pending = None
 
     def _load_cache(self) -> None:
-        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-
-        assert self._cache_path is not None and self._sdk is not None
+        assert self._cache_path is not None
         if not self._cache_path.exists():
             return
         try:
@@ -192,14 +214,23 @@ class ModelMetadataRuntime:
             fetched_at = cached["fetched_at"]
             if not isinstance(fetched_at, (int, float)) or not isinstance(catalog, dict):
                 raise TypeError("模型目录缓存结构无效")
-            if not GetModelCostMap.validate_model_cost_map(
-                fetched_map=catalog, backup_model_count=GetModelCostMap._get_backup_model_count(),
-            ):
-                raise ValueError("模型目录缓存未通过官方校验")
+            if not catalog or not all(isinstance(item, dict) for item in catalog.values()):
+                raise ValueError("模型目录缓存条目无效")
+            if self._sdk is not None:
+                from litellm.litellm_core_utils.get_model_cost_map import (
+                    GetModelCostMap,
+                )
+
+                if not GetModelCostMap.validate_model_cost_map(
+                    fetched_map=catalog, backup_model_count=GetModelCostMap._get_backup_model_count(),
+                ):
+                    raise ValueError("模型目录缓存未通过官方校验")
         except (OSError, ValueError, TypeError, KeyError) as error:
             logger.warning("模型目录缓存不可用，使用已有目录: path=%s error=%s", self._cache_path, error)
             return
-        _adopt_catalog(self._sdk, catalog)
+        self._catalog = catalog
+        if self._sdk is not None:
+            _adopt_catalog(self._sdk, catalog)
         self._next_refresh = time.monotonic() + max(0, self._freshness - (time.time() - fetched_at))
         logger.info("已加载模型目录缓存: source=%s fetched_at=%s", self._source_url, fetched_at)
 
@@ -246,17 +277,24 @@ class ModelMetadataRuntime:
                 temporary.unlink(missing_ok=True)
 
 
-def load_litellm() -> ModuleType:
+def _metadata_runtime() -> ModelMetadataRuntime:
     global _runtime
-    if _local_only_mode():
-        return _import_litellm()
     with _runtime_lock:
         if _runtime is None:
             from app.core.path_utils import get_boxteam_home
 
             _runtime = ModelMetadataRuntime(cache_root=get_boxteam_home() / "cache" / "model-metadata")
-        runtime = _runtime
-    return runtime.load()
+        return _runtime
+
+
+def local_model_catalog() -> Mapping[str, object]:
+    return _metadata_runtime().catalog()
+
+
+def load_litellm() -> ModuleType:
+    if _local_only_mode():
+        return _import_litellm()
+    return _metadata_runtime().load()
 
 
 def prepare_model_request() -> None:
@@ -279,7 +317,4 @@ def __getattr__(name: str) -> object:
         load_litellm()
         module = importlib.import_module("litellm.llms.custom_httpx.http_handler")
         return getattr(module, name)
-    if name == "litellm_http_handler":
-        load_litellm()
-        return importlib.import_module("litellm.llms.custom_httpx.llm_http_handler")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -73,6 +73,9 @@ def debug_runtime_proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     release_upstream = asyncio.Event()
 
     class Upstream:
+        close_code = None
+        close_reason = ""
+
         async def send(self, message: str) -> None:
             forwarded.append(message)
             forwarded_event.set()

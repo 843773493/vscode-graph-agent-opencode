@@ -27,7 +27,11 @@ from app.services.infrastructure.resource_platform.sources.skill_source_config i
 )
 from configs.installer import resolve_config_resource_source
 from configs.plugin_parameters import bound_plugin_configuration
-from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
+from configs.runtime import (
+    merge_json_objects,
+    read_jsonc_object,
+    validate_config_payload,
+)
 
 from .connection_ids import _normalize_connection_ids
 from .sources import (
@@ -65,6 +69,7 @@ def load_gateway_config(
     """加载 Gateway 内置默认、用户配置和本地覆盖。"""
     resolved_config_path = config_path or get_user_gateway_config_path()
     resolved_schema_path = schema_path or get_user_gateway_schema_path()
+    schema = read_jsonc_object(resolved_schema_path)
     resolved_inline_config_path = inline_config_path or resolve_config_resource_source(
         "gateway_inline.jsonc"
     )
@@ -164,12 +169,14 @@ def load_gateway_config(
             raw_gateway_config = merge_json_objects(
                 raw_gateway_config,
                 read_jsonc_object(resolved_config_path),
+                schema=schema,
             )
             source_paths.append(resolved_config_path)
         if resolved_local_config_path.is_file():
             raw_gateway_config = merge_json_objects(
                 raw_gateway_config,
                 read_jsonc_object(resolved_local_config_path),
+                schema=schema,
             )
             source_paths.append(resolved_local_config_path)
     elif not loaded_persisted_snapshot:
@@ -201,16 +208,16 @@ def load_gateway_config(
         source_payloads["gateway_mutable_override"] = deepcopy(user_override or {})
         source_payloads["gateway_local_mutable_override"] = deepcopy(local_override or {})
     if user_override is not None:
-        raw_gateway_config = merge_json_objects(raw_gateway_config, user_override)
+        raw_gateway_config = merge_json_objects(raw_gateway_config, user_override, schema=schema)
         if state_store.path not in source_paths:
             source_paths.append(state_store.path)
     if local_override is not None:
-        raw_gateway_config = merge_json_objects(raw_gateway_config, local_override)
+        raw_gateway_config = merge_json_objects(raw_gateway_config, local_override, schema=schema)
         if state_store.path not in source_paths:
             source_paths.append(state_store.path)
-    validate_config(
+    validate_config_payload(
         raw_gateway_config,
-        schema_path=resolved_schema_path,
+        schema=schema,
     )
     _normalize_connection_ids(
         raw_gateway_config,
@@ -219,9 +226,9 @@ def load_gateway_config(
         allow_new_ids=allow_new_connection_ids,
     )
     # 旧版先按 v1 结构校验，再校验补入 connection_id 的规范化候选。
-    validate_config(
+    validate_config_payload(
         raw_gateway_config,
-        schema_path=resolved_schema_path,
+        schema=schema,
     )
     raw_workspaces = raw_gateway_config["workspaces"]
     plugin_sources(raw_gateway_config)

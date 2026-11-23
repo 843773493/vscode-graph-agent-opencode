@@ -1,3 +1,4 @@
+import type { ProcessDetailSelection } from "../../../api/session/sessionTurnHistory";
 import type { AttachmentRef, DeliveryPolicy, MessageReplayRequest } from "../../../types/backend";
 import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
 
@@ -7,9 +8,9 @@ export type LoadTurnDetails = (
   refreshAfterInFlight?: boolean,
   include?: TurnHistoryInclude[],
   toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
 ) => Promise<void>;
 
-export type LoadToolDetails = (turnId: string, toolCallId: string) => Promise<void>;
 
 export interface ChatTurnHandlers {
   onForkConversation?: (point: {

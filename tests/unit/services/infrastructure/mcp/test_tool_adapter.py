@@ -1,12 +1,20 @@
 """SDK 分页与参数／结果薄适配合同。"""
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import ToolMessage
 from mcp import types
 from mcp.client.session import ClientSession
+from mcp.server.lowlevel import Server
+from mcp.shared.memory import create_connected_server_and_client_session
 
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.session_runtime import _McpServerSession
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from app.services.infrastructure.mcp.tool_definitions import PluginToolSource
 
@@ -116,3 +124,71 @@ async def test_sdk_transport_failure_is_explicit_unknown(sdk_session: MagicMock)
     assert result.status == "error" and result.tool_call_id == "lost"
     assert result.artifact["mcp_outcome"]["retryable"] is False
     assert result.artifact["mcp_outcome"]["error_type"] == "ConnectionError"
+
+
+@pytest.fixture
+async def memory_owner(tmp_path, event_channel_service):
+    """真实 SDK 双向内存协议接入原 Owner，不启动网络或替换会话方法。"""
+    server = Server("business-error-contract")
+    calls: list[dict[str, object]] = []
+    sessions: list[ClientSession] = []
+    lists: list[str] = []
+
+    @server.list_tools()
+    async def tools():
+        lists.append("tools/list")
+        return [types.Tool(name="probe", inputSchema={
+            "type": "object", "properties": {"fail": {"type": "boolean"}},
+            "required": ["fail"], "additionalProperties": False,
+        })]
+
+    @server.call_tool()
+    async def call(name: str, arguments: dict[str, object]):
+        assert name == "probe"
+        calls.append(arguments)
+        failed = arguments["fail"] is True
+        return types.CallToolResult(isError=failed, structuredContent={"accepted": not failed}, content=[
+            types.TextContent(type="text", text="业务拒绝" if failed else "随后成功"),
+            types.ImageContent(type="image", data="aW1hZ2U=", mimeType="image/png"),
+        ])
+
+    @asynccontextmanager
+    async def connect(_config, _notify):
+        async with create_connected_server_and_client_session(server) as session:
+            sessions.append(session)
+            yield _McpServerSession(session)
+
+    owner = McpCatalogOwner(leases=ExternalResourceLeaseLedger(), workspace_root=tmp_path,
+        event_service=event_channel_service, session_factory=connect, raw_config={"servers": {"memory": {
+            "enabled": True, "transport": "streamable_http", "url": "https://memory.invalid/mcp",
+        }}})
+    await owner.start()
+    try:
+        yield owner, calls, sessions, lists
+    finally:
+        await owner.shutdown()
+
+
+async def test_real_sdk_business_error_keeps_owner_connection_ready_and_next_call_succeeds(memory_owner) -> None:
+    owner, calls, sessions, lists = memory_owner
+    tool, = owner.get_tools()
+    before, = owner.list_servers()
+    revision = owner.catalog_revision()
+    assert before.status == "ready" and before.connection_ref is not None
+    first = await tool.ainvoke({"type": "tool_call", "id": "business-failed", "name": tool.name, "args": {"fail": True}})
+    assert isinstance(first, ToolMessage) and first.status == "error"
+    assert first.tool_call_id == "business-failed"
+    assert first.content[0]["text"] == "业务拒绝"
+    assert first.content[1]["type"] == "image" and first.content[1]["base64"] == "aW1hZ2U="
+    assert first.artifact == {"structured_content": {"accepted": False}}
+    after_error, = owner.list_servers()
+    assert after_error.status == "ready" and after_error.connection_ref == before.connection_ref
+    second = await tool.ainvoke({"type": "tool_call", "id": "business-success", "name": tool.name, "args": {"fail": False}})
+    assert isinstance(second, ToolMessage) and second.status == "success"
+    assert second.tool_call_id == "business-success" and second.content[0]["text"] == "随后成功"
+    assert second.artifact == {"structured_content": {"accepted": True}}
+    after_success, = owner.list_servers()
+    assert after_success.status == "ready" and after_success.connection_ref == before.connection_ref
+    assert owner.catalog_revision() == revision
+    assert calls == [{"fail": True}, {"fail": False}]
+    assert len(sessions) == 1 and lists == ["tools/list"]

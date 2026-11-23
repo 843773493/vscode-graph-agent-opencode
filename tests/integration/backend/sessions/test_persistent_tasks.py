@@ -273,10 +273,35 @@ async def test_run_inspection_uses_frozen_definition_after_target_and_content_ed
 
 
 @pytest.mark.asyncio
+async def test_after_delivery_task_runs_accepted_work_after_automatic_completion(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    session_id, thread_id, target = await _target(case)
+    configuration = _configuration(target, "context_and_run")
+    configuration["policies"]["completion"] = "after_delivery"
+    task = await _create(case, configuration)
+    user_call, task_call = await case.plan(session_id, [{"content": "用户工作完成"}, {"content": "已接受的单次工作完成"}])
+    case.control.arm(user_call, "model.response_ready")
+    user = await _send(case, session_id, "先处理用户请求")
+    try:
+        await asyncio.to_thread(case.control.acknowledged, user_call, "model.response_ready", 30)
+        run = await _check(case, task)
+        actual = await _run(case, task, run)
+        current = (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]
+        assert current["lifecycle"] == "complete" and current["revision"] == task["revision"] + 1
+        assert case.call_count(session_id, thread_id) == 1
+    finally:
+        case.control.release(user_call, "model.response_ready")
+    await _job(case, user["job_id"])
+    await _job(case, actual["delivery"]["job_id"])
+    assert _wire_text(case.request(task_call)["messages"]).count("task-original-private") == 1
+    assert case.call_count(session_id, thread_id) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
 @pytest.mark.parametrize("context_mode", ["event", "state"])
 @pytest.mark.parametrize("control", ["pause", "terminate"])
-async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_work_after_control(
+async def test_busy_task_queues_without_fake_user_turn_and_cancels_unstarted_work_after_control(
     source_case: RuntimeSourceCase, context_mode: str, control: str,
 ) -> None:
     case = source_case
@@ -285,7 +310,7 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
     configuration["context"]["mode"] = context_mode
     task = await _create(case, configuration)
     assert task["configuration"]["action"]["target_uri"].startswith(f"boxteam://{case.gateway_id}/")
-    first_call, task_call = await case.plan(session_id, [{"content": "用户工作完成。"}, {"content": "持久任务工作完成。"}])
+    first_call, = await case.plan(session_id, [{"content": "用户工作完成。"}])
     case.control.arm(first_call, "model.response_ready")
     case.control.arm_match("task-accepted", "task.action.accepted_before_record", {"task_id": task["task_id"]})
     user = await _send(case, session_id, "先处理用户工作。")
@@ -318,13 +343,13 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
     assert delivery["state"] == "accepted"
     assert delivery["job_id"] == barrier["details"]["job_id"]
     await _job(case, user["job_id"])
-    await _job(case, delivery["job_id"])
+    await _job(case, delivery["job_id"], expected="cancelled")
     response = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
     assert response.status_code == 200, response.text
     detail = response.json()["data"]
-    assert detail["consumption"]["execution_id"] == delivery["execution_id"]
-    assert detail["execution_outcome"] == "completed"
-    assert _wire_text(case.request(task_call)["messages"]).count("task-original-private") == 1
+    assert detail["consumption"] is None
+    assert detail["execution_outcome"] == "cancelled"
+    assert case.call_count(session_id, thread_id) == 1
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions ORDER BY created_at") == [
         ("user_turn", user["turn_id"]), ("internal", None),
     ]
@@ -335,7 +360,7 @@ async def test_busy_task_queues_without_fake_user_turn_and_preserves_accepted_wo
         (delivery["execution_id"], delivery["job_id"], notice_id, case.gateway_id),
     ]
     assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == expected_lifecycle
-    case.write_actual("busy-task", {"run": actual, "control": changed, "request": case.request(task_call)})
+    case.write_actual("busy-task", {"run": actual, "control": changed, "requests": case.requests()})
 
 
 @pytest.mark.asyncio

@@ -68,7 +68,6 @@ from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
 from app.services.infrastructure.message_stream_store import (
-    MessageStreamTerminalError,
     MessageStreamWriter,
 )
 from app.services.orchestration.event_stream.model_events import (
@@ -744,26 +743,7 @@ class StepRunner:
             # 写入的 block，不能让迟到的最终文本留下 running entity。
             await message_stream_runtime.finish_model()
             if message_stream_writer is not None:
-                try:
-                    await message_stream_writer.close_completed()
-                except MessageStreamTerminalError:
-                    # 中断请求可能在最终业务校验与 stream.completed 之间线性化。
-                    # 此时执行已经停止，必须确认中断事实，不能把用户请求覆盖为完成。
-                    stream_state = await self.ports.message_stream_store.get_state(
-                        message_stream_writer.turn_stream_id
-                    )
-                    interrupt_state = stream_state.get("interrupt_state")
-                    interrupt_request_id = (
-                        interrupt_state.get("request_id")
-                        if isinstance(interrupt_state, dict)
-                        and interrupt_state.get("status") == "requested"
-                        else None
-                    )
-                    if stream_state.get(
-                        "stream_status"
-                    ) != "interrupting" or not isinstance(interrupt_request_id, str):
-                        raise
-                    await message_stream_writer.close_interrupted(interrupt_request_id)
+                await message_stream_writer.close_from_execution(checkpointer, admission)
 
             await event_publisher.publish(
                 EventType.AGENT_END,

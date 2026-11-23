@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -31,6 +30,8 @@ class WorkbenchBuild:
 @pytest.fixture(scope="session")
 def shared_web_workbench_build(integration_test_gate: None) -> WorkbenchBuild:
     context = TestRunContext.from_test_file(Path("tests/harness/python/web_workbench.py")).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     assets = context.runtime_root_for_node("shared-workbench-build") / "dist"
     command = ["bun", "run", "build", "--outdir", str(assets)]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
@@ -40,13 +41,13 @@ def shared_web_workbench_build(integration_test_gate: None) -> WorkbenchBuild:
         "--timeout-seconds", str(WORKBENCH_BUILD_TIMEOUT_SECONDS), "--", *command,
     ]
     directory = context.project_root / "src/clients/workbench"
-    log_path = context.artifacts_dir / "workbench-build.log"
+    log_path = artifacts / "workbench-build.log"
     receipt: dict[str, object] = {
         "command": command, "cwd": str(directory), "exit_code": None,
         "log": str(log_path), "assets": str(assets), "timeout_seconds": WORKBENCH_BUILD_TIMEOUT_SECONDS,
         "supervised_command": supervised_command, "memory_limit_kb": WORKBENCH_BUILD_MEMORY_LIMIT_KB,
     }
-    receipt_path = context.artifacts_dir / "workbench-build.json"
+    receipt_path = artifacts / "workbench-build.json"
     started = time.monotonic()
     try:
         with log_path.open("x", encoding="utf-8") as log, stage("shared.workbench.build", scope="session"):
@@ -85,12 +86,12 @@ def web_workbench_assets(
     request: pytest.FixtureRequest, shared_web_workbench_build: WorkbenchBuild,
 ) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     build = shared_web_workbench_build
-    log_path = context.artifacts_dir / "workbench-build.log"
-    shutil.copyfile(build.log_path, log_path)
     receipt = json.loads(build.receipt_path.read_text(encoding="utf-8"))
-    receipt.update(log=str(log_path), shared_build_receipt=str(build.receipt_path))
-    (context.artifacts_dir / "workbench-build.json").write_text(
+    receipt.update(shared_build_receipt=str(build.receipt_path))
+    (artifacts / "workbench-build.json").write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
     return build.assets

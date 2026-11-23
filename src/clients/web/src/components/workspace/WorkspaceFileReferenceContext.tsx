@@ -17,7 +17,7 @@ import {
   parseWorkspaceFileReference,
   type WorkspaceFileReference,
 } from "../../utils/workspaceFileReferences";
-import { errorDisplayMessage } from "../../utils/errorMessage";
+import { errorMessage } from "../../utils/errorMessage";
 
 export type WorkspaceFileReferenceResolution =
   | {
@@ -146,7 +146,7 @@ export function WorkspaceFileReferenceProvider({
       try {
         reference = parseWorkspaceFileReference(target);
       } catch (error: unknown) {
-        return { status: "error", message: errorDisplayMessage(error) };
+        return { status: "error", message: errorMessage(error) };
       }
       if (!reference) {
         return { status: "missing" };
@@ -173,7 +173,7 @@ export function WorkspaceFileReferenceProvider({
           } catch (error: unknown) {
             return error instanceof HttpRequestError && error.status === 404
               ? { status: "missing" }
-              : { status: "error", message: errorDisplayMessage(error) };
+              : { status: "error", message: errorMessage(error) };
           }
         })();
       return request.then((lookup): WorkspaceFileReferenceResolution =>

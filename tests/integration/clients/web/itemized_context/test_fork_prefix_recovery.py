@@ -26,10 +26,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 复用正式构建装具
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.sealed_request_audit import audit_sealed_requests
@@ -43,16 +42,18 @@ def prefix_runtime(
 ) -> Generator[tuple[str, Path, ModelStreamReplay, int], None, None]:
     """独立受管服务组；Backend 的停启必须由真实 Gateway 生命周期执行。"""
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     prepared_assets = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
     web_assets = Path(prepared_assets) if prepared_assets else request.getfixturevalue("web_workbench_assets")
     assert (web_assets / "version.json").is_file(), web_assets
     if prepared_assets:
         with (web_assets / "out/main.js").open("rb") as main:
-            (context.artifacts_dir / "workbench-reused-assets.json").write_text(json.dumps({
+            (artifacts / "workbench-reused-assets.json").write_text(json.dumps({
                 "assets": str(web_assets), "main_sha256": hashlib.file_digest(main, "sha256").hexdigest(),
                 "version": json.loads((web_assets / "version.json").read_text()),
             }), encoding="utf-8")
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     workspace = Path(integration_workspace_root_path)
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
@@ -67,14 +68,13 @@ def prefix_runtime(
     runtime = context.runtime_root_for_node(request.node.nodeid)
     with ExitStack() as lifetime:
         replay = lifetime.enter_context(model_stream_replay(
-            context.artifacts_dir, runtime_root=runtime, business_assertion="fork-prefix-backend-restart",
+            context.run_root / "artifacts", runtime_root=runtime, business_assertion="fork-prefix-backend-restart",
         ))
-        lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 10, 20)))
-        lease.acquire()
-        lifetime.callback(lease.release)
+        for offset in (0, 10, 20):
+            ports.port(offset)
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=ports.port(20),
-            artifacts_dir=context.artifacts_dir / "gateway",
+            artifacts_dir=artifacts / "gateway",
             asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env=replay.environment | {
                 "BOXTEAM_WEB_ASSETS": str(web_assets),
@@ -114,7 +114,7 @@ async def test_earlier_answer_fork_excludes_later_tools_after_refresh_and_backen
     base_url, workspace, replay, gateway_pid = prefix_runtime
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "前缀分支 Web 回归需要真实 Chromium"
     command = ["node", "tests/integration/clients/web/itemized_context/fork_prefix_recovery.mjs"]

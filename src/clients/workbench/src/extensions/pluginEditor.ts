@@ -9,7 +9,7 @@ import { EditorPaneDescriptor, type IEditorPaneRegistry } from '../../upstream/s
 import { EditorExtensions, type IEditorOpenContext, type IUntypedEditorInput, type IEditorFactoryRegistry, type IEditorSerializer } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import { listManagementTargets, createManagementTargetLifecycle } from '../managementTarget.js';
+import { listManagementTargets, managementTargetDisplayName, createManagementTargetLifecycle } from '../managementTarget.js';
 import { SyncDescriptor } from '../../upstream/src/vs/platform/instantiation/common/descriptors.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
 import { IEditorGroup } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
@@ -17,6 +17,7 @@ import { ITelemetryService } from '../../upstream/src/vs/platform/telemetry/comm
 import { IThemeService } from '../../upstream/src/vs/platform/theme/common/themeService.js';
 import { IStorageService } from '../../upstream/src/vs/platform/storage/common/storage.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { IContextMenuService } from '../../upstream/src/vs/platform/contextview/browser/contextView.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { ActionBar } from '../../upstream/src/vs/base/browser/ui/actionbar/actionbar.js';
 import { Action } from '../../upstream/src/vs/base/common/actions.js';
@@ -28,7 +29,7 @@ import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_gene
 import type { Scope } from '../settings/pluginConfiguration.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { PluginScope, pluginActions, pluginStateLabel, pluginError } from './pluginScope.js';
+import { PluginScope, pluginActions, pluginStateLabel, pluginError, pluginIcon, pluginDescription } from './pluginScope.js';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionEditor.css';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionsWidgets.css';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionActions.css';
@@ -49,7 +50,11 @@ export class PluginEditorInput extends EditorInput {
   get typeId(): string { return PluginEditorInput.ID; }
   override get editorId(): string { return PluginEditorInput.ID; }
   override getName(): string { return this.name; }
-  override getDescription(): string { return `${this.target.gateway_id} · ${this.workspace?.workspace_id ?? this.scope} · ${this.version}`; }
+  override getDescription(): string | undefined {
+    return this.workspace ? workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === this.target.gateway_id && item.workspace_id === this.workspace?.workspace_id)?.name
+      : t(this.scope === 'gateway' ? 'plugins.scopeGateway' : 'plugins.scopeDefaults');
+  }
+  override getTitle(): string { return `${this.name} @${this.version}\n${this.target.gateway_id} · ${this.workspace?.workspace_id ?? this.scope}`; }
   override matches(other: EditorInput | IUntypedEditorInput): boolean {
     return other instanceof PluginEditorInput && this.resource.toString() === other.resource.toString();
   }
@@ -78,7 +83,8 @@ class PluginEditorPane extends EditorPane {
   constructor(group: IEditorGroup, @ITelemetryService telemetry: ITelemetryService,
     @IThemeService themes: IThemeService, @IStorageService storage: IStorageService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
-    @INotificationService private readonly notifications: INotificationService) {
+    @INotificationService private readonly notifications: INotificationService,
+    @IContextMenuService private readonly menus: IContextMenuService) {
     super(PluginEditorPane.ID, group, telemetry, themes, storage);
   }
   protected override createEditor(parent: HTMLElement): void {
@@ -121,11 +127,12 @@ class PluginEditorPane extends EditorPane {
       // 沿用原 ExtensionEditor 的结构与样式，业务模型仍是自有插件。
       const header = append(this.container, $('.header'));
       const icon = append(append(header, $('.icon-container')), $('.extension-icon'));
-      append(icon, $('span.codicon.codicon-extensions')).setAttribute('aria-hidden', 'true');
+      append(icon, $(`span.codicon.${pluginIcon(plugin)}`)).setAttribute('aria-hidden', 'true');
       const details = append(header, $('.details'));
       const title = append(details, $('.title'));
       append(title, $('span.name', { role: 'heading', 'aria-level': 1 })).textContent = plugin.name;
-      append(title, $('span.version')).textContent = input.version;
+      const version = append(title, $('span.version'));
+      version.textContent = input.version; version.title = input.version;
       const subtitle = append(details, $('.subtitle'));
       append(subtitle, $('.subtitle-entry')).textContent = manifest.name;
       const owner = append(subtitle, $('.subtitle-entry.last-non-empty'));
@@ -134,7 +141,7 @@ class PluginEditorPane extends EditorPane {
         : t(input.scope === 'gateway' ? 'plugins.scopeGateway' : 'plugins.scopeDefaults');
       owner.title = `${input.target.gateway_id} · ${input.workspace?.workspace_id ?? input.scope}`;
       const description = append(details, $('.description'));
-      description.textContent = manifest.description ?? '';
+      description.textContent = pluginDescription(plugin, manifest);
       const actionsAndStatus = append(details, $('.actions-status-container.list-layout'));
       const actions = this.presentation.add(new ActionBar(actionsAndStatus, { focusOnlyEnabledItems: true }));
       actions.domNode.classList.add('service-plugin-detail-actions');
@@ -159,10 +166,12 @@ class PluginEditorPane extends EditorPane {
       })));
       tabs[0].checked = true;
       navbar.push(tabs, { icon: false, label: true });
-      append(overview, $('h2')).textContent = plugin.name;
-      append(overview, $('p')).textContent = manifest.description ?? '';
       const identity = append(overview, $('p.service-plugin-owner'));
-      const handoff = append(overview, $('p'));
+      identity.textContent = `${managementTargetDisplayName(route)} / ${owner.textContent}`;
+      const diagnostics = append(overview, $('details.service-plugin-diagnostics'));
+      append(diagnostics, $('summary')).textContent = t('plugins.diagnosticDetails');
+      const technicalIdentity = append(diagnostics, $('p.service-plugin-owner'));
+      const handoff = append(diagnostics, $('p'));
       handoff.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       handoff.dataset.pluginWorkspaceHandoff = 'true';
       handoff.hidden = !input.workspace;
@@ -170,10 +179,10 @@ class PluginEditorPane extends EditorPane {
       failure.setAttribute('aria-label', t('plugins.runtimeFailureAria'));
       failure.setAttribute('role', 'alert');
       failure.dataset.pluginRuntimeError = 'true';
-      const logActions = append(overview, $('div'));
+      const logActions = append(diagnostics, $('div'));
       const logButton = this.presentation.add(new Button(logActions, { ...defaultButtonStyles, secondary: true }));
       logButton.label = t('plugins.viewInstanceLog');
-      const log = append(overview, $('pre'));
+      const log = append(diagnostics, $('pre'));
       log.hidden = true;
       log.setAttribute('aria-label', t('plugins.instanceLogAria'));
       this.presentation.add(logButton.onDidClick(() => {
@@ -191,10 +200,13 @@ class PluginEditorPane extends EditorPane {
       let displayedLogId: string | undefined;
       const update = () => {
         const status = state.slot(input.packageId, input.pluginId), binding = state.binding(input.packageId, input.pluginId);
-        identity.textContent = `${input.target.gateway_id} · ${input.workspace?.workspace_id ?? input.scope}${status?.instance ? t('plugins.instanceSuffix', status.instance.instance_id) : ''}`;
-        versions.textContent = input.scope === 'defaults'
+        technicalIdentity.textContent = `${input.target.gateway_id} · ${input.workspace?.workspace_id ?? input.scope}${status?.instance ? t('plugins.instanceSuffix', status.instance.instance_id) : ''}`;
+        const fullStatus = input.scope === 'defaults'
           ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
           : `${t('plugins.configurationPrefix', state.configurationLabel(input.packageId, input.pluginId))}${state.actualLabel(status, Boolean(plugin.runtime))}`;
+        versions.title = fullStatus;
+        versions.textContent = binding && binding.package_version !== input.version
+          ? t('plugins.otherVersion', binding.package_version) : state.summary(input.packageId, input.pluginId, Boolean(plugin.runtime));
         failure.hidden = !(status?.error || state.error);
         failure.textContent = status?.error ?? state.error ?? '';
         logActions.hidden = !status?.log_id;
@@ -207,7 +219,12 @@ class PluginEditorPane extends EditorPane {
           actionKey = key; actions.clear(); actionLifetime.clear();
           const items = pluginActions(state, manifest, plugin, this.quickInput, this.notifications);
           items.forEach((item, index) => { item.class = `extension-action ${index === 0 ? 'label' : 'text'}`; actionLifetime.add(item); });
-          actions.push(items, { icon: true, label: true });
+          actions.push(items.slice(0, 1), { icon: true, label: true });
+          if (items.length > 1) {
+            const more = actionLifetime.add(new Action('plugin.manage', t('plugins.managePlugin', plugin.name), 'extension-action icon codicon codicon-gear', true,
+              () => this.menus.showContextMenu({ getAnchor: () => actions.domNode, getActions: () => items.slice(1) })));
+            actions.push(more, { icon: true, label: false });
+          }
         }
       };
       this.presentation.add(state.onDidChange(update)); update();

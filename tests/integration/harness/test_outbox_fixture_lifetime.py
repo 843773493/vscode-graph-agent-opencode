@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
+
 
 @pytest.fixture
 def outbox_failure_probe(tmp_path: Path) -> Path:
@@ -115,11 +117,14 @@ try {
     "failure_stage", ["listen", "context", "context-close", "browser-close", "server-close"]
 )
 def test_outbox_failure_releases_remaining_resources_and_preserves_errors(
+    request: pytest.FixtureRequest,
     failure_stage: str,
     outbox_failure_probe: Path,
     tmp_path: Path,
 ) -> None:
     root = Path.cwd()
+    context = TestRunContext.from_test_file(Path("tests/integration/clients/web/session_catalog_outbox_idb.mjs")).prepare()
+    runtime = context.runtime_root_for_node(request.node.nodeid)
     environment = {
         **os.environ,
         **{name: str(tmp_path) for name in ("TMPDIR", "TMP", "TEMP")},
@@ -139,6 +144,7 @@ def test_outbox_failure_releases_remaining_resources_and_preserves_errors(
     lines = [line.removeprefix("OUTBOX_LIFETIME ") for line in result.stdout.splitlines() if line.startswith("OUTBOX_LIFETIME ")]
     assert len(lines) == 1, result.stdout
     observation = json.loads(lines[0])
+    assert observation["temporaryDirectory"] == str(runtime), observation
     assert f"outbox准备失败: {failure_stage}" in observation["errors"], observation
     if failure_stage.endswith("-close"):
         assert f"outbox清理失败: {failure_stage}" in observation["errors"], observation

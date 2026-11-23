@@ -6,7 +6,7 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -21,6 +21,7 @@ from app.domain.itemized.records import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     load_committed_idempotency_commit,
+    load_committed_storage_commit,
     read_committed_item_identities,
     strict_non_negative_int,
     strict_optional_text,
@@ -123,6 +124,7 @@ class RolloutInternalConvergenceMixin:
         items: Sequence[CanonicalItemRecord],
         assembly_id: str | None,
         checkpoint_ns: str,
+        failure: Mapping[str, object] | None = None,
     ) -> int:
         if outcome == ControlOutcome.COMPLETED_EMPTY.value and items:
             raise ValueError("completed_empty internal execution 不得包含 canonical item")
@@ -161,6 +163,8 @@ class RolloutInternalConvergenceMixin:
             {"interrupt_request_id": interrupt.interrupt_request_id, "after_interrupt_requested": True}
             if interrupt is not None else {}
         )
+        if failure is not None:
+            terminal_metadata["failure"] = dict(failure)
         control_correction = (
             current_outcome == ControlOutcome.EXECUTION_LOST.value
             and outcome in {ControlOutcome.CANCELLED.value, ControlOutcome.INTERRUPTED.value}
@@ -204,16 +208,12 @@ class RolloutInternalConvergenceMixin:
                 )
             return committed.commit_id
         if control_correction:
-            lost_commit = load_committed_idempotency_commit(
-                connection,
-                commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                subject_id=execution_id,
-                idempotency_key=f"internal-terminal:{execution_id}:execution_lost",
-                commit_mode=CommitMode.METADATA_ONLY.value,
-                outcome=ControlOutcome.EXECUTION_LOST.value,
-                metadata=terminal_metadata,
-                item_count=0,
-            )
+            lost_row = connection.execute(
+                "SELECT commit_id FROM storage_commits WHERE subject_id=? AND idempotency_key=? "
+                "AND commit_kind='terminal_convergence' AND status='committed' AND outcome='execution_lost'",
+                (execution_id, f"internal-terminal:{execution_id}:execution_lost"),
+            ).fetchone()
+            lost_commit = None if lost_row is None else load_committed_storage_commit(connection, commit_id=lost_row[0])
             if lost_commit is None:
                 raise RuntimeError("internal execution_lost commit 缺失，禁止控制修正")
         if current_outcome != ControlOutcome.UNKNOWN.value and not control_correction:
@@ -355,5 +355,10 @@ class RolloutInternalConvergenceMixin:
             execution_id=execution_id, latest_model_call_id=model_call_id,
             outcome=outcome, timestamp=timestamp, control_correction=control_correction,
         )
+        if not new_message_sequences:
+            connection.execute(
+                "UPDATE database_meta SET history_view_revision=history_view_revision+1, updated_at=? WHERE singleton_id=1",
+                (_now(),),
+            )
         self._storage._commit_connection(connection)
         return commit_id

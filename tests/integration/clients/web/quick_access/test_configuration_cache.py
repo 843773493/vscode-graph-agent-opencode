@@ -24,9 +24,6 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_data,
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.workspaces import prepare_default_test_workspace

@@ -1,5 +1,7 @@
+import { useTranscriptDisclosure, useDisclosureFocus } from "./TranscriptViewContext";
+import { contextNode, nodeAttributes } from "../../state/timeline/transcriptNodes";
 import React from "react";
-import { t } from "../../../../shared/core/i18n/index.js";
+import { formatNumber, t } from "../../../../shared/core/i18n/index.js";
 import type { TurnResponsePart } from "../../types/backend";
 import { ContextNoticeContinuationContext, useChatItemMenu } from "./itemContextMenu";
 import { errorMessage } from "../../utils/errorMessage";
@@ -33,7 +35,10 @@ function noticeLabel(notice: TurnResponsePart): string {
 
 /** 悬停、菜单及展开仅消费元数据；只有明确复制／查看动作读取冻结正文。 */
 export default function ContextNotice({ notices }: { notices: readonly TurnResponsePart[] }): React.ReactNode {
-  const [expanded, setExpanded] = React.useState(false);
+  const first = notices[0];
+  const key = contextNode(first);
+  const [expanded, setExpanded] = useTranscriptDisclosure(key);
+  const focus = useDisclosureFocus(expanded);
   const loadMore = React.useContext(ContextNoticeContinuationContext);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -44,13 +49,13 @@ export default function ContextNotice({ notices }: { notices: readonly TurnRespo
   });
   const menu = useChatItemMenu(() => [
     { id: "toggleContext", label: t(expanded ? "chat.contextNotice.collapse" : "chat.contextNotice.expand"),
-      tooltip: t("chat.contextNotice.expandHint"), run: () => setExpanded(value => !value) },
+      tooltip: t(expanded ? "chat.contextNotice.collapseHint" : "chat.contextNotice.expandHint"), run: () => setExpanded(!expanded) },
   ], true, () => ({ contextSources: sources }));
-  const label = t("chat.contextNotice.hint", [...new Set(sources.map(source => source.name))].join(" · "));
-  return <section className={`chat-context-notice${expanded ? " is-expanded" : ""}`} {...menu}
+  const label = t("chat.contextNotice.hint", [...new Set(sources.map(source => source.name))].join(" · "), formatNumber(sources.length));
+  return <section ref={focus.root} className={`chat-context-notice${expanded ? " is-expanded" : ""}`} {...menu}
     data-context-marker={notices.map(notice => notice.part_id).join(" ")}>
-    <button type="button" className="chat-context-marker" {...menu} aria-label={label} title={label}
-      aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+    <button ref={focus.header} type="button" className="chat-context-marker" {...menu} {...nodeAttributes(key)} aria-label={label} title={label}
+      aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
       <span className="chat-context-rule" aria-hidden="true" />
     </button>
     {expanded ? <div className="chat-context-details" role="region" aria-label={t("chat.contextNotice.title")}>

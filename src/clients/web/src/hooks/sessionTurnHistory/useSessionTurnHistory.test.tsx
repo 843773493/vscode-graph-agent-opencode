@@ -50,7 +50,7 @@ test("execution 正文按最多四项补读，旧 revision 明确报错且手动
     if (path.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "body-bootstrap", data: bootstrap("ready", 1) });
     if (!path.endsWith("/history")) throw new Error(`未声明的请求: ${path}`);
     const request = JSON.parse(String(args[1]?.body));
-    const ids: string[] | undefined = request.execution_item_ids;
+    const ids: string[] | undefined = request.item_ids;
     if (ids) {
       expect(request.execution_id).toBe(execution.execution_id);
       expect(request.cursor).toBeUndefined();

@@ -14,7 +14,12 @@ from app.schemas.internal_v2.turn import (
     InternalExecutionHistoryDTO,
     TurnResponsePartDTO,
 )
+from app.services.mapping.itemized.history_turns.projection import (
+    HistoryProjectionBudget,
+    bounded_text,
+)
 from app.services.mapping.turn_response_parts import (
+    activity_parts_from_projection,
     response_part_order,
     response_parts_from_internal_item,
 )
@@ -37,6 +42,7 @@ def build_internal_execution_history(
     entries: tuple[InternalExecutionHistoryEntry, ...],
     *,
     include: tuple[str, ...],
+    budget: HistoryProjectionBudget,
 ) -> list[InternalExecutionHistoryDTO]:
     projections: dict[str, _InternalExecutionHistoryProjection] = {}
     fields = frozenset(include)
@@ -63,6 +69,14 @@ def build_internal_execution_history(
             )
 
         item = entry.item
+        if entry.activity is not None:
+            activity = [{**member, **(entry.coordinates or {}).get(member["part_ordinal"], {}), "elapsed_ms": entry.elapsed_ms if index == 0 else 0}
+                for index, member in enumerate(entry.activity["activity_items"])]
+            projection.response_parts.extend(activity_parts_from_projection({"activity_items": activity},
+                mode="summary", include=fields | {"activity_outline"}, tool_call_ids=None))
+            continue
+        if item is None:
+            raise RuntimeError("internal history 缺少请求的正文或轮廓")
         if (
             "internal" in fields
             and item.semantic_kind == SemanticKind.RUNTIME_NOTICE
@@ -92,14 +106,26 @@ def build_internal_execution_history(
                         ),
                     )
                 )
-        projection.response_parts.extend(
-            response_parts_from_internal_item(
+        parts = response_parts_from_internal_item(
                 item,
                 include=fields,
                 logical_item_ordinal=entry.logical_item_ordinal,
                 elapsed_ms=entry.elapsed_ms,
             )
-        )
+        projection.response_parts.extend(part.model_copy(update={"source":part.source.model_copy(
+            update=(entry.coordinates or {}).get(part.source.part_ordinal, {}))}) for part in parts)
+
+    # 与同页 Turn 消费同一个正文预算；保留全部成员身份和明确截断事实。
+    for projection in projections.values():
+        for index, part in enumerate(projection.response_parts):
+            changes: dict[str, object] = {}
+            truncated = part.truncated
+            for name in ("text", "arguments", "result"):
+                value = getattr(part, name)
+                if value is not None:
+                    changes[name], limited = bounded_text(value, budget)
+                    truncated = truncated or limited
+            projection.response_parts[index] = part.model_copy(update={**changes, "truncated": truncated})
 
     return [
         InternalExecutionHistoryDTO(
@@ -108,6 +134,8 @@ def build_internal_execution_history(
             session_id=projection.source.session_id,
             thread_id=projection.source.thread_id,
             status=projection.outcome,
+            failure=projection.source.failure,
+            terminal_commit_id=projection.source.terminal_commit_id,
             created_at=projection.source.created_at,
             updated_at=projection.source.updated_at,
             display_parts=sorted(

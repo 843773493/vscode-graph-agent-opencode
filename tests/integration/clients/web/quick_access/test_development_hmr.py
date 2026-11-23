@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 import sys
-from contextlib import ExitStack
 from pathlib import Path
 
 import httpx
@@ -23,13 +22,9 @@ from tests.integration.clients.web.quick_access.source_snapshot import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.processes.workspace import wait_for_http_ok
 
@@ -61,7 +56,7 @@ def development_snapshot(request: pytest.FixtureRequest) -> Path:
 
 @pytest.mark.asyncio
 async def test_source_update_reaches_real_workbench_without_manual_reload(
-    request: pytest.FixtureRequest, development_snapshot: Path, metadata_port_reservations: ExitStack,
+    request: pytest.FixtureRequest, development_snapshot: Path,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
 ) -> None:
     client, context, workspace, provider = metadata_case
@@ -72,10 +67,9 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
     node = shutil.which("node")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert node and chromium, "真实开发入口需要 Node 和 Chromium"
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, probes = E2EProcessLease.acquire_available(runtime / "frontend-port.json", range(ports.port(20), ports.end + 1))
-    metadata_port_reservations.callback(lease.release)
-    port = lease.ports[0]
+    ports = integration_ports_for_file(Path(request.node.path))
+    port = ports.port("vite")
+    probes = {"vite": port}
     base = f"http://127.0.0.1:{port}"
     (context.artifacts_dir / "frontend-port.json").write_text(json.dumps({
         "port": port, "probes": probes,

@@ -3,7 +3,7 @@ import { t } from "../../../../../shared/core/i18n/index.js";
 import { getWorkspaceFiles } from "../../../api";
 import { HttpRequestError } from "../../../api/http";
 import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList } from "../../../types/backend";
-import { errorDisplayMessage } from "../../../utils/errorMessage";
+import { errorMessage } from "../../../utils/errorMessage";
 import {
   failedDirectoryEntry,
   loadedDirectoryEntry,
@@ -165,7 +165,7 @@ export function useWorkspaceFileTreeDirectories({
           if (append && error instanceof HttpRequestError && error.status === 409) {
             return await loadDirectory(path, true);
           }
-          const message = errorDisplayMessage(error);
+          const message = errorMessage(error);
           updateDirectories((prev) => ({
             ...prev,
             [path]: failedDirectoryEntry(prev[path], message, Date.now()),

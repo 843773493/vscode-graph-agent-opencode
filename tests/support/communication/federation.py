@@ -26,8 +26,7 @@ from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_s
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import prepare_terminal_plugin_configuration
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import TestFilePorts, integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -106,7 +105,7 @@ async def open_communication_triad(
     browser_plugin_nodes: tuple[str, ...] = (),
     prepared_developer_tools_package: Path | None = None,
     shared_session_ids: tuple[str, ...] = (),
-    ports: TestFilePortBlock | None = None,
+    ports: TestFilePorts | None = None,
     node_port_offsets: tuple[int, int, int] = (0, 20, 40),
     backend_asgi_app: str = "app.main:app",
     backend_environment: dict[str, str] | None = None,
@@ -115,7 +114,7 @@ async def open_communication_triad(
     on_sshd_started: Callable[[subprocess.Popen[str], Path], None] | None = None,
     same_backend_routes: bool = False,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
-    ports = ports or integration_port_block_for_file(context.test_file)
+    ports = ports or integration_ports_for_file(context.test_file)
     root = context.project_root
     sshd = shutil.which("sshd")
     if sshd is None:
@@ -145,16 +144,15 @@ async def open_communication_triad(
     if browser_plugin_nodes and prepared_developer_tools_package is None:
         raise ValueError("Federation Browser 场景必须传入预备开发工具包")
     backend_layout = layout[:1] if same_backend_routes else layout
-    service_offsets = {60, *range(70, 80)}
+    service_offsets = {60}
     service_offsets.update(offset for _, offset in backend_layout)
     service_offsets.update(offset + 1 for _, offset in layout)
+    tunnels = ports.port_range("ssh-tunnels", count=10)
     async with AsyncExitStack() as resources:
         # 启动并行节点前持续占住服务端口，避免出站连接提前占用尚未监听的端口。
-        # 复用原租约；清理顺序保证所有服务退出后才归还端口。
-        lease = E2EProcessLease(context.artifacts_dir / "c3-process-lease.json",
-                                tuple(ports.port(offset) for offset in sorted(service_offsets)))
-        lease.acquire()
-        resources.callback(lease.release)
+        # 复用公共计划；pytest 在所有服务退出后统一归还端口。
+        for offset in sorted(service_offsets):
+            ports.port(offset)
         log = resources.enter_context((ssh_root / "sshd.log").open("w"))
         process = await asyncio.to_thread(subprocess.Popen, [sshd, "-D", "-e", "-f", str(config)], stdout=log, stderr=log, text=True, start_new_session=True)
         ssh_owner = ManagedProcess(process=process, log_file=log)
@@ -239,7 +237,7 @@ async def open_communication_triad(
             gateway = await asyncio.to_thread(
                 start_gateway_process, workspace_root=workspace, port=ports.port(offset + 1),
                 default_backend_url=f"http://127.0.0.1:{backends[name].port}",
-                ssh_tunnel_port_range=(ports.port(70), ports.port(79)) if name == "a" else None,
+                ssh_tunnel_port_range=(tunnels[0], tunnels[-1]) if name == "a" else None,
                 extra_env=(gateway_environment or {}) | {"BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(known_hosts)},
                 boxteam_home=gateway_homes[name],
                 artifacts_dir=context.artifacts_dir / ("gateway-" + name),

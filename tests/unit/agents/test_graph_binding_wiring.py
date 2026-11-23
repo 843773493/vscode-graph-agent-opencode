@@ -66,50 +66,6 @@ def test_runtime_selects_factory_from_injected_graph_binding_store() -> None:
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
-def test_tool_catalog_uses_builtin_factory_without_persisted_owner() -> None:
-    config_service = MagicMock()
-    config_service.resolve_agent_id.return_value = "default"
-    config_service.get_agent_tool_config.return_value = {"custom": []}
-    config_service.resolve_agent_confirmation_tool_names.return_value = set()
-    dependency_provider = MagicMock()
-    dependency_provider.get_checkpointer.return_value = MagicMock()
-    resource_registry = ResourceRegistry()
-    resource_activation = MagicMock()
-    skill_catalog = MagicMock()
-
-    store = MagicMock(spec=GraphBindingStorePort)
-    store.load_graph_binding.return_value = None
-    with patch(
-        "app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve"
-    ) as resolve_factory:
-        create_runtime = resolve_factory.return_value
-        assemble_agent(
-            session_id="session_test",
-            thread_id="thread_test",
-            agent_id="default",
-            tool_selection_reader=MagicMock(),
-            workspace_root=Path("/workspace"),
-            config_service=config_service,
-            background_task_registry=MagicMock(),
-            background_mailbox=MagicMock(),
-            job_event_bus=MagicMock(),
-            dependency_provider=dependency_provider,
-            mcp_tools=[],
-            resource_registry=resource_registry,
-            resource_activation=resource_activation,
-            skill_catalog=skill_catalog,
-            graph_binding_store=store,
-            assembly_mode="tool_catalog",
-        )
-
-    assert create_runtime.call_args.kwargs["assembly_mode"] == "tool_catalog"
-    assert create_runtime.call_args.kwargs["model"] is None
-    assert resolve_factory.call_args.args == (DEEP_AGENT_GRAPH_BINDING,)
-    assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
-    assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
-    assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
-
-
 def test_execution_service_passes_store_to_runtime() -> None:
     from app.services.orchestration.agent_execution_service import AgentExecutionService
 

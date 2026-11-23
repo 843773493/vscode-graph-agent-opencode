@@ -12,7 +12,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
 )
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
     close_gateway_process,
     reset_gateway_persistent_state,
@@ -37,7 +37,7 @@ def goal_sidebar_gateway(request: pytest.FixtureRequest):
     gateway = start_gateway_process(
         workspace_root=context.workspace_root,
         default_backend_url=None,
-        port=e2e_port_block_for_file(Path(request.node.path)).port(21),
+        port=e2e_ports_for_file(Path(request.node.path)).port(21),
         extra_env={"BOXTEAM_WEB_ASSETS": str(assets)},
     )
     try:

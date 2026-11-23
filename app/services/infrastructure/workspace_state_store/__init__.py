@@ -160,6 +160,7 @@ _WORKSPACE_MIGRATIONS = (
     load_sql(__package__, "migrations/024.sql"),
     load_sql(__package__, "migrations/025.sql"),
     load_sql(__package__, "migrations/026.sql"),
+    load_sql(__package__, "migrations/027.sql"),
 )
 
 

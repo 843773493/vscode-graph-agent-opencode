@@ -226,6 +226,7 @@ def build_detail(
         ]
     )
     detail = TurnDetailDTO(
+        failure=projection.get("failure") if projection is not None else None,
         turn_id=turn_id,
         job_id=job_id,
         session_id=session_id,

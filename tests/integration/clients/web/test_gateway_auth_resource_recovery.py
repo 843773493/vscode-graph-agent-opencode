@@ -15,7 +15,7 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -42,7 +42,7 @@ async def test_web_bootstrap_and_resource_refresh_recover_gateway_auth(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir
 
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
         workspace_root=Path(integration_workspace_root_path),
         default_backend_url=None,

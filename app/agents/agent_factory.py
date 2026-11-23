@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Never
+from typing import TYPE_CHECKING, Any
 
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 from deepagents.middleware.permissions import FilesystemPermission
@@ -60,8 +60,8 @@ from app.agents.skill_catalog import (
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.summarization.tool_middleware import (
-    create_compact_conversation_tool,
-    create_read_compaction_history_tool,
+    COMPACT_CONVERSATION_TOOL,
+    READ_COMPACTION_HISTORY_TOOL,
 )
 from app.agents.tool_identity import (
     TOOL_DISCOVERY_NAME,
@@ -91,8 +91,9 @@ from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.domain.itemized.hashing import sha256_jcs
 from app.runtime.agent_runtime import (
     AGENT_GRAPH_RECURSION_LIMIT,
-    AgentAssemblyMode,
+    prepare_agent_model,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -225,9 +226,10 @@ def assemble_deep_agent(
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
     include_team_tools: bool = False,
-    assembly_mode: AgentAssemblyMode = "execution",
-) -> AgentEventSource | list[ToolDefinitionLike]:
-    """按 assembly_mode 装配执行图或管理目录工具；目录模式不创建 Thread owner。"""
+    preferred_model: ModelReferenceDTO | None = None,
+    model_routing_enabled: bool = True,
+) -> AgentEventSource:
+    """装配真实 Thread 的单代图，本地工具检查先于模型 SDK 构造。"""
     if checkpointer is None:
         raise RuntimeError("assemble_deep_agent 需要显式传入 checkpointer")
     if config_service is None:
@@ -241,14 +243,7 @@ def assemble_deep_agent(
     resolved_model_visibility_overrides = dict(model_visibility_overrides or {})
 
     capability_resolver = config_service.get_tool_policy_resolver(agent_id)
-    thread_binding = (
-        ThreadRuntimeBinding(
-            session_id=session_id,
-            thread_id=thread_id,
-        )
-        if assembly_mode == "execution"
-        else None
-    )
+    thread_binding = ThreadRuntimeBinding(session_id=session_id, thread_id=thread_id)
     tool_invocation_context = ToolInvocationContext(
         tool_timeout_seconds=tool_timeout_seconds,
         thread_binding=thread_binding,
@@ -277,27 +272,21 @@ def assemble_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
-    # 合成工具目录只构建固定 schema；只有真实 thread 消费 Skill catalog。
-    resolved_skills = None
-    if assembly_mode == "execution":
-        resolved_skills = (
-            build_workspace_skill_catalog(
-                workspace_root,
-                registry=resource_registry,
-                file_registry=workspace_file_resource_registry,
-            )
-            if skill_catalog is None and workspace_file_resource_registry is not None
-            else skill_catalog
+    resolved_skills = (
+        build_workspace_skill_catalog(
+            workspace_root, registry=resource_registry,
+            file_registry=workspace_file_resource_registry,
         )
-        if resolved_skills is None:
-            raise RuntimeError(
-                "构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry"
-            )
+        if skill_catalog is None and workspace_file_resource_registry is not None
+        else skill_catalog
+    )
+    if resolved_skills is None:
+        raise RuntimeError("构建 Workspace Skill catalog 需要 WorkspaceFileResourceRegistry")
     tool_output_store = ToolOutputStore(workspace_root=workspace_root)
 
     def read_artifact(file_id: str, max_bytes: int) -> ResourceFileContent:
         binding = tool_invocation_context.thread_binding
-        if assembly_mode == "tool_catalog" or binding is None:
+        if binding is None:
             error = PermissionError("产物读取缺少当前 Agent SessionThread")
             raise mark_public_failure(error, str(error))
         parsed = parse_session_artifact_uri(file_id)
@@ -318,9 +307,7 @@ def assemble_deep_agent(
     backend = build_workspace_backend(workspace_root)
     # CSM 的控制状态必须经唯一 RolloutCheckpointSaver/ContextStore owner 持久化。
     # 生产 checkpointer 就是该 owner；其它（测试替身）checkpointer 没有
-    # ContextStore，只能退化为纯内存 CSM。合成 session（例如工具清单检查用的
-    # tools_inspection_session）没有权威会话节点，同样没有 ContextStore，
-    # 不允许为它伪造持久化 owner。
+    # ContextStore，只能使用无持久端口的 CSM，不伪造持久化 owner。
     context_source_owner: ContextSourceOwnerKey | None = None
     context_source_control_port: ContextSourceControlStatePort | None = None
     if isinstance(checkpointer, RolloutCheckpointSaver):
@@ -344,7 +331,7 @@ def assemble_deep_agent(
     # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
     # 来源确认事件只在真实 Saver seal 成功后发布。
     context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
-    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
+    if workspace_file_resource_registry is not None:
         context_source_event_sink = ContextSourceEventPublisher(
             event_service=(
                 workspace_file_resource_registry.observation_channel.event_service
@@ -362,7 +349,7 @@ def assemble_deep_agent(
     # 订阅必须随 agent 生命周期释放；调用方没有提供 scope 时在代码内留 TODO，
     # 不允许在这里新建第二套 dispose 抽象。
     context_source_reactor: ContextSourceReactor | None = None
-    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
+    if workspace_file_resource_registry is not None:
         if reactor_lifetime_scope is None:
             raise RuntimeError(
                 "启用事件驱动 context source reaction 时必须提供 "
@@ -404,6 +391,7 @@ def assemble_deep_agent(
             direct_confirmation_names.add(tool.name)
 
     if tools is not None:
+        declared_tools = list(tools)
         resolved_tools = []
         for tool in tools:
             if not isinstance(tool, BaseTool):
@@ -422,7 +410,7 @@ def assemble_deep_agent(
             background_mailbox=background_mailbox,
             goal_service=goal_service,
             user_question_service=user_question_service,
-            user_facing=assembly_mode == "tool_catalog" or session_service is not None and session_service.path_resolver.main_thread_id(session_id) == thread_id,
+            user_facing=session_service.path_resolver.main_thread_id(session_id) == thread_id,
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             terminal_resource_owner=terminal_resource_owner,
@@ -436,7 +424,6 @@ def assemble_deep_agent(
         declared_custom_tools = build_custom_tools(
             custom_tool_specs,
             context=CustomToolFactoryContext(
-                session_id=session_id,
                 agent_id=agent_id,
                 sender_agent_id=resolved_sender_agent_id,
                 workspace_root=workspace_root,
@@ -456,6 +443,7 @@ def assemble_deep_agent(
                 mcp_connection_service=mcp_connection_service,
             ),
         )
+        declared_tools = [*visible_tools, *declared_custom_tools, *(mcp_tools or ())]
         custom_tools = []
         for tool in declared_custom_tools:
             if tool.name in resolved_tool_denylist:
@@ -643,6 +631,7 @@ def assemble_deep_agent(
         invocation_context=tool_invocation_context,
     )
     resolved_tools.append(extension_invoker)
+    declared_tools.append(extension_invoker)
 
     def resolve_discovery_capabilities(catalog: FrozenToolCatalog) -> dict[str, ToolCapabilityPolicy]:
         return resolve_extension_capabilities(tuple(definition.metadata for definition in catalog.definitions))
@@ -656,9 +645,9 @@ def assemble_deep_agent(
         ).max_result_bytes),
     )
     resolved_tools.append(discovery_tool)
+    declared_tools.append(discovery_tool)
     if (
         context_source_manager is not None
-        and (tools is not None or "skill_load" not in resolved_tool_denylist)
         and not any(getattr(tool, "name", None) == "skill_load" for tool in resolved_tools)
     ):
         def skill_control_admission(name: str, mode: SkillLoadMode) -> AbstractAsyncContextManager[None]:
@@ -669,12 +658,13 @@ def assemble_deep_agent(
                 recovery_ref=tool_invocation_context.require_tool_call_id(),
             )
 
-        _absorb_builtin_tool(
-            create_skill_load_tool(
-                context_source_manager, activation_snapshot_resolver=skill_snapshot_resolver,
-                control_admission=skill_control_admission,
-            )
+        skill_tool = create_skill_load_tool(
+            context_source_manager, activation_snapshot_resolver=skill_snapshot_resolver,
+            control_admission=skill_control_admission,
         )
+        declared_tools.append(skill_tool)
+        if tools is not None or "skill_load" not in resolved_tool_denylist:
+            _absorb_builtin_tool(skill_tool)
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
         for fixed_tool in (extension_invoker, discovery_tool):
@@ -692,27 +682,54 @@ def assemble_deep_agent(
         resolved_tool_names,
         context=f"agent {agent_id} 的运行时工具策略",
     )
-    if assembly_mode == "tool_catalog":
-        # 目录到工具注册即结束；不创建模型、压缩引擎或编译执行图。
-        def require_execution_context(*_args: object) -> Never:
-            raise RuntimeError("工具目录没有 SessionThread 执行上下文")
-
-        tool_middleware = build_deep_agent_tool_middleware(
-            backend=backend, workspace_root=workspace_root,
-            resource_navigation=resource_navigation, text_mutations=text_mutations,
-            artifact_reader=read_artifact, permissions=permissions,
-            resolved_tool_denylist=resolved_tool_denylist,
-        )
-        return [
-            *(tool for item in tool_middleware if item is not None for tool in item.tools),
-            *(tool for tool in (
-                create_compact_conversation_tool(require_execution_context, require_execution_context),
-                create_read_compaction_history_tool(require_execution_context, require_execution_context),
-            ) if tool.name not in resolved_tool_denylist),
-            *resolved_tools,
+    runtime_middleware: list[AgentMiddleware] = (
+        list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
+    )
+    if enabled_runtime_middleware_names is not None:
+        runtime_middleware = [
+            item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names
         ]
+
+    # 检查完整声明，隐藏项也不能与中间件或压缩工具重名；不绑定模型实现。
+    from app.agents.model_tool_schema import export_model_tool_json_schema
+
+    tool_middleware = build_deep_agent_tool_middleware(
+        backend=backend, workspace_root=workspace_root,
+        resource_navigation=resource_navigation, text_mutations=text_mutations,
+        artifact_reader=read_artifact, permissions=permissions,
+    )
+    local_tools = [
+        *declared_tools,
+        *(tool for item in (*tool_middleware, *runtime_middleware) for tool in getattr(item, "tools", ())),
+        COMPACT_CONVERSATION_TOOL,
+        READ_COMPACTION_HISTORY_TOOL,
+    ]
+    names = [tool_definition_name(tool) for tool in local_tools]
+    if not all(names) or len(names) != len(set(names)):
+        raise ValueError("工具注册目录存在空工具名或重复工具名")
+    for tool in local_tools:
+        if isinstance(tool, BaseTool):
+            export_model_tool_json_schema(tool)
     if model is None:
-        raise RuntimeError("Agent 执行需要真实模型")
+        model_setup = prepare_agent_model(
+            agent_id=agent_id, config_service=config_service,
+            prompt_cache_key=session_id, preferred_model=preferred_model,
+            gateway_id=resolved_skills.gateway_id,
+            lifetime_scope=reactor_lifetime_scope,
+        )
+        model = model_setup.model
+        instruction_producers = model_setup.instruction_producers
+        model_routing_middleware = model_setup.routing_middleware if model_routing_enabled else None
+    elif not instruction_producers:
+        from app.agents.instruction_producers import runtime_instruction_producers
+
+        runtime_config = config_service.get_agent_runtime_config(agent_id, preferred_model=preferred_model)
+        instruction_producers = runtime_instruction_producers(
+            agent_id=agent_id, content=runtime_config["system_prompt"],
+            config_revision=config_service.get_revision(),
+            runtime_identity_description=runtime_config["runtime_identity_description"],
+            provider_candidates=[(provider["provider_id"], provider["model_id"]) for provider in runtime_config["models"]],
+        )
     for producer in instruction_producers:
         register_instruction_producer(context_source_manager, producer)
     team_policy_revision = sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT})
@@ -725,14 +742,6 @@ def assemble_deep_agent(
         update_binding=InstructionUpdateBinding("software_release", team_policy_revision, "epoch"),
     ))
 
-    runtime_middleware: list[AgentMiddleware] = (
-        list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
-    )
-    if enabled_runtime_middleware_names is not None:
-        runtime_middleware = [
-            item for item in runtime_middleware if item.__class__.__name__ in enabled_runtime_middleware_names
-        ]
-
     tool_output_middleware = ToolOutputMiddleware(
         session_id=session_id,
         store=tool_output_store,
@@ -744,11 +753,7 @@ def assemble_deep_agent(
     deepagent_middleware = build_deep_agent_middleware(
         model=model,
         backend=backend,
-        workspace_root=workspace_root,
-        resource_navigation=resource_navigation,
-        text_mutations=text_mutations,
-        artifact_reader=read_artifact,
-        permissions=permissions,
+        tool_middleware=tool_middleware,
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
@@ -821,7 +826,7 @@ def assemble_deep_agent(
 
     # 仅记录真实构建对象的进程内身份；compiled graph 不进入业务库或 trace。
     observe_phase_sync(thread_id, "agent.graph.compiled", details={
-        "session_id": session_id, "thread_id": thread_id, "owns_thread": assembly_mode == "execution",
+        "session_id": session_id, "thread_id": thread_id, "owns_thread": True,
         "compiled_graph_object_id": id(agent),
         "compiled_graph_type": f"{type(agent).__module__}.{type(agent).__qualname__}",
         "agent_object_id": id(runtime_agent),

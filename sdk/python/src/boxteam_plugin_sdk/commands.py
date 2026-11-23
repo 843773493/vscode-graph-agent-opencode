@@ -24,6 +24,12 @@ from pydantic import (
     model_validator,
 )
 
+from boxteam_plugin_sdk.failures import (
+    DIAGNOSTIC_BYTES,
+    bounded_failure_text,
+    failure_message,
+    format_failure_diagnostic,
+)
 from boxteam_plugin_sdk.http import (
     get_request_id,
     verify_local_control_request,
@@ -267,7 +273,7 @@ def plugin_command_router(
         try:
             arguments_validators[payload.command_id].validate(payload.arguments)
         except ValidationError as error:
-            raise HTTPException(422, error.message) from error
+            raise HTTPException(422, failure_message(error)) from error
         if payload.call_id in active:
             raise HTTPException(409, "原命令调用仍在进行，不重复执行")
         request_id = get_request_id(request)
@@ -303,10 +309,13 @@ def plugin_command_router(
                         await emit("result", result=result)
                 except asyncio.CancelledError:
                     await emit("cancelled")
-                except Exception as error:
-                    logger.exception("插件命令失败: command=%s call=%s", payload.command_id, payload.call_id)
+                except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                    detail = bounded_failure_text(f"插件命令失败: command={payload.command_id} call={payload.call_id}", max_bytes=1024)
+                    logger.error("%s\n%s", detail, format_failure_diagnostic(
+                        error, max_bytes=DIAGNOSTIC_BYTES - len(detail.encode("utf-8")) - 1,
+                    ))
                     await emit("error", error_code="deadline-exceeded" if isinstance(error, TimeoutError) else "handler-failed",
-                               message=str(error))
+                               message=failure_message(error))
 
             task = asyncio.create_task(execute())
             active[payload.call_id] = payload, task

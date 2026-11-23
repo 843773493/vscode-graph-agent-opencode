@@ -134,7 +134,8 @@ async def _advance(runtime: PersistentTaskRuntime, configuration: PersistentTask
                 message = await runtime._orchestrator.prepare_user_message(
                     session.session_id, prompt, thread_id=thread_id,
                     metadata={"boxteam_generation_run_id": run.run_id, "boxteam_generator_id": run.task_id,
-                              "boxteam_generation_phase": phase},
+                              "boxteam_generation_phase": phase, "task_id": run.task_id,
+                              "task_revision": run.task_revision, "task_check_only": run.check_only},
                 )
                 state = state.model_copy(update={"prepared_message": message, "message_id": message.message_id,
                                                  "execution_identity": runtime._orchestrator.reserve_user_execution_identity()})

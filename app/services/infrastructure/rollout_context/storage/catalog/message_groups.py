@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from typing import BinaryIO
@@ -85,3 +86,20 @@ def read_message_group(
     if items[-1].item_id != anchor.item_id:
         raise RuntimeError("message locator 没有指向 canonical group anchor")
     return items
+
+
+def read_response_outline(connection: sqlite3.Connection, item_id: str) -> list[dict[str, object]]:
+    """通过显式消息组的末成员找到唯一投影；分组内的前项没有独立 message 行。"""
+    row = connection.execute(
+        "SELECT projection.response_outline_json FROM item_catalog item "
+        "JOIN item_catalog anchor ON anchor.item_id=COALESCE(("
+        "SELECT tail.item_id FROM item_catalog tail WHERE tail.message_group_id=item.message_group_id "
+        "AND json_extract(tail.projection_manifest_json,'$.projection_group.ordinal')="
+        "json_extract(tail.projection_manifest_json,'$.projection_group.size')-1),item.item_id) "
+        "JOIN messages message ON message.jsonl_offset=anchor.jsonl_offset AND message.jsonl_length=anchor.jsonl_length "
+        "JOIN message_projections projection ON projection.message_sequence=message.message_sequence "
+        "WHERE item.item_id=?", (item_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"结构化 Item 缺少已提交 Part 索引: {item_id}")
+    return json.loads(row[0])[item_id]

@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
+import { formatFailureDiagnostic } from "@boxteam/plugin-sdk/failures";
 import { startMaintenance } from "@boxteam/plugin-sdk/maintenance";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { BrowserSession } from "./browserSession.js";
@@ -127,7 +128,7 @@ export class BrowserManager {
     this.artifactMaintenance = startMaintenance({
       identity: { workspace_id: this.workspaceId },
       reportError: (taskId, identity, durationMs, error) => logger.error(
-        `[browser-manager] ${taskId} 截图清理失败`, { ...identity, duration_ms: durationMs }, error,
+        `[browser-manager] ${taskId} 截图清理失败`, { ...identity, duration_ms: durationMs }, formatFailureDiagnostic(error),
       ),
       tasks: [{
         id: "screenshots",

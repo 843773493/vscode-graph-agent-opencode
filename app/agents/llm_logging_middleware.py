@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
@@ -23,7 +24,12 @@ from app.agents.upstream_request_trace import (
 )
 from app.core.bounded_json import bound_json_value
 from app.core.execution_admission_context import require_current_execution_admission
-from app.core.failures import execution_failure_message
+from app.core.failures import (
+    bounded_failure_text,
+    execution_failure_message,
+    failure_message,
+    report_failure,
+)
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -207,14 +213,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 break
             try:
                 stale_file.unlink()
-            except OSError:
+            except OSError as error:
                 # 诊断日志清理失败不覆盖模型调用的真实结果，但必须留痕。
-                import logging
-
                 logging.getLogger(__name__).warning(
-                    "LLM 日志轮转失败: path=%s",
-                    stale_file,
-                    exc_info=True,
+                    "LLM 日志轮转失败: path=%s error=%s reason=%s",
+                    bounded_failure_text(str(stale_file)),
+                    type(error).__name__,
+                    failure_message(error),
                 )
             else:
                 remaining_file_count -= 1
@@ -235,7 +240,12 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         except BaseException as error:
             record_upstream_error(error)
             upstream_attempts = end_upstream_capture(capture_token)
-            self._save_log(session_id, request, None, upstream_attempts, error)
+            try:
+                self._save_log(session_id, request, None, upstream_attempts, error)
+            except Exception as log_error:  # noqa: BLE001 — 日志落盘失败须透明，原模型故障仍是主因。
+                detail = f"LLM 请求日志写入失败: error={type(log_error).__name__}, reason={failure_message(log_error)}"
+                error.add_note(detail)
+                report_failure(error, detail=detail, diagnostic_logger=logging.getLogger(__name__))
             raise
         else:
             self._save_log(session_id, request, response, upstream_attempts)
@@ -257,9 +267,14 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             record_upstream_error(error)
             upstream_attempts = end_upstream_capture(capture_token)
             # 原 handler 已失败，后续取消不能打断日志结算或替换它的异常。
-            await run_cleanup_shielded(
-                partial(run_sync_shielded, self._save_log, session_id, request, None, upstream_attempts, error)
-            )
+            try:
+                await run_cleanup_shielded(
+                    partial(run_sync_shielded, self._save_log, session_id, request, None, upstream_attempts, error)
+                )
+            except Exception as log_error:  # noqa: BLE001 — 日志落盘失败须透明，原模型故障仍是主因。
+                detail = f"LLM 请求日志写入失败: error={type(log_error).__name__}, reason={failure_message(log_error)}"
+                error.add_note(detail)
+                report_failure(error, detail=detail, diagnostic_logger=logging.getLogger(__name__))
             raise
         else:
             await run_sync_shielded(self._save_log, session_id, request, response, upstream_attempts)

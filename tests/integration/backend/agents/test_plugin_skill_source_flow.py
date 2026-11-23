@@ -24,7 +24,7 @@ from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.plugin_package import install_plugin_async
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -220,7 +220,7 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path))
     artifacts, workspace = context.artifacts_dir, Path(integration_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(15)
+    port = integration_ports_for_file(Path(request.node.path)).port(15)
     base_url = f"http://127.0.0.1:{port}"
     _configure_model(Path(integration_workspace_config_path), base_url)
     second = prepare_default_test_workspace(workspace_root=workspace / "second-project",
@@ -365,7 +365,7 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
         workspace_root=workspace, config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
-    port = integration_port_block_for_file(Path(request.node.path)).port(15)
+    port = integration_ports_for_file(Path(request.node.path)).port(15)
     base_url = f"http://127.0.0.1:{port}"
     _configure_model(configuration, base_url)
     home = context.boxteam_home_for_node(request.node.nodeid)

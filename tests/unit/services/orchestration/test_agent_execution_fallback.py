@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import traceback
 from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -58,7 +57,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
 )
 from app.services.infrastructure.mcp.tool_guidance import extension_tool_guidance
-from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
 from app.services.infrastructure.resource_platform.derivation.types import (
     ResourceSnapshot,
 )
@@ -327,6 +325,7 @@ def agent_execution_dependencies(
             "update_model_call_outcome",
             "execution_for_turn",
             "execution_admission_for_job",
+            "execution_admission",
             "internal_execution_interrupt",
             "get_canonical_item",
             "converge_execution",
@@ -341,6 +340,13 @@ def agent_execution_dependencies(
     )
     saver.accepted_user_message.side_effect = accepted_inputs.read_user_message
     saver.execution_admission_for_job.side_effect = accepted_inputs.read_admission
+    def read_execution_admission(session_id, *, thread_id, execution_id, checkpoint_ns=""):
+        admissions = [accepted_inputs.read_admission(session_id, thread_id=thread_id, job_id=job_id,
+            checkpoint_ns=checkpoint_ns) for stored_session, stored_thread, job_id in accepted_inputs._bindings
+            if (stored_session, stored_thread) == (session_id, thread_id)]
+        admission, = [candidate for candidate in admissions if candidate.execution_id == execution_id]
+        return admission
+    saver.execution_admission.side_effect = read_execution_admission
     saver.internal_execution_interrupt.return_value = None
     saver.context_owner_namespace.side_effect = lambda checkpoint_ns: checkpoint_ns
     saver.frozen_resource_activation_for_admission.return_value = None
@@ -485,9 +491,7 @@ def agent_execution_dependencies(
     message_stream_writer = MagicMock()
     message_stream_writer.turn_stream_id = "strm_test"
     message_stream_writer.commit = AsyncMock()
-    message_stream_writer.close_completed = AsyncMock()
-    message_stream_writer.close_interrupted = AsyncMock()
-    message_stream_writer.close_failed = AsyncMock()
+    message_stream_writer.close_from_execution = AsyncMock()
     message_stream_store = MagicMock()
     message_stream_store.open = AsyncMock(return_value=message_stream_writer)
     message_stream_store.get_state = AsyncMock(
@@ -636,84 +640,6 @@ def _build_agent_execution_service(dependencies):
             dependencies["workspace_root"] / "control" / f"{turn_stream_id}.json"
         ),
     )
-
-
-def test_tool_catalog_cache_is_keyed_without_session(
-    agent_execution_dependencies,
-):
-    """管理目录缓存不含 session/thread 或执行状态。
-
-    运行选择不能从管理目录中移除定义；同一配置 revision 复用定义，配置变化才重建。
-    缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
-    """
-    service = _build_agent_execution_service(agent_execution_dependencies)
-    agent_execution_dependencies["config_service"].get_revision.side_effect = [
-        "revision-a",
-        "revision-a",
-        "revision-b",
-    ]
-
-    def fake_definitions(_agent: object, *, extension_tools: object) -> list[dict]:
-        assert list(extension_tools) == []
-        return [{"id": "read_file", "name": "read_file"}]
-
-    with (
-        patch(
-            "app.services.orchestration.agent_execution_service.assemble_agent",
-            side_effect=[object(), object()],
-        ) as build_runtime,
-        patch(
-            "app.services.orchestration.agent_execution_service.tools_to_catalog_definitions",
-            side_effect=fake_definitions,
-        ),
-    ):
-        first = service.list_tool_definitions("test_agent")
-        agent_execution_dependencies["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
-            agent_id, {"read_file": False}, {"read_file": False},
-        )
-        assert service.list_tool_definitions("test_agent") is first  # 命中缓存
-        second = service.list_tool_definitions("test_agent")
-
-    assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
-    assert all(call.kwargs["execution_overrides"] == {} and call.kwargs["model_visibility_overrides"] == {}
-               for call in build_runtime.call_args_list)
-    assert all(
-        call.kwargs["workspace_file_resource_registry"]
-        is agent_execution_dependencies["workspace_file_resource_registry"]
-        for call in build_runtime.call_args_list
-    )
-    assert second is not first
-    # 缓存键不含 session_id：不含任何会话身份。
-    keys = list(service._tool_catalog_cache)
-    assert len(keys) == 1
-    key = keys[0]
-    assert key[0] == "test_agent"
-    assert key[1] == "revision-b"
-    assert "ses_test" not in str(key)
-    assert service._tool_catalog_cache[key] == [{"id": "read_file", "name": "read_file"}]
-
-
-def test_tool_catalog_resolves_default_agent_before_catalog_assembly(
-    agent_execution_dependencies,
-):
-    service = _build_agent_execution_service(agent_execution_dependencies)
-    assembled: list[tuple[str, str]] = []
-
-    def build_agent(**kwargs):
-        assembled.append((kwargs["agent_id"], kwargs["assembly_mode"]))
-        return []
-
-    with (
-        patch.object(service, "_assemble_agent", side_effect=build_agent),
-        patch(
-            "app.services.orchestration.agent_execution_service.tools_to_catalog_definitions",
-            return_value=[],
-        ),
-    ):
-        assert service.list_tool_definitions() == []
-
-    assert agent_execution_dependencies["config_service"].validate_agent_id.call_args.args == (None,)
-    assert assembled == [("test_agent", "tool_catalog")]
 
 
 @pytest.mark.asyncio
@@ -1918,7 +1844,7 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
     assert committed_types.count("model.retrying") == 1
     agent_execution_dependencies[
         "message_stream_store"
-    ].open.return_value.close_completed.assert_awaited_once()
+    ].open.return_value.close_from_execution.assert_awaited_once()
     completed_outcomes = [
         call.args[1]["outcome"]
         for call in agent_execution_dependencies[
@@ -1930,12 +1856,11 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
 
 
 @pytest.mark.asyncio
-async def test_interrupt_wins_when_completion_races_with_persisted_request(
+async def test_committed_success_wins_when_interrupt_arrives_before_stream_mirror(
     agent_execution_dependencies,
 ):
     service = _build_agent_execution_service(agent_execution_dependencies)
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_completed.side_effect = MessageStreamTerminalError("已进入中断闸门")
     agent_execution_dependencies["message_stream_store"].get_state.return_value = {
         "stream_status": "interrupting",
         "interrupt_state": {
@@ -1975,8 +1900,11 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
         )
 
     assert result == "竞态结果"
-    writer.close_interrupted.assert_awaited_once_with("intr_race")
-    writer.close_failed.assert_not_awaited()
+    writer.close_from_execution.assert_awaited_once()
+    saver = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value
+    assert saver.converge_execution.call_args.kwargs["outcome"] in {"completed", "completed_empty"}
+    assert "failure" not in saver.converge_execution.call_args.kwargs
+    saver.mark_execution_lost.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2016,11 +1944,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
     persist_checkpoint.assert_called_once()
     assert persist_checkpoint.call_args.kwargs["checkpoint_source"] == "execution_lost"
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="execution_lost",
-        message="AgentLoop 因内部取消而结束，未收到用户中断请求",
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="execution_lost", message="AgentLoop 因内部取消而结束，未收到用户中断请求")
 
 
 @pytest.mark.asyncio
@@ -2058,11 +1982,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
         )
 
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="job_timeout",
-        message="Job 执行超过总超时上限",
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="job_timeout", message="Job 执行超过总超时上限")
 
 
 @pytest.mark.asyncio
@@ -2104,12 +2024,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
         "scope_deadline_exceeded"
     )
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="scope_deadline_exceeded",
-        message="运行时 scope 已取消: reason=scope_deadline_exceeded",
-        after_interrupt_requested=False,
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="scope_deadline_exceeded", message="运行时 scope 已取消: reason=scope_deadline_exceeded", after_interrupt_requested=False)
 
 
 @pytest.mark.asyncio
@@ -2162,14 +2077,8 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
         )
 
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="tool_dispatch_timeout",
-        message=(
-            "模型工具调用参数已完整，但工具执行分派在取消前没有启动: "
-            "tool_calls=['model_dispatch_timeout:tool-call:call_dispatch_timeout']"
-        ),
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="tool_dispatch_timeout", message="模型工具调用参数已完整，但工具执行分派在取消前没有启动: "
+            "tool_calls=['model_dispatch_timeout:tool-call:call_dispatch_timeout']")
 
 
 @pytest.mark.asyncio
@@ -2204,11 +2113,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
         )
 
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="job_timeout",
-        message="Job 执行超过总超时上限",
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="job_timeout", message="Job 执行超过总超时上限")
 
 
 @pytest.mark.asyncio
@@ -2249,8 +2154,10 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
             )
 
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_interrupted.assert_awaited_once_with("intr_user_cancelled")
-    writer.close_failed.assert_not_awaited()
+    writer.close_from_execution.assert_awaited_once()
+    saver = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value
+    assert saver.converge_execution.call_args.kwargs["outcome"] == "cancelled"
+    assert "failure" not in saver.converge_execution.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -2290,30 +2197,19 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
         record
         for record in caplog.records
         if record.name == "app.services.orchestration.execution_step.runner"
-        and record.getMessage() == "上游异常；完整诊断见异常链"
+        and record.getMessage().startswith("上游异常\n")
     ]
     assert (failure_record.session_id, failure_record.thread_id, failure_record.job_id,
             failure_record.turn_id, failure_record.execution_id) == (
         "ses_execution_error", "thr_test", "job_execution_error",
         "turn_job_execution_error", "execution_test",
     )
-    assert failure_record.exc_info is not None
-    error_type, logged_error, error_traceback = failure_record.exc_info
-    assert error_type is RuntimeError
-    assert logged_error is original_error
-    assert error_traceback is not None
-    assert any(
-        frame.name == "process_failed"
-        for frame in traceback.extract_tb(error_traceback)
-    )
+    assert failure_record.exc_info is None
+    assert "RuntimeError" in failure_record.getMessage()
+    assert "process_failed" in failure_record.getMessage()
 
     writer = agent_execution_dependencies["message_stream_store"].open.return_value
-    writer.close_failed.assert_awaited_once_with(
-        code="execution_error",
-        message="上游异常",
-        after_interrupt_requested=False,
-        resumable=False,
-    )
+    _assert_terminal_failure(agent_execution_dependencies, writer, code="execution_error", message="上游异常", after_interrupt_requested=False)
 
 
 @pytest.mark.asyncio
@@ -2521,3 +2417,25 @@ async def test_named_secret_rotation_rebuilds_resident_model_on_next_turn(agent_
             assert config.prepare_llm_credentials.await_count == 4
     finally:
         await service.shutdown()
+
+
+def _assert_terminal_failure(dependencies, writer, *, code, message, after_interrupt_requested=False):
+    """失败必须先交给原 Saver；消息流只镜像该 owner 的精确准入。"""
+    saver = dependencies["dependency_provider"].get_checkpointer.return_value
+    terminal = saver.converge_execution if code == "execution_error" else saver.mark_execution_lost
+    terminal.assert_called_once()
+    failure = terminal.call_args.kwargs["failure"]
+    assert failure["code"] == code and failure["message"] == message
+    if code == "execution_error":
+        assert terminal.call_args.kwargs["outcome"] == "failed"
+    else:
+        assert terminal.call_args.kwargs["reason"] == code
+    assert terminal.call_args.kwargs.get("after_interrupt_requested", False) is after_interrupt_requested
+    saver.execution_admission.assert_called_once()
+    writer.close_from_execution.assert_awaited_once()
+    owner, admission = writer.close_from_execution.await_args.args
+    assert owner is saver
+    assert (admission.session_id, admission.thread_id, admission.execution_id) == (
+        saver.execution_admission.call_args.args[0], saver.execution_admission.call_args.kwargs["thread_id"],
+        saver.execution_admission.call_args.kwargs["execution_id"],
+    )

@@ -1,6 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
+import type { LoadTurnDetails } from "../../components/chat/turn/types";
 import { MessageSubmissionRejectedError, MessageSubmissionUnknownError, reconcileMessageSubmissions, sendUserMessage } from "../../api/session/sessionMessages";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { ChildThreadSummary, MessageRunAccepted, TurnHistoryPage } from "../../types/backend";
@@ -27,7 +28,8 @@ const EMPTY: ChildThreadConversationSnapshot = {
   history: null, report: null, view: "history", draft: "", loading: false,
   sending: false, error: null, accepted: null, paged: false,
 };
-const INCLUDE = ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
+const INCLUDE = ["user", "metadata", "assistant_text", "final_response", "internal"] as const;
+const ITEM_DETAILS = ["text", "reasoning_detail", "reasoning_summary", "encrypted_reasoning_meta", "tool_call", "tool_result", "internal"] as const;
 
 // 导航列表与 Thread 内来源报告共享已读展示态；最后一个视图释放时清空，不增加持久化。
 let readReports: Readonly<Record<string, string>> = {};
@@ -87,6 +89,7 @@ export function resolveTerminalResourceTarget({
   ) {
     return { thread: null, unavailable: true };
   }
+
   return {
     thread: { session_id: selectionIntent.sessionId, thread_id: selectionIntent.threadId },
     unavailable: false,
@@ -175,7 +178,7 @@ export function useChildThreadConversation({
         || !sameHistoryRevision(current[view], page)
       ) {
         update(key, (prior) => ({
-          ...prior, [view]: retainPageBodies(older ? mergeChildThreadHistory(prior[view], page) : page, prior.bodyWindow?.[view]),
+          ...prior, [view]: retainPageBodies(mergeChildThreadHistory(older ? prior[view] : null, page), prior.bodyWindow?.[view]),
           view, loading: false, error: null, paged: view === "history" && older,
         }));
       }
@@ -254,7 +257,8 @@ export function useChildThreadConversation({
       if (!pending) {
         pending = (async () => {
           const response = await loadSessionHistory(apiPort, sessionId, { execution_id: executionId,
-            execution_item_ids: selected, include: [...INCLUDE] }, workspaceId, bodyController.signal, threadId);
+            source_view_id: page?.source_view_id ?? undefined, source_view_revision: page?.source_view_revision ?? undefined,
+            item_ids: selected, include: [...ITEM_DETAILS] }, workspaceId, bodyController.signal, threadId);
           if (bodyController.signal.aborted || selectionTokenRef.current !== token) return;
           update(key, prior => {
             const current = prior[view];
@@ -262,7 +266,7 @@ export function useChildThreadConversation({
             if (!sameHistoryRevision(current, response)) return { ...prior,
               error: "历史视图已更新，正文补读未应用，请刷新历史或重新打开报告" };
             return { ...prior, [view]: retainPageBodies({ ...current,
-              internal_executions: mergeInternalExecutions(current.internal_executions ?? [], response.internal_executions ?? []),
+              internal_executions: mergeInternalExecutions(current.internal_executions ?? [], response.internal_executions ?? [], response),
             }, prior.bodyWindow?.[view]) };
           });
         })();
@@ -324,8 +328,23 @@ export function useChildThreadConversation({
     setSelection(null);
   }, []);
 
+  const loadProcessDetails = useCallback<LoadTurnDetails>(async (turnIds, _identity, _refresh, include, _tools, selection) => {
+    if (!selection || !key || !sessionId || !threadId || !workspaceId) throw new Error("子 Thread 详情缺少精确 owner");
+    const token = selectionTokenRef.current;
+    const view = latestRef.current.view;
+    const response = await loadSessionHistory(apiPort, sessionId, {
+      direction: selection.beforeCursor ? "before" : "tail",
+      ...(selection.executionId ? {execution_id: selection.executionId} : {turn_ids: turnIds}),
+      ...(selection.itemIds ? {item_ids: selection.itemIds} : {}),
+      ...(selection.beforeCursor ? {cursor: selection.beforeCursor} : {}),
+      include, source_view_id: selection.sourceViewId, source_view_revision: selection.sourceViewRevision,
+    }, workspaceId, readRef.current?.signal, threadId);
+    if (selectionTokenRef.current !== token) return;
+    update(key, prior => ({...prior, [view]: mergeChildThreadHistory(prior[view], response, true, include?.includes("activity_outline"))}));
+  }, [apiPort, key, sessionId, threadId, update, workspaceId]);
+
   return {
-    selectedThread, selectionIntent, snapshot, retainExecutionBodies, reportHistoryError,
+    selectedThread, selectionIntent, snapshot, retainExecutionBodies, reportHistoryError, loadProcessDetails,
     owner: sessionId && threadId ? { sessionId, threadId } : null,
     submissionRecovery: enabled && workspaceId && sessionId && threadId
       ? { port: apiPort, owner: { workspaceKey: workspaceId, sessionId, threadId } } : null,

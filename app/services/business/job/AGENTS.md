@@ -39,6 +39,8 @@ Job业务
 # 规范
 
 - 同一 `(session_id, thread_id)` 最多只能有一个 active Job；同 Session 的不同 thread 可以并行，parent 等待 child 不得占用 child 的执行槽。
+- 等待项统一按用户消息、内部完成通知、持续任务后台请求排序；同类按原队列位置，拖拽只调整用户子序列，不抢占活动执行。显式继续丢失的原执行仍先于保留输入。后台请求启动前经注入的任务 owner 核对控制状态；失效时复用取消收尾，不能绕过队列另起执行。
+- 终端完成通知是独立的已接受执行；前序 Job 失败或超时只交还执行槽，不按消息类型批量丢弃通知。显式停止、删除和来源 owner 的控制仍沿各自入口执行。
 - 队列、active 槽、幂等准入和恢复保持精确 thread 归属；会话查询、删除和排空仍聚合该 Session 的全部 thread。
 - 队列版本由 rollout SQLite owner 发布；Session 聚合版本只用于既有聚合查询，重排必须使用精确 Thread 的 revision CAS。`JobPendingQueue` 只维护镜像；`QueueEntry` 只承载单条消息状态，位置理由只在对应 thread 队首变动时更新。
 - 持久化能力通过 abstractions 协议注入。

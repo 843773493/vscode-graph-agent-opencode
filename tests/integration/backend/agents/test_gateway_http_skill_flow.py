@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from app.core.workspace_identity import read_workspace_id
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     ENDPOINT,
     FRONTMATTER,
@@ -28,7 +29,7 @@ from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     scripted_model as scripted_model,  # noqa: PLC0414 - pytest 通过重导出的 fixture 注入。
 )
 from tests.support.http_server import running_http_server
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -51,7 +52,7 @@ class HttpSkillServer:
 
 @pytest.fixture
 def http_skill_server(request: pytest.FixtureRequest) -> Iterator[HttpSkillServer]:
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(14)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(14)
     state = HttpSkillServer(f"http://127.0.0.1:{port}/private/SKILL.md")
 
     class Handler(BaseHTTPRequestHandler):
@@ -84,7 +85,7 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
     state, source = scripted_model, http_skill_server
     workspace = Path(integration_workspace_root_path)
     output, home = workspace.parent, workspace.parent / "boxteam-home"
-    artifacts = output / "artifacts" / request.node.name
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     config_path = Path(integration_workspace_config_path)
     _configure_model(config_path, ENDPOINT)
@@ -95,7 +96,7 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
     # 模板身份只属于模板；新复制的工作区经真实初始化入口生成独立身份。
     (secondary / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
     install_test_workspace_config(workspace_root=secondary, config_path=config_path, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(13)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(13)
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
         artifacts_dir=artifacts / "gateway", extra_env=state.environment,

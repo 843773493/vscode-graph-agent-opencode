@@ -7,6 +7,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
+from boxteam_plugin_sdk.failures import failure_message
+
 from app.core.failures import failure_detail
 from app.core.resource_uri import file_uri_root, parse_resource_uri
 from app.services.infrastructure.resource_platform.sources.observed_source import (
@@ -187,7 +189,7 @@ class InstructionFileInputs:
                     _text(values, text_key).encode("utf-8")
                 ).hexdigest(),
                 "available": uri not in self._failures,
-                "last_error": type(self._failures[uri]).__name__
+                "last_error": failure_message(self._failures[uri])
                 if uri in self._failures
                 else None,
             }

@@ -20,7 +20,7 @@ import type {
   WorkspaceFileSelection,
 } from "../../utils/workspaceFileReferences";
 import { isWorkspaceTextFilePath } from "../../utils/workspaceFileReferences";
-import { errorDisplayMessage } from "../../utils/errorMessage";
+import { errorMessage } from "../../utils/errorMessage";
 import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 
@@ -175,7 +175,7 @@ export function useWorkspacePreviewTabs({
         if (cancelled || fileOpenIntentRef.current !== intent) {
           return;
         }
-        const message = errorDisplayMessage(restoreError);
+        const message = errorMessage(restoreError);
         setError(message);
         onStatusChange(t("workspace.preview.status.restoreFailed", message));
       })
@@ -302,7 +302,7 @@ export function useWorkspacePreviewTabs({
         if (fileOpenIntentRef.current !== intent) {
           return;
         }
-        const message = errorDisplayMessage(openError);
+        const message = errorMessage(openError);
         setError(message);
         onStatusChange(t("workspace.preview.status.readFailed", message));
       })
@@ -367,7 +367,7 @@ export function useWorkspacePreviewTabs({
       if (fileOpenIntentRef.current !== intent) {
         return;
       }
-      const message = errorDisplayMessage(openError);
+      const message = errorMessage(openError);
       setError(message);
       onStatusChange(t("workspace.preview.status.readFailed", message));
     } finally {
@@ -543,7 +543,7 @@ export function useWorkspacePreviewTabs({
       setDraftContent(saved.content);
       onStatusChange(t("workspace.preview.status.fileSaved", saved.path));
     } catch (saveError) {
-      const message = errorDisplayMessage(saveError);
+      const message = errorMessage(saveError);
       setError(message);
       onStatusChange(t("workspace.preview.status.saveFailed", message));
     } finally {

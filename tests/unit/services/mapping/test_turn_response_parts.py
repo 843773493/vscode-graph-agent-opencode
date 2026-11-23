@@ -145,7 +145,8 @@ def test_internal_execution_tool_payload_is_only_detailed_when_requested() -> No
     assert summary[0].projection == "summary"
     assert summary[0].arguments is None
     assert detail[0].projection == "detail"
-    assert detail[0].arguments == '{"path":"a.py"}'
+    # 沿普通 Turn 的既有 JSON 格式；统一点读不能因独立执行的格式差异改写正文。
+    assert detail[0].arguments == '{"path": "a.py"}'
 
 
 @pytest.fixture

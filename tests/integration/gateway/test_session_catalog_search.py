@@ -21,8 +21,7 @@ from tests.harness.performance.record import stage
 from tests.harness.performance.report import distribution
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -64,7 +63,7 @@ def catalog_network(request: pytest.FixtureRequest, integration_workspace_root_p
     prepare_default_test_workspace(workspace_root=secondary, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True)
     install_test_workspace_config(workspace_root=secondary, config_path=workspace / ".boxteam/workspace.jsonc",
                                   schema_path=workspace / ".boxteam/workspace_schema.jsonc")
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
     home = runtime / "gateway-home"
     root = home / "state/gateway"
@@ -74,9 +73,8 @@ def catalog_network(request: pytest.FixtureRequest, integration_workspace_root_p
     token.chmod(0o600)
     gateway_id = load_or_create_gateway_id(root / "identity.json")
     with ExitStack() as cleanup:
-        lease = E2EProcessLease(runtime / "ports.json", tuple(ports.port(offset) for offset in (0, 1, 20)))
-        lease.acquire()
-        cleanup.callback(lease.release)
+        for offset in (0, 1, 20):
+            ports.port(offset)
         backends = []
         for index, target_root in enumerate((workspace, secondary)):
             backend = start_backend_process(workspace_root=str(target_root), port=ports.port(index), log_name=f"catalog-backend-{index}",

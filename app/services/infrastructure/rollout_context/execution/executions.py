@@ -74,12 +74,14 @@ class RolloutExecutionsMixin:
         assembly_id: str | None = None,
         checkpoint_ns: str = "",
         loss_reason: str | None = None,
+        failure: Mapping[str, object] | None = None,
     ) -> int:
         """原子收敛 execution/model/assembly/Turn 与可选 output item。"""
         return self._converge_execution(
             session_id, thread_id=thread_id, turn_id=turn_id, execution_id=execution_id,
             outcome=outcome, turn_status=turn_status, items=items, final_item_id=final_item_id,
             assembly_id=assembly_id, checkpoint_ns=checkpoint_ns, loss_reason=loss_reason,
+            failure=failure,
         )
 
     def materialize_legacy_turn(
@@ -140,6 +142,7 @@ class RolloutExecutionsMixin:
         assembly_id: str | None = None,
         checkpoint_ns: str = "",
         loss_reason: str | None = None,
+        failure: Mapping[str, object] | None = None,
         historical_source: tuple[str, str, str] | None = None,
     ) -> int:
         """运行终态与显式历史安装共用唯一 items/commit/projection 事务。"""
@@ -167,6 +170,10 @@ class RolloutExecutionsMixin:
             {"execution_id": execution_id, "reason": loss_reason}
             if loss_reason is not None else {}
         )
+        if failure is not None:
+            if outcome in {ControlOutcome.COMPLETED.value, ControlOutcome.COMPLETED_EMPTY.value}:
+                raise ValueError("成功 execution 不得携带 failure")
+            terminal_metadata["failure"] = dict(failure)
         if historical_source is not None:
             terminal_key = f"legacy-terminal:{turn_id}:{execution_id}"
             terminal_metadata = {
@@ -240,6 +247,7 @@ class RolloutExecutionsMixin:
                     items=items,
                     assembly_id=assembly_id,
                     checkpoint_ns=checkpoint_ns,
+                    failure=failure,
                 )
             turn = connection.execute(
                 "SELECT status, final_item_id FROM turn_records "
@@ -742,5 +750,10 @@ class RolloutExecutionsMixin:
                 execution_id=execution_id, latest_model_call_id=latest_model_call_id,
                 outcome=outcome, timestamp=timestamp, control_correction=control_correction,
             )
+            if not new_message_sequences:
+                connection.execute(
+                    "UPDATE database_meta SET history_view_revision=history_view_revision+1, updated_at=? WHERE singleton_id=1",
+                    (_now(),),
+                )
             self._storage._commit_connection(connection)
             return commit_id

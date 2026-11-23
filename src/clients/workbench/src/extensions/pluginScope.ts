@@ -16,6 +16,25 @@ import { manageConfig, readPluginBindings, writeOnlyFields, type Scope } from '.
 export type PackageManifest = NonNullable<PluginInventoryResultDTO['packages'][number]['manifest']>;
 export type PackagePlugin = PackageManifest['plugins'][number];
 export const pluginError = (error: unknown) => error instanceof Error ? error.message : String(error);
+function pluginService(plugin: PackagePlugin): string | undefined {
+  return plugin.contributes?.debuggers.length ? 'debugger' : plugin.contributes?.services[0]?.service_type;
+}
+export function pluginIcon(plugin: PackagePlugin): string {
+  switch (pluginService(plugin)) {
+    case 'terminal': return 'codicon-terminal';
+    case 'browser': return 'codicon-browser';
+    case 'debugger': return 'codicon-debug-alt';
+    default: return 'codicon-extensions';
+  }
+}
+export function pluginDescription(plugin: PackagePlugin, manifest: PackageManifest): string {
+  switch (pluginService(plugin)) {
+    case 'terminal': return t('plugins.description.terminal');
+    case 'browser': return t('plugins.description.browser');
+    case 'debugger': return t('plugins.description.debugger');
+    default: return manifest.description ?? '';
+  }
+}
 export function pluginStateLabel(state: string): string {
   switch (state) {
     case 'stopped': return t('plugins.state.stopped');
@@ -95,6 +114,15 @@ export class PluginScope extends Disposable {
   }
   label(packageId: string, pluginId: string, runtime: boolean): string {
     return `${this.configurationLabel(packageId, pluginId)} · ${this.actualLabel(this.slot(packageId, pluginId), runtime)}`;
+  }
+  summary(packageId: string, pluginId: string, runtime: boolean): string {
+    const binding = this.binding(packageId, pluginId), status = this.slot(packageId, pluginId);
+    if (this.scope === 'defaults') return t(binding ? binding.enabled ? 'plugins.enabledOnCreate' : 'plugins.disabledOnCreate' : 'plugins.notInDefaults');
+    const configuration = t(binding ? binding.enabled ? 'plugins.enabledState' : 'plugins.disabledState' : 'plugins.notEnabled');
+    const mismatch = binding && status?.instance && binding.package_version !== status.instance.package_version;
+    if (!runtime || (binding?.enabled && status?.state === 'ready' && !mismatch)) return configuration;
+    const actual = status ? pluginStateLabel(status.state) : t('plugins.notRunning');
+    return `${configuration} · ${actual}${mismatch ? ` · ${t('plugins.versionMismatch')}` : ''}`;
   }
 }
 

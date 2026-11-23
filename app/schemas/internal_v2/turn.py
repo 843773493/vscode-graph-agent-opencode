@@ -6,11 +6,12 @@ from typing import Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .attachment import AttachmentDirectoryURI, AttachmentFileURI
-from .common import JobStatus
+from .common import JobStatus, PublicErrorDTO
 from .session import SessionDTO
 from .trace import TraceEventDTO
 from .turn_search import (
     ContextContentReference,
+    ThreadItemLocationDTO,
     TurnMessageLocationDTO,
     TurnMessageReferenceDTO,
     TurnToolResultDTO,
@@ -31,11 +32,12 @@ TurnInclude = Literal[
     "internal",
     "metadata",
     "final_response",
+    "activity_outline",
 ]
 # 上限直接从闭集派生，避免闭集与计数两份清单漂移。
 MAX_TURN_INCLUDE_FIELDS = len(get_args(TurnInclude))
 TurnCursorDirection = Literal["head", "tail", "before", "after", "around", "older"]
-TurnCursorQueryMode = Literal["tail", "linear", "window", "execution"]
+TurnCursorQueryMode = Literal["tail", "linear", "window", "execution", "activity"]
 TurnProjectionState = Literal["ready", "partial"]
 
 
@@ -118,6 +120,11 @@ class TurnResponseSourceDTO(BaseModel):
     part_ordinal: int | None = Field(default=None, ge=0)
     created_at: datetime | None = None
     elapsed_ms: int | None = Field(default=None, ge=0)
+    turn_id: str | None = None
+    execution_id: str | None = None
+    process_segment_item_id: str | None = None
+    activity_group_item_id: str | None = None
+    activity_group_part_ordinal: int | None = Field(default=None, ge=0)
 
 
 class TurnResponsePartDTO(BaseModel):
@@ -214,6 +221,7 @@ class TurnBaseDTO(BaseModel):
     独立创建时刻；此处按 history 已加载消息投影，不把两种事件时间混同。
     """
 
+    failure: PublicErrorDTO | None = None
     turn_id: str = Field(min_length=1)
     job_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
@@ -364,6 +372,15 @@ class TurnDetailCursorDTO(BaseModel):
     include_hash: str = Field(min_length=1, max_length=64)
 
 
+class ContextNoticeAnchorDTO(BaseModel):
+    """定位消费请求产生的一组标记，不将其伪造为 canonical Item。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model_call_id: str = Field(min_length=1, max_length=256)
+    anchor: Literal["before_user_message", "before_model_call"]
+
+
 class TurnHistoryLoadRequest(BaseModel):
     """语义化历史读取请求；客户端不能通过它绕过服务端硬上限。"""
 
@@ -372,12 +389,16 @@ class TurnHistoryLoadRequest(BaseModel):
     direction: TurnCursorDirection = "tail"
     cursor: str | None = None
     context_cursor: str | None = Field(default=None, min_length=1, max_length=65536)
+    anchor_context: ContextNoticeAnchorDTO | None = None
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     anchor_message: TurnMessageReferenceDTO | None = None
     anchor_tool_result: str | None = Field(default=None, min_length=1, max_length=256)
     turn_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     execution_id: str | None = Field(default=None, min_length=1, max_length=256)
-    execution_item_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    item_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    anchor_item_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_view_id: str | None = Field(default=None, min_length=1)
+    source_view_revision: int | None = Field(default=None, ge=0)
     # 只用于单个 Turn 内的 ToolRow 定点补载；不允许退化成整轮工具详情读取。
     tool_call_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     turns: int | None = Field(default=None, ge=1, le=256)
@@ -390,11 +411,54 @@ class TurnHistoryLoadRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_around_budget(self) -> TurnHistoryLoadRequest:
+        if (self.source_view_id is None) != (self.source_view_revision is None):
+            raise ValueError("历史来源 view/revision 必须成对提供")
+        outline = self.include is not None and "activity_outline" in self.include
+        if self.anchor_context is not None and (
+            any(value is not None for value in (
+                self.cursor, self.context_cursor, self.anchor_item_id, self.anchor_message,
+                self.anchor_tool_result, self.turn_ids, self.item_ids, self.tool_call_ids,
+            )) or outline or not (
+                self.direction == "around" and self.anchor_turn_id is not None and self.execution_id is None
+                or self.direction == "tail" and self.execution_id is not None and self.anchor_turn_id is None
+            )
+        ):
+            raise ValueError("上下文标记定位必须绑定一个 Turn around 或 execution tail，不能混用其它选择器")
+        if outline or self.item_ids is not None:
+            if self.cursor is None and (self.execution_id is None) == (self.turn_ids is None):
+                raise ValueError("过程详情要求一个 Turn 或 execution")
+            if self.turn_ids is not None and len(self.turn_ids) != 1:
+                raise ValueError("过程详情只能选择一个 Turn")
+            if self.direction not in {"tail", "before"} or any(value is not None for value in (
+                self.context_cursor, self.anchor_turn_id, self.anchor_item_id,
+                self.anchor_message, self.anchor_tool_result, self.tool_call_ids,
+                self.turns, self.before_turns, self.after_turns,
+            )):
+                raise ValueError("过程详情不能混用窗口或其它定位选择器")
+            if self.cursor is None and self.source_view_id is None:
+                raise ValueError("过程详情必须携带原 source_view_id/source_view_revision")
+            if self.execution_id is not None and self.include is not None and "internal" not in self.include:
+                raise ValueError("execution 详情必须包含 internal")
+            if self.item_ids is not None:
+                if outline or self.cursor is not None or self.direction != "tail":
+                    raise ValueError("item_ids 定点读取不能混用轮廓或分页游标")
+                if len(set(self.item_ids)) != len(self.item_ids) or any(not value.strip() or len(value) > 256 for value in self.item_ids):
+                    raise ValueError("item_ids 必须为一到四个唯一 canonical Item")
+            if outline and set(self.include or ()) - {"activity_outline", "assistant_text", "internal"}:
+                raise ValueError("活动轮廓不能携带思考或工具正文 include")
+            return self
+        if self.anchor_item_id is not None:
+            if self.direction != "around" or any(value is not None for value in (
+                self.cursor, self.context_cursor, self.anchor_turn_id, self.anchor_message,
+                self.anchor_tool_result, self.turn_ids, self.execution_id, self.tool_call_ids,
+            )):
+                raise ValueError("anchor_item_id 只用于独立 around 定位")
+            return self
         if self.context_cursor is not None:
             if self.direction != "tail" or any(value is not None for value in (
                 self.cursor, self.anchor_turn_id, self.anchor_message, self.anchor_tool_result,
-                self.turn_ids, self.execution_id, self.execution_item_ids, self.tool_call_ids, self.turns,
-                self.before_turns, self.after_turns, self.include,
+                self.turn_ids, self.execution_id, self.item_ids, self.tool_call_ids, self.turns,
+                self.before_turns, self.after_turns, self.include, self.source_view_id,
             )):
                 raise ValueError("上下文元数据续读不能混用历史页选择器")
             return self
@@ -415,16 +479,7 @@ class TurnHistoryLoadRequest(BaseModel):
                 raise ValueError("execution_id 详情只支持 tail 与 before 续读")
             if self.include is not None and "internal" not in self.include:
                 raise ValueError("execution_id 详情必须包含 internal")
-            if self.execution_item_ids is not None:
-                if self.direction != "tail" or self.cursor is not None:
-                    raise ValueError("execution_item_ids 定点补读不能混用分页游标")
-                if len(set(self.execution_item_ids)) != len(self.execution_item_ids) or any(
-                    not item_id.strip() or len(item_id) > 256 for item_id in self.execution_item_ids
-                ):
-                    raise ValueError("execution_item_ids 必须是非空且不重复的 canonical item ID")
             return self
-        if self.execution_item_ids is not None:
-            raise ValueError("execution_item_ids 必须提供 execution_id")
         if self.turn_ids is not None:
             if len(set(self.turn_ids)) != len(self.turn_ids):
                 raise ValueError("turn_ids 不能重复")
@@ -497,6 +552,8 @@ class InternalExecutionHistoryDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     execution_id: str = Field(min_length=1, max_length=256)
+    terminal_commit_id: int | None = Field(default=None, ge=1, description="同一快照中原 terminal convergence 的提交；缺失表示尚无权威终态，不按 Job 或 outcome 猜测。")
+    failure: PublicErrorDTO | None = None
     job_id: str = Field(min_length=1, max_length=256)
     session_id: str = Field(
         min_length=1,
@@ -568,6 +625,7 @@ class TurnHistoryPageDTO(BaseModel):
     has_before: bool = False
     has_after: bool = False
     projection_epoch: int = Field(ge=1)
+    located_item: ThreadItemLocationDTO | None = None
     located_message: TurnMessageLocationDTO | None = None
     located_tool_result: TurnToolResultDTO | None = None
     context_notices: list[ContextNoticeBatchDTO] = Field(default_factory=list, max_length=128)
@@ -640,25 +698,25 @@ class TurnCursorDTO(BaseModel):
     window_before_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
     window_after_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
     execution_id: str | None = Field(default=None, min_length=1, max_length=256)
+    activity_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
+    anchor_item_id: str | None = Field(default=None, min_length=1, max_length=256)
     stage: int = Field(default=0, ge=0, strict=True)
     turn_ordinal: int | None = Field(default=None, ge=1, strict=True)
     logical_item_ordinal: int | None = Field(default=None, ge=0, strict=True)
 
     @model_validator(mode="after")
     def validate_query_binding(self) -> TurnCursorDTO:
-        if (self.query_mode == "execution") != (self.execution_id is not None):
+        if self.query_mode != "activity" and (self.query_mode == "execution") != (self.execution_id is not None):
             raise ValueError("execution 历史游标必须冻结精确 execution_id")
         if self.effective_include != tuple(sorted(set(self.effective_include))):
             raise ValueError("历史游标 effective_include 必须排序且唯一")
-        window_values = (
-            self.anchor_turn_id,
-            self.window_before_turns,
-            self.window_after_turns,
-        )
+        if self.query_mode == "activity" and ((self.execution_id is None) == (self.activity_turn_id is None)):
+            raise ValueError("activity 游标必须冻结一个真实过程")
+        window_values = (self.window_before_turns, self.window_after_turns)
         if self.query_mode == "window":
-            if any(value is None for value in window_values):
+            if (self.anchor_turn_id is None) == (self.anchor_item_id is None) or any(value is None for value in window_values):
                 raise ValueError("window 历史游标必须冻结 anchor 与两侧窗口")
-        elif any(value is not None for value in window_values):
+        elif self.anchor_turn_id is not None or self.anchor_item_id is not None or any(value is not None for value in window_values):
             raise ValueError("非 window 历史游标不得携带 around 窗口")
         if (
             self.turn_ordinal is not None
@@ -679,7 +737,7 @@ class TurnCursorDTO(BaseModel):
             and self.logical_item_ordinal is not None
         ):
             raise ValueError("空 internal snapshot 不得携带 item anchor")
-        if "internal" not in self.effective_include and self.logical_item_ordinal is not None:
+        if self.query_mode != "activity" and "internal" not in self.effective_include and self.logical_item_ordinal is not None:
             raise ValueError("effective_include 排除 internal 时不得携带 item anchor")
         if self.turn_ordinal is None and self.logical_item_ordinal is None:
             raise ValueError("已耗尽的历史 cursor 不得继续发行")

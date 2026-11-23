@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -12,9 +13,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 
+from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_control_store import ThreadGraphBindingRecord
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.enums import (
@@ -22,8 +26,10 @@ from app.domain.itemized.enums import (
     PayloadKind,
     SemanticKind,
 )
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.runtime_reminder import submit_runtime_reminder
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -44,7 +50,7 @@ from tests.support.model_stream.frozen_provider import (
     frozen_provider_wire,
 )
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -61,9 +67,15 @@ from tests.support.rollout.web_boundary_seeding import (
     tool_result_payload,
 )
 from tests.support.session_catalog_owner import fixture_catalog_scope
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 from tests.support.workspaces import prepare_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
+INTERNAL_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd8"
+FORK_SOURCE_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd9"
 LONG_SESSION_TOOL_CALL_ID = "call_chat_reasoning_tool"
 LONG_SESSION_TOOL_NAME = "invoke_extension_tool"
 LONG_SESSION_FINAL_TEXT = "工具调用完成"
@@ -266,6 +278,77 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
             turn_status="completed" if has_result else "interrupted", final_item_id=final_id,
         )
 
+    # 长历史含刻意未闭合的中断工具，只用于展示；fork 使用完整闭合的单轮来源。
+    # fork 经正式接口重建绑定，不能使用播种器默认的单元测试 graph selector。
+    seed_catalog_session_bundle(
+        sessions_dir, FORK_SOURCE_SESSION_ID, title="独立会话分屏来源",
+        graph_binding=ThreadGraphBindingRecord(*DEEP_AGENT_GRAPH_BINDING.selector_fields()),
+    )
+    fork_owner = saver.forks.source.resolve_main_thread_owner(FORK_SOURCE_SESSION_ID)
+    turn_id, _, items, _, final_id = pending[-1]
+    accepted = saver.accept_turn(
+        FORK_SOURCE_SESSION_ID, thread_id=fork_owner.thread_id,
+        accepted_ingress_id="fork-source-ingress", acceptance_idempotency_key="fork-source-acceptance",
+        job_id="fork-source-job", admission_idempotency_key="fork-source-admission",
+        payload="完整闭合的工具调用与长结果，用于独立会话展示。", payload_kind=PayloadKind.TEXT,
+        turn_id=turn_id, root_item_id="fork-source-user", initial_execution_id="fork-source-execution",
+    )
+    execution_id = str(accepted["initial_execution_id"])
+    admission = saver.execution_admission(FORK_SOURCE_SESSION_ID, thread_id=fork_owner.thread_id, execution_id=execution_id)
+    with (session_thread_owner_scope(fork_owner, langgraph_thread_id=fork_owner.thread_id),
+          execution_admission_scope(admission, langgraph_thread_id=fork_owner.thread_id)):
+        assembly = prepare(saver, key="fork-source-display")
+    # 可 fork 的正文绑定到上述真实登记的 ModelCall，不能复用纯展示样本的假调用 ID。
+    fork_call = tool_call_payload(
+        LONG_SESSION_TOOL_CALL_ID, LONG_SESSION_TOOL_NAME, _call_arguments(128),
+        model_call_id=assembly.model_call_id,
+    )
+    fork_result = tool_result_payload(
+        LONG_SESSION_TOOL_CALL_ID, LONG_SESSION_TOOL_NAME, _tool_result_content(128),
+        model_call_id=assembly.model_call_id,
+    )
+    fork_items = tuple(CanonicalItemRecord.create(
+        item_sequence=item.item_sequence, item_id=item.item_id,
+        semantic_kind=item.semantic_kind, payload_kind=item.payload_kind, status=item.status,
+        turn_id=item.turn_id, turn_scope=item.turn_scope,
+        message_group_id=item.message_group_id, wire_role=item.wire_role,
+        producer_ref={"producer_kind":"provider", "producer_id":assembly.model_call_id, "invocation_id":execution_id},
+        projection_identity=replace(
+            item.projection_identity, model_call_id=assembly.model_call_id,
+            block_id=str(fork_call["tool_call_id"]) if item.semantic_kind == SemanticKind.TOOL_CALL else item.projection_identity.block_id,
+        ),
+        payload=fork_call if item.semantic_kind == SemanticKind.TOOL_CALL
+            else fork_result if item.semantic_kind == SemanticKind.TOOL_RESULT else item.payload,
+    ) for item in items)
+    saver.converge_execution(
+        FORK_SOURCE_SESSION_ID, thread_id=fork_owner.thread_id, turn_id=turn_id,
+        execution_id=execution_id, items=fork_items,
+        assembly_id=assembly.assembly_id, outcome="completed", turn_status="completed", final_item_id=final_id,
+    )
+
+    # 无 Turn 的独立执行仍由正式 admission / convergence 写入，只用于页面读取验收。
+    seed_catalog_session_bundle(sessions_dir, INTERNAL_SESSION_ID, title="无 Turn 的内部执行")
+    internal_owner = saver.forks.source.resolve_main_thread_owner(INTERNAL_SESSION_ID)
+    execution_id = "internal-browser-execution"
+    prepared = internal_message_factory.build(kind="generated_session_result", control="读取独立执行结果。",
+        sections=(PromptSection("control_context", {"source":"browser-history-fixture"}),
+                  PromptSection("generated_session_result", "内部执行展示输入")), display_content="内部执行展示输入")
+    admission = saver.admit_internal_execution(INTERNAL_SESSION_ID,thread_id=internal_owner.thread_id,job_id="internal-browser-job",
+        intent=InternalExecutionIntent(message_id="internal-browser-message",execution_id=execution_id,admission_idempotency_key="internal-browser-admission"),
+        message=HumanMessage(id="internal-browser-message",content=prepared.content,
+            response_metadata={"message_id":"internal-browser-message","created_at":datetime.now(UTC).isoformat(),"message_metadata":prepared.metadata}))
+    items = tuple(CanonicalItemRecord.create(item_sequence=1,item_id=f"internal-browser-{index}",semantic_kind=SemanticKind.REASONING,
+        payload_kind=PayloadKind.TEXT,status=CanonicalItemStatus.COMPLETED,payload=f"内部执行思考正文 {index}",
+        producer_ref={"producer_kind":"runtime","producer_id":"browser-fixture","invocation_id":execution_id},
+        projection_identity=ItemProjectionIdentity(projection_message_id=f"internal-browser-message-{index}",model_call_id="internal-browser-model",block_id=f"internal-browser-block-{index}",block_index=index))
+        for index in range(3))
+    saver.converge_execution(INTERNAL_SESSION_ID,thread_id=internal_owner.thread_id,turn_id=None,execution_id=execution_id,
+        outcome="completed",turn_status=None,items=items)
+    # 复现正式 canonical sink：终态提交和可见历史发布是两个 owner 操作。
+    with (session_thread_owner_scope(internal_owner, langgraph_thread_id=internal_owner.thread_id),
+          execution_admission_scope(admission, langgraph_thread_id=internal_owner.thread_id)):
+        saver.append_items(INTERNAL_SESSION_ID, items, thread_id=internal_owner.thread_id)
+
 
 @pytest.fixture(scope="module")
 def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
@@ -290,17 +373,24 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
+def history_boxteam_home(request: pytest.FixtureRequest) -> Path:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    return context.boxteam_home_for_node(request.node.nodeid)
+
+
+@pytest.fixture(scope="module")
 def browser_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    history_boxteam_home: Path,
 ) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     assert Path(integration_workspace_config_path).is_file()
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="read-only-128-turn-progressive-history",
     ) as replay:
         backend = start_backend_process(
@@ -308,7 +398,12 @@ def browser_backend(
             port=port_block.port(0),
             log_name="rollout-history-browser-backend",
             asgi_app="tests.support.e2e_control.backend_app:app",
-            env_overrides={**replay.environment, "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}"},
+            boxteam_home=history_boxteam_home,
+            env_overrides={
+                **replay.environment,
+                "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
+                "BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"],
+            },
         )
         try:
             yield f"http://127.0.0.1:{backend.port}", workspace_root, replay
@@ -337,6 +432,8 @@ async def test_rollout_history_around_loading_real_web_chain(
     browser_backend_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
     web_workbench_assets: Path,
+    history_boxteam_home: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     chromium_path = (
@@ -417,16 +514,33 @@ async def test_rollout_history_around_loading_real_web_chain(
         f"/api/v1/sessions/{session_id}"
     )
     assert session_response.status_code == 200, session_response.text
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, history_boxteam_home)
     gateway = start_gateway_process(
         workspace_root=Path(browser_backend[1]),
         default_backend_url=browser_backend[0],
         port=port_block.port(20),
         artifacts_dir=context.artifacts_dir / "gateway",
+        boxteam_home=history_boxteam_home,
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     artifacts = context.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
+    sources = (
+        "app/services/infrastructure/rollout_context/storage/catalog/turn_projection_reads.py",
+        "app/services/infrastructure/rollout_context/storage/migrations/history/turn_activity_coordinates.sql",
+        "app/services/infrastructure/rollout_context/storage/migrations/history/activity_coordinates.sql",
+        "src/clients/web/src/components/chat/useTranscriptNavigation.ts",
+        "src/clients/web/src/components/chat/useTranscriptVirtualScroller.ts",
+        "src/clients/web/src/components/chat/turn/TurnActivitySummary.tsx",
+        "tests/integration/clients/web/rollout_history_progressive_loading.mjs",
+    )
+    (artifacts / "scenario-source.json").write_text(json.dumps({
+        "model_mode":"canonical_history_fixture_without_model_requests",
+        "asset_source":"tests/fixtures/workspaces/default_test_workspace + _seed_long_session canonical writer",
+        "turns":128,
+        "sources":{name:hashlib.sha256((project_root / name).read_bytes()).hexdigest() for name in sources},
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     result_path = artifacts / "rollout-history-progressive-result.json"
     screenshot_path = artifacts / "rollout-history-progressive-failure.png"
     result_path.unlink(missing_ok=True)
@@ -443,6 +557,24 @@ async def test_rollout_history_around_loading_real_web_chain(
             workspace_id = owner["workspace_id"]
             gateway_id = owner["gateway_id"]
             assert workspace_id == read_workspace_id(browser_backend[1])
+            # Fork 来源同时枚举终端和浏览器资源，复用完整的真实插件装具。
+            await enable_developer_tools_plugins(
+                client, gateway_id=gateway_id, workspace_id=workspace_id,
+                plugin_ids=("terminal", "browser"),
+            )
+            source_point = await client.get(
+                f"/api/v1/sessions/{FORK_SOURCE_SESSION_ID}/fork-source-point",
+                headers={"X-BoxTeam-Target-Gateway-Id": gateway_id, "X-BoxTeam-Workspace-Id": workspace_id},
+            )
+            assert source_point.status_code == 200, source_point.text
+            internal_page = await client.post(
+                f"/api/v1/sessions/{INTERNAL_SESSION_ID}/threads/{resolver.main_thread_id(INTERNAL_SESSION_ID)}/history",
+                headers={"X-BoxTeam-Target-Gateway-Id": gateway_id, "X-BoxTeam-Workspace-Id": workspace_id},
+                json={"direction": "tail"},
+            )
+            assert internal_page.status_code == 200, internal_page.text
+            internal_parts = internal_page.json()["data"]["internal_executions"][0]["response_parts"]
+            assert len([part for part in internal_parts if part["kind"] == "reasoning"]) == 3, internal_page.text
 
         environment = os.environ.copy()
         environment.update(
@@ -450,6 +582,8 @@ async def test_rollout_history_around_loading_real_web_chain(
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                 "BOXTEAM_BROWSER_SESSION_ID": session_id,
+                "BOXTEAM_BROWSER_INTERNAL_OWNER": json.dumps({"sessionId":INTERNAL_SESSION_ID,"threadId":resolver.main_thread_id(INTERNAL_SESSION_ID)}),
+                "BOXTEAM_BROWSER_FORK_OWNER": json.dumps({"sessionId":FORK_SOURCE_SESSION_ID,"threadId":resolver.main_thread_id(FORK_SOURCE_SESSION_ID)}),
                 "BOXTEAM_BROWSER_OWNER": json.dumps({
                     "workspaceId": workspace_id, "gatewayId": gateway_id,
                     "sessionId": session_id, "threadId": resolver.main_thread_id(session_id),
@@ -516,6 +650,17 @@ async def test_rollout_history_around_loading_real_web_chain(
         # 首次真实浏览器 prepend 包含 Virtuoso 首次布局和 Gateway 冷路径；
         # 热路径 API p95 仍由上面的 200ms 断言约束。
         assert result["browserPrependMs"] < 500
+        assert result["readingRestored"] is True
+        assert len(result["independentSessions"]) == 6
+        assert result["childAndInternal"] is True
+        assert result["explicitLocationCancellation"] is True
+        assert result["extremeLayout"]["width"] <= 320
+        assert len(result["cachedDisclosures"]) == 20
+        assert len(result["networkDisclosures"]) == 20
+        assert result["disclosurePerformance"]["cached"]["maxMs"] <= 200
+        assert result["disclosurePerformance"]["network"]["p95Ms"] <= 500
+        assert result["disclosurePerformance"]["network"]["maxMs"] <= 1500
+        assert result["firstReadMs"] <= 3000
         assert result["noPageErrors"] is True
     finally:
         close_gateway_process(gateway)

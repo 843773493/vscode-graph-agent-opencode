@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -35,7 +35,7 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     workspace = Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=workspace)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     evidence = {}
     with ExitStack() as processes:
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir)

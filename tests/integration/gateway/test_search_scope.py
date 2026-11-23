@@ -18,8 +18,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendOwner,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -82,31 +81,28 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     artifacts = context.artifacts_dir
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease = E2EProcessLease(runtime / "service-ports.json", (ports.port(0), ports.port(20)))
-    lease.acquire()
-    try:
-        workspace = Path(integration_workspace_root_path)
-        stopped_roots = (workspace / "stopped-b", workspace / "stopped-c")
-        for root in stopped_roots:
-            prepare_default_test_workspace(
-                workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-                fresh_identity=True,
-            )
-        gateway_home = runtime / "boxteam-home"
-        gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
-        fixture = ScopeNetwork(workspace, gateway_home, gateway_id, artifacts, ports.port(20), ports.port(0), stopped_roots)
-        fixture.register_stopped_target(stopped_roots[0])
-        backend = start_backend_process(
-            workspace_root=str(workspace), port=fixture.backend_port, log_name="scope-backend",
-            boxteam_home=runtime / "backend-home", artifacts_dir=artifacts,
+    ports = integration_ports_for_file(Path(request.node.path))
+    ports.port(0)
+    ports.port(20)
+    workspace = Path(integration_workspace_root_path)
+    stopped_roots = (workspace / "stopped-b", workspace / "stopped-c")
+    for root in stopped_roots:
+        prepare_default_test_workspace(
+            workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+            fresh_identity=True,
         )
-        try:
-            yield fixture
-        finally:
-            close_backend_process(backend)
+    gateway_home = runtime / "boxteam-home"
+    gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
+    fixture = ScopeNetwork(workspace, gateway_home, gateway_id, artifacts, ports.port(20), ports.port(0), stopped_roots)
+    fixture.register_stopped_target(stopped_roots[0])
+    backend = start_backend_process(
+        workspace_root=str(workspace), port=fixture.backend_port, log_name="scope-backend",
+        boxteam_home=runtime / "backend-home", artifacts_dir=artifacts,
+    )
+    try:
+        yield fixture
     finally:
-        lease.release()
+        close_backend_process(backend)
 
 
 @pytest.mark.asyncio

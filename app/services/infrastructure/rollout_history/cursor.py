@@ -32,6 +32,8 @@ class HistoryCursorBinding:
     window_before_turns: int | None = None
     window_after_turns: int | None = None
     execution_id: str | None = None
+    activity_turn_id: str | None = None
+    anchor_item_id: str | None = None
 
 
 class HistoryCursorMixin:
@@ -49,6 +51,14 @@ class HistoryCursorMixin:
         logical_item_read_upper_bound: int | None,
     ) -> HistoryCursorBinding:
         if decoded is None:
+            if request.include is not None and "activity_outline" in request.include:
+                return HistoryCursorBinding(
+                    query_mode="activity", effective_include=cls._canonical_include(request.include),
+                    history_view_revision=history_view_revision, turn_read_upper_bound=turn_read_upper_bound,
+                    logical_item_read_upper_bound=logical_item_read_upper_bound,
+                    execution_id=request.execution_id,
+                    activity_turn_id=request.turn_ids[0] if request.turn_ids else None,
+                )
             if request.execution_id is not None:
                 return HistoryCursorBinding(
                     query_mode="execution",
@@ -94,7 +104,7 @@ class HistoryCursorMixin:
                     turn_read_upper_bound=turn_read_upper_bound,
                     logical_item_read_upper_bound=logical_item_read_upper_bound,
                 )
-            if request.anchor_turn_id is None:
+            if request.anchor_turn_id is None and request.anchor_item_id is None:
                 raise InvalidTurnCursorError("around 历史游标缺少 anchor_turn_id")
             return HistoryCursorBinding(
                 query_mode="window",
@@ -103,6 +113,7 @@ class HistoryCursorMixin:
                 turn_read_upper_bound=turn_read_upper_bound,
                 logical_item_read_upper_bound=logical_item_read_upper_bound,
                 anchor_turn_id=request.anchor_turn_id,
+                anchor_item_id=request.anchor_item_id,
                 window_before_turns=cls._window_limit(
                     request.before_turns,
                     configured.anchor_before_turns,
@@ -116,8 +127,10 @@ class HistoryCursorMixin:
         normalized_direction = (
             "before" if request.direction == "older" else request.direction
         )
-        if request.execution_id != decoded.execution_id:
+        if request.execution_id is not None and request.execution_id != decoded.execution_id:
             raise InvalidTurnCursorError("历史游标 execution_id 与请求不一致")
+        if request.turn_ids is not None and decoded.query_mode == "activity" and request.turn_ids != [decoded.activity_turn_id]:
+            raise InvalidTurnCursorError("历史游标 activity Turn 与请求不一致")
         if (
             request.include is not None
             and cls._canonical_include(request.include) != decoded.effective_include
@@ -176,6 +189,7 @@ class HistoryCursorMixin:
             window_before_turns=decoded.window_before_turns,
             window_after_turns=decoded.window_after_turns,
             execution_id=decoded.execution_id,
+            activity_turn_id=decoded.activity_turn_id, anchor_item_id=decoded.anchor_item_id,
         )
 
     @staticmethod
@@ -224,6 +238,7 @@ class HistoryCursorMixin:
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
             execution_id=binding.execution_id,
+            activity_turn_id=binding.activity_turn_id, anchor_item_id=binding.anchor_item_id,
         )
 
     def _indexed_after_cursor(
@@ -260,6 +275,7 @@ class HistoryCursorMixin:
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
             execution_id=binding.execution_id,
+            activity_turn_id=binding.activity_turn_id, anchor_item_id=binding.anchor_item_id,
         )
 
     def _decode_cursor(
@@ -366,6 +382,7 @@ class HistoryCursorMixin:
                 turn_ordinal=decoded.turn_ordinal,
                 logical_item_ordinal=decoded.logical_item_ordinal,
                 execution_id=decoded.execution_id,
+                activity_turn_id=decoded.activity_turn_id, anchor_item_id=decoded.anchor_item_id,
             )
             != cursor
         ):
@@ -394,6 +411,8 @@ class HistoryCursorMixin:
         turn_ordinal: int | None,
         logical_item_ordinal: int | None,
         execution_id: str | None = None,
+        activity_turn_id: str | None = None,
+        anchor_item_id: str | None = None,
     ) -> str:
         cursor = TurnCursorDTO(
             session_id=session_id,
@@ -415,6 +434,7 @@ class HistoryCursorMixin:
             turn_ordinal=turn_ordinal,
             logical_item_ordinal=logical_item_ordinal,
             execution_id=execution_id,
+            activity_turn_id=activity_turn_id, anchor_item_id=anchor_item_id,
         )
         payload = json.dumps(
             cursor.model_dump(mode="json"),

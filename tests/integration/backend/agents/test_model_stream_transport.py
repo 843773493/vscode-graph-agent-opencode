@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, contextmanager
 from copy import deepcopy
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -19,6 +19,7 @@ from langchain_core.messages import (
 )
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.agents.providers import provider_http_client
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import (
@@ -190,17 +191,19 @@ class SealedTransportOwner:
 
 
 @pytest.fixture
-def transport_dispatch(tmp_path: Path, frozen_provider_activation):
+async def transport_dispatch(tmp_path: Path, frozen_provider_activation):
     """多个并发 owner 共用 fixture catalog；每个 owner 独立 admission 与封存。"""
-    def create(model, *, identity: ModelCallIdentity | None = None) -> SealedTransportOwner:
-        session_id = identity.session_id if identity is not None else "ses_" + create_uuid_hex()
-        thread_id = identity.thread_id if identity is not None else "thr_" + create_uuid_hex()
-        sessions = tmp_path / ".boxteam/sessions"
-        seed_catalog_session_bundle(sessions, session_id, main_thread_id=thread_id)
-        saver = RolloutCheckpointSaver(sessions)
-        return SealedTransportOwner(model, saver, MutationIntentOwner(session_id, thread_id), frozen_provider_activation)
+    async with AsyncExitStack() as cleanup:
+        def create(model, *, identity: ModelCallIdentity | None = None) -> SealedTransportOwner:
+            cleanup.push_async_callback(model.aclose)
+            session_id = identity.session_id if identity is not None else "ses_" + create_uuid_hex()
+            thread_id = identity.thread_id if identity is not None else "thr_" + create_uuid_hex()
+            sessions = tmp_path / ".boxteam/sessions"
+            seed_catalog_session_bundle(sessions, session_id, main_thread_id=thread_id)
+            saver = RolloutCheckpointSaver(sessions)
+            return SealedTransportOwner(model, saver, MutationIntentOwner(session_id, thread_id), frozen_provider_activation)
 
-    return create
+        yield create
 
 
 def _model(*, api_key: str = "test-key", no_proxy: bool = False) -> BoxteamLiteLLMChatModel:
@@ -403,7 +406,7 @@ async def test_litellm_replay_preserves_provider_url_and_parser_chain(
                 assert text == "基础回放"
             finally:
                 await model.aclose()
-            assert controller.client is not None and not controller.client.is_closed
+            assert controller.installed
         assert controller.transport.request_urls == (
             "https://opencode.ai/zen/v1/chat/completions",
             "https://opencode.ai/zen/v1/chat/completions",
@@ -572,29 +575,27 @@ async def test_different_cassettes_match_concurrently(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_transport_controller_restores_litellm_async_session() -> None:
+async def test_transport_controller_never_changes_litellm_shared_clients() -> None:
     import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
 
     previous_factory = litellm_http_handler.get_async_httpx_client
     previous_session = litellm.aclient_session
-    if previous_session is not None:
-        raise RuntimeError("测试开始前 LiteLLM async session 已存在")
     config = load_model_stream_config(CONFIG_PATH)
     controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
 
-    assert controller.client is None
+    assert not controller.installed
     assert litellm.aclient_session is previous_session
     controller.ensure_installed()
-    installed_client = controller.client
-    assert installed_client is not None
-    assert litellm.aclient_session is installed_client
+    transport = controller.transport
+    assert controller.installed
+    assert litellm.aclient_session is previous_session
     controller.ensure_installed()
-    assert controller.client is installed_client
+    assert controller.transport is transport
     await controller.aclose()
     await controller.aclose()
-    assert installed_client.is_closed
+    assert not controller.installed
     assert litellm.aclient_session is previous_session
     assert litellm_http_handler.get_async_httpx_client is previous_factory
 
@@ -603,26 +604,28 @@ async def test_transport_controller_restores_litellm_async_session() -> None:
 async def test_litellm_exact_call_identity_isolated_for_concurrent_tool_loops(
     tmp_path: Path,
     transport_dispatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    previous_session = litellm.aclient_session
-    if previous_session is not None:
-        raise RuntimeError("测试开始前 LiteLLM async session 已存在")
     transport = ModelStreamHTTPTransport(
         scenario=_sequence_scenario(),
         mode="replay",
         replay_policy="call_identity",
         artifact_root=tmp_path,
     )
-    client = httpx.AsyncClient(transport=transport)
-    litellm.aclient_session = client
+    # 从实例 transport 边界注入，不依赖已不承载模型请求的 SDK 全局 session。
+    monkeypatch.setattr(provider_http_client, "model_stream_async_transport",
+                        lambda *_: httpx.MockTransport(transport.handle_async_request))
 
     async def run_session(owner: int) -> tuple[str, str]:
         model = transport_dispatch(_sequence_model(), identity=_call_identity(owner, 0))
-        with replay_model_call(_call_identity(owner, 0)):
-            first = await _visible_text(model, "执行第一轮", identity=_call_identity(owner, 0))
-        with replay_model_call(_call_identity(owner, 1)):
-            second = await _visible_text(model, "执行第二轮", identity=_call_identity(owner, 1))
-        return first, second
+        try:
+            with replay_model_call(_call_identity(owner, 0)):
+                first = await _visible_text(model, "执行第一轮", identity=_call_identity(owner, 0))
+            with replay_model_call(_call_identity(owner, 1)):
+                second = await _visible_text(model, "执行第二轮", identity=_call_identity(owner, 1))
+            return first, second
+        finally:
+            await model.model.aclose()
 
     try:
         results = await asyncio.gather(
@@ -630,8 +633,7 @@ async def test_litellm_exact_call_identity_isolated_for_concurrent_tool_loops(
             run_session(2),
         )
     finally:
-        litellm.aclient_session = previous_session
-        await client.aclose()
+        await transport.aclose()
 
     assert results == [("第一轮", "第二轮"), ("第一轮", "第二轮")]
     assert transport.hit_counts == {0: 1, 1: 1, 2: 1, 3: 1}

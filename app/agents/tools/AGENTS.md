@@ -27,7 +27,7 @@ app/agents/tools/
 
 - 每个模块围绕一个清晰工具领域命名。
 - 工具失败时直接抛出明确错误，不返回虚假默认值。
-- 工具所需运行时依赖通过 factory 参数显式传入。
+- 工具所需运行时依赖通过 factory 参数显式传入。目录构造不绑定 Thread；custom 工具调用归属只从 `CustomToolFactoryContext.invocation_context.thread_binding` 取得，调用前明确核验，不能再增重复 session_id 或 inspection 身份。Skill／工具发现的目录与执行共用原参数声明，声明不带假回调。
 - `extension_invocation.py` 统一执行 MCP 和工作区自定义工具；`custom_tools.py` 仅负责配置自定义工具的构造。参数模型 `CustomToolInvocationInput` 的既有类名参与原始 schema 标题，不表示该入口只执行自定义工具。
 - `create_extension_catalog_resolver_from_tools` 从工具注册快照构造固定目录解析器，返回可调用对象；活动执行按原 tool call 通过 Saver 解析持久封存目录，不能用当前工具列表替代。
 - `invoke_extension_tool` 有意只作为固定扩展工具入口暴露给模型，不得把所有扩展工具名称和参数 schema 展开到该入口描述或模型 tools 列表中；这样可避免扩展工具数量增长时持续膨胀每次 LLM 请求。

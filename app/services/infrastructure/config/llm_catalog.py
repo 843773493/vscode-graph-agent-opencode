@@ -1,4 +1,4 @@
-"""当前 Provider 的有界上游目录读取；不保存目录或推断模型能力。"""
+"""当前 Provider 的有界上游目录读取；LiteLLM 目录只补充能力，不代表账号授权。"""
 
 from __future__ import annotations
 
@@ -9,10 +9,73 @@ from typing import Any
 
 import httpx
 
-from app.schemas.internal_v2.llm_probe import LlmDiscoveredModelDTO, LlmProbeErrorDTO
+from app.runtime.litellm_runtime import local_model_catalog
+from app.runtime.model_metadata import model_metadata
+from app.schemas.internal_v2.llm_probe import (
+    LlmDiscoveredModelDTO,
+    LlmModelCatalogDTO,
+    LlmModelMetadataDTO,
+    LlmProbeErrorDTO,
+    LlmProviderDTO,
+    LlmProvidersDTO,
+)
 
 CATALOG_MAX_BYTES = 2 * 1024 * 1024
 CATALOG_MAX_MODELS = 5000
+
+
+def discovered_model_metadata(
+    provider: str, model: str, *, upstream: Mapping[str, Any], configured: Mapping[str, Any],
+) -> LlmModelMetadataDTO | None:
+    """仅投影本次目录观察；显式配置优先，不保存或冒充已经实测的能力。"""
+    fields = LlmModelMetadataDTO.model_fields.keys() - {"sources", "catalog_provider"}
+    values: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+    for source, candidate in (("litellm", model_metadata(provider, model) or {}), ("upstream", upstream), ("provider", configured)):
+        # 只消费同名显式字段；总上下文 context_length 不能推导成输入容量。
+        selected = {key: candidate[key] for key in fields if key in candidate and candidate[key] is not None}
+        values.update(selected)
+        sources.update(dict.fromkeys(selected, source))
+    return LlmModelMetadataDTO.model_validate({**values, "sources": sources,
+        "catalog_provider": provider if "litellm" in sources.values() else None}, strict=True) if values else None
+
+# 这里只登记项目已提供的连接模板；目录中的其它 Provider 仍全部开放。
+_PROVIDER_TEMPLATES = {
+    "openai": ("https://api.openai.com/v1", "responses"),
+    "anthropic": ("https://api.anthropic.com", "anthropic_messages"),
+    "openrouter": ("https://openrouter.ai/api/v1", "chat_completions"),
+    "deepseek": ("https://api.deepseek.com", "chat_completions"),
+}
+
+
+def list_catalog_providers() -> LlmProvidersDTO:
+    """直接枚举完整目录，不把目录收录等同于连接、认证或上游发现已适配。"""
+    providers: dict[str, LlmProviderDTO] = {}
+    for key, entry in local_model_catalog().items():
+        if key in {"sample_spec", "fallback_generalizations"} or not isinstance(entry, Mapping):
+            continue
+        provider = entry.get("litellm_provider")
+        if not isinstance(provider, str) or not provider:
+            continue
+        if provider not in providers:
+            endpoint, protocol = _PROVIDER_TEMPLATES.get(provider, (None, None))
+            providers[provider] = LlmProviderDTO(provider=provider, model_count=0, chat_model_count=0,
+                default_endpoint=endpoint, protocol=protocol, upstream_discovery=provider in _PROVIDER_TEMPLATES)
+        item = providers[provider]
+        item.model_count += 1
+        item.chat_model_count += entry.get("mode") in {"chat", "responses"}
+    return LlmProvidersDTO(providers=sorted(providers.values(), key=lambda item: item.provider))
+
+
+def list_catalog_models(provider: str) -> LlmModelCatalogDTO:
+    """目录名称仅作候选；用户仍可发现上游或手工输入未收录模型。"""
+    models: dict[str, LlmDiscoveredModelDTO] = {}
+    for key, entry in local_model_catalog().items():
+        if not isinstance(entry, Mapping) or entry.get("litellm_provider") != provider or entry.get("mode") not in {"chat", "responses"}:
+            continue
+        model = key.removeprefix(provider + "/")
+        models[model] = LlmDiscoveredModelDTO(model=model, metadata=discovered_model_metadata(provider, model, upstream={}, configured={}))
+    return LlmModelCatalogDTO(provider=provider, models=sorted(models.values(), key=lambda item: item.model))
 
 
 def public_endpoint(endpoint: str) -> str:
@@ -100,8 +163,10 @@ async def read_model_catalog(
                 for item in payload["data"]:
                     if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
                         return fail("protocol", "上游模型目录项缺少非空 id；本页不被视为完整结果")
-                    name = item.get("display_name")
-                    page.append(LlmDiscoveredModelDTO(model=item["id"], name=name if isinstance(name, str) else None))
+                    name = item.get("display_name", item.get("name"))
+                    page.append(LlmDiscoveredModelDTO(model=item["id"], name=name if isinstance(name, str) else None,
+                        metadata=discovered_model_metadata(connection["custom_llm_provider"], item["id"],
+                            upstream=item, configured=connection["api_mode"].get("model_info", {}))))
                 has_more = payload.get("has_more", False)
                 if not isinstance(has_more, bool):
                     return fail("protocol", "上游 has_more 必须是布尔值")
@@ -119,4 +184,4 @@ async def read_model_catalog(
     except httpx.HTTPError as error:
         return fail("network", f"模型目录网络错误: {type(error).__name__}: {error}")
     except (ValueError, UnicodeDecodeError):
-        return fail("protocol", "上游模型目录不是完整有效的 JSON；未修补截断内容")
+        return fail("protocol", "上游模型目录 JSON 或能力字段无效；未修补或替换无效声明")

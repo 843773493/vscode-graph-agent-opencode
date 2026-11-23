@@ -32,7 +32,23 @@ try {
       result.restoredSourceReads.push({ path: resource, status: response.status() });
     }
   });
-  const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+
+  const openDetails = async details => { if (!(await details.evaluate(element => element.open))) await details.locator(':scope > summary').click(); };
+  const chooseCatalog = async (container, kind, value) => {
+    await container.getByRole('button', { name: kind === 'provider' ? '从 LiteLLM 目录选择服务商，或手动填写' : '从 LiteLLM 目录选择模型（不代表账号已开通）', exact: true }).click();
+    const search = page.getByRole('combobox', { name: '搜索服务商或模型…', exact: true });
+    await search.fill(value === '__custom__' ? '自定义服务商' : value);
+    await page.locator('.configuration-catalog-popup').getByRole('option', { name: value === '__custom__' ? '自定义服务商／兼容接口' : new RegExp('^' + value + '(?:\\s|$)') }).click();
+  };
+  const command = async (id, ...args) => {
+    const value = await page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+    if (id === 'boxteam.settings.modelsProviders') {
+      const connection = page.locator('.configuration-entity-content .configuration-provider-connection');
+      await expect(connection).toBeVisible();
+      if (!(await connection.evaluate(element => element.open))) await connection.locator(':scope > summary').click();
+    }
+    return value;
+  };
   const api = (url, owner, init = {}) => page.evaluate(async ({ url, owner, init }) => {
     const started = performance.now();
     const credential = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
@@ -123,45 +139,51 @@ try {
   result.firstAvailableMs = performance.now() - started;
   assert(result.firstAvailableMs <= 3000, `定义管理首次可用 ${result.firstAvailableMs}ms`);
   await form('providers').getByRole('button', { name: '添加模型服务', exact: true }).click();
-  await input('entities-provider');
-  await quick.locator('.monaco-list-row').filter({ hasText: 'OpenAI 兼容' }).click();
+  await expect(quick).not.toBeVisible();
+  const providerId = await form('providers').locator('article[data-definition-id]').getAttribute('data-definition-id');
+  assert(providerId);
+  await chooseCatalog(form('providers'), 'provider', '__custom__');
+  await form('providers').getByRole('textbox', { name: /^服务适配器/ }).fill('openai');
+  await form('providers').getByRole('textbox', { name: '显示名', exact: true }).fill('entities-provider');
   await form('providers').getByRole('checkbox', { name: '连接编辑结束后自动获取一次模型', exact: true }).uncheck();
   await form('providers').getByRole('textbox', { name: /^API 地址/ }).first().fill('https://entities.example/v1');
   await form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first().click();
   await quick.locator('.monaco-list-row').filter({ hasText: '使用环境变量' }).click();
   await input('${ENTITIES_MISSING_KEY}');
-  await expect(form('providers').locator('[data-definition-id="entities-provider"]')).toBeVisible();
+  await expect(form('providers').locator(`[data-definition-id="${providerId}"]`)).toBeVisible();
   assert.equal(result.writes.length, 0, '编辑表单不能自动保存');
   await save('providers');
-  const connectionSaved = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers['entities-provider'];
+  const connectionSaved = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers[providerId];
   assert.deepEqual(connectionSaved.models, {}, '连接应可在没有模型时保存');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  await command('boxteam.settings.modelsProviders', location, providerId);
   await expect(form('providers').getByRole('textbox', { name: /^API 地址/ }).first()).toHaveValue('https://entities.example/v1');
   await expect(form('providers').getByText('尚未添加模型。', { exact: false })).toBeVisible();
+  await openDetails(form('providers').locator('.configuration-model-add'));
+  await form('providers').getByRole('textbox', { name: '新模型名称', exact: true }).fill('entities-model');
   await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
-  await input('entities-model');
+  await openDetails(form('providers').locator('.configuration-model-add'));
+  await form('providers').getByRole('textbox', { name: '新模型名称', exact: true }).fill('entities-backup');
   await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
-  await input('entities-backup');
   await form('providers').getByRole('navigation', { name: '模型列表', exact: true }).getByText('entities-model', { exact: true }).click();
   result.emptyProviderSavedAndRestored = true;
   result.phase = 'same-jsonc-model';
   await more('providers', '打开来源 JSONC');
   await expect(page.locator('.tabs-container .tab.active')).toContainText(location.source_key + '.jsonc');
-  await expect(page.locator('.editor-instance:visible .monaco-editor .view-lines').last()).toContainText('entities-provider');
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
-  await expect(form('providers').locator('[data-definition-id="entities-provider"]')).toBeVisible();
+  await expect(page.locator('.editor-instance:visible .monaco-editor .view-lines').last()).toContainText(providerId);
+  await command('boxteam.settings.modelsProviders', location, providerId);
+  await expect(form('providers').locator(`[data-definition-id="${providerId}"]`)).toBeVisible();
   await form('providers').locator('[data-model-id="entities-model"]').getByRole('textbox', { name: /^模型名称/ }).fill('entities-model-edited');
   await save('providers');
   const providerSaved = (await api(sourceUrl, fixture)).data;
-  const savedProvider = parse(providerSaved.jsonc).llm.providers['entities-provider'];
+  const savedProvider = parse(providerSaved.jsonc).llm.providers[providerId];
   assert.equal(savedProvider.models['entities-model'].model, 'entities-model-edited');
   assert.equal(savedProvider.models['entities-backup'].model, 'entities-backup');
   result.multipleModelsShareConnection = true;
   await page.screenshot({ path: path.join(artifacts, 'provider-simple-form.png') });
-  assert.equal(parse(result.writes.at(-1).jsonc).llm.providers['entities-provider'].defaults.api_key, '${ENTITIES_MISSING_KEY}');
+  assert.equal(parse(result.writes.at(-1).jsonc).llm.providers[providerId].defaults.api_key, '${ENTITIES_MISSING_KEY}');
   assert.equal(savedProvider.defaults.api_key, '${ENTITIES_MISSING_KEY}', '公开来源保留引用，不能展开凭据');
   result.phase = 'secret-cancel';
   const setSecret = () => form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first().click();
@@ -216,7 +238,7 @@ try {
   // 冲突保留原引用草稿；用户明确放弃该草稿、重读后才接受新基线。
   await more('providers', '打开来源 JSONC');
   await command('workbench.action.files.revert');
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  await command('boxteam.settings.modelsProviders', location, providerId);
   result.phase = 'secret-unknown-reload';
   let savedSecret, failedQueries = 0, dropQuery = true;
   const sourceRoute = async route => {
@@ -251,7 +273,7 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  await command('boxteam.settings.modelsProviders', location, providerId);
   const originalQuery = form('providers').getByRole('button', { name: '查询原提交', exact: true });
   await expect(originalQuery).toBeVisible();
   const [reconciled] = await Promise.all([
@@ -273,14 +295,14 @@ try {
   // 打开同一来源正文，再撤销；密码不能被放入原文本模型或撤销历史。
   await more('providers', '打开来源 JSONC');
   const sourceText = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
-  await expect(sourceText).toContainText('entities-provider');
+  await expect(sourceText).toContainText(providerId);
   assert(!(await sourceText.innerText()).includes(secret));
   await command('undo');
   assert(!(await sourceText.innerText()).includes(secret));
   await command('redo');
   // 查询只确认原提交；继续编辑前，由用户显式重读来源取得新的 CAS 基线。
   await command('workbench.action.files.revert');
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  await command('boxteam.settings.modelsProviders', location, providerId);
   // 原Workbench存储与热退出备份只允许非秘密查询身份，不存密码正文。
   await command('boxteam.flushViewState');
   const leaked = await page.evaluate(async needle => {
@@ -303,24 +325,29 @@ try {
     return false;
   }, secret);
   assert.equal(leaked, false, '本机工作台存储不能包含密码');
-  const referenced = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers['entities-provider'];
+  const referenced = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers[providerId];
   assert.equal(referenced.defaults.api_key, secretRef, '原来源只保存命名引用');
   assert(result.writes.every(write => !write.jsonc.includes(secret)), '密钥值不得进入来源 writer');
   result.secret = { cancelledBeforeInputSubmit: true, cancelledAfterPreflight: true, externalConflictRecovered: true,
     unknownRecoveredByOriginalKey: savedSecret.idempotency_key, puts: result.writes.length - writeCount, requestId: envelope.request_id };
   result.phase = 'named-secret-reuse-and-management';
   await form('providers').getByRole('button', { name: '添加模型服务', exact: true }).click();
-  await input('entities-provider-shared');
-  await quick.locator('.monaco-list-row').filter({ hasText: 'OpenAI 兼容' }).click();
+  await expect(quick).not.toBeVisible();
+  const sharedProviderId = await form('providers').locator('article[data-definition-id]').getAttribute('data-definition-id');
+  assert(sharedProviderId);
+  await chooseCatalog(form('providers'), 'provider', '__custom__');
+  await form('providers').getByRole('textbox', { name: /^服务适配器/ }).fill('openai');
+  await form('providers').getByRole('textbox', { name: '显示名', exact: true }).fill('entities-provider-shared');
   await form('providers').getByRole('checkbox', { name: '连接编辑结束后自动获取一次模型', exact: true }).uncheck();
   await form('providers').getByRole('textbox', { name: /^API 地址/ }).first().fill('https://entities.example/v1');
+  await openDetails(form('providers').locator('.configuration-model-add'));
+  await form('providers').getByRole('textbox', { name: '新模型名称', exact: true }).fill('shared-model');
   await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
-  await input('shared-model');
   await setSecret(); await chooseSavedKey();
   await save('providers');
   const sharedDefinitions = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers;
-  assert.equal(sharedDefinitions['entities-provider-shared'].defaults.api_key, secretRef);
-  assert.equal(sharedDefinitions['entities-provider'].defaults.api_key, secretRef);
+  assert.equal(sharedDefinitions[sharedProviderId].defaults.api_key, secretRef);
+  assert.equal(sharedDefinitions[providerId].defaults.api_key, secretRef);
   await page.locator('.configuration-entities .monaco-toolbar').getByRole('button', { name: /更多/ }).click();
   await page.getByRole('menuitem', { name: '管理 API 密钥', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: secretRef }).click();
@@ -354,7 +381,7 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider-shared');
+  await command('boxteam.settings.modelsProviders', location, sharedProviderId);
   await more('providers', '管理 API 密钥');
   await quick.locator('.monaco-list-row').filter({ hasText: '查询未确认的创建' }).filter({ hasText: lostCreation.id }).click();
   await expect(quick).toContainText('已确认密钥资源存在');
@@ -419,21 +446,21 @@ try {
   await expect(form('agents')).toBeVisible();
   await form('agents').getByRole('button', { name: '新增 Agent', exact: true }).click();
   await input('entities-agent'); await input('定义管理 Agent'); await input('此提示词来自真实管理表单');
-  await expect(quick).toBeVisible(); await quick.getByRole('option', { name: 'entities-provider / entities-model', exact: true }).click();
+  await expect(quick).toBeVisible(); await quick.getByRole('option', { name: `${providerId} / entities-model`, exact: true }).click();
   await expect(form('agents').locator('[data-definition-id="entities-agent"]')).toBeVisible();
   await form('agents').getByRole('textbox', { name: /^显示名/ }).fill('修改后的显示名');
   await save('agents');
   const created = (await api(sourceUrl, fixture)).data;
   assert.equal(parse(created.jsonc).agents['entities-agent'].name, '修改后的显示名');
   assert.equal(created.source_effective.agents['entities-agent'].instructions.system_prompt, '此提示词来自真实管理表单');
-  assert.deepEqual(created.source_effective.agents['entities-agent'].model.primary, { provider_id: 'entities-provider', model_id: 'entities-model' });
+  assert.deepEqual(created.source_effective.agents['entities-agent'].model.primary, { provider_id: providerId, model_id: 'entities-model' });
   // 来源保存与运行应用分开断言，不能把待重启的候选冒充当前生效值。
   if (created.status.restart_required) {
     assert.equal(created.effective.agents['entities-agent'], undefined);
     await expect(form('agents')).toContainText('当前生效配置中不存在');
     await expect(page.locator('.settings-context-label')).toContainText('需要重启');
   } else {
-    assert.deepEqual(created.effective.agents['entities-agent'].model.primary, { provider_id: 'entities-provider', model_id: 'entities-model' });
+    assert.deepEqual(created.effective.agents['entities-agent'].model.primary, { provider_id: providerId, model_id: 'entities-model' });
   }
   result.phase = 'agent-reload-remove';
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -454,7 +481,7 @@ try {
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${session.session_id}"][data-thread-id="${mainThread.thread_id}"]`);
   await expect(thread.locator('.composer-model-pill')).toBeVisible({ timeout: 30000 });
   await thread.locator('.composer-model-pill').click();
-  const manage = quick.getByRole('option').filter({ hasText: '模型与 Provider' });
+  const manage = page.locator('.action-widget').getByText('模型与 Provider', { exact: true });
   const providerSourceRead = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === sourceUrl);
   await manage.click();
   // 会话入口现在直接打开所属工作区来源；核对实际回执，不再要求重复选择来源。
@@ -625,11 +652,11 @@ try {
   await page.locator('.settings-toc-container').getByText('模型与 Provider', { exact: true }).click();
   await form('providers').locator('nav').getByText('entities-provider', { exact: true }).click();
   await form('providers').locator('article').getByRole('button', { name: '移除本层定义', exact: true }).last().click();
-  await expect(modal).toContainText('entities-provider');
+  await expect(modal).toContainText(providerId);
   await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
   await save('providers');
   const providerRemoved = (await api(sourceUrl, fixture)).data;
-  assert.equal(providerRemoved.source_effective.llm.providers['entities-provider'], undefined);
+  assert.equal(providerRemoved.source_effective.llm.providers[providerId], undefined);
   await more('providers', '恢复整组 Provider 继承');
   await expect(modal).toContainText('恢复整组 Provider 继承');
   await modal.getByRole('button', { name: '恢复整组 Provider 继承', exact: true }).click();

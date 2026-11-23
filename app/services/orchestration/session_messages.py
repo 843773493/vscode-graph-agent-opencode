@@ -91,12 +91,14 @@ class SessionMessageOrchestrator:
         thread_id: str, source_id: str, idempotency_key: str,
         delivery_policy: DeliveryPolicy = "after_turn",
         context_mode: RuntimeContextMode = "event",
+        background: bool = False,
     ) -> MessageRunAccepted:
         if self._runtime_source_dispatcher is None:
             raise RuntimeError("runtime source dispatcher unavailable")
         return await self._runtime_source_dispatcher.submit(
             session_id, thread_id, message, source_id=source_id,
             idempotency_key=idempotency_key, delivery_policy=delivery_policy, context_mode=context_mode,
+            background=background,
         )
 
     def reserve_user_execution_identity(self) -> UserExecutionIdentity:

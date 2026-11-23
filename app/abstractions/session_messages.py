@@ -32,6 +32,7 @@ class SessionMessageOrchestratorProtocol(Protocol):
         thread_id: str, source_id: str, idempotency_key: str,
         delivery_policy: DeliveryPolicy = "after_turn",
         context_mode: RuntimeContextMode = "event",
+        background: bool = False,
     ) -> MessageRunAccepted: ...
 
     def reserve_user_execution_identity(self) -> UserExecutionIdentity: ...

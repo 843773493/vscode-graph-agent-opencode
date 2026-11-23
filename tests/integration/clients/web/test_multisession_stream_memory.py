@@ -16,7 +16,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.processes.workspace import (
     close_backend_process,
@@ -44,7 +44,7 @@ def test_six_generating_sessions_keep_reading_and_following_responsive(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     artifacts = context.artifacts_dir
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     home = context.boxteam_home_for_node(request.node.nodeid)
     with model_stream_replay(artifacts, runtime_root=runtime,
             business_assertion="six-generating-sessions-two-reading-four-following") as replay:

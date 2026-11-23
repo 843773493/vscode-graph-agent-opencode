@@ -17,7 +17,7 @@ from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.processes.workspace import (
     BackendProcess,
@@ -31,13 +31,13 @@ def process_replay(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
 ) -> Iterator[ModelStreamReplay]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     config_path = Path(integration_workspace_root_path) / ".boxteam/workspace.jsonc"
     config = read_jsonc_object(config_path)
     providers = cast(dict[str, dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
     provider = providers["primary"]
     provider["defaults"] = {
-        "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1",
+        "endpoint": f"http://127.0.0.1:{ports.port(48)}/v1",
         "api_key": "", "custom_llm_provider": "openai",
         "api_mode": {
             "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
@@ -61,7 +61,7 @@ def backend_lifecycle(
     process_replay: ModelStreamReplay,
 ) -> Callable[[str, int], AbstractContextManager[BackendProcess]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
 
     @contextmanager
     def start(name: str, offset: int) -> Iterator[BackendProcess]:
@@ -122,7 +122,7 @@ def test_another_home_cannot_bypass_workspace_lock_and_can_take_over_after_exit(
     request: pytest.FixtureRequest, process_replay: ModelStreamReplay,
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path))
-    model_url = f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(80)}/v1/chat/completions"
+    model_url = f"http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(48)}/v1/chat/completions"
     with backend_lifecycle("original", 0) as original:
         headers = {**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Workspace-Id": original.workspace_id}
         with httpx.Client(base_url=f"http://127.0.0.1:{original.port}", headers=headers, timeout=20) as client:

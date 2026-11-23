@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import cast
 
 from boxteam_plugin_sdk.lifecycle import LifetimeScope, run_cleanup_shielded
 from boxteam_plugin_sdk.maintenance import MaintenanceTask, start_maintenance
@@ -30,11 +30,7 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
 )
-from app.agents.tool_identity import ToolDefinitionLike
-from app.agents.tools.extension_invocation import (
-    create_extension_catalog_resolver_from_tools,
-)
-from app.core.identifier import create_prefixed_id
+from app.core.failures import report_failure
 from app.core.path_utils import (
     SessionCatalogComponents,
     get_session_path_resolver,
@@ -56,7 +52,6 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.runtime.agent_runtime import (
-    AgentAssemblyMode,
     AgentRuntimeDependencyProvider,
     assemble_agent,
 )
@@ -83,7 +78,6 @@ from app.services.infrastructure.resource_platform.sources.gateway_skill_sources
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.mapping.tool_catalog import tools_to_catalog_definitions
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.execution_step.approval import ToolApprovalService
@@ -98,9 +92,6 @@ from app.services.orchestration.thread_residency import (
     ThreadRuntimeLease,
 )
 
-# 工具注册检查用的合成会话：不初始化模型、不编译图、不创建 durable owner，
-# 不进入任何业务会话账目。抽出的定义不捕获该会话，仅用于 Provider 工具目录。
-_TOOL_INSPECTION_SESSION_ID: Final[str] = "tools_inspection_session"
 RUNTIME_SHUTDOWN_WAIT_SECONDS = 30.0
 logger = logging.getLogger(__name__)
 
@@ -133,10 +124,8 @@ class AgentExecutionService(JobStepExecutor):
         gateway_skill_sources: GatewaySkillSources | None = None,
         configured_skill_sources: ConfiguredSkillSources | None = None,
     ):
-        # 管理目录按配置与 MCP 版本缓存纯 DTO，不捕获 Session/Thread 或执行闭包。
         # 真实 Thread 图由 tracker 的 generation scope 持有；invocation 的
         # admission 与工具调用 ContextVar 由 Runner 每轮绑定。
-        self._tool_catalog_cache: dict[tuple[object, ...], list[dict[str, Any]]] = {}
         self._config_service = config_service
         self._background_task_registry = background_task_registry
         self._background_mailbox = background_mailbox
@@ -226,15 +215,10 @@ class AgentExecutionService(JobStepExecutor):
         mcp_catalog_owner: McpCatalogOwner | None = None,
         resource_registry: ResourceRegistry,
         resource_activation: ResourceActivationCoordinator | None,
-        assembly_mode: AgentAssemblyMode = "execution",
         lifetime_scope: LifetimeScope | None = None,
         skill_catalog: PublishedSkillCatalog | None = None,
-    ) -> AgentEventSource | list[ToolDefinitionLike]:
-        """装配执行事件源或管理工具目录；Thread 归属由显式 binding 注入。
-
-        目录模式不构建模型、执行图、CSM 订阅或持久化 GraphBinding；
-        两种模式沿用同一工具注册规则。
-        """
+    ) -> AgentEventSource:
+        """装配精确 Thread 的执行事件源；管理目录由原 catalog 独立读取。"""
         return assemble_agent(
             session_id=session_id,
             thread_id=thread_id,
@@ -254,12 +238,11 @@ class AgentExecutionService(JobStepExecutor):
             preferred_model=preferred_model,
             tool_timeout_seconds=self._tool_timeout_seconds,
             workspace_file_resource_registry=self._workspace_file_resource_registry,
-            reactor_lifetime_scope=lifetime_scope if assembly_mode == "execution" else None,
+            reactor_lifetime_scope=lifetime_scope,
             skill_catalog=skill_catalog,
             graph_binding_store=self._graph_binding_store,
             workspace_root=self._workspace_root,
             include_team_tools=include_team_tools,
-            assembly_mode=assembly_mode,
         )
 
     async def _acquire_step_agent(
@@ -421,11 +404,10 @@ class AgentExecutionService(JobStepExecutor):
     ) -> None:
         if self._shutdown_requested:
             raise error
-        logger.error(
+        report_failure(error, detail=(
             "ThreadRuntime 闲置清理未收敛；保留失败 owner，下一周期重试: "
-            "workspace_id=%s task_id=%s elapsed_ms=%.3f",
-            identity, task_id, elapsed_ms, exc_info=(type(error), error, error.__traceback__),
-        )
+            f"workspace_id={identity} task_id={task_id} elapsed_ms={elapsed_ms:.3f}"
+        ), diagnostic_logger=logger)
 
     async def start(self) -> None:
         """lifespan 启动 idle worker，不读取或编译 cold thread。"""
@@ -475,7 +457,6 @@ class AgentExecutionService(JobStepExecutor):
         except Exception as error:  # noqa: BLE001 - 扫描结算失败后仍排空 generation scope。
             errors.append(error)
         self._sweep_task = None
-        self._tool_catalog_cache.clear()
         try:
             await run_cleanup_shielded(self._residency_tracker.close)
         except Exception as error:  # noqa: BLE001
@@ -561,64 +542,3 @@ class AgentExecutionService(JobStepExecutor):
         ):
             candidate = await persisted_pending_tool_candidate(checkpointer, admission)
         return candidate.checkpoint_id if candidate is not None else None
-
-    def list_tool_definitions(self, agent_id: str | None = None) -> list[dict[str, Any]]:
-        """按配置缓存完整工具目录；运行选择另行投影，不初始化模型或图。"""
-        if self._config_service is None:
-            raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
-
-        mcp_tools = list(self._dependency_provider.get_mcp_tools())
-        # MCP 工具集是运行时可变的：用它的内容指纹参与缓存键，避免复用过期
-        # 工具目录。指纹复用 extension catalog 的唯一 payload 摘要实现。
-        mcp_binding = create_extension_catalog_resolver_from_tools(mcp_tools)()
-
-        config_snapshot = self._config_service.get_snapshot()
-        with self._config_service.use_snapshot(config_snapshot):
-            resolved_agent_id = self._config_service.validate_agent_id(agent_id)
-            config_revision = self._config_service.get_revision()
-            mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
-            run_mode = mode_getter() if callable(mode_getter) else None
-            include_team_tools = (
-                run_mode == "team" if isinstance(run_mode, str) else False
-            )
-            cache_key = (
-                resolved_agent_id,
-                config_revision,
-                include_team_tools,
-                mcp_binding.catalog_revision,
-                mcp_binding.generation,
-            )
-            cached = self._tool_catalog_cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-            registered_tools = self._assemble_agent(
-                session_id=_TOOL_INSPECTION_SESSION_ID,
-                thread_id=create_prefixed_id("thr"),
-                agent_id=resolved_agent_id,
-                execution_overrides={},
-                model_visibility_overrides={},
-                preferred_model=None,
-                include_team_tools=include_team_tools,
-                mcp_tools=mcp_tools,
-                resource_registry=ResourceRegistry(),
-                resource_activation=None,
-                assembly_mode="tool_catalog",
-            )
-            definitions = tools_to_catalog_definitions(
-                cast(list[BaseTool], registered_tools),
-                extension_tools=mcp_tools,
-            )
-
-        # 只保留该 Agent 的当前工具目录：旧配置 revision 的子项
-        # 不再被查询命中，留在表里只会无界增长。正在读取的调用方已持有返回值，
-        # 移除旧项不影响它在途使用。
-        stale_keys = [
-            key
-            for key in self._tool_catalog_cache
-            if key[0] == cache_key[0] and key != cache_key
-        ]
-        for stale_key in stale_keys:
-            del self._tool_catalog_cache[stale_key]
-        self._tool_catalog_cache[cache_key] = definitions
-        return definitions

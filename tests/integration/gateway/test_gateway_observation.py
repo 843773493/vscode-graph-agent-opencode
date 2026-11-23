@@ -16,7 +16,7 @@ import pytest
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import PYTHON_PLUGIN
 from tests.support.plugin_package import install_plugin, native_plugin_target
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -30,7 +30,7 @@ def observation_gateway(request: pytest.FixtureRequest, integration_workspace_ro
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     gateway = start_gateway_process(
         workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
-        port=integration_port_block_for_file(Path(request.node.path)).port(0),
+        port=integration_ports_for_file(Path(request.node.path)).port(0),
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir,
         extra_env={name: os.environ.get(name, "unused-observation-test-key") for name in (
             "OPENCODE_ZEN_API_KEY", "KILO_API_KEY", "OPENROUTER_API_KEY", "CCTQ_API_KEY",

@@ -14,7 +14,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
@@ -25,7 +25,7 @@ from tests.support.processes.workspace import (
 @pytest.fixture(scope="module")
 def activity_replay(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
     context = TestRunContext.from_test_file(Path(request.node.path))
-    with model_stream_replay(context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="session-activity") as replay:
+    with model_stream_replay(context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="session-activity") as replay:
         yield replay
 
 
@@ -36,7 +36,7 @@ def activity_backend(
     integration_workspace_config_path: str,
     activity_replay: ModelStreamReplay,
 ) -> Generator[tuple[str, Path], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))

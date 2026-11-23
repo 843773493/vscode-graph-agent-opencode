@@ -37,7 +37,7 @@ function runDirectoryName() {
   return `run-${runKey}`;
 }
 
-function pytestNodeDirectoryName() {
+function pytestNodeId() {
   const currentTest = process.env.PYTEST_CURRENT_TEST;
   if (currentTest === undefined) return null;
   const separator = currentTest.lastIndexOf(" (");
@@ -48,7 +48,12 @@ function pytestNodeDirectoryName() {
   ) {
     throw new Error(`PYTEST_CURRENT_TEST 格式无效: ${currentTest}`);
   }
-  const nodeId = currentTest.slice(0, separator);
+  return currentTest.slice(0, separator);
+}
+
+function pytestNodeDirectoryName() {
+  const nodeId = pytestNodeId();
+  if (nodeId === null) return null;
   const nodeKey = createHash("sha1").update(nodeId).digest("hex").slice(0, 12);
   return `node-${nodeKey}`;
 }
@@ -79,6 +84,8 @@ export class TestRunContext {
     this.artifactsDir = pytestNodeDirectory
       ? path.join(this.runRoot, "nodes", pytestNodeDirectory, "artifacts")
       : path.join(this.runRoot, "artifacts");
+    this.runtimeDir = path.join(this.outputRoot, "runtime", path.basename(this.runRoot),
+      ...(pytestNodeDirectory ? [pytestNodeDirectory] : []));
     this.boxteamHome = path.join(this.outputRoot, "boxteam-home");
   }
 
@@ -90,6 +97,7 @@ export class TestRunContext {
     await Promise.all([
       mkdir(this.workspaceRoot, { recursive: true }),
       mkdir(this.artifactsDir, { recursive: true }),
+      mkdir(this.runtimeDir, { recursive: true }),
       mkdir(this.boxteamHome, { recursive: true }),
     ]);
     return this;
@@ -110,6 +118,8 @@ export class TestRunContext {
     await mkdir(this.artifactsDir, { recursive: true });
     const result = {
       schemaVersion: 1,
+      runId: path.basename(this.runRoot),
+      nodeId: pytestNodeId(),
       testId: this.testId,
       status,
       recordedAt: new Date().toISOString(),

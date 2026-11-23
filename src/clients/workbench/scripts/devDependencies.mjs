@@ -49,12 +49,12 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir, 
     const source = await readFile(sourceFile, 'utf8');
     for (const { fileName } of ts.preProcessFile(source).importedFiles) {
       const path = sourceFileFor(resolve(dirname(sourceFile), fileName));
-      if (isWithin(upstreamSource, path) && /\.tsx?$/.test(path) && !path.endsWith('.d.ts')) entries.add(path);
+      if (isWithin(upstreamSource, path) && /\.[jt]sx?$/.test(path) && !path.endsWith('.d.ts')) entries.add(path);
     }
   }
 
   const entryPoints = Object.fromEntries([...entries].sort().map(path => [
-    relative(upstreamSource, path).replace(/\.tsx?$/, ''), path,
+    relative(upstreamSource, path).replace(/\.[jt]sx?$/, ''), path,
   ]));
   const developmentOutput = join(outdir, 'dev-upstream');
   await rm(developmentOutput, { recursive: true, force: true });
@@ -99,7 +99,7 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir, 
     needsRebuild(source, file) {
       return ts.preProcessFile(source).importedFiles.some(({ fileName }) => {
         const path = sourceFileFor(resolve(dirname(file), fileName.split('?', 1)[0]));
-        return isWithin(upstreamSource, path) && /\.tsx?$/.test(path)
+        return isWithin(upstreamSource, path) && /\.[jt]sx?$/.test(path)
           && !path.endsWith('.d.ts') && !entries.has(path);
       });
     },
@@ -112,7 +112,7 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir, 
         if (!isWithin(upstreamSource, path)) continue;
         // 样式继续由 Vite 处理；脚本指向同一次 split build 的 entry，共享模块身份。
         const upstreamUrl = (viteSourceUrl(root, path)
-          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js'))
+          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.[jt]sx?$/, '.js'))
           + (query.length ? '?' + query.join('?') : '');
         source = source.replaceAll("'" + fileName + "'", JSON.stringify(upstreamUrl))
           .replaceAll(JSON.stringify(fileName), JSON.stringify(upstreamUrl));

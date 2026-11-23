@@ -11,6 +11,7 @@ import commentjson
 import httpx
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_gateway_http_skill_flow import (
     HttpSkillServer,
 )
@@ -32,7 +33,7 @@ from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     scripted_model as scripted_model,  # noqa: PLC0414 - 复用唯一 model_stream 回放入口。
 )
 from tests.support.api_helpers import with_message_run_operation_id
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -64,7 +65,7 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
 ) -> None:
     state, source = scripted_model, http_skill_server
     workspace = Path(integration_workspace_root_path)
-    artifacts = workspace.parent / "artifacts" / request.node.name
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     config_path = Path(integration_workspace_config_path)
     _configure_model(config_path, ENDPOINT)
@@ -74,7 +75,7 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
     config.setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources
     config_path.write_text(json.dumps(config, ensure_ascii=False))
     home = workspace.parent / "boxteam-home"
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(13)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(13)
     base_url = f"http://127.0.0.1:{port}"
 
     def start(label: str):

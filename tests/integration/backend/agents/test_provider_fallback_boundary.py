@@ -186,9 +186,16 @@ async def test_product_fallback_keeps_failed_attempt_and_rejects_unclosed_tool_g
         assert log["upstream"]["attempts"][-1]["error"] is None
         assert events[-1]["type"] == "stream.completed"
         assert calls[-1]["outcome"] == "completed" and len(calls) == 2
+        assert "failure" not in (await main.app.state.workspace_container_registry.get(
+            load_or_create_workspace_id(workspace)).message_stream_store.get_state(failed["turn_stream_id"]))
+        history = await client.post(f"/api/v1/sessions/{session}/threads/{thread}/history",
+            json={"turn_ids": [accepted["turn_id"]]})
+        assert history.status_code == 200, history.text
+        assert history.json()["data"]["items"][0].get("failure") is None
         assert not any(item["semantic_kind"] == "tool_call" for item in items)
-    assert any(record.exc_info and type(record.exc_info[1]).__name__ == failed["payload"]["error_code"]
-               for record in caplog.records)
+    diagnostics = [record for record in caplog.records if record.name == "app.core.failures"
+                   and failed["payload"]["error_code"] in record.getMessage()]
+    assert diagnostics and all(record.exc_info is None for record in diagnostics)
     live_store = main.app.state.workspace_container_registry.get(load_or_create_workspace_id(workspace)).message_stream_store
     stored = await live_store.list_events(session_id=session, turn_stream_id=failed["turn_stream_id"])
     assert [message_stream_to_json(message_stream_to_proto(event)) for event in stored] == events

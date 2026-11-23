@@ -21,7 +21,10 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextClientProtocol,
 )
 from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
-from app.agents.model_tool_schema import get_model_tool_schema
+from app.agents.model_tool_schema import (
+    export_model_tool_json_schema,
+    get_model_tool_schema,
+)
 from app.agents.policy import ParsedCustomToolSpec
 from app.agents.tool_invocation_context import ToolInvocationContext
 
@@ -34,7 +37,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class CustomToolFactoryContext:
-    session_id: str
     agent_id: str
     sender_agent_id: str
     workspace_root: Path
@@ -110,17 +112,19 @@ def build_custom_tools(
                 "自定义扩展工具声明名与实际工具名不一致: "
                 f"declared={spec.name}, actual={tool.name}"
             )
-        internal_schema = tool.get_input_schema()
-        public_schema = get_model_tool_schema(tool)
-        internal_fields = set(internal_schema.model_fields)
-        public_fields = set(public_schema.model_fields)
-        hidden_fields = internal_fields - public_fields
-        if hidden_fields:
-            raise TypeError(
-                "扩展工具不得通过 ToolRuntime/InjectedToolArg 声明隐藏注入参数；"
-                "扩展工具的后端依赖必须由 CustomToolFactoryContext 容器注入并由闭包读取。"
-                f" tool_name={spec.name} hidden_fields={sorted(hidden_fields)}"
-            )
+        export_model_tool_json_schema(tool)
+        if not isinstance(tool.tool_call_schema, dict):
+            internal_schema = tool.get_input_schema()
+            public_schema = get_model_tool_schema(tool)
+            internal_fields = set(internal_schema.model_fields)
+            public_fields = set(public_schema.model_fields)
+            hidden_fields = internal_fields - public_fields
+            if hidden_fields:
+                raise TypeError(
+                    "扩展工具不得通过 ToolRuntime/InjectedToolArg 声明隐藏注入参数；"
+                    "扩展工具的后端依赖必须由 CustomToolFactoryContext 容器注入并由闭包读取。"
+                    f" tool_name={spec.name} hidden_fields={sorted(hidden_fields)}"
+                )
         tools.append(tool)
 
     return tools

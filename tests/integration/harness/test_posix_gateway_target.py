@@ -19,7 +19,7 @@ from tests.e2e.system.gateway.gateway_target import (
     stop_remote_gateway,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
@@ -155,7 +155,7 @@ ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
         lambda _target, command: ["sh", "-c", command],
     )
     monkeypatch.setattr(gateway_target, "TARGET_READY_TIMEOUT_SECONDS", 20)
-    port_block = integration_port_block_for_file(Path(__file__).resolve())
+    port_block = integration_ports_for_file(Path(__file__).resolve())
     port_offset = 0 if posix_gateway_platform == "linux" else 1
     return PosixGatewayCase(
         target=target,

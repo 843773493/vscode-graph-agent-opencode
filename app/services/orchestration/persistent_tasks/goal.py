@@ -58,7 +58,7 @@ async def _submit(runtime: PersistentTaskRuntime, goal: SessionGoalStateDTO,
             raise RuntimeError("任务已记录投递，但原准入回执缺失")
         await runtime._orchestrator.submit_runtime_event(
             goal.session_id, dispatch.message, thread_id=goal.thread_id, source_id=dispatch.source_id,
-            idempotency_key=key, delivery_policy="after_turn",
+            idempotency_key=key, delivery_policy="after_turn", background=True,
         )
         wakeup = runtime._dispatcher.submitted(goal.session_id, goal.thread_id, idempotency_key=key)
         if wakeup is None:
@@ -70,7 +70,8 @@ async def _submit(runtime: PersistentTaskRuntime, goal: SessionGoalStateDTO,
 
 
 def _metadata(goal: SessionGoalStateDTO) -> dict[str, object]:
-    return {"goal_continuation": True, "goal_id": goal.goal_id, "goal_objective": goal.objective}
+    return {"goal_continuation": True, "goal_id": goal.goal_id, "goal_objective": goal.objective,
+            "goal_control_revision": goal.control_revision}
 
 
 async def _finish_execution(runtime: PersistentTaskRuntime, session_id: str, *, goal_id: str | None,

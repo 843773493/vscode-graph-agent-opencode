@@ -1,707 +1,224 @@
 import { describe, expect, test } from "bun:test";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import React from "react";
+import { act, create, type ReactTestRenderer, type ReactTestInstance } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import ChatTurn from "./ChatTurn";
 import { TurnActivitySummary } from "./TurnActivitySummary";
-import {
-  chatTurnProps,
-  conversation,
-  loadAgentStateMessageRawContent,
-  mediaProps,
-  pendingActionProps,
-} from "./chatTurnTestFixtures";
+import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
+import { TranscriptTestView } from "../../../tests/fixtures/transcriptView";
+import type { TurnResponsePart } from "../../../types/backend";
+import { MessageSearchLocationContext } from "../messageSearchLocation";
+import type { ThreadItemLocationDTO } from "../../../types/protocol_generated/boxteam/workspace/v2/public";
 
-describe("ChatTurn 历史详情", () => {
-  test("摘要保留完整用量详情，键盘和读屏可读取相同信息", () => {
+function reasoning(id: string, ordinal: number): TurnResponsePart {
+  return {part_id:id, kind:"reasoning", projection:"detail", status:"completed", text:`正文 ${id}`,
+    source:{item_id:id, item_sequence:ordinal, logical_item_ordinal:ordinal, message_sequence:ordinal, part_ordinal:0}};
+}
+function processButton(renderer: ReactTestRenderer) {
+  return renderer.root.findAllByType("button").find(node => {
+    const key = node.props["data-transcript-node"];
+    return key && JSON.parse(key).source_ref.kind === "turn" && JSON.parse(key).slot === "header";
+  })!;
+}
+async function click(button: ReactTestInstance) { await act(async () => button.props.onClick()); }
+
+describe("ChatTurn 历史的三层过程", () => {
+  test("摘要使用结构化用量，未报告用量不伪造零", () => {
     const value = conversation("done");
-    value.activityStats = { duration_ms: 16000, item_count: 1 };
-    const renderer = create(<TurnActivitySummary conversation={value} groups={[]} showRawDetails={false}
-      usage={{ modelUsage: { finalModelId: "provider/model-with-a-long-name" }, tokenUsage: {
-        inputTokens: 32000, outputTokens: 843, totalTokens: 32843, cacheReadInputTokens: 12000,
-        modelCalls: 1, reportedModelCalls: 1,
-      } }} />);
-    const toggle = renderer.root.findByType("button");
-    const details = renderer.root.findByProps({ className: "chat-turn-activity-header" }).props.title;
-    expect(toggle.props["aria-description"]).toBe(details);
-    const lines = details.split("\n");
-    expect(lines).toContain("耗时 16s");
-    expect(lines).toContain("Item 1 项");
-    expect(lines).toContain("输入：32,000");
-    expect(lines).toContain("输出：843");
-    expect(lines).toContain("缓存命中：12,000");
-    expect(lines).toContain("最后一次请求模型：provider/model-with-a-long-name");
+    value.activityStats = {duration_ms:16000,item_count:1};
+    const renderer = create(<TranscriptTestView><TurnActivitySummary conversation={value} groups={[]} showRawDetails={false}
+      usage={{modelUsage:{finalModelId:"provider/model"}, tokenUsage:{inputTokens:32000,outputTokens:843,totalTokens:32843,
+        cacheReadInputTokens:12000,modelCalls:1,reportedModelCalls:1}}} /></TranscriptTestView>);
+    const description = processButton(renderer).props["aria-description"] as string;
+    for (const detail of ["耗时 16s","Item 1 项","输入：32,000","输出：843","缓存命中：12,000","最后一次请求模型：provider/model"]) {
+      expect(description).toContain(detail);
+    }
+    renderer.update(<TranscriptTestView><TurnActivitySummary conversation={value} groups={[]} showRawDetails={false}
+      usage={{modelUsage:{finalModelId:"provider/model"},tokenUsage:null}} /></TranscriptTestView>);
+    expect(processButton(renderer).props["aria-description"]).toContain("用量未报告");
+    expect(renderer.root.findAllByProps({className:"chat-usage-context"})).toHaveLength(0);
     renderer.unmount();
   });
 
-  test("上游没有报告用量时不把上下文显示为零", () => {
-    const renderer = create(<TurnActivitySummary conversation={conversation("done")} groups={[]} showRawDetails={false}
-      usage={{ modelUsage: { finalModelId: "model" }, tokenUsage: null }} />);
-    expect(renderer.root.findAllByProps({ className: "chat-usage-context" })).toHaveLength(0);
-    expect(renderer.root.findByProps({ className: "chat-turn-activity-header" }).props.title.split("\n")).toContain("用量未报告");
+  test("过程、连续活动组和单项逐层展开，迟到数据不重开已关闭的层", async () => {
+    let value = conversation("done");
+    value.responseParts = [reasoning("item_reasoning",2),...value.responseParts!];
+    const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>;
+    const renderer = create(render());
+    expect(renderer.root.findAllByProps({className:"chat-activity-group"})).toHaveLength(0);
+    await click(processButton(renderer));
+    expect(renderer.root.findAllByProps({className:"chat-activity-item"})).toHaveLength(0);
+    await click(renderer.root.findByProps({className:"chat-activity-group"}).findByType("button"));
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("正文 item_reasoning");
+    const item = renderer.root.findByProps({className:"chat-activity-item"});
+    await click(item.findByType("button"));
+    expect(JSON.stringify(renderer.toJSON())).toContain("正文 item_reasoning");
+    await click(item.findByType("button"));
+    value = {...value,responseParts:[{...value.responseParts![0],text:"迟到的正文"},...value.responseParts!.slice(1)]};
+    await act(async () => renderer.update(render()));
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("迟到的正文");
     renderer.unmount();
   });
 
-  test("历史 Turn 折叠行提示边界，展开后在中间消息中显示未知工具结果", async () => {
-    const value = conversation("error");
-    value.turnId = "boundary-turn-0003";
-    value.turnStatus = "failed";
-    value.responseParts = [{
-      part_id: "tool-call:2:0",
-      kind: "tool_call",
-      projection: "summary",
-      status: "failed",
-      source: {
-        message_sequence: 2,
-        assistant_message_sequence: 2,
-        call_index: 0,
-      },
-      tool_call_id: "call-boundary-unknown-tool",
-      tool_name: "large_test_output",
-      arguments: null,
-      text: "pending",
-      outcome_unknown: true,
-      final: false,
-    }];
-
-    let renderer: ReactTestRenderer;
-    act(() => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} />);
-    });
-
-    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
-    expect(toggle.props["aria-label"]).toBe(
-      "展开 Turn 中间消息：耗时 — · Item 计数同步中 · 工具执行结果未知",
-    );
-    expect(renderer!.root.findAllByProps({ "data-status-kind": "tool-outcome-unknown" })).toHaveLength(1);
-    expect(renderer!.root.findAllByProps({ className: "chat-inline-tool-unknown" })).toHaveLength(0);
-
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-
-    const body = renderer!.root.findByProps({ className: "chat-thinking-body" });
-    expect(body.findAllByProps({ "data-status-kind": "tool-outcome-unknown" })).toHaveLength(0);
-    expect(body.findByProps({ className: "chat-tool-row is-unknown" })).toBeDefined();
-    expect(JSON.stringify(renderer!.toJSON())).toContain(
-      "large_test_output 结果未知",
-    );
-    renderer!.unmount();
-  });
-
-  test("没有 Assistant 正文的边界 Turn 不渲染空操作栏", () => {
-    const value = conversation("error");
-    value.turnId = "boundary-turn-without-response";
-    value.turnItemsView = "full";
-    value.assistantMessages = [];
-    value.responseParts = [{
-      part_id: "tool-call:without-response",
-      kind: "tool_call",
-      projection: "summary",
-      status: "failed",
-      source: { message_sequence: 2, call_index: 0 },
-      tool_call_id: "call-without-response",
-      tool_name: "invoke_extension_tool",
-      outcome_unknown: true,
-      final: false,
-    }];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).not.toContain('class="chat-response-actions"');
-    expect(html).not.toContain("暂未开放");
-    expect(html).not.toContain("重新生成最后回复");
-  });
-
-  test("完整历史回复和摘要 Turn 保留正文且不渲染占位操作", () => {
+  test("第一层只请求轻轮廓，单个工具才携 binding 定点补读输入和结果", async () => {
     const value = conversation("done");
-    value.turnId = "history-turn-0001";
-    value.turnItemsView = "full";
-
-    const historicalHtml = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    expect(historicalHtml).toContain("原始回答");
-    expect(historicalHtml).not.toContain('class="chat-response-actions"');
-    expect(historicalHtml).not.toContain("暂未开放");
-
-    const summaryValue = {
-      ...value,
-      turnItemsView: "summary" as const,
-    };
-    const summaryHtml = renderToStaticMarkup(
-      <ChatTurn {...chatTurnProps(summaryValue)} isLastTurn />,
-    );
-    expect(summaryHtml).toContain("原始回答");
-    expect(summaryHtml).not.toContain('class="chat-response-actions"');
-    expect(summaryHtml).not.toContain("暂未开放");
-    expect(summaryHtml).not.toContain('aria-label="重新生成最后回复"');
+    const call: TurnResponsePart = {part_id:"call",kind:"tool_call",projection:"summary",status:"completed",tool_name:"read_file",tool_call_id:"tool_1",
+      source:{item_id:"item_call",item_sequence:2,message_sequence:2,part_ordinal:0,call_index:0,assistant_message_sequence:2}};
+    const result: TurnResponsePart = {...call,part_id:"result",kind:"tool_result",source:{...call.source,item_id:"item_result",item_sequence:3,message_sequence:3}};
+    value.responseParts = [call,result,...value.responseParts!];
+    value.activityOutline = undefined;
+    const calls: Parameters<NonNullable<ReturnType<typeof chatTurnProps>["onLoadTurnDetails"]>>[] = [];
+    const renderer = create(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} onLoadTurnDetails={async (...args) => {calls.push(args);}} /></TranscriptTestView>);
+    await click(processButton(renderer));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![3]).toEqual(["activity_outline","assistant_text"]);
+    await click(renderer.root.findByProps({className:"chat-activity-group"}).findByType("button"));
+    expect(calls).toHaveLength(1);
+    await click(renderer.root.findByProps({className:"chat-tool-summary"}));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![5]).toEqual({sourceViewId:"view_fixture",sourceViewRevision:1,executionId:undefined,itemIds:["item_call","item_result"]});
+    expect(calls[1]![3]).toContain("tool_result");
+    const toolNodes = renderer.root.findAll(node => node.type === "div" && node.props["data-transcript-node"])
+      .map(node => JSON.parse(node.props["data-transcript-node"]));
+    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_call",part:0},slot:"tool_input"});
+    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_result",part:0},slot:"tool_output"});
+    await click(processButton(renderer));
+    expect(renderer.root.findAllByProps({className:"chat-tool-summary"})).toHaveLength(0);
+    renderer.unmount();
   });
 
-  test("用户中断优先于半截工具的未知结果", () => {
-    const value = conversation("error");
-    value.turnStatus = "cancelled";
-    value.responseParts = [
-      {
-        part_id: "partial-text",
-        kind: "text",
-        projection: "detail",
-        status: "completed",
-        source: { message_sequence: 2 },
-        text: "我准备读取配置文件。",
-        completion_reason: "user_interrupt",
-        partial: true,
-        final: false,
-      },
-      {
-        part_id: "partial-tool",
-        kind: "tool_call",
-        projection: "summary",
-        status: "failed",
-        source: {
-          message_sequence: 2,
-          assistant_message_sequence: 2,
-          call_index: 0,
-        },
-        tool_call_id: "call-partial-tool",
-        tool_name: "read_file",
-        outcome_unknown: true,
-        final: false,
-      },
-    ];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain('data-status-kind="user-interrupted"');
-    expect(html).toContain("已由用户中断");
-    expect(html).not.toContain("工具执行结果未知");
-    expect(html).not.toContain("后端未返回结果，无法确认是否成功");
-  });
-
-  test("终态历史保留消息流诊断时仍展示已知工具失败", async () => {
+  test("中间文本、压缩、活动组保留 canonical 顺序，final 始终独立", async () => {
     const value = conversation("done");
-    value.turnId = "turn-tool-failed";
-    value.turnStatus = "completed";
-    value.turnItemsView = "full";
-    value.activityStats = { duration_ms: 100, item_count: 2 };
-    value.messageStream = {
-      connectionStatus: "terminal",
-      streamStatus: "completed",
-      lastEventSeq: 21,
-      failure: null,
-      resumable: false,
-    };
-    value.responseParts = [{
-      part_id: "failed-tool",
-      kind: "tool_call",
-      projection: "summary",
-      status: "failed",
-      source: {
-        message_sequence: 2,
-        assistant_message_sequence: 2,
-        call_index: 0,
-      },
-      tool_call_id: "call-failed-tool",
-      tool_name: "read_file",
-      text: "Permission denied",
-      outcome_unknown: false,
-      final: false,
-    }, {
-      part_id: "failed-tool-result",
-      kind: "tool_result",
-      projection: "detail",
-      status: "completed",
-      source: {
-        message_sequence: 3,
-        assistant_message_sequence: 2,
-        call_index: 0,
-      },
-      tool_call_id: "call-failed-tool",
-      tool_name: "read_file",
-      result: "Permission denied",
-      outcome_unknown: false,
-      final: true,
-    }];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain('data-status-kind="tool-failed"');
-    expect(html).toContain("工具执行失败");
-    expect(html).toContain("read_file：工具返回了失败结果");
-    expect(html).not.toContain("工具执行结果未知");
-
-    let renderer: ReactTestRenderer;
-    act(() => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} />);
-    });
-    const activity = renderer!.root.findByProps({ "data-status-kind": "tool-failed" });
-    const toggle = activity.findByProps({ "aria-expanded": false });
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-    expect(renderer!.root.findByProps({ className: "chat-tool-row is-failed" })).toBeTruthy();
-    act(() => renderer!.unmount());
+    value.responseParts![0] = {...value.responseParts![0],source:{...value.responseParts![0].source,item_id:"final"}};
+    value.responseParts = [reasoning("before",2),
+      {...reasoning("middle",3),kind:"text",text:"普通中间文本"},
+      {...reasoning("compaction",4),kind:"compaction_summary",text:"压缩正文"},
+      reasoning("after",5),...value.responseParts!];
+    const renderer = create(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>);
+    const members = JSON.parse(processButton(renderer).props["data-transcript-members"]);
+    expect(members).toContainEqual({kind:"item",id:"compaction",part:0});
+    expect(members).not.toContainEqual({kind:"item",id:"final",part:0});
+    expect(JSON.stringify(renderer.toJSON())).toContain("原始回答");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("普通中间文本");
+    await click(processButton(renderer));
+    const kinds = renderer.root.findByProps({className:"chat-thinking-body"}).children
+      .filter((node): node is Exclude<typeof node,string> => typeof node !== "string")
+      .map(node => node.props.group?.kind ?? node.props.item?.partKind);
+    expect(kinds).toEqual(["work","markdown","compaction","work"]);
+    expect(JSON.stringify(renderer.toJSON())).toContain("普通中间文本");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("正文 before");
+    const compactionHeader = renderer.root.findByProps({className:"chat-compaction-summary"}).findByType("button");
+    expect(JSON.parse(compactionHeader.props["data-transcript-members"])).toEqual([{kind:"item",id:"compaction",part:0}]);
+    await click(renderer.root.findAllByProps({className:"chat-activity-group"})[0].findByType("button"));
+    const reasoningHeader = renderer.root.findAllByProps({className:"chat-activity-item"})[0].findByType("button");
+    expect(JSON.parse(reasoningHeader.props["data-transcript-members"])).toEqual([{kind:"item",id:"before",part:0}]);
+    expect(renderer.root.findAllByProps({"aria-label":"模型回复"})).toHaveLength(2);
+    renderer.unmount();
   });
 
-  test("历史失败但没有工具细节时仍显示通用失败状态", () => {
-    const value = conversation("error");
+  test.each(["process", "group", "reasoning", "tool", "compaction"] as const)("显式定位后手动收起 %s，迟到数据和重新挂载不重开，新定位仍可打开", async layer => {
+    let value = conversation("done");
+    const part: TurnResponsePart = {...reasoning("target",2),
+      ...(layer === "compaction" ? {kind:"compaction_summary" as const}
+        : layer === "tool" ? {kind:"tool_call" as const,tool_name:"read_file",tool_call_id:"tool-1",arguments:'{"path":"a.ts"}'} : {})};
+    value.responseParts = [part,...value.responseParts!];
+    const location: ThreadItemLocationDTO = {item_id:"target",semantic_kind:layer === "tool" ? "tool_call" : "assistant_output",
+      turn_id:"turn_fixture",execution_id:"exec",content_hash:"hash",byte_length:12};
+    let navigate!: (target: ThreadItemLocationDTO) => void;
+    let closed = 0;
+    let childKey = "initial";
+    function Harness() {
+      const [target,setTarget] = React.useState<ThreadItemLocationDTO | undefined>(location);
+      navigate = setTarget;
+      return <TranscriptTestView><MessageSearchLocationContext.Provider value={{item:target,
+        close:() => {closed++;setTarget(undefined);},onMount:() => {}}}>
+        <ChatTurn key={childKey} {...chatTurnProps(value)} />
+      </MessageSearchLocationContext.Provider></TranscriptTestView>;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {renderer = create(<Harness />);});
+    const header = () => layer === "process" ? processButton(renderer)
+      : layer === "tool" ? renderer.root.findByProps({className:"chat-tool-summary"})
+      : renderer.root.findByProps({className:layer === "group" ? "chat-activity-group"
+        : layer === "compaction" ? "chat-compaction-summary" : "chat-activity-item"}).findAllByType("button")[0];
+    expect(header().props["aria-expanded"]).toBe(true);
+    await click(header());
+    expect(closed).toBe(1);
+    expect(header().props["aria-expanded"]).toBe(false);
+    value = {...value,responseParts:value.responseParts!.map(entry => ({...entry,text:"迟到正文"}))};
+    await act(async () => renderer.update(<Harness />));
+    expect(header().props["aria-expanded"]).toBe(false);
+    childKey = "remounted";
+    await act(async () => renderer.update(<Harness />));
+    expect(header().props["aria-expanded"]).toBe(false);
+    await act(async () => navigate({...location}));
+    expect(header().props["aria-expanded"]).toBe(true);
+    renderer.unmount();
+  });
+
+  test("定位独立 final 不打开无关过程", async () => {
+    const value = conversation("done");
+    value.responseParts = [reasoning("thinking",2),{...value.responseParts![0],source:{message_sequence:3,item_id:"final",part_ordinal:0}}];
+    const location: ThreadItemLocationDTO = {item_id:"final",semantic_kind:"assistant_output",turn_id:"turn_fixture",
+      execution_id:"exec",content_hash:"hash",byte_length:12};
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<TranscriptTestView><MessageSearchLocationContext.Provider value={{item:location,close:()=>{},onMount:()=>{}}}>
+      <ChatTurn {...chatTurnProps(value)} /></MessageSearchLocationContext.Provider></TranscriptTestView>); });
+    expect(processButton(renderer).props["aria-expanded"]).toBe(false);
+    expect(JSON.stringify(renderer.toJSON())).toContain("原始回答");
+    renderer.unmount();
+  });
+
+  test("Job／attempt 完成不收起过程，真实 Turn 终态才使用 settled 默认", async () => {
+    let value = conversation("running", "job_completed");
+    value.displayMode = "live";
+    value.messageStream = {connectionStatus:"connected",streamStatus:"open",lastEventSeq:1,failure:null,resumable:true};
+    value.responseParts = [reasoning("running_reasoning",2)];
+    const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>;
+    const renderer = create(render());
+    expect(processButton(renderer).props["aria-expanded"]).toBe(true);
+    value = {...value,status:"done"};
+    await act(async () => renderer.update(render()));
+    expect(processButton(renderer).props["aria-expanded"]).toBe(true);
+    value = {...value,turnStatus:"completed"};
+    await act(async () => renderer.update(render()));
+    expect(processButton(renderer).props["aria-expanded"]).toBe(false);
+    await click(processButton(renderer));
+    await act(async () => renderer.update(render()));
+    expect(processButton(renderer).props["aria-expanded"]).toBe(true);
+    renderer.unmount();
+  });
+
+  test("零活动不创建空展开区，encrypted-only 仍有可展开的存在性", async () => {
+    let value = conversation("done");
+    value.activityStats = {duration_ms:50,item_count:0};
+    const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>;
+    const renderer = create(render());
+    expect(processButton(renderer).props.disabled).toBe(true);
+    expect(renderer.root.findAllByProps({className:"chat-thinking-body"})).toHaveLength(0);
+    value = {...value,responseParts:[{...reasoning("encrypted",2),kind:"reasoning_encrypted",text:""}]};
+    await act(async () => renderer.update(render()));
+    await click(processButton(renderer));
+    await click(renderer.root.findByProps({className:"chat-activity-group"}).findByType("button"));
+    await click(renderer.root.findByProps({className:"chat-activity-item"}).findByType("button"));
+    expect(JSON.stringify(renderer.toJSON())).toContain("已隐藏");
+    renderer.unmount();
+  });
+
+  test("失败、超时、中断保留真实原因，工具失败不升级为整轮失败", () => {
+    const value = conversation("done");
+    value.responseParts = [{...reasoning("tool",2),kind:"tool_call",status:"failed",tool_call_id:"call",tool_name:"read_file",text:"Permission denied"}];
+    const render = () => renderToStaticMarkup(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>);
+    expect(render()).not.toContain('data-status-kind="turn-failed"');
     value.turnStatus = "failed";
-    value.responseParts = [];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain('data-status-kind="turn-failed"');
-    expect(html).toContain("本轮执行失败");
-    expect(html).toContain("后端没有提供可用的失败详情");
-  });
-
-  test("回放后的新 Turn 明确显示上下文已回退", () => {
-    const value = conversation("running");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.pending = true;
-    value.userMessage = {
-      ...value.userMessage!,
-      metadata: {
-        replay_action: "edit_and_continue",
-        source: "optimistic_replay",
-      },
-    };
-    value.assistantMessages = [];
-    value.responseParts = [];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain("已回退上下文，从编辑后的消息继续");
-    expect(html).toContain("工作区文件修改不会被撤销");
-    expect(html).toContain('data-status-kind="rewind"');
-  });
-
-  test("非用户中断的取消事件显示内部执行错误而不是用户中断", () => {
-    const value = conversation("error", "job_cancelled");
-  value.displayMode = "live";
-  value.source = "pending";
-  value.responseParts = [];
-  value.messageStream = {
-    connectionStatus: "terminal",
-    streamStatus: "failed",
-    lastEventSeq: 3,
-    failure: {
-      code: "execution_cancelled",
-      message: "AgentLoop 在没有用户中断请求的情况下被取消",
-      afterInterruptRequested: false,
-      resumable: false,
-    },
-    resumable: false,
-  };
-  value.assistantMessages = [];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain("内部执行取消");
-    expect(html).toContain("AgentLoop 在没有用户中断请求的情况下被取消");
-    expect(html).not.toContain("任务已取消");
-  });
-
-  test("总超时事件显示超时而不是任务取消", () => {
-    const value = conversation("error", "job_failed");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.responseParts = [];
+    value.turnFailure = {code:"unknown_error",message:"embedding.model_ref: Field required",details:{stage:"execution"}};
+    expect(render()).toContain("embedding.model_ref: Field required");
+    expect(render()).toContain('data-status-kind="turn-failed"');
     value.turnStatus = "timed_out";
-    value.messageStream = {
-      connectionStatus: "terminal",
-      streamStatus: "failed",
-      lastEventSeq: 4,
-      failure: {
-        code: "execution_cancelled",
-        message: "AgentLoop 在没有用户中断请求的情况下被取消",
-        afterInterruptRequested: false,
-        resumable: false,
-      },
-      resumable: false,
-    };
-    value.assistantMessages = [];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain("本轮执行超时");
-    expect(html).toContain("AgentLoop 在没有用户中断请求的情况下被取消");
-    expect(html).not.toContain("任务已取消");
-  });
-
-  test("历史 partial Turn 显示用户中断提示且不展示独立重试入口", () => {
-    const value = conversation("error");
+    expect(render()).toContain('data-status-kind="turn-timed-out"');
     value.turnStatus = "cancelled";
-    value.assistantMessages![0] = {
-      ...value.assistantMessages![0],
-      content: "我已经开始分析这个问题，但回答在这里被用户中断……",
-    };
-    value.responseParts![0] = {
-      ...value.responseParts![0],
-      kind: "text",
-      text: "我已经开始分析这个问题，但回答在这里被用户中断……",
-      completion_reason: "user_interrupt",
-      partial: true,
-      final: false,
-    };
-
-    const html = renderToStaticMarkup(
-      <ChatTurn {...chatTurnProps(value)} isLastTurn />,
-    );
-
-    expect(html).toContain("我已经开始分析这个问题，但回答在这里被用户中断……");
-    expect(html).toContain("已由用户中断");
-    expect(html).not.toContain("重新生成用户中断轮次");
-    expect(html).not.toContain("生成已中断");
-    expect(html).not.toContain("重试失败轮次");
-    expect(html).not.toContain("此轮消息无法显示");
-  });
-
-  test("消息流晚加入时已提交正文先作为活动正文展示", () => {
-    const value = conversation("running");
-  value.displayMode = "live";
-  value.source = "pending";
-  value.responseParts = [];
-  value.messageStream = {
-    connectionStatus: "connected",
-    streamStatus: "open",
-    lastEventSeq: 3,
-    failure: null,
-    resumable: true,
-  };
-  value.assistantMessages = [];
-  value.responseParts = [{
-    part_id: "part_joined_delta",
-    kind: "text",
-    projection: "streaming",
-    status: "running",
-    source: { message_sequence: 0 },
-    text: "已接入的流式片段",
-    final: false,
-  }];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-
-    expect(html).toContain("已接入的流式片段");
-    expect(html).not.toContain("尚未开始");
-  });
-
-  test("Turn summary 先展示预览并禁止基于截断内容操作", () => {
-    const value = conversation("done");
-    value.turnId = "job_1";
-    value.turnRevision = 1;
-    value.turnItemsView = "summary";
-    value.userMessage = {
-      ...value.userMessage!,
-      metadata: { source: "turn_projection", summary: true },
-    };
-    value.assistantMessages = [{
-      ...value.assistantMessages![0],
-      content: "最新 Turn 预览",
-      metadata: { source: "turn_projection", summary: true },
-    }];
-    value.responseParts = [{
-      ...value.responseParts![0],
-      text: "最新 Turn 预览",
-      projection: "summary",
-    }];
-
-    const html = renderToStaticMarkup(
-      <ChatTurn
-        {...mediaProps}
-        conversation={value}
-        showRawDetails={false}
-        isLastTurn
-        sessionBusy={false}
-        onLoadAgentStateMessageRawContent={loadAgentStateMessageRawContent}
-        onReplayTurn={async () => {}}
-        {...pendingActionProps}
-      />,
-    );
-
-    expect(html).toContain("最新 Turn 预览");
-    expect(html).not.toContain("已完成思考");
-    expect(html).toContain("展开 Turn 中间消息");
-    expect(html).not.toContain("编辑并从此处继续");
-    expect(html).not.toContain("重新生成最后回复");
-  });
-
-  test("历史 Turn 的统计行点击后通过详情接口加载中间消息", async () => {
-    const value = conversation("done");
-    value.turnId = "job_1";
-    value.turnRevision = 1;
-    value.turnItemsView = "summary";
-    value.activityStats = {
-      duration_ms: 1250,
-      item_count: 5,
-    };
-    let loadedInclude: string[] | undefined;
-    let detailLoadCalls = 0;
-    let renderer: ReactTestRenderer;
-    act(() => {
-      renderer = create(
-        <ChatTurn
-          {...chatTurnProps(value)}
-          onLoadTurnDetails={async (_turnIds, _identity, _refresh, include) => {
-            detailLoadCalls += 1;
-            loadedInclude = include;
-          }}
-        />,
-      );
-    });
-    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
-    expect(toggle.props["aria-label"]).toBe(
-      "展开 Turn 中间消息：耗时 1.3s · Item 5 项",
-    );
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-    expect(loadedInclude).toEqual([
-      "user",
-      "metadata",
-      "text",
-      "reasoning_detail",
-      "encrypted_reasoning_meta",
-      "tool_summary",
-      "tool_call",
-      "tool_result",
-      "final_response",
-    ]);
-    expect(renderer!.root.findByProps({ "aria-expanded": true })).toBeTruthy();
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-    expect(detailLoadCalls).toBe(2);
-    const summaryHtml = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    expect(summaryHtml).toContain("耗时 1.3s · Item 5 项");
-    expect(summaryHtml).not.toContain("assistant 1");
-    expect(summaryHtml).not.toContain("tool 1/1");
-    renderer!.unmount();
-  });
-
-  test("没有中间 item 的历史 Turn 只显示统计，不提供空展开区", () => {
-    const value = conversation("done");
-    value.turnId = "job_plain";
-    value.turnRevision = 1;
-    value.turnItemsView = "summary";
-    value.activityStats = {
-      duration_ms: 7100,
-      item_count: 0,
-    };
-
-    const renderer = create(<ChatTurn {...chatTurnProps(value)} />);
-    const activity = renderer.root.findByProps({
-      className: "chat-thinking-toggle is-static",
-    });
-    expect(activity.props.role).toBe("status");
-    expect(activity.props["aria-label"]).toBe(
-      "Turn 中间消息：耗时 7.1s · Item 0 项",
-    );
-    expect(renderer.root.findAllByProps({ className: "chat-thinking-body" })).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ className: "chat-thinking-empty" })).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ "aria-expanded": false })).toHaveLength(0);
-    renderer.unmount();
-  });
-
-  test("历史 ToolRow 展开时只请求当前 tool_call_id 的详情", async () => {
-    const value = conversation("done");
-    value.turnId = "job_1";
-    value.turnRevision = 1;
-    value.turnItemsView = "summary";
-    value.responseParts = [
-      {
-        part_id: "tool-call:call-1",
-        kind: "tool_call",
-        projection: "summary",
-        status: "completed",
-        source: {
-          message_sequence: 2,
-          assistant_message_sequence: 2,
-          call_index: 0,
-        },
-        tool_call_id: "call-1",
-        tool_name: "read_fixture",
-      },
-      ...value.responseParts!,
-    ];
-    let loadedToolCallId = "";
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(
-        <ChatTurn
-          {...chatTurnProps(value)}
-          onLoadToolDetails={async (_turnId, toolCallId) => {
-            loadedToolCallId = toolCallId;
-          }}
-        />,
-      );
-    });
-
-    const activityToggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
-    expect(activityToggle.props["aria-label"]).toBe(
-      "展开 Turn 中间消息：耗时 — · Item 计数同步中",
-    );
-    await act(async () => {
-      await activityToggle.props.onClick();
-    });
-    const toolToggle = renderer!.root.findByProps({
-      className: "chat-tool-summary",
-    });
-    await act(async () => {
-      await toolToggle.props.onClick();
-    });
-
-    expect(loadedToolCallId).toBe("call-1");
-    renderer!.unmount();
-  });
-
-  test("历史 response parts 展开详情时不重复渲染工具和最终响应", async () => {
-    const value = conversation("done");
-    value.turnId = "job_1";
-    value.turnRevision = 1;
-    value.turnItemsView = "full";
-    value.assistantMessages![0].content = "最终响应";
-    value.responseParts = [
-      {
-        part_id: "tool-call-1",
-        kind: "tool_call",
-        projection: "detail",
-        status: "completed",
-        source: {
-          message_sequence: 2,
-          assistant_message_sequence: 2,
-          call_index: 0,
-        },
-        tool_call_id: "call-1",
-        tool_name: "read_fixture",
-        arguments: '{"path":"fixture.json"}',
-      },
-      {
-        part_id: "tool-result-1",
-        kind: "tool_result",
-        projection: "detail",
-        status: "completed",
-        source: {
-          message_sequence: 3,
-          assistant_message_sequence: 2,
-          call_index: 0,
-          result_message_sequence: 3,
-        },
-        tool_call_id: "call-1",
-        tool_name: "read_fixture",
-        text: "工具输出",
-        result: "工具输出",
-      },
-      {
-        ...value.responseParts![0],
-        part_id: "final-1",
-        text: "最终响应",
-        final: true,
-      },
-    ];
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(
-        <ChatTurn
-          {...chatTurnProps(value)}
-          onLoadTurnDetails={async () => {}}
-        />,
-      );
-    });
-
-    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
-    expect(toggle.props["aria-label"]).toBe(
-      "展开 Turn 中间消息：耗时 — · Item 计数同步中",
-    );
-    await act(async () => {
-      await toggle.props.onClick();
-    });
-
-    expect(renderer!.root.findAllByProps({ className: "chat-tool-row is-complete" })).toHaveLength(1);
-    expect(renderer!.root.findAllByProps({ "aria-label": "模型回复" })).toHaveLength(1);
-    renderer!.unmount();
-  });
-
-  test("历史展开与收起保持压缩前后正文的 canonical DOM 顺序", async () => {
-    const value = conversation("done");
-    value.turnId = "turn_compaction_order";
-    value.turnItemsView = "full";
-    value.activityStats = { duration_ms: 100, item_count: 4 };
-    value.assistantMessages![0].content = "最终响应";
-    value.responseParts = [
-      { part_id: "before", kind: "reasoning", projection: "detail", status: "completed",
-        source: { message_sequence: 1, item_id: "item_before", logical_item_ordinal: 1 }, text: "压缩前思考" },
-      { part_id: "summary", kind: "compaction_summary", projection: "detail", status: "completed",
-        source: { message_sequence: 2, item_id: "item_summary", logical_item_ordinal: 2 },
-        text: "A condensed summary follows:\n\n<summary>\n三轮均通过 read_file 核对 README。\n</summary>" },
-      { part_id: "after", kind: "reasoning", projection: "detail", status: "completed",
-        source: { message_sequence: 3, item_id: "item_after", logical_item_ordinal: 3 }, text: "压缩后思考" },
-      { part_id: "final", kind: "final_text", projection: "detail", status: "completed", final: true,
-        source: { message_sequence: 4, item_id: "item_final", logical_item_ordinal: 4 }, text: "最终响应" },
-    ];
-    const summaryMarkup = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    expect(summaryMarkup).toContain("三轮均通过 read_file 核对 README。");
-    expect(summaryMarkup).toContain("&lt;summary&gt;");
-    let loads = 0;
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} onLoadTurnDetails={async () => { loads += 1; }} />);
-    });
-    const sources = () => renderer!.root.findAll((node) =>
-      typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
-    ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
-    const expected = value.responseParts.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
-    expect(sources()).toEqual([expected[1], expected[3]]);
-    const toggle = renderer!.root.findByProps({ className: "chat-thinking-toggle" });
-    await act(async () => { await toggle.props.onClick(); });
-    expect(loads).toBe(1);
-    expect(sources()).toEqual(expected);
-    await act(async () => { await toggle.props.onClick(); });
-    expect(sources()).toEqual([expected[1], expected[3]]);
-    expect(renderer!.root.findAllByProps({ className: "chat-thinking-toggle" })).toHaveLength(1);
-    act(() => renderer!.unmount());
-  });
-
-  test("默认主线同一模型消息只展示普通文本，不展开 tool_call 正文", () => {
-    const value = conversation("done");
-    value.displayMode = "live";
-    value.source = "pending";
-    value.status = "running";
-    value.assistantMessages = [];
-    value.messageStream = {
-      connectionStatus: "connected",
-      streamStatus: "open",
-      lastEventSeq: 4,
-      failure: null,
-      resumable: true,
-    };
-    value.responseParts = [
-      {
-        part_id: "text-before-tool",
-        kind: "text",
-        projection: "streaming",
-        status: "completed",
-        source: { message_sequence: 1, content_block_index: 0 },
-        text: "我先读取文件。",
-      },
-      {
-        part_id: "tool-call-same-message",
-        kind: "tool_call",
-        projection: "streaming",
-        status: "pending",
-        source: { message_sequence: 1, assistant_message_sequence: 1, call_index: 0 },
-        tool_call_id: "call-same-message",
-        tool_name: "read_file",
-        arguments: '{"path":"README.md"}',
-      },
-    ];
-
-    const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
-    const textIndex = html.indexOf("我先读取文件");
-    const thinkingBodyIndex = html.indexOf('class="chat-thinking-body"');
-    expect(textIndex).toBeGreaterThanOrEqual(0);
-    expect(thinkingBodyIndex).toBe(-1);
-    expect(html).not.toContain("read_file");
+    value.responseParts = [{...reasoning("partial",2),kind:"text",partial:true,completion_reason:"user_interrupt"}];
+    expect(render()).toContain('data-status-kind="user-interrupted"');
+    expect(render()).not.toContain("重试失败轮次");
   });
 });

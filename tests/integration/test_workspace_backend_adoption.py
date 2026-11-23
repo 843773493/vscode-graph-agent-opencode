@@ -27,7 +27,6 @@ from app.gateway.runtime.managed_backend import (
 )
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.workspace_process import start_local_backend_process
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 GATEWAY_ID = "gateway_" + "a" * 32
@@ -54,28 +53,23 @@ async def adopted_backend(
     load_or_create_backend_id(get_boxteam_home())
     generation = "backend_generation_adoption"
     digest = mounted_workspace_manifest_digest((MountedWorkspace(workspace_id, workspace_root),))
-    lease = E2EProcessLease(tmp_path / "backend-port.json", (integration_backend_port,))
-    lease.acquire()
+    # 使用正式启动、健康与日志证明，不再手写一份不完整的 Backend HTTP 协议。
+    process = start_local_backend_process(
+        project_root=Path.cwd(), mounts=(MountedWorkspace(workspace_id, workspace_root),),
+        backend_generation=generation, port=integration_backend_port, log_dir=tmp_path / "logs",
+    )
     try:
-        # 使用正式启动、健康与日志证明，不再手写一份不完整的 Backend HTTP 协议。
-        process = start_local_backend_process(
-            project_root=Path.cwd(), mounts=(MountedWorkspace(workspace_id, workspace_root),),
-            backend_generation=generation, port=integration_backend_port, log_dir=tmp_path / "logs",
+        await verify_managed_backend_group(
+            ManagedBackendContract(
+                gateway_id=GATEWAY_ID, owner_id="backend_owner_adoption", generation=generation,
+                members=(ManagedBackendMember(workspace_id),),
+                backend_url=f"http://127.0.0.1:{integration_backend_port}",
+            ),
+            mounts=(MountedWorkspace(workspace_id, workspace_root),), process=process,
         )
-        try:
-            await verify_managed_backend_group(
-                ManagedBackendContract(
-                    gateway_id=GATEWAY_ID, owner_id="backend_owner_adoption", generation=generation,
-                    members=(ManagedBackendMember(workspace_id),),
-                    backend_url=f"http://127.0.0.1:{integration_backend_port}",
-                ),
-                mounts=(MountedWorkspace(workspace_id, workspace_root),), process=process,
-            )
-            yield _Backend(process, workspace_root, workspace_id, integration_backend_port, generation, digest)
-        finally:
-            await asyncio.to_thread(process.close)
+        yield _Backend(process, workspace_root, workspace_id, integration_backend_port, generation, digest)
     finally:
-        lease.release()
+        await asyncio.to_thread(process.close)
 
 
 @pytest.mark.asyncio

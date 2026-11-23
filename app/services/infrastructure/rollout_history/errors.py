@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from app.core.exceptions import NotFoundError
+from app.core.failures import mark_http_failure
 from app.schemas.internal_v2.turn import (
     StaleTurnCursorErrorDTO,
     StaleTurnReferenceErrorDTO,
@@ -55,3 +57,22 @@ class StaleTurnReferenceError(RuntimeError):
 
 class InvalidTurnCursorError(ValueError):
     pass
+
+
+class HistoryItemUnavailableError(NotFoundError):
+    """仅在精确 Thread 的可见成员查询确认缺失后产生，不代替其它 404。"""
+
+    def __init__(self, *, session_id: str, thread_id: str, item_id: str) -> None:
+        super().__init__("Item 不存在或已不在当前 Thread 的可见历史中")
+        mark_http_failure(self, {"stage": "history_locate", "error_type": type(self).__name__,
+            "target": {"session_id": session_id, "thread_id": thread_id, "item_id": item_id}})
+
+
+class HistoryContextUnavailableError(NotFoundError):
+    """同一可见过程的定点元数据查询确认目标标记不存在。"""
+
+    def __init__(self, *, session_id: str, thread_id: str, model_call_id: str, anchor: str) -> None:
+        super().__init__("上下文标记不存在或已不在当前 Thread 的可见历史中")
+        mark_http_failure(self, {"stage": "history_locate", "error_type": type(self).__name__,
+            "target": {"session_id": session_id, "thread_id": thread_id,
+                "model_call_id": model_call_id, "anchor": anchor}})

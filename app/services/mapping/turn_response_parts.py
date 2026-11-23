@@ -169,7 +169,7 @@ def _part_projection(kind: str, *, mode: Projection, include: frozenset[str]) ->
     return mode
 
 
-def _activity_parts_from_projection(
+def activity_parts_from_projection(
     projection: Mapping[str, object],
     *,
     mode: Projection,
@@ -189,7 +189,7 @@ def _activity_parts_from_projection(
         include_fields = _INCLUDE_BY_KIND.get(kind) if isinstance(kind, str) else None
         if include_fields is None:
             raise ValueError(f"未知 Turn activity item kind: {raw_kind!r}")
-        if not include & include_fields:
+        if "activity_outline" not in include and not include & include_fields:
             continue
         item_id = raw.get("item_id")
         item_sequence = raw.get("item_sequence")
@@ -216,14 +216,14 @@ def _activity_parts_from_projection(
         if not isinstance(message_sequence, int) or isinstance(message_sequence, bool):
             raise TypeError("Turn activity item message_sequence 非法")
         text = raw.get("text") if isinstance(raw.get("text"), str) else ""
-        part_projection = _part_projection(kind, mode=mode, include=include)
+        part_projection = "summary" if "activity_outline" in include else _part_projection(kind, mode=mode, include=include)
         # 工具部件在 summary 投影不携带正文：tool_summary 只提供身份与状态，
         # 完整参数/结果必须经显式 tool_call/tool_result include 补拉。这与
         # summary 模式「不物化工具 payload」的既有契约一致；否则默认历史页
         # 会把 item_projections 的整段工具正文（上限 64KB）随页带出。
         part_text = (
             ""
-            if part_projection == "summary" and kind in {"tool_call", "tool_result"}
+            if part_projection == "summary" and (kind in {"tool_call", "tool_result"} or "activity_outline" in include and kind != "text")
             else text
         )
         tool_call_id = raw.get("tool_call_id")
@@ -267,6 +267,9 @@ def _activity_parts_from_projection(
                     part_ordinal=part_ordinal,
                     created_at=created_at,
                     elapsed_ms=_int_or_none(raw, "elapsed_ms"),
+                    process_segment_item_id=raw.get("process_segment_item_id"),
+                    activity_group_item_id=raw.get("activity_group_item_id"),
+                    activity_group_part_ordinal=_int_or_none(raw, "activity_group_part_ordinal"),
                 ),
                 text=part_text,
                 carrier_type=(
@@ -348,13 +351,13 @@ def _enrich_activity_parts(
     projection: Mapping[str, object],
 ) -> list[TurnResponsePartDTO]:
     """用同 snapshot 的 typed scope 和显式坐标补充 canonical payload。"""
-    if not any(
-        part.kind in {"tool_call", "tool_result"} and part.tool_call_id is not None
-        for part in parts
-    ):
-        return parts
-
     calls, calls_by_identity, results = _tool_payloads(records)
+    reasoning = {}
+    for record in records:
+        for row in reasoning_content_rows(_message_data(_serialized_message(record)).get("content")):
+            for kind, text in (("reasoning", row.reasoning_text), ("reasoning_summary", row.summary_text)):
+                if text:
+                    reasoning[(record.get("_indexed_sequence"), kind, row.content_block_index, row.item_index)] = _bounded(text)
     identities = {
         raw["item_id"]: ItemProjectionIdentity.from_dict(
             {"model_call_id": raw.get("model_call_id")}
@@ -374,7 +377,8 @@ def _enrich_activity_parts(
     for part in parts:
         source = part.source
         if part.kind not in {"tool_call", "tool_result"} or part.tool_call_id is None:
-            enriched.append(part)
+            payload = reasoning.get((source.message_sequence, part.kind, source.content_block_index, source.item_index))
+            enriched.append(part.model_copy(update={"text":payload[0], "truncated":part.truncated or payload[1]}) if payload is not None else part)
             continue
         identity = identities[source.item_id]
         key = (identity.model_call_id, provider_tool_call_id(identity, part.tool_call_id))
@@ -386,7 +390,9 @@ def _enrich_activity_parts(
                 if assistant_sequence is not None and call_index is not None
                 else calls_by_identity.get(key)
             )
-            outcome_unknown = terminal_turn and key not in result_call_ids
+            # 定点回补可以只含调用，是否已有回执由同快照的索引关系决定，
+            # 不能把未选中的结果正文当作工具结果丢失。
+            outcome_unknown = terminal_turn and source.result_message_sequence is None and key not in result_call_ids
             enriched.append(
                 part.model_copy(
                     update={
@@ -489,7 +495,7 @@ def response_parts_from_records(
     """
     if projection is None:
         raise RuntimeError("历史 response parts 缺少 canonical Turn projection")
-    parts = _activity_parts_from_projection(
+    parts = activity_parts_from_projection(
         projection,
         mode=mode,
         include=include,
@@ -659,7 +665,7 @@ def response_parts_from_internal_item(
             arguments = (
                 raw_arguments
                 if isinstance(raw_arguments, str)
-                else json.dumps(raw_arguments, ensure_ascii=False, separators=(",", ":"))
+                else json.dumps(raw_arguments, ensure_ascii=False, default=str)
                 if raw_arguments is not None
                 else None
             )
@@ -731,3 +737,53 @@ def response_parts_from_internal_item(
             partial=item.status in {"partial", "incomplete"},
         )
     ]
+
+
+def enrich_selected_item_parts(
+    parts: list[TurnResponsePartDTO], items: Sequence[CanonicalItemRecord], *, include: frozenset[str],
+) -> list[TurnResponsePartDTO]:
+    """保留 Turn 的 canonical 部位，只从精确选中的 Item 补正文。
+
+    结构化 content 按真实 block/item 坐标关联，不能按 kind 或文本猜配多个部件。
+    final 已由 Turn 的权威 final projection 提供，不按 standalone text 重建。
+    """
+    enriched: list[TurnResponsePartDTO] = []
+    for item in items:
+        selected = [part for part in parts if part.source.item_id == item.item_id]
+        if not selected:
+            continue
+        source = selected[0].source
+        bodies = response_parts_from_internal_item(item, include=include,
+            logical_item_ordinal=source.logical_item_ordinal, elapsed_ms=source.elapsed_ms or 0)
+        by_position = {(part.kind, part.source.content_block_index, part.source.item_index, part.source.call_index): part for part in bodies}
+        for part in selected:
+            if part.kind == "final_text":
+                enriched.append(part)
+                continue
+            position = (part.kind, part.source.content_block_index, part.source.item_index, part.source.call_index)
+            body = by_position.get(position)
+            # 单语义 payload 只含一个显式部位；其 Turn ordinal 可与 standalone ordinal 不同。
+            if item.payload_kind != "structured_content" and len(bodies) == 1 and bodies[0].kind == part.kind:
+                body = bodies[0]
+            if body is None:
+                raise RuntimeError(f"选中 Item 缺少精确正文部位: {item.item_id}/{position}")
+            enriched.append(part.model_copy(update={"text": body.text, "projection": body.projection,
+                "arguments": body.arguments, "result": body.result, "truncated": body.truncated}))
+    return sorted(enriched, key=response_part_order)
+
+
+def internal_item_outline(item: CanonicalItemRecord) -> list[dict[str, object]]:
+    """写入时提取真实结构坐标；索引不保存思考、参数或工具结果正文。"""
+    outline: list[dict[str, object]] = []
+    remaining = _TEXT_LIMIT
+    for part in response_parts_from_internal_item(item,
+        include=frozenset({"assistant_text", "reasoning_detail", "reasoning_summary", "encrypted_reasoning_meta", "tool_summary"}),
+        logical_item_ordinal=0, elapsed_ms=0):
+        text, truncated = _bounded(part.text, remaining) if part.kind == "text" else ("", False)
+        remaining -= len(text)
+        outline.append({"kind": part.kind, "part_ordinal": part.source.part_ordinal,
+            "content_block_index": part.source.content_block_index, "item_index": part.source.item_index,
+            "carrier_type": part.carrier_type, "call_index": part.source.call_index,
+            "tool_call_id": part.tool_call_id, "tool_name": part.tool_name, "text": text,
+            "truncated": truncated or part.truncated if part.kind == "text" else False})
+    return outline

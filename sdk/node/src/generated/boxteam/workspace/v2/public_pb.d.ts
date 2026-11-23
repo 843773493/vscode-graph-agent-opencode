@@ -7,6 +7,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
 import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
 import type { PluginServiceReference } from "../../gateway/v2/service_plugin_pb.js";
+import type { Error } from "../../common/v1/error_pb.js";
 
 /**
  * Describes the file boxteam/workspace/v2/public.proto.
@@ -1010,6 +1011,142 @@ export declare type LlmProbeObservationDTO = Message<"boxteam.workspace.v2.LlmPr
 export declare const LlmProbeObservationDTOSchema: GenMessage<LlmProbeObservationDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.LlmModelMetadataDTO
+ */
+export declare type LlmModelMetadataDTO = Message<"boxteam.workspace.v2.LlmModelMetadataDTO"> & {
+  /**
+   * @generated from field: optional int64 max_input_tokens = 1;
+   */
+  maxInputTokens?: bigint | undefined;
+
+  /**
+   * @generated from field: optional bool supports_vision = 2;
+   */
+  supportsVision?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool supports_video_input = 3;
+   */
+  supportsVideoInput?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool supports_audio_input = 4;
+   */
+  supportsAudioInput?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool supports_audio_output = 5;
+   */
+  supportsAudioOutput?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool supports_function_calling = 6;
+   */
+  supportsFunctionCalling?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool supports_reasoning = 7;
+   */
+  supportsReasoning?: boolean | undefined;
+
+  /**
+   * 逐字段标记 provider／upstream／litellm；目录声明均不代表实测通过。
+   *
+   * @generated from field: map<string, string> sources = 8;
+   */
+  sources: { [key: string]: string };
+
+  /**
+   * @generated from field: optional string catalog_provider = 9;
+   */
+  catalogProvider?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmModelMetadataDTO.
+ * Use `create(LlmModelMetadataDTOSchema)` to create a new message.
+ */
+export declare const LlmModelMetadataDTOSchema: GenMessage<LlmModelMetadataDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmModelCatalogDTO
+ */
+export declare type LlmModelCatalogDTO = Message<"boxteam.workspace.v2.LlmModelCatalogDTO"> & {
+  /**
+   * @generated from field: string provider = 1;
+   */
+  provider: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.LlmDiscoveredModelDTO models = 2;
+   */
+  models: LlmDiscoveredModelDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmModelCatalogDTO.
+ * Use `create(LlmModelCatalogDTOSchema)` to create a new message.
+ */
+export declare const LlmModelCatalogDTOSchema: GenMessage<LlmModelCatalogDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmProviderDTO
+ */
+export declare type LlmProviderDTO = Message<"boxteam.workspace.v2.LlmProviderDTO"> & {
+  /**
+   * @generated from field: string provider = 1;
+   */
+  provider: string;
+
+  /**
+   * @generated from field: int64 model_count = 2;
+   */
+  modelCount: bigint;
+
+  /**
+   * @generated from field: int64 chat_model_count = 3;
+   */
+  chatModelCount: bigint;
+
+  /**
+   * @generated from field: optional string default_endpoint = 4;
+   */
+  defaultEndpoint?: string | undefined;
+
+  /**
+   * @generated from field: optional string protocol = 5;
+   */
+  protocol?: string | undefined;
+
+  /**
+   * @generated from field: bool upstream_discovery = 6;
+   */
+  upstreamDiscovery: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmProviderDTO.
+ * Use `create(LlmProviderDTOSchema)` to create a new message.
+ */
+export declare const LlmProviderDTOSchema: GenMessage<LlmProviderDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LlmProvidersDTO
+ */
+export declare type LlmProvidersDTO = Message<"boxteam.workspace.v2.LlmProvidersDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.LlmProviderDTO providers = 1;
+   */
+  providers: LlmProviderDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LlmProvidersDTO.
+ * Use `create(LlmProvidersDTOSchema)` to create a new message.
+ */
+export declare const LlmProvidersDTOSchema: GenMessage<LlmProvidersDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.LlmDiscoveredModelDTO
  */
 export declare type LlmDiscoveredModelDTO = Message<"boxteam.workspace.v2.LlmDiscoveredModelDTO"> & {
@@ -1022,6 +1159,11 @@ export declare type LlmDiscoveredModelDTO = Message<"boxteam.workspace.v2.LlmDis
    * @generated from field: optional string name = 2;
    */
   name?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.LlmModelMetadataDTO metadata = 3;
+   */
+  metadata?: LlmModelMetadataDTO | undefined;
 };
 
 /**
@@ -3793,6 +3935,11 @@ export declare type McpConnectionOperationDTO = Message<"boxteam.workspace.v2.Mc
    * @generated from field: optional string error_code = 10;
    */
   errorCode?: string | undefined;
+
+  /**
+   * @generated from field: optional string error_message = 11;
+   */
+  errorMessage?: string | undefined;
 };
 
 /**
@@ -12500,6 +12647,11 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
    * @generated from field: optional bool tool_summary_truncated = 28;
    */
   toolSummaryTruncated?: boolean | undefined;
+
+  /**
+   * @generated from field: optional boxteam.common.v1.Error failure = 29;
+   */
+  failure?: Error | undefined;
 };
 
 /**
@@ -12890,6 +13042,27 @@ export declare type WorkspaceMessageSearchResultsDTO = Message<"boxteam.workspac
 export declare const WorkspaceMessageSearchResultsDTOSchema: GenMessage<WorkspaceMessageSearchResultsDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ContextNoticeAnchorDTO
+ */
+export declare type ContextNoticeAnchorDTO = Message<"boxteam.workspace.v2.ContextNoticeAnchorDTO"> & {
+  /**
+   * @generated from field: string model_call_id = 1;
+   */
+  modelCallId: string;
+
+  /**
+   * @generated from field: string anchor = 2;
+   */
+  anchor: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextNoticeAnchorDTO.
+ * Use `create(ContextNoticeAnchorDTOSchema)` to create a new message.
+ */
+export declare const ContextNoticeAnchorDTOSchema: GenMessage<ContextNoticeAnchorDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TurnHistoryLoadRequest
  */
 export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnHistoryLoadRequest"> & {
@@ -12959,11 +13132,33 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
   contextCursor?: string | undefined;
 
   /**
-   * 同一 execution 内最多四个 canonical item 的正文回补；不推进历史游标。
+   * 同一 Turn 或 execution 内最多四个 canonical Item 的正文回补；不推进历史游标。
    *
-   * @generated from field: repeated string execution_item_ids = 14;
+   * @generated from field: repeated string item_ids = 14;
    */
-  executionItemIds: string[];
+  itemIds: string[];
+
+  /**
+   * @generated from field: optional string anchor_item_id = 15;
+   */
+  anchorItemId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_view_id = 16;
+   */
+  sourceViewId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 source_view_revision = 17;
+   */
+  sourceViewRevision?: bigint | undefined;
+
+  /**
+   * 在原过程窗口内定点读取上下文标记元数据，不扫描 context_cursor。
+   *
+   * @generated from field: optional boxteam.workspace.v2.ContextNoticeAnchorDTO anchor_context = 18;
+   */
+  anchorContext?: ContextNoticeAnchorDTO | undefined;
 };
 
 /**
@@ -13081,6 +13276,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: repeated boxteam.workspace.v2.ContextNoticeBatchDTO context_notices = 16;
    */
   contextNotices: ContextNoticeBatchDTO[];
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ThreadItemLocationDTO located_item = 17;
+   */
+  locatedItem?: ThreadItemLocationDTO | undefined;
 };
 
 /**
@@ -13147,6 +13347,18 @@ export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.
    * @generated from field: google.protobuf.Timestamp updated_at = 9;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional boxteam.common.v1.Error failure = 11;
+   */
+  failure?: Error | undefined;
+
+  /**
+   * 原 terminal convergence 的提交；未提交时不根据 Job 或 outcome 推断终态。
+   *
+   * @generated from field: optional int64 terminal_commit_id = 12;
+   */
+  terminalCommitId?: bigint | undefined;
 };
 
 /**
@@ -13558,6 +13770,31 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
    * @generated from field: optional string model_call_id = 13;
    */
   modelCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string activity_group_item_id = 14;
+   */
+  activityGroupItemId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 activity_group_part_ordinal = 15;
+   */
+  activityGroupPartOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string turn_id = 16;
+   */
+  turnId?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_id = 17;
+   */
+  executionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string process_segment_item_id = 18;
+   */
+  processSegmentItemId?: string | undefined;
 };
 
 /**
@@ -13724,6 +13961,11 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
    * @generated from field: optional bool tool_summary_truncated = 29;
    */
   toolSummaryTruncated?: boolean | undefined;
+
+  /**
+   * @generated from field: optional boxteam.common.v1.Error failure = 30;
+   */
+  failure?: Error | undefined;
 };
 
 /**

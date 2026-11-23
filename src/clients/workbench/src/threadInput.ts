@@ -1,7 +1,7 @@
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import { t } from '../../shared/core/i18n/index.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
-import { IEditorSerializer, IUntypedEditorInput, isResourceEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
+import { IEditorSerializer, IUntypedEditorInput, isResourceEditorInput, Verbosity } from '../upstream/src/vs/workbench/common/editor.js';
 import { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { gateway, type ThreadOwner } from './agentApi.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
@@ -59,6 +59,7 @@ export class ThreadInput extends EditorInput {
     super();
     this.resource = URI.from({ scheme: 'boxteam-thread', authority: owner.gatewayId,
       path: `/${owner.workspaceId}/${owner.sessionId}/${owner.threadId}` });
+    this._register({ dispose: workspaceContext.subscribe(() => this._onDidChangeLabel.fire()) });
   }
   static fromResource(resource: URI, title?: string, viewState?: object): ThreadInput {
     const [workspaceId, sessionId, threadId, extra] = resource.path.slice(1).split('/');
@@ -92,7 +93,14 @@ export class ThreadInput extends EditorInput {
   override get editorId(): string { return ThreadInput.ID; }
   override getName(): string { return this.owner.title; }
   setTitle(title: string): void { if (this.owner.title !== title) { this.owner.title = title; this._onDidChangeLabel.fire(); } }
-  override getDescription(): string { return `${this.owner.sessionId} / ${this.owner.threadId}`; }
+  override getDescription(_verbosity?: Verbosity): string | undefined {
+    return workspaceContext.getSnapshot().workspaces.find(workspace =>
+      gatewayWorkspaceKey(workspace) === gatewayWorkspaceKey(this.owner))?.name;
+  }
+  override getTitle(verbosity = Verbosity.MEDIUM): string {
+    if (verbosity === Verbosity.SHORT) return this.getName();
+    return [this.getName(), this.getDescription(), this.resource.toString()].filter(Boolean).join('\n');
+  }
   override copy(): ThreadInput {
     // 原版分屏复制输入；每个组持有自己的展示态，业务 owner 保持相同。
     const input = new ThreadInput({ ...this.owner });

@@ -45,7 +45,7 @@ from tests.integration.clients.web.itemized_context.test_fork_prefix_recovery im
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.processes.scope import capture_test_processes, register_test_process
 from tests.support.sealed_request_audit import audit_sealed_requests
@@ -106,7 +106,7 @@ async def verify_agents_source_boundary(
         session_id, thread_id = session["session_id"], session["thread_id"]
         updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "primary", "model_id": "default"}})
         assert updated.status_code == 200 and updated.json()["data"]["current_model"] == {"provider_id": "primary", "model_id": "default"}, updated.text
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     first_reply = "本轮继续沿用冻结来源。" if boundary == "turn" else "本轮采用更新来源。"
     responses = [
         ([{"role": "assistant", "tool_calls": [{"index": 0, "id": "frozen-turn-read", "type": "function",

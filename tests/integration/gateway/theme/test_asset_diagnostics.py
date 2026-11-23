@@ -17,7 +17,7 @@ from PIL import Image
 
 from tests.harness.python.run_context import TestRunContext
 from tests.support.diagnostic_sink import install_failing_diagnostic_sink
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -58,7 +58,7 @@ def asset_gateway(request: pytest.FixtureRequest, integration_workspace_root_pat
     runtime.mkdir(parents=True, exist_ok=True)
     control, audit, blocked = runtime / "sink-enabled", runtime / "sink-audit.jsonl", runtime / "blocked-log-directory"
     blocked.write_text("本次测试的日志阻塞文件", encoding="utf-8")
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     with ExitStack() as processes:
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir,

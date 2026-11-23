@@ -1,3 +1,8 @@
+import { TranscriptViewContext, useTranscriptView } from "../chat/TranscriptViewContext";
+import { ProcessActivity } from "../chat/turn/TurnActivitySummary";
+import { buildRenderGroups } from "../../state/timeline/chatResponseGroups";
+import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
+import { childExecutionStatusLabel } from "../../state/childThreadDisplay";
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import type { SessionViewState } from "../../state/sessionViewState";
@@ -28,10 +33,11 @@ import ContextNotice from "../chat/ContextNotice";
 import { ChatItemOwnerContext } from "../chat/itemContextMenu";
 import ChatTurnErrorBoundary from "../chat/turn/ChatTurnErrorBoundary";
 import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
-import { useTurnVirtualScroller, type TurnViewportController } from "../chat/useTurnVirtualScroller";
+import type { TranscriptViewportPosition, TranscriptViewportChangeReason } from "../chat/useTranscriptNavigation";
+import { useTranscriptVirtualScroller, type TranscriptViewportController } from "../chat/useTranscriptVirtualScroller";
 import { useTurnBodyWindow } from "../chat/useTurnBodyWindow";
 import { errorMessage } from "../../utils/errorMessage";
-import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
+import type { ChatTurnHandlers, LoadTurnDetails } from "../chat/turn/types";
 import { MessageSearchLocationContext } from "../chat/messageSearchLocation";
 
 interface ChatPanelRenderState extends ChatTurnHandlers {
@@ -47,8 +53,8 @@ interface ChatPanelRenderState extends ChatTurnHandlers {
     sessionId: string,
     messageId: string,
   ) => Promise<string>;
+  internalExecutions: readonly import("../../state/session/internalExecutionHistory").InternalExecutionRecord[];
   onLoadTurnDetails: LoadTurnDetails;
-  onLoadToolDetails?: LoadToolDetails;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   loadingOlderMessages: boolean;
   historyError: string | null;
@@ -120,7 +126,26 @@ const renderChatPanelItem: ItemContent<
   ChatPanelVirtuosoContext
 > = (_index, item, context) => {
   const state = currentChatPanelRenderState(context);
-  if (item.kind === "execution_response" || item.kind === "execution_header") return null;
+  if (item.kind === "execution_response" || item.kind === "execution_header") {
+    const execution = state.internalExecutions.find(execution => execution.execution_id === item.executionId);
+    if (!execution) throw new Error("内部展示段缺少原 execution");
+    const settled = execution.terminal_commit_id != null;
+    const interrupted = execution.status === "interrupted" || execution.status === "cancelled";
+    const uncertain = execution.status === "unknown" || execution.status === "execution_lost";
+    return <ChatItemOwnerContext.Provider value={state.sessionId && state.threadId ? {sessionId:state.sessionId,threadId:state.threadId}:null}>
+      <div className="chat-virtual-item" data-execution-id={item.executionId}>
+        <ProcessActivity process={{kind:"execution",id:item.executionId}} segment={item.kind === "execution_response" ? item.itemId : undefined}
+          groups={item.kind === "execution_response" ? buildRenderGroups(responsePartsToTimelineItems(item.parts,
+            {terminalFailure:settled && !interrupted && (!!execution.failure || uncertain),terminalCancellation:settled && interrupted})) : []}
+          settled={settled}
+          showRawDetails={state.expandDetails} loadDetails={state.onLoadTurnDetails}
+          outline={execution.activityOutline}
+          status={{title:childExecutionStatusLabel(execution.status),detail:execution.failure?.message,
+            icon:execution.failure ? "codicon-error" : interrupted ? "codicon-debug-stop" : uncertain ? "codicon-question" : "codicon-check"}}
+          binding={execution.sourceViewId && execution.sourceViewRevision !== undefined ? {sourceViewId:execution.sourceViewId,sourceViewRevision:execution.sourceViewRevision}:undefined} />
+      </div>
+    </ChatItemOwnerContext.Provider>;
+  }
   if (item.kind === "context_event") {
     return <ChatItemOwnerContext.Provider value={state.sessionId && state.threadId ? { sessionId: state.sessionId, threadId: state.threadId } : null}>
       <ContextNotice notices={item.notices} />
@@ -151,6 +176,7 @@ const renderChatPanelItem: ItemContent<
     <div
       className="chat-virtual-item"
       data-turn-id={item.conversation.turnId}
+      data-transcript-process={JSON.stringify({kind:"turn",id:item.conversation.turnId})}
     >
       <div>
         <ChatTurnErrorBoundary
@@ -165,7 +191,6 @@ const renderChatPanelItem: ItemContent<
             sessionBusy={state.sessionBusy}
             onLoadAgentStateMessageRawContent={state.onLoadAgentStateMessageRawContent}
             onLoadTurnDetails={state.onLoadTurnDetails}
-            onLoadToolDetails={state.onLoadToolDetails}
             onReplayTurn={state.onReplayTurn}
             onRemovePending={state.onRemovePending}
             onChangePendingPolicy={state.onChangePendingPolicy}
@@ -208,7 +233,6 @@ export default function ChatPanel({
   onLoadOlderMessages,
   onLoadTurnDetails,
   onRetainTurnBodies,
-  onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
   onRetryHistory,
   sessionChangeSummary,
@@ -224,6 +248,7 @@ export default function ChatPanel({
   onViewStateChange,
   onViewStateRestoreStatus,
   messageNavigation,
+  onCloseMessageNavigation,
   onViewportReady,
 }: {
   apiPort: number;
@@ -247,7 +272,6 @@ export default function ChatPanel({
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
   onRetainTurnBodies?: (turnIds: string[], executionItems?: ExecutionItemReference[]) => Promise<void>;
-  onLoadToolDetails?: LoadToolDetails;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
     messageId: string,
@@ -259,15 +283,19 @@ export default function ChatPanel({
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   onOpenChildReport?: (source: InternalDisplayProvenance) => void;
   viewState?: SessionViewState | null;
-  onViewStateChange?: (payload: {
-    turn_anchor: string | null;
-    scroll_offset: number;
-    follow_latest: boolean;
-  }) => void;
+  onViewStateChange?: (payload: TranscriptViewportPosition, reason: TranscriptViewportChangeReason) => void;
   onViewStateRestoreStatus?: (message: string) => void;
   messageNavigation?: TurnNavigationTarget;
-  onViewportReady?: (controller: TurnViewportController | undefined) => void;
+  onCloseMessageNavigation?: () => void;
+  onViewportReady?: (controller: TranscriptViewportController | undefined) => void;
 } & ChatTurnHandlers): React.ReactNode {
+  const ownerScope = JSON.stringify([workspaceId, sessionId, threadId]);
+  const viewportRef = React.useRef<TranscriptViewportController>();
+  const capturePosition = React.useCallback(() => viewportRef.current?.capture(), []);
+  const {transcriptView, publishPosition} = useTranscriptView(ownerScope, viewState, onViewStateChange, capturePosition);
+  const connectViewport = React.useCallback((controller: TranscriptViewportController | undefined) => {
+    viewportRef.current = controller; onViewportReady?.(controller);
+  }, [onViewportReady]);
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
   const transcriptConversations = React.useMemo(
@@ -275,7 +303,7 @@ export default function ChatPanel({
     [conversations],
   );
   const transcriptItems = React.useMemo(
-    () => chatTranscriptItems(transcriptConversations, internalExecutions),
+    () => chatTranscriptItems(transcriptConversations, internalExecutions, true),
     [transcriptConversations, internalExecutions],
   );
   const lastTurnKey = React.useMemo(() => {
@@ -305,7 +333,7 @@ export default function ChatPanel({
     locatedTool,
     locatedItem,
     cancelMessageNavigation,
-  } = useTurnVirtualScroller({
+  } = useTranscriptVirtualScroller({
     items: transcriptItems,
     scopeKey,
     onLoadNewerMessages,
@@ -318,10 +346,10 @@ export default function ChatPanel({
     loadingOlderMessages,
     historyLoading,
     viewState,
-    onViewStateChange,
+    onViewStateChange: publishPosition,
     onViewStateRestoreStatus,
     messageNavigation,
-    onViewportReady,
+    onViewportReady: connectViewport,
   });
   const sessionBusy = conversations.some(
     (conversation) => isLiveConversationView(conversation)
@@ -421,8 +449,8 @@ export default function ChatPanel({
     lastTurnKey,
     sessionBusy,
     onLoadAgentStateMessageRawContent,
+    internalExecutions,
     onLoadTurnDetails,
-    onLoadToolDetails,
     onReplayTurn,
     onRemovePending: removePending,
     onChangePendingPolicy: updatePendingPolicy,
@@ -436,7 +464,8 @@ export default function ChatPanel({
   };
 
   return (
-    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, tool: locatedTool, item: locatedItem, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell panel-feedback-host" aria-busy={loadingOlderMessages || historyLoading}>
+    <TranscriptViewContext.Provider value={transcriptView}><MessageSearchLocationContext.Provider value={{ message: locatedMessage, tool: locatedTool, item: locatedItem,
+      close: () => { cancelMessageNavigation(); onCloseMessageNavigation?.(); }, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell panel-feedback-host" aria-busy={loadingOlderMessages || historyLoading}>
       {navigation ? <p className="panel-feedback" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
       {hasActiveSession && sessionId && threadId && approvalWaits.length > 0 ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId, approvalWaits])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
@@ -499,6 +528,6 @@ export default function ChatPanel({
           {t("chat.latest")}
         </button>
       ) : null}
-    </section></MessageSearchLocationContext.Provider>
+    </section></MessageSearchLocationContext.Provider></TranscriptViewContext.Provider>
   );
 }

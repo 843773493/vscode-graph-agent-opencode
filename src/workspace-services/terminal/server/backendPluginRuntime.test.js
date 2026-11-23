@@ -134,8 +134,10 @@ test("Terminal 仅以 Gateway 插件身份启动，并保护 HTTP 与 WebSocket 
   });
   await once(socket, "open");
   const socketClosed = once(socket, "close");
-  socket.close();
-  await socketClosed;
+  const rejected = once(socket, "message");
+  socket.send(JSON.stringify({ type: "attach", terminalId: "term_missing", grantToken: "expired" }));
+  assert.equal(JSON.parse((await rejected)[0].toString()).type, "error");
+  assert.equal((await socketClosed)[0], 4008);
 
   const shutdown = await fetch(`${baseUrl}/internal/plugin/shutdown`, {
     method: "POST",

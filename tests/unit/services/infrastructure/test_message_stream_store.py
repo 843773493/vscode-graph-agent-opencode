@@ -34,6 +34,7 @@ from app.services.orchestration.message_stream.activities import (
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.messages import admit_message_stream_writer
 
 MessageStreamStoreCase: TypeAlias = tuple[
     MessageStreamStore,
@@ -93,7 +94,7 @@ async def test_same_local_turn_streams_are_isolated_by_thread_on_warm_and_cold_r
         streams[thread] = writer.turn_stream_id
         await writer.commit("model.started", {"model_call_id": "same-call", "attempt": 1})
         await writer.commit("model.completed", {"model_call_id": "same-call", "status": "completed"})
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
     assert len(set(streams.values())) == 2
     index = json.loads(store._index_path(session_id).read_text())
     assert index == {"format_version": 2, "threads": {thread: {"same-turn": stream} for thread, stream in streams.items()}}
@@ -185,7 +186,7 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
         },
         block_id="block_1",
     )
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     with pytest.raises(MessageStreamTerminalError):
         await writer.commit(
             "block.delta",
@@ -267,11 +268,7 @@ async def test_stream_terminal_event_survives_unrelated_catalog_drift(
         session_id=session_id,
         turn_id="job_runtime_drift_terminal",
     )
-    await writer.close_failed(
-        code="execution_error",
-        message="工具执行失败",
-        resumable=True,
-    )
+    await writer.commit("stream.failed", {"code": "execution_error", "message": "工具执行失败", "resumable": True, "after_interrupt_requested": False})
 
     state = await store.get_state(writer.turn_stream_id)
     assert state["stream_status"] == "failed"
@@ -432,7 +429,7 @@ async def test_slow_state_snapshot_keeps_fanout_live_and_coalesces_pending_versi
             await writer.commit("block.delta", {
                 "block_id": "block_1", "operation": "append", "text": "后续",
             }, block_id="block_1")
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
         # 慢盘期间仍继续提交，但不能每触发一次快照就多保留一棵历史状态。
         pending = [task for task in asyncio.all_tasks()
                    if task.get_coro().cr_code is store._persist_state_snapshot.__func__.__code__]
@@ -703,7 +700,7 @@ async def test_completed_stream_rejects_unfinished_entities(
         model_call_id="model_1",
     )
     with pytest.raises(MessageStreamError, match="model_calls"):
-        await model_writer.close_completed()
+        await model_writer.commit("stream.completed", {"status": "completed"})
     assert (await store.get_state(model_writer.turn_stream_id))["stream_status"] == "open"
 
     tool_writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
@@ -720,7 +717,7 @@ async def test_completed_stream_rejects_unfinished_entities(
         tool_execution_id="exec_1",
     )
     with pytest.raises(MessageStreamError, match="tool_executions"):
-        await tool_writer.close_completed()
+        await tool_writer.commit("stream.completed", {"status": "completed"})
 
     activity_writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
@@ -735,7 +732,7 @@ async def test_completed_stream_rejects_unfinished_entities(
         },
     )
     with pytest.raises(MessageStreamError, match="activities"):
-        await activity_writer.close_completed()
+        await activity_writer.commit("stream.completed", {"status": "completed"})
 
 
 @pytest.mark.asyncio
@@ -764,7 +761,7 @@ async def test_existing_stream_ids_does_not_materialize_historical_snapshots(
 ) -> None:
     store, resolver, session_id = message_stream_store
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_with_snapshot")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     if store._snapshot_tasks:
         await asyncio.gather(*store._snapshot_tasks.values())
 
@@ -796,7 +793,7 @@ async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
             session_id=session_id,
             turn_id=f"job_terminal_cache_{index}",
         )
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
         stream_ids.append(writer.turn_stream_id)
 
     terminal_ids = [
@@ -853,7 +850,7 @@ async def test_terminal_stream_cache_respects_byte_budget(
                 "block_id": "reply", "operation": "item_upsert",
                 "item": {"id": "current", "text": f"{index}:{event_index}:" + "x" * 16_384},
             }, event_id=f"cache-{index}-{event_index}")
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
         stream_ids.append(writer.turn_stream_id)
 
     terminal_ids = [
@@ -886,7 +883,7 @@ async def test_restart_does_not_retain_terminal_history_in_memory(
             session_id=session_id,
             turn_id=f"job_restart_terminal_{index}",
         )
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
     if store._snapshot_tasks:
         await asyncio.gather(*store._snapshot_tasks.values())
 
@@ -998,7 +995,7 @@ async def test_restart_reconciles_interrupt_and_unknown_tool_result(
     message_stream_store: MessageStreamStoreCase,
 ) -> None:
     store, resolver, session_id = message_stream_store
-    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_restart_test")
+    writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_restart_test", job_id="job_restart_test_owner")
     await writer.commit(
         "tool.started",
         {
@@ -1014,7 +1011,7 @@ async def test_restart_reconciles_interrupt_and_unknown_tool_result(
     )
 
     restarted_store = MessageStreamStore(path_resolver=resolver)
-    assert await restarted_store.reconcile_unfinished_streams() == 1
+    assert await restarted_store.reconcile_unfinished_streams(terminal_status_writer=admit_message_stream_writer(writer, resolver)) == 1
     state = await restarted_store.get_state(writer.turn_stream_id)
     assert state["stream_status"] == "failed"
     assert state["failure"]["code"] == "execution_lost"
@@ -1054,7 +1051,7 @@ async def test_terminal_stream_conservatively_closes_running_activities(
         "interrupt.requested",
         {"interrupt_request_id": "intr_activity", "reason": "user_requested"},
     )
-    await writer.close_interrupted("intr_activity")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_activity", "status": "interrupted"})
 
     state = await store.get_state(writer.turn_stream_id)
     activities = {item["activity_id"]: item for item in state["activities"]}
@@ -1089,7 +1086,7 @@ async def test_interrupt_gate_rejects_late_delta_and_preserves_request(
             },
         )
     with pytest.raises(MessageStreamTerminalError):
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
 
     repeated = await writer.commit(
         "interrupt.requested",
@@ -1109,7 +1106,7 @@ async def test_interrupt_gate_rejects_late_delta_and_preserves_request(
         "reason": "user_requested",
     }
 
-    await writer.close_interrupted("intr_1")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_1", "status": "interrupted"})
     state = await store.get_state(writer.turn_stream_id)
     assert state["stream_status"] == "interrupted"
     assert state["blocks"][0]["status"] == "interrupted"
@@ -1182,7 +1179,7 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
         },
         event_id=f"intr_{stage}",
     )
-    await writer.close_interrupted(f"intr_{stage}")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": f"intr_{stage}", "status": "interrupted"})
     live_events = [
         await subscription.get()
         for _ in range(4 if stage in {"reasoning", "text"} else 3)
@@ -1301,7 +1298,7 @@ async def test_tool_message_completion_stays_persisted_through_interrupt_and_reo
         {"interrupt_request_id": "intr_tool_message", "reason": "user_requested"},
     )
     await runtime.finalize_interruption_facts()
-    await writer.close_interrupted("intr_tool_message")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_tool_message", "status": "interrupted"})
     tool_result_sink.assert_awaited_once()
 
     state = await store.get_state(writer.turn_stream_id)
@@ -1506,10 +1503,7 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
         completion_reason="execution_error",
         error="清理错误不得覆盖原结果",
     )
-    await writer.close_failed(
-        code="execution_error",
-        message="注入 writer 错误后的清理已完成",
-    )
+    await writer.commit("stream.failed", {"code": "execution_error", "message": "注入 writer 错误后的清理已完成", "after_interrupt_requested": False, "resumable": False})
 
     assert injected
     assert runtime._pending_tool_completions == {}
@@ -1579,7 +1573,7 @@ async def test_zero_argument_tool_call_stays_complete_through_interrupt_and_reop
         {"interrupt_request_id": "intr_zero_arguments", "reason": "user_requested"},
     )
     await runtime.finalize_interruption_facts()
-    await writer.close_interrupted("intr_zero_arguments")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_zero_arguments", "status": "interrupted"})
 
     call_id = "model_zero_arguments:tool-call:call_zero_arguments"
     state = await store.get_state(writer.turn_stream_id)
@@ -1624,12 +1618,12 @@ async def test_interrupt_and_model_completion_race_has_one_terminal_winner(
 
     results = await asyncio.gather(
         request_interrupt(),
-        writer.close_completed(),
+        writer.commit("stream.completed", {"status": "completed"}),
         return_exceptions=True,
     )
     state = await store.get_state(writer.turn_stream_id)
     if state["stream_status"] == "interrupting":
-        await writer.close_interrupted("intr_race")
+        await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_race", "status": "interrupted"})
         state = await store.get_state(writer.turn_stream_id)
 
     assert state["stream_status"] in {"completed", "interrupted"}
@@ -1942,7 +1936,7 @@ async def test_cancelled_commit_waits_for_fsync_before_next_commit(
         "block.delta", cancelled_payload, event_id="evt_cancelled_fsync",
     )
     assert duplicate["event_seq"] == 2
-    terminal = await writer.close_interrupted("intr_cancelled_fsync")
+    terminal = await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_cancelled_fsync", "status": "interrupted"})
     assert terminal["event_seq"] == 4
     events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
     assert [event["event_seq"] for event in events] == [1, 2, 3, 4]
@@ -2263,7 +2257,7 @@ async def test_completed_stream_closes_running_blocks_with_public_events(
         block_id="block_late",
     )
 
-    completed = await writer.close_completed()
+    completed = await writer.commit("stream.completed", {"status": "completed"})
     # 内部事件不得再携带任何绕过公共协议的收口标记。
     assert "auto_closed_blocks" not in completed["payload"]
     assert completed["payload"] == {"status": "completed"}
@@ -2397,7 +2391,7 @@ async def test_stream_records_delivers_terminal_event_beyond_list_events_page_li
         },
         block_id="block_1",
     )
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     state = await store.get_state(writer.turn_stream_id)
 
     stream = store.stream_records(
@@ -2434,7 +2428,7 @@ async def test_evicted_terminal_streams_release_serial_locks(
             {"block_id": "block_1", "operation": "append", "text": "t"},
             block_id="block_1",
         )
-        await writer.close_completed()
+        await writer.commit("stream.completed", {"status": "completed"})
 
     cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
     assert len(store._locks) <= cache_limit
@@ -2502,7 +2496,7 @@ async def test_terminal_stream_converges_running_model_calls(
     # 重启恢复路径（reconcile 提交 stream.failed）同样不得遗留 running model_call。
     crashed = await store.open(thread_id=store._path_resolver.main_thread_id(session_id),
         session_id=session_id,
-        turn_id="job_terminal_model_call_restart",
+        turn_id="job_terminal_model_call_restart", job_id="job_terminal_model_call_restart_owner",
     )
     await crashed.commit(
         "model.started",
@@ -2510,7 +2504,7 @@ async def test_terminal_stream_converges_running_model_calls(
         model_call_id="mc_restart",
     )
     restarted_store = MessageStreamStore(path_resolver=store._path_resolver)
-    assert await restarted_store.reconcile_unfinished_streams() >= 1
+    assert await restarted_store.reconcile_unfinished_streams(terminal_status_writer=admit_message_stream_writer(crashed, store._path_resolver)) >= 1
     restarted_state = await restarted_store.get_state(crashed.turn_stream_id)
     assert restarted_state["stream_status"] == "failed"
     assert restarted_state["model_calls"][0]["status"] == "failed"
@@ -2569,7 +2563,7 @@ async def test_stream_records_closes_when_cursor_is_at_terminal_event(
         },
         block_id="block_1",
     )
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     terminal_seq = int((await store.get_state(writer.turn_stream_id))["snapshot_seq"])
 
     # 场景 A：Last-Event-ID 恰好指向已收到的终态帧。

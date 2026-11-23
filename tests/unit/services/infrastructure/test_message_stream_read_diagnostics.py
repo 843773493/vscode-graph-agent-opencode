@@ -37,7 +37,7 @@ async def test_cold_read_rejection_survives_diagnostic_sink_failure(
     store, resolver, session = message_stream_store
     thread = resolver.main_thread_id(session)
     writer = await store.open(session_id=session, thread_id=thread, turn_id="read-diagnostics")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     if store._snapshot_tasks:
         await asyncio.gather(*store._snapshot_tasks.values())
     expected = await store.list_events(session_id=session, turn_stream_id=writer.turn_stream_id)
@@ -160,7 +160,7 @@ async def test_native_read_failure_keeps_exact_cause_and_all_original_bytes(
     store, resolver, session = message_stream_store
     thread = resolver.main_thread_id(session)
     writer = await store.open(session_id=session, thread_id=thread, turn_id="native-read")
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
     if store._snapshot_tasks:
         await asyncio.gather(*store._snapshot_tasks.values())
     events = await store.list_events(session_id=session, turn_stream_id=writer.turn_stream_id)

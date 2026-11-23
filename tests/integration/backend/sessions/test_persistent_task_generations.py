@@ -54,7 +54,8 @@ def generation_configuration(workspace_id: str, *, mode: str = "new_per_run", ta
     }
 
 
-async def generation_run(case: ModelReplayCase, task: dict, run: dict, *, accepted: bool = False) -> dict:
+async def generation_run(case: ModelReplayCase, task: dict, run: dict, *, accepted: bool = False,
+                         expected_phase: str = "delivered") -> dict:
     async with asyncio.timeout(30):
         while True:
             response = await case.client.get(f"{ROOT}/{task['task_id']}/runs")
@@ -63,7 +64,7 @@ async def generation_run(case: ModelReplayCase, task: dict, run: dict, *, accept
             if accepted and actual["delivery"] is not None:
                 return actual
             if actual["phase"] not in {"pending", "checking", "delivering"}:
-                assert actual["phase"] == "delivered", actual
+                assert actual["phase"] == expected_phase, actual
                 return actual
             await asyncio.sleep(0.02)
 
@@ -138,9 +139,9 @@ async def test_generation_wait_releases_worker_and_preserves_overlap_and_busy_qu
         await _control(case, task, "pause")
     finally:
         case.control.release(calls[0], "model.response_ready")
-    for run in (first, second):
-        final = await generation_run(case, task, run)
-        assert final["generation"]["status"] == "completed"
+    for run, executed in ((first, True), (second, False)):
+        final = await generation_run(case, task, run, expected_phase="delivered" if executed else "failed")
+        assert final["generation"]["status"] == ("completed" if executed else "failed")
         state = generation_state(case, run)
         assert state["prepared_message"] is None
         assert state["execution_identity"]["job_id"] == run["generation"]["job_id"]
@@ -149,11 +150,12 @@ async def test_generation_wait_releases_worker_and_preserves_overlap_and_busy_qu
         detail = response.json()["data"]
         assert detail["work_target"]["session_id"] == session_id and detail["work_target"]["thread_id"] == thread_id
         assert "generation-original-private" in detail["action_content"]
-        assert detail["execution_outcome"] == "completed" and detail["consumption"] is not None
+        assert detail["execution_outcome"] == ("completed" if executed else "cancelled")
+        assert (detail["consumption"] is not None) is executed
     rows = admission_rows(case, state)
     assert len(rows) == 2 and len({row[0] for row in rows}) == len({row[1] for row in rows}) == 2
-    for call in calls:
-        assert _wire_text(case.request(call)["messages"]).count("generation-original-private") in {1, 2}
+    assert _wire_text(case.request(calls[0])["messages"]).count("generation-original-private") == 1
+    assert case.call_count(session_id, thread_id) == 1
     assert (await case.client.get(f"{ROOT}/{task['task_id']}")).json()["data"]["lifecycle"] == "paused"
 
 

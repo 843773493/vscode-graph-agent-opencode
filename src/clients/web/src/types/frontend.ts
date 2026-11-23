@@ -13,6 +13,7 @@ import type {
   SessionResource,
   TraceEvent,
   TurnResponsePart,
+  TurnSummary,
   WebUiSettings,
   DeliveryPolicy,
   JobStatus,
@@ -92,12 +93,15 @@ export interface ConversationView {
   rootLogicalItemOrdinal?: number;
   /** 后端 Turn 原始状态；status 是前端为展示折叠后的状态。 */
   turnStatus?: JobStatus;
+  /** 原终态提交的失败事实；不从 Item 或工具 attempt 推断。 */
+  turnFailure?: TurnSummary["failure"];
   activityStats?: {
     duration_ms: number | null;
     item_count: number;
     first_item_sequence?: number | null;
     last_item_sequence?: number | null;
   };
+  activityOutline?: {beforeCursor: string | null};
   sessionId: string;
   /** pending-request 提供的精确 thread 归属，不从消息 DTO 或展示坐标推导。 */
   threadId?: string;

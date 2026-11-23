@@ -10,7 +10,7 @@ clients/
     └── web-selectors.mjs    Web 语义选择器的唯一声明；由 Web 源码合同测试核对
 ```
 
-浏览器测试与选择器合同属于不同边界：浏览器启动、访客登录、页面动作和产物收集按实际依赖放在 `tests/integration/clients/web/` 或 `tests/e2e/clients/web/`；使用固定模型回放的完整 Workbench 场景属于 Integration。选择器名称与 Workbench 入口、共享 React 组件的真实属性对照放在 `src/clients/web/src/tests/`，Thread 内控件须由使用方按编辑器组及完整 owner 定位 ShadowRoot。不要在此目录另建未被测试入口消费的 driver、scenario 或客户端能力清单。
+浏览器测试与选择器合同属于不同边界：浏览器启动、页面动作和产物收集按验证目标放在 `tests/integration/clients/web/` 或 `tests/e2e/clients/web/`。新增 E2E 来自用户明确的完整业务流程，模型可真实调用、上游重放或手工 SSE；现有场景保留原归属，不以模型参数分类。选择器名称与 Workbench 入口、共享 React 组件的真实属性对照放在 `src/clients/web/src/tests/`，Thread 内控件须由使用方按编辑器组及完整 owner 定位 ShadowRoot。不要在此目录另建未被测试入口消费的 driver、scenario 或客户端能力清单。
 
 ## 可修改内容
 

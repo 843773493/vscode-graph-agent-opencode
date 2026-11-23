@@ -14,7 +14,7 @@
 
 `file_watch.test.mjs` 从原 Provider 注册入口验证共享 WebSocket 中的文件事件，直接使用原文件事件请求，不保留旧聚合器的伪 subscriptions 或空 connect。原件读取的延迟装具分别阻塞响应头、首块和 EOF，覆盖凭据撤销／Gateway 往返切换时拒绝迟到正文及保存基线、工作区激活变化不改原 owner；不得再通过覆写 `Response.blob` 或 `Blob.arrayBuffer` 模拟已流式消费的路径。
 
-`file_open_menu.test.mjs` 执行正式转换后的真实菜单 Action，组服务、编辑器 writer 和打开方式选择结果为明确边界；核右键发起组、原侧开方向、组关闭拒绝及取消零打开，不将其称作真实 Workbench 页面。`test_file_canonical.py` 的完整页面先单击文件，核会话资源区预览原正文且零新 Workbench Tab，再经原生右键菜单打开编辑器；可复用既有 `file_search_web_assets` 提供的不可变产物，场景 Home／工作区／端口仍独立。
+`file_open_menu.test.mjs` 执行正式转换后的真实菜单 Action，真实转换后的原 finder，组服务、编辑器 writer 和打开方式选择结果为明确边界；核发起组作为起点、锁定与复用、后台激活、侧开方向、组关闭拒绝及取消零打开，不将其称作真实 Workbench 页面。`test_file_canonical.py` 的完整页面先单击文件，核会话资源区预览原正文且零新 Workbench Tab，再经原生右键菜单打开编辑器；可复用既有 `file_search_web_assets` 提供的不可变产物，场景 Home／工作区／端口仍独立。
 
 文件搜索合同覆盖显式额外文件的名称／精确正文分支、owner隔离及目录分页前去重；HTTP页资产区分真实文件节点与目录。完整模型覆盖页面通过原文件编辑器修改node_modules中的未保存模型，沿真实Search Editor开启ignore，核本地正文、负命中、原Gateway请求及磁盘不变，不预写模型或替换业务响应。
 
@@ -68,7 +68,7 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 整份编辑器设置使用 `tests/support/workbench/settings.mjs` 经真实剪贴板粘贴、保存，并只读实际存储核对 JSON；不要用逐键多行插入留下自动补括号生成的无效配置，也不要直接预写 IndexedDB 替产品完成保存。真实搜索观察同样复用该 support 目录；`query_faults.mjs` 只控制本组显式故障装具，不供 E2E 调用。
 
-页面端口复用本目录 `conftest.py` 的租约 fixture，在各测试自己的端口块内有界选择空闲端口并保留绑定，记录探测原件；占用不终止未知进程，其他租约错误立即暴露。
+页面端口复用本目录 `conftest.py` 的 fixture，向公共 `TestFilePorts` 申请 Gateway 实际端口并记录；随机选择、占用跳过和绑定持有统一在公共 owner，不再由页面 fixture 扫描候选或重复租约。
 
 `file_input.test.mjs` 编译真实 `FileEditorInput` 及同一源码转换，只在文件服务／模型引用服务边界提供计数装具；验证并发引用、解析中关闭与失败后重试，不替代真实页面或 Gateway 模型验收。
 
@@ -127,3 +127,13 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 `recent_history.mjs` 与真实 Electron 共用产品创建、原最近资源／命令历史及三项 preserveInput 配置的业务步骤；先关闭原搜索动作的选区种入以独立验证输入记忆。坏 JSON／未知版本／缺失 owner 只在离开产品文档后破坏一条真实 Thread 记录，重启保留原错并单条移除；正常状态不预写历史。凭据负例只改下一次真实 HTTP 发送边界的 token，401／原因／request_id 均由 Gateway 产生并原样返回。工作区通过原 managed API 删除登记、在隔离测试工作区搬迁及复用原路径，核旧稳定身份拒绝替代目标、重登记原 UUID 后恢复草稿；原 HistoryService 的打开失败单条移除行为保留，恢复从原规范 URI 进入。不新增产品 hook／IPC，不代替真实双 Gateway 切换或其它平台验收。
 
 `item_documents.test.mjs` 通过原 FileService 及只读 Item Provider 验证冻结引用、stat 零预读、运行中取消到 HTTP signal、字节范围和失败重读；目标解析、HTTP 及编辑器关闭事件为受控依赖。关闭最后一组取消原读取，另一组仍打开时保留；Gateway 离开后切回仍拒绝迟到路由。已取消令牌的零请求检查直接经过 Provider；上游 FileService 对预取消父令牌的传播可能延后，不把此项当作整个编辑器关闭的页面验收，真实页面关闭验收归原 context history markers 场景。
+
+默认入口合同装具模拟原 Controller 隐藏时同步释放 Provider lifetime，并在无 selectedItems 时取消令牌；符号行按钮通过原 Picker 事件经过异步 resolve，分别核打开后关闭和 Esc 取消。真实 Trace 场景使用原 navigateBack／navigateForward 在同 Thread 的两处精确命中间导航，核实际 locate 请求和可见原文，不预写历史栈。
+
+发起组合同覆盖空组及模式转接，符号 Provider 的当前活动组与显式发起组必须不同。真实 Trace 场景关闭定位后通过原分屏命令复制 Pane 视图态，核无新增 locate 请求且不恢复已关闭的定位。
+
+大纲加载取消合同实例化真实 ChatSurface，只用子类替换渲染出口及具名阅读控制器，核临时卸下／重新挂载、立即恢复展示、恢复位置仅执行一次，以及后续接受替换旧恢复；不将宿主边界检查称作真实 Gateway 页面验收。
+
+Thread 视图态合同运行真实 Pane setInput／clearInput、ChatSurface 和原 memento；仅路由解析、工作台服务和内存 Storage 为具名依赖边界。核标签切回、关闭重开、组隔离、原 restoreViewState 开关、明确定位优先及恢复事件原因；不代替页面重载和真实 Gateway 验收。
+
+阅读恢复合同分别核控制器已挂载和延迟挂载：PROGRAMMATIC 只恢复位置且不切换展示，NAVIGATION 才进入聊天并采用主动定位；通过真实 ChatSurface 的统一入口验证，不以具名控制器证明实际日志页或浏览器重载验收。

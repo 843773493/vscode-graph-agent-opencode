@@ -73,9 +73,9 @@ export function compactInternalExecutionBodies(executions: readonly InternalExec
       // context notice 本来就只有来源 metadata；正文始终由 inspect 按需读取。
       if (part.kind === "context_notice" || part.bodyEvicted || retained.has(part.source.item_id ?? "")) return part;
       changed = true;
-      return { part_id: part.part_id, kind: part.kind, projection: part.projection,
-        status: part.status, source: part.source, bodyEvicted: true as const };
+      return { part_id: part.part_id, kind: part.kind, projection: "summary" as const,
+        status: part.status, source: part.source, tool_call_id: part.tool_call_id, tool_name: part.tool_name, bodyEvicted: true as const };
     });
-    return changed ? { ...execution, display_parts, response_parts } : execution;
+    return changed ? { ...execution, activityOutline: undefined, display_parts, response_parts } : execution;
   });
 }

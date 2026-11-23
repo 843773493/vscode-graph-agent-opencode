@@ -1,7 +1,8 @@
+import { TranscriptTestView } from "../../../tests/fixtures/transcriptView";
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import ChatTurn, { areChatTurnPropsEqual, type ChatTurnProps } from "./ChatTurn";
+import OriginalChatTurn, { areChatTurnPropsEqual, type ChatTurnProps } from "./ChatTurn";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
@@ -164,3 +165,5 @@ describe("ChatTurn memo 比较", () => {
     )).toBe(false);
   });
 });
+
+function ChatTurn(props: React.ComponentProps<typeof OriginalChatTurn>) { return <TranscriptTestView><OriginalChatTurn {...props} /></TranscriptTestView>; }

@@ -88,8 +88,11 @@ async def test_activity_handler_failure_degrades_detail_only(
     assert isinstance(detail_error, str)
     assert "PermissionError" in detail_error
     assert "errno=13" in detail_error
-    assert native_path not in detail_error
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert "reason=" + str(error) in detail_error
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert str(error) in diagnostic.getMessage()
+    assert "_normalize" in diagnostic.getMessage()
 
 
 @pytest.mark.asyncio

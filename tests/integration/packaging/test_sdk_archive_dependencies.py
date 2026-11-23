@@ -18,6 +18,8 @@ def sdk_archive(request: pytest.FixtureRequest) -> tuple[str, Path, str]:
     """正式构建一次不可变归档，各场景只破坏自己的副本。"""
     language = request.param
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     output = context.run_root / "runtime" / "sdk"
     command = ["bun", "--eval", (
         'import { buildPluginSdk } from "./scripts/plugins/build-sdk.mjs"; '
@@ -25,8 +27,8 @@ def sdk_archive(request: pytest.FixtureRequest) -> tuple[str, Path, str]:
         'language: process.argv[1], outputRoot: process.argv[2]})));'
     ), language, str(output)]
     result = subprocess.run(command, cwd=Path.cwd(), capture_output=True, text=True, timeout=60, check=False)
-    (context.artifacts_dir / f"{language}-build.stdout.log").write_text(result.stdout)
-    (context.artifacts_dir / f"{language}-build.stderr.log").write_text(result.stderr)
+    (artifacts / f"{language}-build.stdout.log").write_text(result.stdout)
+    (artifacts / f"{language}-build.stderr.log").write_text(result.stderr)
     assert result.returncode == 0, result.stderr
     built = json.loads(result.stdout)
     return language, Path(built["archive"]), built["version"]

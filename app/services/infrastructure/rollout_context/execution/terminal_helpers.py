@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionTerminalResult,
+)
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,
@@ -14,6 +18,7 @@ from app.domain.itemized.identity.tool_call_identity import (
 )
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
+    load_committed_storage_commit,
     strict_non_negative_int,
     strict_optional_non_negative_int,
     strict_text,
@@ -100,8 +105,57 @@ def execution_lost_tool_results(
     return (*items, *recovered)
 
 
+def read_terminal_result(
+    connection: sqlite3.Connection, *, execution_id: str, turn_id: str | None,
+) -> ExecutionTerminalResult | None:
+    """由已校验 owner 的同一快照，按原稳定提交键定位执行结果。"""
+    subject = turn_id or execution_id
+    prefix = (
+        f"terminal:{turn_id}:{execution_id}:"
+        if turn_id is not None else f"internal-terminal:{execution_id}:"
+    )
+    row = connection.execute(
+        "SELECT commit_id FROM storage_commits WHERE subject_id=? "
+        "AND commit_kind='terminal_convergence' AND status='committed' "
+        "AND (idempotency_key=?||outcome OR idempotency_key=?) "
+        "ORDER BY commit_id DESC LIMIT 1",
+        (subject, prefix, f"execution-lost:{turn_id}:{execution_id}"),
+    ).fetchone()
+    if row is None:
+        return None
+    commit = load_committed_storage_commit(connection, commit_id=row[0])
+    metadata = json.loads(commit.metadata_json)
+    failure = metadata.get("failure")
+    if failure is not None and (
+        not isinstance(failure, dict)
+        or not isinstance(failure.get("code"), str)
+        or not isinstance(failure.get("message"), str)
+    ):
+        raise RuntimeError("terminal convergence failure 合同损坏")
+    if commit.outcome in {"completed", "completed_empty"} and failure is not None:
+        raise RuntimeError("成功 terminal convergence 不得携带 failure")
+    return ExecutionTerminalResult(commit.commit_id, strict_text(commit.outcome, field="terminal outcome"), failure, bool(metadata.get("after_interrupt_requested", False)))
+
+
 class RolloutTerminalProjectionMixin:
     """只负责 terminal projection 所需的 durable item/view 辅助读取。"""
+
+    def execution_terminal_result(
+        self, admission: ExecutionAdmission, *, checkpoint_ns: str = "",
+        connection: sqlite3.Connection | None = None,
+    ) -> ExecutionTerminalResult | None:
+        """按精确准入读取原终态提交；调用方可传入历史的同一只读快照。"""
+        with self._storage.read_connection(
+            admission.session_id, admission.thread_id, checkpoint_ns, connection=connection,
+        ) as reader:
+            stored = self.execution_admission(
+                admission.session_id, thread_id=admission.thread_id,
+                execution_id=admission.execution_id, checkpoint_ns=checkpoint_ns,
+                writer_connection=reader,
+            )
+            if stored != admission:
+                raise ValueError("terminal result 与 execution admission 归属冲突")
+            return read_terminal_result(reader, execution_id=admission.execution_id, turn_id=admission.turn_id)
 
     def _ensure_active_view_turn(
         self,

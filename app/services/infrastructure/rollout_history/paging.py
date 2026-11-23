@@ -43,7 +43,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
         projection_epoch = indexed.projection_epoch
         snapshot = indexed.snapshot
         configured = policy or default_history_loading_config()
-        if request.turn_ids is not None and request.cursor is not None:
+        if request.turn_ids is not None and request.cursor is not None and "activity_outline" not in (request.include or ()) :
             raise InvalidTurnCursorError("按 turn_ids 加载详情不能使用历史分页游标")
         bounds = (
             self._context_reader.read_history_snapshot_bounds(snapshot, indexed.chain)
@@ -103,6 +103,26 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             )
         include = binding.effective_include
 
+        if binding.query_mode == "activity" and binding.activity_turn_id is not None:
+            rows = self._context_reader.read_context_turn_ids(snapshot, indexed.chain, [binding.activity_turn_id])
+            if not rows:
+                raise StaleTurnReferenceError(session_id=session_id, turn_ids=[binding.activity_turn_id])
+            projections = self._context_reader.read_turn_projections(snapshot, indexed.chain, [binding.activity_turn_id],
+                outline=True, activity_limit=_INTERNAL_HISTORY_PAGE_LIMIT,
+                activity_before=(decoded_cursor.logical_item_ordinal, decoded_cursor.stage) if decoded_cursor else None)
+            page = self._indexed_page(session_id, [self._span_from_row(rows[0])], include=include,
+                next_cursor=None, has_more=False, projection_epoch=projection_epoch,
+                snapshot=snapshot, chain=indexed.chain, activity_limit=_INTERNAL_HISTORY_PAGE_LIMIT,
+                projections=projections)
+            continuation = projections[binding.activity_turn_id].get("activity_continuation")
+            if continuation is not None:
+                cursor = self._indexed_before_cursor(session_id, indexed, binding=binding,
+                    stage=continuation[1], turn_ordinal=None,
+                    logical_item_ordinal=continuation[0])
+                return page.model_copy(update={"before_cursor": cursor, "has_before": True,
+                    "next_cursor": cursor, "has_more": True})
+            return page
+
         if binding.execution_id is not None:
             internal_page = self._read_internal_page(
                 snapshot, indexed.chain, include=include, direction="before",
@@ -111,7 +131,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound,
                 execution_id=binding.execution_id,
-                **({"item_ids": tuple(request.execution_item_ids)} if request.execution_item_ids is not None else {}),
+                **({"item_ids": tuple(request.item_ids)} if request.item_ids is not None else {}),
             )
             before_cursor = self._indexed_before_cursor(
                 session_id, indexed, binding=binding, stage=0, turn_ordinal=None,
@@ -123,6 +143,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 has_before=internal_page.has_more, projection_epoch=projection_epoch,
                 snapshot=snapshot, chain=indexed.chain,
                 internal_entries=internal_page.entries,
+                anchor_context=request.anchor_context,
             )
 
         if request.turn_ids is not None:
@@ -155,6 +176,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 selected,
                 include=include,
                 tool_call_ids=tuple(request.tool_call_ids or ()),
+                item_ids=tuple(request.item_ids) if request.item_ids is not None else None,
                 next_cursor=None,
                 has_more=False,
                 projection_epoch=projection_epoch,
@@ -311,6 +333,40 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             )
 
         if request.direction == "around":
+            if binding.anchor_item_id is not None:
+                item_ordinal, nearby_turn_id = self._context_reader.read_item_position(snapshot, indexed.chain, binding.anchor_item_id)
+                before_count = binding.window_before_turns
+                after_count = binding.window_after_turns
+                turn_rows = self._context_reader.read_context_turn_ids(snapshot, indexed.chain, [nearby_turn_id]) if nearby_turn_id else []
+                selected = [self._span_from_row(row) for row in turn_rows]
+                before_more = after_more = False
+                if selected:
+                    before_rows, before_more = self._context_reader.read_context_turn_page(snapshot, indexed.chain,
+                        direction="before", anchor_ordinal=selected[0].ordinal, upper_ordinal=bounds.upper_turn_ordinal, limit=before_count) if before_count else ([], selected[0].ordinal > 1)
+                    after_rows, after_more = self._context_reader.read_context_turn_page(snapshot, indexed.chain,
+                        direction="after", anchor_ordinal=selected[0].ordinal, upper_ordinal=bounds.upper_turn_ordinal, limit=after_count) if after_count else ([], selected[0].ordinal < bounds.upper_turn_ordinal)
+                    selected = [*[self._span_from_row(row) for row in before_rows], *selected, *[self._span_from_row(row) for row in after_rows]]
+                # Item 周围独立取两半，零 Turn 和大于256条的内部历史同样可精确定位。
+                before_page = self._read_internal_page(snapshot, indexed.chain, include=include, direction="before",
+                    anchor_logical_item_ordinal=item_ordinal+1, lower_logical_item_ordinal=None,
+                    upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                    snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound, limit=128)
+                after_page = self._read_internal_page(snapshot, indexed.chain, include=include, direction="after",
+                    anchor_logical_item_ordinal=item_ordinal, lower_logical_item_ordinal=None,
+                    upper_logical_item_ordinal=bounds.upper_logical_item_ordinal,
+                    snapshot_upper_logical_item_ordinal=binding.logical_item_read_upper_bound, limit=128)
+                has_before = before_more or before_page.has_more
+                has_after = after_more or after_page.has_more
+                before_cursor = self._indexed_before_cursor(session_id, indexed, binding=binding, stage=0,
+                    turn_ordinal=selected[0].ordinal if before_more else None,
+                    logical_item_ordinal=before_page.entries[0].logical_item_ordinal if before_page.has_more else None) if has_before else None
+                after_cursor = self._indexed_after_cursor(session_id, indexed, binding=binding, stage=0,
+                    turn_ordinal=selected[-1].ordinal if after_more else None,
+                    logical_item_ordinal=after_page.entries[-1].logical_item_ordinal if after_page.has_more else None) if has_after else None
+                return self._indexed_page(session_id, selected, include=include, next_cursor=None, has_more=False,
+                    before_cursor=before_cursor, after_cursor=after_cursor, has_before=has_before, has_after=has_after,
+                    projection_epoch=projection_epoch, snapshot=snapshot, chain=indexed.chain,
+                    internal_entries=(*before_page.entries, *after_page.entries))
             if binding.anchor_turn_id is not None:
                 anchor_rows = self._context_reader.read_context_turn_ids(
                     snapshot,
@@ -465,6 +521,8 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 include=tuple(dict.fromkeys((*include, "tool_call", "tool_result")))
                 if located_tool_call_id else include,
                 tool_call_ids=(located_tool_call_id,) if located_tool_call_id else (),
+                anchor_context=request.anchor_context,
+                context_turn_id=request.anchor_turn_id if request.anchor_context else None,
                 next_cursor=None,
                 has_more=False,
                 before_cursor=before_cursor,
@@ -507,6 +565,11 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             limit=limit,
             execution_id=execution_id,
             **({"item_ids": item_ids} if item_ids is not None else {}),
+            # 摘要也需要活动身份，才能展开只有普通思考的内部执行；不先读取其正文。
+            outline="activity_outline" in include or (
+                bool({"reasoning_summary", "tool_summary", "final_response"}.intersection(include))
+                and not {"text", "assistant", "assistant_text", "reasoning_detail", "tool_call", "tool_result"}.intersection(include)
+            ),
         )
 
     @staticmethod

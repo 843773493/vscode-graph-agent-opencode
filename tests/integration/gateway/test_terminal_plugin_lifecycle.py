@@ -115,12 +115,14 @@ def _receive_output(socket, marker: str, *, timeout_seconds: float = 15) -> dict
     raise TimeoutError(f"Terminal 没有输出命令标记 {marker!r}: {observed}")
 
 
-def _wait_for_close(socket, *, timeout_seconds: float = 10) -> None:
+def _wait_for_close(socket, *, timeout_seconds: float = 10, expected_code: int | None = None) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
             socket.recv(timeout=max(0.1, deadline - time.monotonic()))
-        except ConnectionClosed:
+        except ConnectionClosed as error:
+            if expected_code is not None:
+                assert error.rcvd is not None and error.rcvd.code == expected_code
             return
     raise TimeoutError("Terminal WebSocket 未在期限内观察到 owner 版本撤权")
 
@@ -370,6 +372,55 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 socket.send(json.dumps({"type": "input", "data": f"printf '{marker}\\n'\n"}))
                 output = _receive_output(socket, marker)
                 assert output["terminalId"] == resource["resource_id"]
+
+                def connect_thread(thread):
+                    current = _json(client.get(
+                        f"/api/v1/resources/{resource['resource_id']}", headers=workspace_headers,
+                    ))["data"]
+                    ticket = _json(client.post(
+                        f"/api/v1/resources/{resource['resource_id']}/transport-grant", headers=workspace_headers,
+                        json={"expected_revision": current["owner_revision"], "thread": thread},
+                    ))["data"]
+                    connection = connect(old_socket_url, open_timeout=10, close_timeout=3)
+                    connection.send(json.dumps({"type": "attach", "terminalId": resource["resource_id"],
+                                                "grantToken": ticket["grant_token"]}))
+                    assert json.loads(connection.recv(timeout=10))["type"] == "attached"
+                    return connection
+
+                thread_a = {"session_id": session["session_id"], "thread_id": session["thread_id"]}
+                peer = _json(client.post("/api/v1/sessions", headers=workspace_headers,
+                                        json={"title": "Terminal peer"}))["data"]
+                thread_b = {"session_id": peer["session_id"], "thread_id": peer["thread_id"]}
+                with connect_thread(thread_a) as socket_a:
+                    associated = _json(client.post(
+                        f"/api/v1/resources/{resource['resource_id']}/attach", headers=workspace_headers,
+                        json={"expected_revision": resource["owner_revision"], "thread": thread_b},
+                    ))["data"]
+                    # 新增关联不踢掉仍合法的Thread和workspace面板连接。
+                    marker_a = f"still-associated-{time.time_ns()}"
+                    socket_a.send(json.dumps({"type": "input", "data": f"printf '{marker_a}\\n'\n"}))
+                    _receive_output(socket_a, marker_a)
+                    _receive_output(socket, marker_a)
+                    with connect_thread(thread_b) as socket_b:
+                        detached = _json(client.post(
+                            f"/api/v1/resources/{resource['resource_id']}/detach", headers=workspace_headers,
+                            json={"expected_revision": associated["owner_revision"], "thread": thread_a},
+                        ))["data"]
+                        _wait_for_close(socket_a, expected_code=4009)
+                        denied = client.post(
+                            f"/api/v1/resources/{resource['resource_id']}/transport-grant", headers=workspace_headers,
+                            json={"expected_revision": detached["owner_revision"], "thread": thread_a},
+                        )
+                        assert denied.status_code == 409, denied.text
+                        marker_b = f"surviving-association-{time.time_ns()}"
+                        socket_b.send(json.dumps({"type": "input", "data": f"printf '{marker_b}\\n'\n"}))
+                        _receive_output(socket_b, marker_b)
+                        _receive_output(socket, marker_b)
+                        _json(client.post(
+                            f"/api/v1/resources/{resource['resource_id']}/detach", headers=workspace_headers,
+                            json={"expected_revision": detached["owner_revision"], "thread": thread_b},
+                        ))
+                        _wait_for_close(socket_b, expected_code=4009)
                 page = _run_terminal_page(
                     project_root=project_root,
                     context=context,
@@ -410,6 +461,9 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 }))
                 stale_grant = json.loads(stale_socket.recv(timeout=5))
                 assert stale_grant["type"] == "error", stale_grant
+                with pytest.raises(ConnectionClosed) as handshake_failed:
+                    stale_socket.recv(timeout=5)
+                assert handshake_failed.value.rcvd.code == 4008
                 stale_socket.close()
 
                 recovered_grant = _json(client.post(

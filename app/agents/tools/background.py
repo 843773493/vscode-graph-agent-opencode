@@ -5,7 +5,10 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from app.abstractions.background_mailbox import BackgroundMailboxProtocol
-from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundToolResultIdentity,
@@ -15,15 +18,15 @@ from app.domain.itemized.identity.tool_call_identity import provider_tool_call_i
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 
-def _thread(invocation_context: ToolInvocationContext, session_id: str) -> str:
+def _thread(invocation_context: ToolInvocationContext, session_id: str | None) -> ThreadRuntimeBinding:
     binding = invocation_context.thread_binding
     if binding is None or binding.session_id != session_id:
         raise RuntimeError("后台工具缺少匹配的精确 ThreadRuntimeBinding")
-    return binding.thread_id
+    return binding
 
 
 def create_system_time_emitter_tool(
-    session_id: str,
+    session_id: str | None,
     agent_id: str = "default",
     *,
     background_task_registry: BackgroundTaskRegistry,
@@ -40,8 +43,9 @@ def create_system_time_emitter_tool(
         if interval_seconds <= 0 or message_count <= 0:
             raise ValueError("interval_seconds 和 message_count 必须大于 0")
         task_id = "bgt_" + invocation_context.require_operation_id("background_time_emitter").removeprefix("cop_")
+        binding = _thread(invocation_context, session_id)
         handle = await background_task_registry.spawn(
-            session_id=session_id, thread_id=_thread(invocation_context, session_id),
+            session_id=binding.session_id, thread_id=binding.thread_id,
             agent_id=agent_id, task_id=task_id,
             descriptor=BackgroundTaskDescriptor(
                 kind="emit_system_time_messages", version=1,
@@ -56,7 +60,7 @@ def create_system_time_emitter_tool(
 
 
 def create_background_message_collection_tool(
-    session_id: str,
+    session_id: str | None,
     agent_id: str = "default",
     *,
     background_mailbox: BackgroundMailboxProtocol,
@@ -72,8 +76,9 @@ def create_background_message_collection_tool(
         stop_on_interrupt: bool = True,
     ) -> dict[str, Any]:
         """持续收集当前 thread 与 agent selector 的后台消息。"""
+        binding = _thread(invocation_context, session_id)
         batch = await background_mailbox.collect(
-            session_id, _thread(invocation_context, session_id), agent_id,
+            binding.session_id, binding.thread_id, agent_id,
             consumption_id=invocation_context.require_operation_id("background_collect"),
             source_id=source_id, after_message_id=after_message_id,
             timeout_seconds=timeout_seconds, poll_interval_seconds=poll_interval_seconds,

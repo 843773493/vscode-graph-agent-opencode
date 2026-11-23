@@ -29,7 +29,8 @@ export async function changesetContract(mode, kind = 'changeset') {
     async openEditor(input, options, group) { opened.push({ owner: { ...input.owner }, options, group }); } };
   class Pane extends ThreadPane {
     constructor(index) {
-      super({ id: index + 7 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None });
+      super({ id: index + 7 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None, getObject: () => ({}) },
+        { getValue: () => undefined, onDidChangeConfiguration: Event.None });
       this.target = { input: origin, conversation: { captureDraft: () => ({ append: async text => drafts[index].push(text) }) } };
     }
     get threadTarget() { return this.target; }

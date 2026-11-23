@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import tempfile
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from pathlib import Path
 
 import httpx
 
 from app.core.atomic_fs import native_io_path
-from app.core.phase_observer import observe_phase
+from app.core.phase_observer import observe_phase, observe_phase_sync
 
 from .assets import (
     ModelStreamCassette,
@@ -24,7 +24,7 @@ from .protocols import StreamProtocolCodec, get_protocol_codec
 from .replay import ReplayCoordinator
 
 
-class _ReplayByteStream(httpx.AsyncByteStream):
+class _ReplayByteStream(httpx.AsyncByteStream, httpx.SyncByteStream):
     def __init__(
         self, frames: tuple[StreamFrame, ...], codec: StreamProtocolCodec,
         model_call_id: str | None,
@@ -43,6 +43,17 @@ class _ReplayByteStream(httpx.AsyncByteStream):
             yield self._codec.encode(frame)
 
     async def aclose(self) -> None:
+        self._closed = True
+
+    def __iter__(self) -> Iterator[bytes]:
+        for index, frame in enumerate(self._frames):
+            if self._closed:
+                return
+            if self._model_call_id is not None:
+                observe_phase_sync(self._model_call_id, f"model.response_frame/{index}")
+            yield self._codec.encode(frame)
+
+    def close(self) -> None:
         self._closed = True
 
 
@@ -78,13 +89,13 @@ class _SSEFrameRecorder:
         )
 
     def _frame_end(self) -> int | None:
-        lf_end = bytes(self._buffer).find(b"\n\n")
-        crlf_end = bytes(self._buffer).find(b"\r\n\r\n")
+        lf_end = self._buffer.find(b"\n\n")
+        crlf_end = self._buffer.find(b"\r\n\r\n")
         positions = [position for position in (lf_end, crlf_end) if position >= 0]
         return min(positions) if positions else None
 
     def _delimiter_length(self, end: int) -> int:
-        return 4 if bytes(self._buffer[end : end + 4]) == b"\r\n\r\n" else 2
+        return 4 if self._buffer[end : end + 4] == b"\r\n\r\n" else 2
 
     def _parse_frame(self, raw_frame: bytes) -> None:
         text = raw_frame.decode("utf-8")
@@ -107,13 +118,13 @@ class _SSEFrameRecorder:
             self.saw_done = True
 
 
-class _RecordingByteStream(httpx.AsyncByteStream):
+class _RecordingByteStream(httpx.AsyncByteStream, httpx.SyncByteStream):
     def __init__(
         self,
-        upstream: httpx.AsyncByteStream,
+        upstream: httpx.AsyncByteStream | httpx.SyncByteStream,
         recorder: _SSEFrameRecorder,
         complete: Callable[[], None],
-        incomplete: Callable[[BaseException | None], None],
+        incomplete: Callable[[], None],
     ) -> None:
         self._upstream = upstream
         self._recorder = recorder
@@ -126,19 +137,54 @@ class _RecordingByteStream(httpx.AsyncByteStream):
             async for chunk in self._upstream:
                 self._recorder.feed(chunk)
                 yield chunk
-            self._recorder.finish()
-            self._complete()
-            self._finished = True
-        except BaseException as error:
-            self._incomplete(error)
-            self._finished = True
+            self._finish()
+        except BaseException:
+            self._interrupt()
             raise
 
     async def aclose(self) -> None:
+        try:
+            self._close_recording()
+        finally:
+            await self._upstream.aclose()
+
+    def __iter__(self) -> Iterator[bytes]:
+        try:
+            for chunk in self._upstream:
+                self._recorder.feed(chunk)
+                yield chunk
+            self._finish()
+        except BaseException:
+            self._interrupt()
+            raise
+
+    def close(self) -> None:
+        try:
+            self._close_recording()
+        finally:
+            self._upstream.close()
+
+    def _finish(self) -> None:
         if not self._finished:
-            self._incomplete(None)
+            self._recorder.finish()
+            self._complete()
             self._finished = True
-        await self._upstream.aclose()
+
+    def _interrupt(self) -> None:
+        if not self._finished:
+            self._finished = True
+            self._incomplete()
+
+    def _close_recording(self) -> None:
+        # SDK 可在终止帧后主动关闭，无需等待上游连接读尽才承认完成。
+        try:
+            if self._recorder.saw_done:
+                self._finish()
+            else:
+                self._interrupt()
+        except BaseException:
+            self._interrupt()
+            raise
 
 
 def _request_body(request: httpx.Request) -> dict[str, object]:
@@ -204,7 +250,7 @@ def _write_json_atomically(path: Path, payload: Mapping[str, object]) -> None:
     temporary_path.replace(path)
 
 
-class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
+class ModelStreamHTTPTransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """LiteLLM 使用的 HTTPX transport：replay 不触网，record 旁路采集。"""
 
     def __init__(
@@ -216,6 +262,7 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         artifact_root: Path,
         matching_policy: str = "strict",
         live_transport: httpx.AsyncBaseTransport | None = None,
+        sync_live_transport: httpx.BaseTransport | None = None,
     ) -> None:
         if mode not in {"record", "replay"}:
             raise ModelStreamError(f"不支持的 model stream transport mode: {mode!r}")
@@ -244,9 +291,8 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
             scenario_id=scenario.scenario_id,
             policy=replay_policy,  # type: ignore[arg-type]
         )
-        self._live_transport = (
-            live_transport if live_transport is not None else httpx.AsyncHTTPTransport()
-        ) if mode == "record" else None
+        self._live_transport = live_transport if mode == "record" else None
+        self._sync_live_transport = sync_live_transport if mode == "record" else None
         self._call_count = 0
         self._request_urls: list[str] = []
         self._incomplete_artifacts: list[Path] = []
@@ -268,35 +314,60 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
     def incomplete_artifacts(self) -> tuple[Path, ...]:
         return tuple(self._incomplete_artifacts)
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(
+        self, request: httpx.Request, *, live_transport: httpx.AsyncBaseTransport | None = None,
+    ) -> httpx.Response:
         self._call_count += 1
         self._request_urls.append(str(request.url))
         if self._mode == "replay":
-            interaction = self._coordinator.select(request)
-            if self._replay_policy == "call_identity":
-                identity = current_model_call_identity()
-                _write_json_atomically(self._artifact_root / f"{identity.model_call_id}.json", {
-                    "identity": identity.to_dict(), "interaction_index": interaction.index,
-                    "scenario_id": self._scenario.scenario_id,
-                    "request": _request_body(request),
-                })
-                await observe_phase(identity.model_call_id, "model.response_ready")
-            codec = get_protocol_codec(interaction.protocol)
-            codec.require_runtime()
-            return httpx.Response(
-                status_code=interaction.response.status,
-                headers=interaction.response.headers,
-                stream=_ReplayByteStream(
-                    interaction.response.frames, codec,
-                    identity.model_call_id if self._replay_policy == "call_identity" else None,
-                ),
-                request=request,
-            )
-        if self._live_transport is None:
-            raise RuntimeError("record transport 缺少 live HTTP transport")
+            response, model_call_id = self._replay_response(request)
+            if model_call_id is not None:
+                await observe_phase(model_call_id, "model.response_ready")
+            return response
+        live = live_transport if live_transport is not None else self._live_transport
+        if live is None:
+            live = self._live_transport = httpx.AsyncHTTPTransport()
+        upstream = await live.handle_async_request(request)
+        return self._record_response(request, upstream)
+
+    def handle_request(
+        self, request: httpx.Request, *, live_transport: httpx.BaseTransport | None = None,
+    ) -> httpx.Response:
+        self._call_count += 1
+        self._request_urls.append(str(request.url))
+        if self._mode == "replay":
+            response, model_call_id = self._replay_response(request)
+            if model_call_id is not None:
+                observe_phase_sync(model_call_id, "model.response_ready")
+            return response
+        live = live_transport if live_transport is not None else self._sync_live_transport
+        if live is None:
+            live = self._sync_live_transport = httpx.HTTPTransport()
+        return self._record_response(request, live.handle_request(request))
+
+    def _replay_response(self, request: httpx.Request) -> tuple[httpx.Response, str | None]:
+        interaction = self._coordinator.select(request)
+        model_call_id = None
+        if self._replay_policy == "call_identity":
+            identity = current_model_call_identity()
+            model_call_id = identity.model_call_id
+            _write_json_atomically(self._artifact_root / f"{model_call_id}.json", {
+                "identity": identity.to_dict(), "interaction_index": interaction.index,
+                "scenario_id": self._scenario.scenario_id,
+                "request": _request_body(request),
+            })
+        codec = get_protocol_codec(interaction.protocol)
+        codec.require_runtime()
+        return httpx.Response(
+            status_code=interaction.response.status,
+            headers=interaction.response.headers,
+            stream=_ReplayByteStream(interaction.response.frames, codec, model_call_id),
+            request=request,
+        ), model_call_id
+
+    def _record_response(self, request: httpx.Request, upstream: httpx.Response) -> httpx.Response:
         if self._codec is None:
             raise RuntimeError("record transport 缺少单一 protocol codec")
-        upstream = await self._live_transport.handle_async_request(request)
         recorder = _SSEFrameRecorder(self._codec)
         asset_id = str(self._scenario.cassette.metadata["asset_id"])
 
@@ -311,8 +382,7 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
             output_path = self._artifact_root / f"{asset_id}-{time.time_ns()}.json"
             _write_json_atomically(output_path, cassette.raw)
 
-        def incomplete(error: BaseException | None) -> None:
-            del error
+        def incomplete() -> None:
             output_path = self._artifact_root / f"{asset_id}-{time.time_ns()}.incomplete.json"
             diagnostic: dict[str, object] = {
                 "schema_version": 1,
@@ -340,5 +410,14 @@ class ModelStreamHTTPTransport(httpx.AsyncBaseTransport):
         )
 
     async def aclose(self) -> None:
-        if self._live_transport is not None:
-            await self._live_transport.aclose()
+        try:
+            if self._live_transport is not None:
+                await self._live_transport.aclose()
+                self._live_transport = None
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self._sync_live_transport is not None:
+            self._sync_live_transport.close()
+            self._sync_live_transport = None

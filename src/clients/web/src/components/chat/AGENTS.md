@@ -8,11 +8,11 @@ chat/
 ├── turn/                    # 单轮消息组合、用户动作和 Assistant response
 ├── ChatHistory*             # 历史加载、空状态和投影提示
 ├── transcriptItems.ts       # 把会话投影整理成可虚拟化的 transcript 项
-├── useTurnVirtualScroller.ts # 跨 turn 的窗口化渲染与滚动锚点
+├── useTranscriptVirtualScroller.ts # 跨 turn 的窗口化渲染与滚动锚点
 ├── useTurnBodyWindow.ts      # 将实际挂载范围交给历史 owner，保留正文占位高度
-├── useTurnAnchorNavigation.ts
+├── useTranscriptNavigation.ts
 ├── InternalExecutionTranscriptItem.tsx
-└── MarkdownContent.tsx、ThinkingSection.tsx、ToolRow.tsx 等共享展示组件
+└── MarkdownContent.tsx、TranscriptViewContext.tsx、ToolRow.tsx 等共享展示组件
 ```
 
 测试与被测组件同目录；跨多个展示组件的组合测试留在 `chat/` 根目录。
@@ -38,3 +38,5 @@ chat/
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。
 
 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+阅读位置仍经原 onViewStateChange 保存；同时传出 scroll／navigation／layout 来源，供宿主区分用户滚动、定位完成与布局保持，不新增位置持久化或原生 Workbench 依赖。预览继续不发布保存事件。

@@ -26,7 +26,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.services.infrastructure import workspace_service as service_module
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_service import WorkspaceService
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ async def download_case(tmp_path, monkeypatch, request):
     app.include_router(workspace_api.router, prefix="/api/v1")
     app.dependency_overrides[get_workspace_service] = lambda: service
     app.dependency_overrides[verify_local_token] = lambda: "test-token"
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
+    port = integration_ports_for_file(Path(request.node.path)).port(0)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="error", access_log=False,
         log_config=None, lifespan="off",

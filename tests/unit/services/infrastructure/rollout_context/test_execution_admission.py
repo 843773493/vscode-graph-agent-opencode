@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
@@ -679,3 +680,21 @@ def test_job_admission_lookup_keeps_session_owner_and_nullable_turn(
             thread_id=admission.thread_id,
             job_id=admission.job_id,
         ) == admission
+
+
+def test_turnless_failure_is_kept_in_original_terminal_commit(saver: RolloutCheckpointSaver) -> None:
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    intent = InternalExecutionIntent("msg-internal-failure", "execution-internal-failure", "admit-internal-failure")
+    admission = saver.admit_internal_execution(SESSION_ID, thread_id=thread, job_id="job-internal-failure",
+        intent=intent, message=_internal_notice(intent.message_id))
+    failure = {"code": "execution_error", "message": "内部执行配置无效", "details": {"error_type": "ValueError"}}
+    commit = saver.converge_execution(SESSION_ID, thread_id=thread, turn_id=None,
+        execution_id=intent.execution_id, outcome="failed", turn_status=None, failure=failure)
+    result = saver.execution_terminal_result(admission)
+    assert result is not None and result.commit_id == commit and result.failure == failure
+    with saver._storage.storage.read_connection(SESSION_ID, thread) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone()[0] == 0
+        metadata, = connection.execute("SELECT metadata_json FROM storage_commits WHERE commit_id=?", (commit,)).fetchone()
+        assert json.loads(metadata)["failure"] == failure
+    assert saver.converge_execution(SESSION_ID, thread_id=thread, turn_id=None,
+        execution_id=intent.execution_id, outcome="failed", turn_status=None, failure=failure) == commit

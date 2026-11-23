@@ -16,6 +16,7 @@ button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .5; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.anchored-overlay-positioner { z-index: 2575; width: max-content; max-width: calc(100vw - 16px); outline: none; }
 .react-session-overlays .workspace-dialog-backdrop { position: fixed; padding: 16px; }
 .react-session-overlays .workspace-dialog { max-width: 100%; }
 .react-session-content [role=alert] { color: var(--vscode-errorForeground); }

@@ -24,7 +24,7 @@
 | 按 Node/Bun 测试框架运行 Browser、Terminal 的 JS 单测 | `bun run test:matrix -- --suite=unit-workspace-services` |
 | 验证 Browser 动态元素引用与点击（真实 Chromium） | `bun run test:matrix -- --suite=integration-browser-element-references` |
 | 验证 Browser 表单检查点捕获与恢复（真实 Chromium） | `bun run test:matrix -- --suite=integration-browser-checkpoint-form-state` |
-| 运行 Web 真实 E2E 全目录 | `bun run test:matrix -- --suite=e2e-web` |
+| 运行 Web E2E 业务流程目录（模型方式由场景配置决定） | `bun run test:matrix -- --suite=e2e-web` |
 | 定向验证 Web 聊天与 Goal | `BOXTEAM_E2E_SECTION8_FOCUS=basic_chat,goal_owner bun run test:matrix -- --suite=integration-web-conversation-lifecycle` |
 | 显式运行 Web Section 8 全部场景（耗时数小时） | `BOXTEAM_E2E_SECTION8_FOCUS=default bun run test:matrix -- --suite=integration-web-conversation-lifecycle` |
 | 聚焦附件复制 Web 场景 | `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment bun run test:matrix -- --suite=integration-web-conversation-lifecycle` |
@@ -72,7 +72,7 @@ Section 8 日常验证按改动影响选择场景，完整覆盖可以由各组�
 
 - `tests/unit/`：单模块或纯函数测试。
 - `tests/contracts/`：HTTP、共享实时 WebSocket／SSE、生成类型和辅助服务公开协议契约。
-- `tests/integration/`：关键链路含 stub、fake、mock、固定响应、替代服务或替代运行面的组合测试。
-- `tests/e2e/`：不含替身的真实进程、真实传输和真实外部依赖链路。
+- `tests/integration/`：生产组件之间的协作、协议与故障边界测试，可以使用真实依赖或明确的外部替身。
+- `tests/e2e/`：用户主动说明的完整业务流程验收，用例注明入口、步骤和可观察结果；允许真实模型、上游录制重放或手工 SSE。
 
-缺少 E2E 真实前置条件时必须明确失败、跳过或报告 `UNMET_PREREQUISITE`，不得自动运行 Integration 替身版本。
+目录按验证目标归属，模型参数不改变分类。同一场景复用现有 fixture、transport 与驱动，不为真实／回放复制测试。运行产物注明实际模型模式、响应资产来源及被替换边界；实时录制仍调用真实模型，重放和手工 SSE 不证明真实 Provider 可用。缺少已选模式的前置条件时必须明确失败、跳过或报告 `UNMET_PREREQUISITE`，不得静默切换模式。现有归属不明确的测试暂留原位，不批量搬迁。

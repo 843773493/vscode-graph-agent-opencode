@@ -132,6 +132,17 @@ function aroundHarness(port: number, respond: (request: AroundRequest) => Respon
 }
 
 describe("指定 Turn 的真实 history reader", () => {
+  test("上下文定位选择传给原 history 请求；没有目标标记时立即失败，不改写当前窗口", async () => {
+    const context = {model_call_id:"target-call",anchor:"before_model_call"};
+    const harness = aroundHarness(9151, () => aroundResponse(aroundPage("turn-anchor")));
+    await act(async () => { await expect(harness.load("turn-anchor",undefined,undefined,undefined,undefined,undefined,context))
+      .rejects.toThrow(); });
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.requests[0].body.anchor_context).toEqual(context);
+    expect(harness.timeline().orderedTurnIds).toEqual([]);
+    expect(harness.timeline().loadingBefore).toBe(false);
+    expect(harness.timeline().loadingAfter).toBe(false);
+  });
   test("消息引用沿 around 核验，定位原文只返回调用方而不进入时间线缓存", async () => {
     const located: TurnMessageLocationDTO = { turn_id: "turn-found", role: "user", content: "😀定位词",
       reference: { item_id: "item-found", content_hash: "opaque", start_codepoint: 1, end_codepoint: 4 } };

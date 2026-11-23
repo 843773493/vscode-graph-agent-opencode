@@ -231,7 +231,7 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         )
         service = context.session_communication_service
         binding = context.invocation_context.thread_binding
-        if service is None or binding is None or binding.session_id != context.session_id:
+        if service is None or binding is None:
             raise RuntimeError("Session read 缺少持久通信 owner 与精确 source thread")
         return await _result_json(service.read(
             session_id=binding.session_id, thread_id=binding.thread_id,

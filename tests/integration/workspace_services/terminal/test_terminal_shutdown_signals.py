@@ -23,6 +23,7 @@ from tests.harness.python.terminal_backend import (
     stop_terminal_plugin_service,
 )
 from tests.harness.python.terminal_state import read_terminal_state
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本组核对Linux原生PTY及POSIX信号；不代替Windows SIGBREAK验收")
@@ -31,7 +32,7 @@ TerminalService = tuple[TestRunContext, TerminalPluginService, str, str, Path, P
 
 @pytest.fixture
 def terminal_service(
-    integration_backend_port: int, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+    integration_backend_port: int, integration_service_ports: TestFilePorts, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ) -> Iterator[TerminalService]:
     with TestRunContext.from_test_file(Path(request.node.path)) as run:
         root = prepare_default_test_workspace(
@@ -47,7 +48,7 @@ def terminal_service(
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
             env.setenv("BOXTEAM_TEST_TERMINAL_CONTROL", str(control))
             process = start_terminal_plugin_service(
-                backend_port=integration_backend_port + 66, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
+                backend_port=integration_service_ports.port(46), workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
         try:
             yield run, process, process.http_url, process.workspace_id, control, root

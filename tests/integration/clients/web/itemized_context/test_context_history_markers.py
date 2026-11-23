@@ -35,7 +35,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
     chat_loop_web_assets as chat_loop_web_assets,  # noqa: PLC0414
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
@@ -57,7 +57,7 @@ async def test_interrupt_continue_and_reopen_context_markers(
     backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=backend_url,
         port=ports.port(20), boxteam_home=chat_backend_boxteam_home,
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(chat_loop_web_assets)})

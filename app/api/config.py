@@ -47,6 +47,8 @@ from app.schemas.internal_v2.config import (
 from app.schemas.internal_v2.llm_probe import (
     LlmDiscoverRequest,
     LlmDiscoverResultDTO,
+    LlmModelCatalogDTO,
+    LlmProvidersDTO,
     LlmTestDeltaDTO,
     LlmTestRequest,
     LlmTestResultDTO,
@@ -54,6 +56,10 @@ from app.schemas.internal_v2.llm_probe import (
 )
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
+from app.services.infrastructure.config.llm_catalog import (
+    list_catalog_models,
+    list_catalog_providers,
+)
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
     validate_private_input,
@@ -67,6 +73,23 @@ from app.services.infrastructure.config_service import ConfigService
 from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+@router.get("/llm/providers", response_model=APIResponse[LlmProvidersDTO], summary="读取 LiteLLM 完整 Provider 目录及现有连接模板")
+async def get_llm_providers(
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[LlmProvidersDTO]:
+    return APIResponse(data=await asyncio.to_thread(list_catalog_providers), request_id=request_id)
+
+
+@router.get("/llm/catalog", response_model=APIResponse[LlmModelCatalogDTO], summary="读取 LiteLLM 本地模型能力目录")
+async def get_llm_catalog(
+    provider: Annotated[str, Query(min_length=1, max_length=64)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[LlmModelCatalogDTO]:
+    return APIResponse(data=await asyncio.to_thread(list_catalog_models, provider), request_id=request_id)
 
 
 @router.post("/llm/discover", response_model=APIResponse[LlmDiscoverResultDTO], summary="发现当前模型连接的上游目录")

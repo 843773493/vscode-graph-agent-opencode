@@ -20,7 +20,7 @@ from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tool_result_text import extract_tool_result_text, tool_output_status
-from app.core.failures import report_failure
+from app.core.failures import failure_detail
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
@@ -74,9 +74,6 @@ from app.services.orchestration.event_stream.tool_events import (
     stored_edit_payload,
     text_mutation_has_file_effects,
     tool_message_from_output,
-)
-from app.services.orchestration.message_stream.activities import (
-    activity_failure_message,
 )
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
@@ -695,8 +692,8 @@ async def process_agent_event_stream(
                     error = data.get("error")
                     if not isinstance(error, BaseException):
                         raise TypeError("工具错误事件缺少真实异常")
-                    failure_message = report_failure(
-                        error, detail=activity_failure_message(error, phase="tool_callback"),
+                    failure_message = failure_detail(
+                        error, stage="tool_callback", label="工具活动失败",
                     )
                     # SDK校验错误也有start/error，却没有end；不伪造ToolMessage覆盖框架处理后的结果。
                     message_stream_tool_call_ids_by_run_id.pop(run_id, None)

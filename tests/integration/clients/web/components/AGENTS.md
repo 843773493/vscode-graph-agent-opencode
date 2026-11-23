@@ -32,7 +32,7 @@ components/
 # 规范
 
 - 资源作用域覆盖准备和断言全过程：取得 Vite 后立即登记关闭，再开始监听；取得 Chromium 后立即登记关闭，再创建 context/page。准备失败同样由外层`finally`逆序清理，已有页面的业务失败截图留在场景作用域。
-- 原生临时文件与 Vite 缓存归`out/tests/integration/clients/web/components/<脚本名>/runtime/`，不写源码树内的`node_modules/.vite`或依赖系统临时目录；其他正式结果同样镜像当前测试路径。
+- 原生临时文件与 Vite 缓存归`TestRunContext.runtimeDir`（`out/tests/integration/clients/web/components/<脚本名>/runtime/<run-id>/node-<node-id>/`，独立脚本省略节点层），不写源码树内的`node_modules/.vite`或依赖系统临时目录；其他正式结果同样镜像当前测试路径。Python 包装入口须按脚本文件创建并准备 context、登记当前节点 runtime，使 JS 产物及运行目录跟随消费者保留和清理。
 - 故障测试只在准备边界注入错误，先观察装具的释放结果，再由探针兜底回收真实句柄；不能把该检查称为产品 E2E。
 - 类型检查加载真实组件及其依赖。移动装具时同步导入、类型配置、Python 入口和 suite 注册，保留原用例与业务断言。
 - Vite 组件装具直接加载源码，专用 Python 入口不先生成整站`dist`。装具的语义类型检查使用相邻`tsconfig`；产品前端改动仍按根目录规范完成相应类型检查和构建。

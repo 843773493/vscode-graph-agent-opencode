@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
@@ -93,6 +95,7 @@ class RolloutExecutionRecoveryMixin:
         execution_id: str | None = None,
         checkpoint_ns: str = "",
         reason: str = "provider_result_commit_missing",
+        failure: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """把 dispatch 后、terminal commit 前丢失的 execution 收敛为 unknown。"""
         session_id = strict_text(session_id, field="session_id")
@@ -125,6 +128,7 @@ class RolloutExecutionRecoveryMixin:
                     outcome=ControlOutcome.EXECUTION_LOST.value,
                     turn_status=None,
                     checkpoint_ns=checkpoint_ns,
+                    failure=failure,
                 )
             return {
                 "execution_id": execution_id,
@@ -181,6 +185,7 @@ class RolloutExecutionRecoveryMixin:
                 outcome=ControlOutcome.EXECUTION_LOST.value,
                 turn_status=TurnStatus.UNKNOWN.value, checkpoint_ns=checkpoint_ns,
                 loss_reason=reason,
+                failure=failure,
             )
             result = {
                 "turn_id": turn_id, "execution_id": target_execution,

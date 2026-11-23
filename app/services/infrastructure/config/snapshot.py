@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from app.core.config_sources import ConfigSource
+from configs.inheritance.values import ConfigValue, freeze
 
 ConfigReloadFailureReason = Literal[
     "invalid_config",
@@ -28,6 +30,11 @@ class ConfigSnapshot:
     source_details: tuple[ConfigSource, ...] = ()
     schema_path: Path | None = None
     origins_json: str = "[]"
+    read_only: Mapping[str, ConfigValue] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """同一不可变快照只解析一次；模型暖读不复制整份工作区配置。"""
+        object.__setattr__(self, "read_only", cast(Mapping[str, ConfigValue], freeze(self.to_dict())))
 
     def to_dict(self) -> dict[str, Any]:
         value = json.loads(self.canonical_json)

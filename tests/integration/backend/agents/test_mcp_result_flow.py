@@ -57,15 +57,17 @@ def scripted_model_info() -> dict[str, bool]:
 
 @pytest.fixture(scope="module")
 def result_server_receipts_path(request: pytest.FixtureRequest) -> Path:
-    # artifacts_dir 按当前测试节点动态计算；冻结 Server 启动时真正使用的收据路径。
+    # Server 跨用例共享，收据归本次模块运行。
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    return context.artifacts_dir / "receipts.jsonl"
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    return artifacts / "receipts.jsonl"
 
 
 @pytest.fixture(scope="module")
 def integration_workspace_config_path(
     integration_workspace_config_path: str, result_server_receipts_path: Path,
-    scripted_debug_backend_port: int,
+    scripted_debug_gateway_port: int,
 ) -> Iterator[str]:
     """在原工作区配置安装后、真实后端启动前清空 MCP 配置。"""
     definitions = result_server_receipts_path.with_name("definitions.json")
@@ -81,7 +83,7 @@ def integration_workspace_config_path(
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # 目标后端反向查询 Gateway Skill 来源也必须指向本测试控制面。
     with pytest.MonkeyPatch.context() as environment:
-        environment.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{scripted_debug_backend_port + 1}")
+        environment.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{scripted_debug_gateway_port}")
         yield str(config_path)
 
 

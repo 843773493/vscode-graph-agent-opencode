@@ -114,4 +114,5 @@ def test_restart_reconciles_operation_against_current_server_configuration(
         status="succeeded",
         stage="reconcile",
         error_code=None,
+        error_message=None,
     )

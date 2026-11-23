@@ -821,9 +821,11 @@ async def test_finalization_grace_does_not_require_fresh_step_projection(job_ser
 
 
 @pytest.mark.asyncio
-async def test_failed_job_discards_queued_terminal_followup_without_new_stream(job_service_factory,
+@pytest.mark.parametrize("failure_status", [JobStatus.failed, JobStatus.timed_out])
+async def test_failed_job_preserves_independent_terminal_notification(job_service_factory,
     monkeypatch: pytest.MonkeyPatch,
     session_lifecycle_guard,
+    failure_status: JobStatus,
 ) -> None:
     bus = _RecordingBus()
     service = job_service_factory(
@@ -839,7 +841,7 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(j
         message_id="msg_parent_failed",
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
-        status=JobStatus.failed,
+        status=failure_status,
         delivery_policy="after_turn",
         delivery_boundary="idle",
         thread_id=job_fixture_thread_id(session_id),
@@ -859,7 +861,7 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(j
         agent_id="default",
         status=JobStatus.queued,
         message_metadata=internal_message.metadata,
-        delivery_policy="after_tool_result",
+        delivery_policy="after_turn",
         thread_id=job_fixture_thread_id(session_id),
         execution_binding=_binding("job_terminal_followup", "msg_terminal_followup", internal_message.metadata),
     )
@@ -883,8 +885,8 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(j
         }
     )
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = parent.job_id
-    enqueue_job(service, followup, "after_tool_result")
     enqueue_job(service, user_job, "after_turn")
+    enqueue_job(service, followup, "after_turn")
     started: list[str] = []
 
     def start_job_task(job: JobState) -> None:
@@ -895,21 +897,20 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(j
 
     await service._schedule_next_job_if_needed(parent)
 
-    assert followup.status == JobStatus.failed
-    assert service._pending_queue.queued_job_ids(session_id) == ()
+    assert followup.status == JobStatus.queued
+    assert service._pending_queue.queued_job_ids(session_id) == (followup.job_id,)
     assert started == [user_job.job_id]
     assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == user_job.job_id
-    stale_event = next(
+    assert not [
         event
         for event in bus.events
         if event.get("job_id") == followup.job_id
         and event.get("event_type") == EventType.JOB_FAILED
-    )
-    assert stale_event["payload"]["code"] == "stale_internal_followup"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failure(job_service_factory,
+async def test_pending_dispatch_after_failure_starts_terminal_notification(job_service_factory,
     monkeypatch: pytest.MonkeyPatch,
     session_lifecycle_guard,
 ) -> None:
@@ -944,13 +945,13 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
         agent_id="default",
         status=JobStatus.queued,
         message_metadata=internal_message.metadata,
-        delivery_policy="after_tool_result",
+        delivery_policy="after_turn",
         thread_id=job_fixture_thread_id(session_id),
         execution_binding=_binding("job_failed_race_followup", "msg_failed_race_followup", internal_message.metadata),
     )
     service._jobs.update({parent.job_id: parent, followup.job_id: followup})
     service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = parent.job_id
-    enqueue_job(service, followup, "after_tool_result")
+    enqueue_job(service, followup, "after_turn")
     started: list[str] = []
     monkeypatch.setattr(
         service,
@@ -958,7 +959,7 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
         lambda job: started.append(job.job_id),
     )
 
-    assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id), boundary="idle") is False
-    assert followup.status == JobStatus.failed
-    assert started == []
+    assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id), boundary="idle") is True
+    assert followup.status == JobStatus.running
+    assert started == [followup.job_id]
     assert service._pending_queue.queued_job_ids(session_id) == ()

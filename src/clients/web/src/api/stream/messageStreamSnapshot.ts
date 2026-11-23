@@ -77,6 +77,8 @@ export type MessageStreamSnapshotResponse = MessageStreamSnapshot & {
 const SNAPSHOT_FIELDS = new Set([
   "workspace_id",
   "snapshot_seq",
+  "terminal_commit_id",
+  "terminal_outcome",
   "stream_status",
   "agent_loop_status",
   "current_model_call_id",

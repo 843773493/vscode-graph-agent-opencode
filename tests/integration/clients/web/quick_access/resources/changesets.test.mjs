@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/changesets.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'changesets.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/changesets.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>来源合同</title>')
@@ -41,9 +41,9 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'no-preview', 'freez
   const result = await exercise(mode);
   expect(result.errors).toEqual([]); expect(result.opened).toEqual([{ owner: { ...result.owner,
     workspaceKey: JSON.stringify([result.owner.gatewayId, result.owner.workspaceId]), title: result.owner.threadId },
-    group: mode === 'side' ? 8 : 7, options: { pinned: ['pinned', 'background', 'no-preview'].includes(mode),
+    group: mode === 'side' ? -2 : -1, options: { sourceGroup: 7, pinned: ['pinned', 'background', 'no-preview'].includes(mode),
       preserveFocus: mode === 'background', viewState: { resourcesVisible: true, resourceTab: 'changes', selectedChangesetId: 'turn:chosen' } } }]);
-  expect(lists(result)).toHaveLength(1); expect(result.groupsAdded).toBe(mode === 'side' ? 1 : 0);
+  expect(lists(result)).toHaveLength(1); expect(result.groupsAdded).toBe(0);
   expect(result.requests.every(item => item.method === 'GET' && !item.path.includes('/changesets/'))).toBe(true);
 });
 for (const mode of ['no-thread', 'excluded']) test(`${mode}没有明确且入选的Session时零变更发现`, async () => {
@@ -85,7 +85,7 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'no-preview', 'freez
   const result = await exercise(mode, 'attachment');
   expect(result.errors).toEqual([]); expect(result.opened).toEqual([{ owner: { ...result.owner,
     workspaceKey: JSON.stringify([result.owner.gatewayId, result.owner.workspaceId]), title: result.owner.threadId },
-    group: mode === 'side' ? 8 : 7, options: { pinned: ['pinned', 'background', 'no-preview'].includes(mode),
+    group: mode === 'side' ? -2 : -1, options: { sourceGroup: 7, pinned: ['pinned', 'background', 'no-preview'].includes(mode),
       preserveFocus: mode === 'background', viewState: { resourcesVisible: true, resourceTab: 'files', selectedAttachment: result.attachment } } }]);
   expect(attachmentLists(result)).toHaveLength(1);
 });

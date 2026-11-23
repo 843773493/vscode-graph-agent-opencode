@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal, TypedDict
 from urllib.parse import parse_qs, urlparse
 
+from boxteam_plugin_sdk.failures import failure_message
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.domain.itemized.hashing import sha256_jcs
@@ -153,8 +154,8 @@ class McpConnectionService:
         if task.cancelled() or task.exception() is None:
             self._tasks.pop(operation_id, None)
 
-    def _advance(self, operation_id: str, *, status: str, stage: str, error_code: str | None = None) -> McpConnectionOperationDTO:
-        operation = self._store.advance(operation_id, status=status, stage=stage, error_code=error_code)
+    def _advance(self, operation_id: str, *, status: str, stage: str, error_code: str | None = None, error_message: str | None = None) -> McpConnectionOperationDTO:
+        operation = self._store.advance(operation_id, status=status, stage=stage, error_code=error_code, error_message=error_message)
         self._changed.set()
         self._changed = asyncio.Event()
         return operation
@@ -220,16 +221,18 @@ class McpConnectionService:
             # 原 owner 用取消的 cause 交付清理失败；asyncio.timeout 会再包一层。
             cancellation = error if cancelled else error.__cause__
             if isinstance(cancellation, asyncio.CancelledError) and cancellation.__cause__ is not None:
-                self._store.record_cleanup_failure(identity, type(cancellation.__cause__).__name__)
+                self._store.record_cleanup_failure(identity, type(cancellation.__cause__).__name__,
+                                                   error_message=failure_message(cancellation.__cause__))
                 raise RuntimeError("MCP 连接操作清理未完成，请检查该操作状态") from error
             if cancelled:
                 raise
-        except Exception as error:  # noqa: BLE001 - 操作边界只保存安全类型与阶段，不复制 OAuth 或 Server 自由正文。
+        except Exception as error:  # noqa: BLE001 - 原操作保留安全原因；OAuth 私有正文由原授权边界排除。
             current = self._store.get(identity)
             if current.status in {"cancelled", "expired"}:
-                self._store.record_cleanup_failure(identity, type(error).__name__)
+                self._store.record_cleanup_failure(identity, type(error).__name__, error_message=failure_message(error))
                 raise RuntimeError("MCP 连接操作清理未完成，请检查该操作状态") from None
-            self._advance(identity, status="failed", stage=current.stage, error_code=type(error).__name__)
+            self._advance(identity, status="failed", stage=current.stage, error_code=type(error).__name__,
+                          error_message=failure_message(error))
         finally:
             expiry.cancel()
             self._authorizations.pop(identity, None)

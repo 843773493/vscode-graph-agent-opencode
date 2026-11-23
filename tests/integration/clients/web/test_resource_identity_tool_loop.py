@@ -30,7 +30,7 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -46,7 +46,7 @@ async def test_rejected_identity_and_correction_survive_workbench_refresh(
 ) -> None:
     backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("google-chrome")
     assert chromium, "Workbench 工具拒绝验收需要 Chromium"
     gateway = start_gateway_process(

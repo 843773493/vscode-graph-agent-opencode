@@ -16,6 +16,7 @@ test('开发预构建发现新增上游入口，普通修改不重建，重建�
     writeFile(join(upstream, 'base/common/shared.ts'), 'export const shared = {};'),
     writeFile(join(upstream, 'base/common/first.ts'), "export { shared } from './shared.js';"),
     writeFile(join(upstream, 'base/common/second.ts'), "export { shared } from './shared.js';"),
+    writeFile(join(upstream, 'base/common/javascript.js'), "export { shared } from './shared.js';"),
     writeFile(join(upstream, 'base/common/types.d.ts'), 'export interface OnlyType {}'),
     writeFile(join(upstream, 'base/common/style.css'), '.fixture { color: red; }'),
     writeFile(join(upstream, 'workbench/workbench.web.main.internal.ts'), "export { shared } from '../base/common/shared.js';"),
@@ -38,4 +39,12 @@ test('开发预构建发现新增上游入口，普通修改不重建，重建�
   const main = await import(pathToFileURL(join(output, 'dev-upstream/vs/workbench/workbench.web.main.internal.js')).href);
   const second = await import(pathToFileURL(join(output, 'dev-upstream/vs/base/common/second.js')).href);
   expect(main.shared).toBe(second.shared);
+  const javascriptImport = original.replace('first.js', 'javascript.js');
+  expect(rebuilt.needsRebuild(javascriptImport, file)).toBe(true);
+  await writeFile(file, javascriptImport);
+  const javascriptDependencies = await build();
+  expect(javascriptDependencies.needsRebuild(javascriptImport, file)).toBe(false);
+  expect(javascriptDependencies.transform(javascriptImport, file)).toContain('/out/dev-upstream/vs/base/common/javascript.js');
+  const javascript = await import(pathToFileURL(join(output, 'dev-upstream/vs/base/common/javascript.js')).href);
+  expect(javascript.shared).toBe(main.shared);
 });

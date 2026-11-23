@@ -19,7 +19,7 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -43,7 +43,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     assert chromium, "设置来源 UI 验收需要真实 Chromium"
     workspace_root = Path(integration_workspace_root_path)
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    ports = integration_ports_for_file(Path(request.node.fspath))
     config_path = Path(integration_workspace_config_path)
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(configuration)

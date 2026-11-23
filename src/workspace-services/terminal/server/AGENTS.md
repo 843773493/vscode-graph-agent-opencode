@@ -44,6 +44,8 @@ server/
 
 传输授权从Manager的一次性grant经WebSocket接线交给Session，内部统一用`TerminalTransportGrant.transportOwnerRevision`表示发放时冻结的owner版本；它不表示模型命令代际、输出sequence或完成事件编号。`expiresAtUnixMs`是授权过期的绝对时刻。公开HTTP字段`owner_revision/expires_at`和状态字段`transport_owner_revision`保持原合同，Node只保存传输所需的版本影子，不成为领域owner。
 
+关联变化时，Workspace owner只提交变更前后仍合法的不透明关联用于续准现有连接；Node不复制Thread归属。Session为这些连接替换当前授权对象，不修改原票据，未消费旧票据仍失效；只有被移除关联的连接收到4009。停止、删除和恢复同步不保留旧连接，同版本恢复同步也必须撤权。握手失败发送原错误后以4008关闭，不能留下未attach的开放socket。
+
 原始WebSocket JSON只由`terminalInput.js`复用共享解析器解码一次，保留非有限数转null及负零转零的原语义，再直接进入纯协议schema投影。原生解析片段、Protobuf字段原值及未知type只留原服务诊断和cause；普通错误保留阶段、类别及静态消息/字段身份，日志次错不能替换原拒绝。未知扩展type仍在原已附加授权检查之后拒绝，不改变连接队列、一次性grant、PTY输入或detach顺序。
 
 ## 交互与命令事实

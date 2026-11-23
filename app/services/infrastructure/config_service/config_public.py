@@ -211,7 +211,7 @@ class ConfigPublicMixin:
         return {**raw_public_config, **self._runtime_config_overrides}
 
     def list_llm_models(self) -> list[dict[str, Any]]:
-        return self._llm_resolution.list_models(self._get_effective_config())
+        return self._llm_resolution.list_models(self._require_snapshot().read_only)
 
     def get_llm_model(self, model: ModelReferenceDTO) -> dict[str, Any]:
         return self._llm_resolution.get_model(model)

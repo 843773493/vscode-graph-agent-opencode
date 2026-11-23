@@ -3,19 +3,17 @@ import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { Disposable, type IReference } from '../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { ITextModelService, type IResolvedTextEditorModel } from '../upstream/src/vs/editor/common/services/resolverService.js';
-import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { IOpenerService, type IOpener, type OpenOptions } from '../upstream/src/vs/platform/opener/common/opener.js';
 import { getWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
 import type { IResourceDiffEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
 import type { IResourceEditorInput, ITextEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
-import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import { gateway } from './agentApi.js';
+import { gateway, type ThreadOwner } from './agentApi.js';
 import { inspectItem } from './react/itemActions.js';
-import { itemContentUri } from './itemDocuments.js';
 import { ThreadInput } from './threadInput.js';
 import { workspaceFileEditorInput, workspaceFileUri } from './workspaceFiles.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -29,7 +27,6 @@ import type { ThreadEditorOptions } from './threadPane.js';
 import { t } from '../../shared/core/i18n/index.js';
 
 export interface ResourceOpenOptions extends OpenOptions {
-  boxteamTargetGroup?: number;
   boxteamResourceOwner?: WorkspaceOwner;
   boxteamResourceLabel?: string;
   editorOptions?: ThreadEditorOptions & ITextEditorOptions;
@@ -41,7 +38,6 @@ export class ResourceOpener extends Disposable implements IOpener {
     @IOpenerService opener: IOpenerService,
     @IEditorService private readonly editors: IEditorService,
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
-    @IConfigurationService private readonly configuration: IConfigurationService,
     @ITextModelService private readonly models: ITextModelService,
     @ICommandService private readonly commands: ICommandService,
     @IEditorResolverService private readonly resolver: IEditorResolverService,
@@ -53,9 +49,9 @@ export class ResourceOpener extends Disposable implements IOpener {
   async open(resource: URI | string, options: ResourceOpenOptions = {}): Promise<boolean> {
     const uri = typeof resource === 'string' ? resource : resource.toString();
     if (!/^boxteam:/i.test(uri)) return false;
-    const groupId = options.boxteamTargetGroup ?? this.groups.activeGroup.id;
+    const groupId = options.editorOptions?.sourceGroup ?? this.groups.activeGroup.id;
     const openToSide = options.openToSide;
-    let editorOptions = options.editorOptions && { ...options.editorOptions };
+    const editorOptions = { ...options.editorOptions, sourceGroup: groupId };
     const label = options.boxteamResourceLabel;
     const resourceOwner = options.boxteamResourceOwner && { ...options.boxteamResourceOwner };
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
@@ -107,7 +103,7 @@ export class ResourceOpener extends Disposable implements IOpener {
         const match = matches[0];
         await this.commands.executeCommand(openConfigurationSourceCommand, {
           location: { ...match.target, version: 2, source_key: match.sourceKey, name: match.target.workspace_id ?? 'Gateway' },
-          groupId, openToSide, editorOptions,
+          openToSide, editorOptions,
         } satisfies ConfigurationSourceOpenRequest);
         return true;
       }
@@ -124,7 +120,7 @@ export class ResourceOpener extends Disposable implements IOpener {
       if (resourceOwner && (address.gateway_id !== resourceOwner.gatewayId || owner.workspaceId !== resourceOwner.workspaceId)) {
         throw new Error(t('quickAccess.resource.ownerMismatch'));
       }
-      let input: ThreadInput | IResourceEditorInput | IResourceDiffEditorInput;
+      let input: ThreadOwner | IResourceEditorInput | IResourceDiffEditorInput;
       if (address.kind === 'changes') {
         if (!address.session_id || !address.changeset_id || !address.change_file_uri) throw new Error(t('quickAccess.resource.changeReferenceMissing'));
         const changeOwner = { ...owner, sessionId: address.session_id };
@@ -149,9 +145,9 @@ export class ResourceOpener extends Disposable implements IOpener {
         assertAccess();
         if (target.status !== 'ready') throw new Error(t('quickAccess.resource.workspaceUnavailable', target.status));
         input = address.session_id
-          ? new ThreadInput({ ...owner, workspaceKey: gatewayWorkspaceKey(target), sessionId: address.session_id,
+          ? { ...owner, workspaceKey: gatewayWorkspaceKey(target), sessionId: address.session_id,
             threadId: address.thread_id ?? trace?.thread_id ?? (await gateway.mainThread(gatewayWorkspaceKey(target), address.session_id)).thread_id,
-            title: label ?? address.thread_id ?? address.session_id })
+            title: label ?? address.thread_id ?? address.session_id }
           : { resource: workspaceFileUri(owner, address.uri, address.file_root_uri!) };
       } else {
         // 单文件来源（包括 Session 产物）交原导航 owner 核验读取能力，不在客户端重复 URI 模板。
@@ -160,28 +156,19 @@ export class ResourceOpener extends Disposable implements IOpener {
         // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
         references.push(await this.models.createModelReference(input.resource));
       }
-      if (address.item_id && input instanceof ThreadInput) {
-        const result = await inspectItem(input.owner, { item_id: address.item_id, operation: 'location' });
-        assertAccess();
-        if (result.location?.turn_id) {
-          Object.assign(editorOptions ??= {}, { boxteamMessage: { ...result.location, turn_id: result.location.turn_id } });
-        } else {
-          const content = await inspectItem(input.owner, { item_id: address.item_id, operation: 'content' });
-          assertAccess();
-          const part = content.contents[0];
-          if (!part) throw new Error(t('chat.itemMenu.contentMissing'));
-          if (part.uri) return this.open(part.uri, { ...options, boxteamTargetGroup: groupId, boxteamResourceOwner: input.owner });
-          input = { resource: itemContentUri(input.owner, address.item_id, 0, part) };
-        }
-      }
-      if (!(input instanceof ThreadInput)) input = await workspaceFileEditorInput({ ...input, options: editorOptions }, this.resolver);
       assertAccess();
-      const source = this.groups.getGroup(groupId);
-      if (!source) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
-      const direction = preferredSideBySideGroupDirection(this.configuration);
-      const group = openToSide ? this.groups.findGroup({ direction }, source) ?? this.groups.addGroup(source, direction) : source;
-      if (input instanceof ThreadInput) await this.editors.openEditor(input, editorOptions, group.id);
-      else await this.editors.openEditor(input, group.id);
+      if (address.item_id && 'threadId' in input) {
+        const result = await inspectItem(input, { item_id: address.item_id, operation: 'location' });
+        assertAccess();
+        if (!result.location) throw new Error(t('quickAccess.resource.itemLocationMissing'));
+        Object.assign(editorOptions, { boxteamMessage: result.location });
+      }
+      if (!('threadId' in input)) input = await workspaceFileEditorInput({ ...input, options: editorOptions }, this.resolver);
+      assertAccess();
+      if (!this.groups.getGroup(groupId)) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
+      const group = openToSide ? SIDE_GROUP : ACTIVE_GROUP;
+      if ('threadId' in input) await this.editors.openEditor(new ThreadInput(input), editorOptions, group);
+      else await this.editors.openEditor(input, group);
       return true;
     } finally { for (const reference of references) reference.dispose(); releaseToken(); releaseGateway(); }
   }

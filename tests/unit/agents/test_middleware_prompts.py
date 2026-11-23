@@ -12,7 +12,10 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.middleware_assembly import build_deep_agent_middleware
+from app.agents.middleware_assembly import (
+    build_deep_agent_middleware,
+    build_deep_agent_tool_middleware,
+)
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
@@ -83,11 +86,6 @@ def _build_middleware(
     return build_deep_agent_middleware(
         model=FakeListChatModel(responses=["ok"]),
         backend=StateBackend(),
-        workspace_root=tmp_path,
-        resource_navigation=MagicMock(),
-        artifact_reader=MagicMock(),
-        text_mutations=MagicMock(),
-        permissions=None,
         resolved_skills=resolved_skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),
         compaction_preflight=NoDurableOwnerCompactionPreflight(),
@@ -99,6 +97,9 @@ def _build_middleware(
             invocation_context
         ),
         tool_output_middleware=AgentMiddleware(),
+        tool_middleware=build_deep_agent_tool_middleware(
+            backend=StateBackend(), workspace_root=tmp_path, resource_navigation=MagicMock(), text_mutations=MagicMock(), artifact_reader=MagicMock(), permissions=None,
+        ),
     )
 
 

@@ -98,6 +98,33 @@ test('编辑时取消旧目录，忽略不遵守取消的迟到响应', async ()
   expect(fixture.onImport).not.toHaveBeenCalled();
 });
 
+test('发现能力逐字段说明来源，保留上游否定声明且不把参考值自动写入配置', async () => {
+  respond((_url, init) => {
+    const result = directory(JSON.parse(String(init.body)));
+    return ok({ ...result, models: [{ model: 'new-model', name: '新模型', metadata: {
+      max_input_tokens: 32000, supports_vision: false, supports_function_calling: true,
+      supports_reasoning: null, catalog_provider: 'openai',
+      sources: { max_input_tokens: 'provider', supports_vision: 'upstream', supports_function_calling: 'litellm' },
+    } }] });
+  });
+  const fixture = setup();
+  await click('configuration.probe.discover');
+  const markup = JSON.stringify(view!.toJSON());
+  expect(markup).toContain(t('configuration.catalog.providerSource'));
+  expect(markup).toContain(t('configuration.catalog.capacity', 32000));
+  expect(markup).toContain(t('configuration.catalog.upstreamSource'));
+  expect(markup).toContain(t('configuration.catalog.unsupported', t('configuration.catalog.vision')));
+  expect(markup).toContain(t('configuration.catalog.referenceSource', 'openai'));
+  expect(markup).not.toContain(t('configuration.catalog.reasoning'));
+  expect(fixture.onImport).not.toHaveBeenCalled();
+  await click('configuration.probe.selectMatching');
+  await click('configuration.probe.importSelected');
+  expect(fixture.onImport.mock.calls[0][0][0].metadata.sources).toEqual({
+    max_input_tokens: 'provider', supports_vision: 'upstream', supports_function_calling: 'litellm',
+  });
+  expect(fixture.editor.jsonc).toBe('// 当前来源原文\n{}');
+});
+
 test('批量最多三个在途，停止取消实际请求并且不再派发后续模型', async () => {
   const calls: { model_id: string; signal: AbortSignal }[] = [];
   respond((_url, init) => new Promise((_resolve, reject) => {
@@ -259,4 +286,17 @@ test('选择时的空密钥目录吸收随后创建回执，新Key测试不会�
   expect(JSON.stringify(view!.toJSON())).toContain(t('configuration.probe.status.passed'));
   expect(JSON.stringify(view!.toJSON())).not.toContain(t('configuration.probe.stale'));
   expect(methods).toEqual(['GET', 'POST', 'POST']);
+});
+
+test('失败和取消的测试不推荐应用模式，只有成功结果可以修改草稿', async () => {
+  let status: LlmTestResultDTO['status'] = 'failed';
+  respond((_url, init) => modelTestResponse(JSON.parse(String(init.body)), { source: 'none' }, status));
+  const fixture = setup();
+  for (const next of ['failed', 'cancelled', 'passed'] as const) {
+    status = next;
+    await click('configuration.probe.test.configured');
+    const actions = view!.root.findAllByType('button').filter(item => item.children.includes(t('configuration.probe.applyMode')));
+    expect(actions.length).toBe(next === 'passed' ? 1 : 0);
+  }
+  expect(fixture.onApplyMode).not.toHaveBeenCalled();
 });

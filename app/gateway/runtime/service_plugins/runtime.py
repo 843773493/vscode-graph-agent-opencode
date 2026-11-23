@@ -23,6 +23,7 @@ from boxteam_plugin_sdk.commands import (
     PluginCommandRegistrationsDTO,
     PluginShutdownDTO,
 )
+from boxteam_plugin_sdk.failures import bounded_failure_text, failure_message
 from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from boxteam_plugin_sdk.observation import RuntimeObservationStatus
 from jsonschema import Draft202012Validator
@@ -30,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.core.config_sources import config_revision
 from app.core.env import get_project_root
+from app.core.failures import report_failure
 from app.core.file_permissions import restrict_private_path_access
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.plugins.dependencies import validate_runtime_target
@@ -201,14 +203,16 @@ class GatewayPluginRuntime:
                 await wait_process_exit(process_id)
             except asyncio.CancelledError:
                 raise
-            except Exception as error:
-                slot.error = f"插件退出通知失败: {error}"
-                logger.exception("插件退出等待失败: binding=%s", slot.binding)
+            except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                slot.error = bounded_failure_text(f"插件退出通知失败: {failure_message(error)}")
+                report_failure(error, detail=f"插件退出等待失败: binding={slot.binding}", diagnostic_logger=logger)
             else:
                 if isinstance(slot.process, ManagedProcess):
                     # 系统退出通知不收割 Popen 子进程；在发布 failed 前回收已退出的根。
-                    slot.process.process.poll()
-                slot.error = "插件进程已退出；需显式重启，不自动重放在途操作"
+                    exit_code = slot.process.process.poll()
+                    slot.error = f"插件进程已退出: exit_code={exit_code}；需显式重启，不自动重放在途操作"
+                else:
+                    slot.error = "插件进程已退出；需显式重启，不自动重放在途操作"
             slot.state = "failed"
             slot.stopped.set()
             self._publish()
@@ -319,8 +323,8 @@ class GatewayPluginRuntime:
                 try:
                     await self._observation(slot, apply=True)
                 except (httpx.HTTPError, ValueError, RuntimeError) as error:
-                    slot.observation_error = f"诊断应用失败: {error}"
-                    logger.exception("插件诊断配置应用失败: slot=%s", key)
+                    slot.observation_error = bounded_failure_text(f"诊断应用失败: {failure_message(error)}")
+                    report_failure(error, detail=f"插件诊断配置应用失败: slot={key}", diagnostic_logger=logger)
                 else:
                     slot.observation_error = None
 
@@ -339,7 +343,7 @@ class GatewayPluginRuntime:
                         raise RuntimeError(f"插件诊断尚不可用: state={slot.state}")
                     actual = await self._observation(slot)
                 except (httpx.HTTPError, ValueError, RuntimeError) as read_error:
-                    error = f"诊断状态读取失败: {read_error}"
+                    error = bounded_failure_text(f"诊断状态读取失败: {failure_message(read_error)}")
                 result.append(PluginRuntimeObservationDTO(
                     instance=PluginInstanceView.model_validate(slot.receipt.model_dump(exclude={"log_sink"})),
                     observation=actual, error=error,
@@ -358,9 +362,9 @@ class GatewayPluginRuntime:
                     self.skill_sources.remove_plugin(key)
                     try:
                         await self._stop(key, slot)
-                    except Exception as error:
-                        slot.state, slot.error = "failed", str(error)
-                        logger.exception("配置已删除，插件原实例尚未完成停止: slot=%s", key)
+                    except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                        slot.state, slot.error = "failed", failure_message(error)
+                        report_failure(error, detail=f"配置已删除，插件原实例尚未完成停止: slot={key}", diagnostic_logger=logger)
                     else:
                         del self.slots[key]
                     finally:
@@ -377,10 +381,10 @@ class GatewayPluginRuntime:
                 slot = (replace(previous, binding=binding, revision=revision, declaration=None,
                     parameters=values, package_digest=None, commands={}) if previous is not None else
                     PluginSlot(binding, revision, None, self.gateway_id, parameters=values, package_digest=None))
-                slot.state, slot.error = "failed", f"绑定不可用: {error}"
+                slot.state, slot.error = "failed", bounded_failure_text(f"绑定不可用: {failure_message(error)}")
                 slot.stopped.set()
                 self.slots[key] = slot
-                logger.exception("已提交插件绑定无法恢复: slot=%s", key)
+                report_failure(error, detail=f"已提交插件绑定无法恢复: slot={key}", diagnostic_logger=logger)
                 self._publish()
 
     async def apply_binding(self, binding: PluginBinding, *, revision: str, restart: bool = False,
@@ -419,21 +423,23 @@ class GatewayPluginRuntime:
                 previous_version = previous.process_version or previous.binding.package_version
                 try:
                     await self._stop(key, previous)
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
                     # 期望已提交，实际句柄／回执仍属于旧实例；同一输入不得再次尝试替换。
                     slot = replace(previous, binding=binding, revision=revision, declaration=declaration,
-                        parameters=values, state="failed", error=f"停止原实例失败（原运行版本 {previous_version}；未启动新实例）: {error}", commands={})
+                        parameters=values, state="failed", error=bounded_failure_text(f"停止原实例失败（原运行版本 {previous_version}；未启动新实例）: {failure_message(error)}"), commands={})
                     self.slots[key] = slot
-                    logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
+                    report_failure(error, detail=f"插件旧实例停止失败，拒绝并行启动: slot={key}", diagnostic_logger=logger)
                     self._publish()
                     return slot.describe()
             self.slots[key] = slot
+            private_values: tuple[str, ...] = ()
             stage = "启动实例" if binding.enabled and declaration.runtime is not None else "发布贡献"
             try:
                 if binding.enabled and declaration.runtime is not None:
                     # 冷恢复的失败属于这个绑定，不阻断 Gateway 或其它插件。
                     if previous is None:
                         runtime_parameters = await self._start_parameters(slot, delivered_parameters)
+                    private_values = tuple(value for value in runtime_parameters.values() if isinstance(value, str))
                     await self._start(key, slot, parameters=runtime_parameters)
                 stage = "发布贡献"
                 self.skill_sources.publish_plugin(binding, self.packages)
@@ -441,12 +447,14 @@ class GatewayPluginRuntime:
                 slot.state, slot.error = "failed", f"{stage}被取消；需显式重启"
                 raise
             except BaseExceptionGroup as error:
-                slot.state, slot.error = "failed", f"{stage}失败: {error}"
-                logger.exception("插件启动及清理失败: slot=%s", key)
+                private_values += (slot.token,) if slot.token else ()
+                slot.state, slot.error = "failed", bounded_failure_text(f"{stage}失败: {failure_message(error, secrets=private_values)}")
+                report_failure(error, detail=f"插件启动及清理失败: slot={key}", diagnostic_logger=logger, secrets=private_values)
                 raise
-            except Exception as error:
-                slot.state, slot.error = "failed", f"{stage}失败: {error}"
-                logger.exception("插件启动或贡献发布失败: slot=%s", key)
+            except Exception as error:  # noqa: BLE001 — 原 owner 边界结算任意失败，并报告安全诊断。
+                private_values += (slot.token,) if slot.token else ()
+                slot.state, slot.error = "failed", bounded_failure_text(f"{stage}失败: {failure_message(error, secrets=private_values)}")
+                report_failure(error, detail=f"插件启动或贡献发布失败: slot={key}", diagnostic_logger=logger, secrets=private_values)
             finally:
                 self._publish()
             return slot.describe()

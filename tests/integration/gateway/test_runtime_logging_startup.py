@@ -13,7 +13,7 @@ import pytest
 from boxteam_plugin_sdk.logging import runtime_log_path_identity
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -79,7 +79,7 @@ def test_supported_configuration_upgrade_starts_and_restarts_original_workspace(
     gateway_config = json.loads((home / "config/gateway.jsonc").read_text(encoding="utf-8"))
     assert gateway_config["config_version"] == 5 and "ui" not in gateway_config
     assert json.loads((home / "config/workspace.jsonc").read_text(encoding="utf-8")) == {"config_version": 3}
-    port = integration_port_block_for_file(context.test_file).port(0)
+    port = integration_ports_for_file(context.test_file).port(0)
     owners = []
     for generation in range(2):
         gateway = start_gateway_process(
@@ -125,7 +125,7 @@ def logging_gateway(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     gateway = start_gateway_process(
         workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
-        port=integration_port_block_for_file(Path(request.node.path)).port(0),
+        port=integration_ports_for_file(Path(request.node.path)).port(0),
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir,
     )

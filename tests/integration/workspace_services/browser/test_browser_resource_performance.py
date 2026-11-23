@@ -22,7 +22,7 @@ from tests.harness.python.terminal_plugin import (
     browser_plugin_gateway_for_workspace,
 )
 from tests.support.http_server import running_http_server
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB = 400 * 1024
 MAX_FROZEN_CPU_PERCENT = 5.0
@@ -351,7 +351,7 @@ async def _measure_latest_frame_delivery(gateway: TerminalPluginGateway, browser
 
 @pytest.fixture(scope="module")
 def dynamic_page_server(request: pytest.FixtureRequest) -> Generator[str, None, None]:
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(62)
+    port = integration_ports_for_file(Path(request.node.fspath)).port(62)
     with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), _DynamicPageHandler)):
         yield f"http://127.0.0.1:{port}/"
 
@@ -364,11 +364,13 @@ async def browser_plugin_gateway(
 ) -> AsyncIterator[TerminalPluginGateway]:
     workspace_root = Path(integration_workspace_root_path).resolve()
     run = TestRunContext.from_test_file(Path(request.node.fspath)).prepare()
-    gateway_port = integration_port_block_for_file(Path(request.node.fspath)).port(60)
+    artifacts = run.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    gateway_port = integration_ports_for_file(Path(request.node.fspath)).port(60)
     home = run.boxteam_home_for_node("browser-resource-performance")
     async with browser_plugin_gateway_for_workspace(
         workspace_root,
-        run.artifacts_dir,
+        artifacts,
         gateway_port,
         home,
         prepared_developer_tools_package,

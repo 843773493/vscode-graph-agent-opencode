@@ -34,27 +34,21 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_tool_restrictions as mcp_plugin_tool_restrictions,  # noqa: PLC0414 - mcp_plugin_case 的 fixture 依赖
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 官方 SDK HTTP 服务
 )
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import install_plugin_async
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 
 
 @pytest.fixture(autouse=True)
 def mcp_ui_ports(request: pytest.FixtureRequest) -> Iterator[None]:
-    # 高端口块也属于客户端临时端口范围；启动前持续保留绑定，避免自己发出的连接抢占。
-    context = TestRunContext.from_test_file(Path(request.node.path))
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "ports.json",
-                            (ports.port(20), ports.port(21)))
-    lease.acquire()
-    try:
-        yield
-    finally:
-        lease.release()
+    # 启动前通过公共计划持有端口，避免客户端临时源端口抢占。
+    ports = integration_ports_for_file(Path(request.node.path))
+    ports.port(20)
+    ports.port(21)
+    yield
 
 
 @pytest.fixture(autouse=True)

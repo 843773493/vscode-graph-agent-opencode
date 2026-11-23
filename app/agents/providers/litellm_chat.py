@@ -101,6 +101,8 @@ from app.core.turn_execution_scope import (
 )
 from app.domain.itemized.identity.model_source import ModelSource
 from app.runtime.litellm_runtime import ChatLiteLLM, prepare_model_request
+from app.runtime.network_proxy import ProxyRoutes
+from configs.network import DirectProxy, EnvironmentProxy
 
 logger = logging.getLogger(__name__)
 
@@ -121,53 +123,48 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     _uses_http_handler: ClassVar[bool] = False
     _owned_sync_client: Any = PrivateAttr(default=None)
     _owned_async_client: Any = PrivateAttr(default=None)
+    _proxy_routes: ProxyRoutes | None = PrivateAttr(default=None)
 
     def _provider_http_client(self, *, is_async: bool) -> Any:
-        """显式免代理、无认证或单次模型测试使用本实例持有的 HTTP client。
+        """测试与正式调用复用本实例持有的 HTTP client。
 
-        Anthropic Messages 适配族要求 LiteLLM 的 HTTPHandler，Chat
-        Completions 适配族要求 OpenAI SDK client，因此按协议分别
-        构造。client 在本实例内缓存复用，避免每次请求重建连接池。
+        客户端类型遵循 SDK 适配族的实际传输合同；协议为 Chat Completions
+        不代表一定接收 OpenAI SDK client。实例缓存池，避免每次请求重建。
         """
-        anonymous = self.api_key == "" and self.custom_llm_provider in {"openai", "anthropic"}
-        if not self.no_proxy and self.invocation_purpose != "model_test" and not anonymous:
-            return None
-        use_handler = self._uses_http_handler or self.custom_llm_provider == "anthropic"
-        if is_async:
-            if self._owned_async_client is None:
-                self._owned_async_client = (
-                    build_provider_http_handler(is_async=True, trust_env=not self.no_proxy, no_auth=anonymous)
-                    if use_handler
-                    else build_provider_openai_client(
-                        is_async=True,
-                        base_url=self.api_base,
-                        api_key=self.api_key,
-                        trust_env=not self.no_proxy,
-                    )
-                )
-            return self._owned_async_client
-        if self._owned_sync_client is None:
-            self._owned_sync_client = (
-                build_provider_http_handler(is_async=False, trust_env=not self.no_proxy, no_auth=anonymous)
+        client = self._owned_async_client if is_async else self._owned_sync_client
+        if client is None:
+            if self._proxy_routes is None:
+                # TODO: v6／v4 正式配置切换时由快照准备边界提供路由，替换旧 no_proxy 输入。
+                self._proxy_routes = ProxyRoutes.from_configuration(DirectProxy() if self.no_proxy else EnvironmentProxy())
+            anonymous = self.api_key == "" and self.custom_llm_provider in {"openai", "anthropic"}
+            use_handler = self._uses_http_handler or self.custom_llm_provider in {"anthropic", "deepseek", "openrouter"}
+            client = (
+                build_provider_http_handler(is_async=is_async, routes=self._proxy_routes, no_auth=anonymous)
                 if use_handler
                 else build_provider_openai_client(
-                    is_async=False,
-                    base_url=self.api_base,
-                    api_key=self.api_key,
-                    trust_env=not self.no_proxy,
+                    is_async=is_async, base_url=self.api_base, api_key=self.api_key, routes=self._proxy_routes,
                 )
             )
-        return self._owned_sync_client
+            if is_async:
+                self._owned_async_client = client
+            else:
+                self._owned_sync_client = client
+        return client
 
     async def aclose(self) -> None:
         """关闭本实例创建的连接池；不触碰 LiteLLM 的共享连接。"""
-        use_handler = self._uses_http_handler or self.custom_llm_provider == "anthropic"
-        if self._owned_async_client is not None:
-            client, self._owned_async_client = self._owned_async_client, None
-            await close_async_stream(client.client if use_handler else client)
-        if self._owned_sync_client is not None:
-            client, self._owned_sync_client = self._owned_sync_client, None
-            (client.client if use_handler else client).close()
+        use_handler = self._uses_http_handler or self.custom_llm_provider in {"anthropic", "deepseek", "openrouter"}
+        try:
+            if self._owned_async_client is not None:
+                client = self._owned_async_client
+                await close_async_stream(client.client if use_handler else client)
+                self._owned_async_client = None
+        finally:
+            # 一个池失败仍释放另一个池；失败引用保留，原生命周期 owner 可以重试。
+            if self._owned_sync_client is not None:
+                client = self._owned_sync_client
+                (client.client if use_handler else client).close()
+                self._owned_sync_client = None
 
     def _dispatch_run_config(self, config: RunnableConfig | None) -> RunnableConfig:
         """真实 callback run_id 使用 Bridge 为本次 handler 分配的 UUID。"""
@@ -372,8 +369,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             dispatch_ref=binding.reference if binding is not None else None,
             resource_refs=binding.resource_refs if binding is not None else (),
         )
-        if client is not None:
-            kwargs.setdefault("client", client)
+        kwargs.setdefault("client", client)
         if self.invocation_purpose == "model_test":
             kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
@@ -381,7 +377,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
 
@@ -403,8 +399,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             dispatch_ref=binding.reference if binding is not None else None,
             resource_refs=binding.resource_refs if binding is not None else (),
         )
-        if client is not None:
-            kwargs.setdefault("client", client)
+        kwargs.setdefault("client", client)
         if self.invocation_purpose == "model_test":
             kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
@@ -414,7 +409,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
 
@@ -681,7 +676,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                 except ScopeCancelledError:
                     raise
                 except Exception as error:
-                    mark_provider_failure(error)
+                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise
                 while True:
@@ -692,7 +687,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     except ScopeCancelledError:
                         raise
                     except Exception as error:
-                        mark_provider_failure(error)
+                        mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                         record_upstream_error(error)
                         raise
                     if scope is not None:
@@ -763,7 +758,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             except ScopeCancelledError:
                 raise
             except Exception as error:
-                mark_provider_failure(error)
+                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             async with cancelable_stream:
@@ -776,7 +771,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     except ScopeCancelledError:
                         raise
                     except Exception as error:
-                        mark_provider_failure(error)
+                        mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                         record_upstream_error(error)
                         raise
                     if scope is not None:

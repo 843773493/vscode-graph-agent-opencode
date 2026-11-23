@@ -22,7 +22,7 @@ from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,
     SessionKind,
 )
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support.canonical_id_at import thread_id_at, thread_id_for_name_at
@@ -46,6 +46,7 @@ class CatalogSessionBundleSpec:
     context_source_session_id: str | None = None
     generation_origin: SessionGenerationOriginDTO | None = None
     updated_at: datetime | None = None
+    graph_binding: ThreadGraphBindingRecord = TEST_THREAD_GRAPH_BINDING
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +168,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
             control.initialize_main_thread(
                 main_thread_id,
                 datetime.fromisoformat(str(manifest["created_at"])),
-                TEST_THREAD_GRAPH_BINDING,
+                spec.graph_binding,
             )
             control.initialize_fence("active", 1)
             control.verify_matches_catalog_main_thread(main_thread_id)
@@ -196,6 +197,7 @@ def seed_catalog_session_bundle(
     session_kind: SessionKind = "normal",
     context_source_session_id: str | None = None,
     updated_at: datetime | None = None,
+    graph_binding: ThreadGraphBindingRecord = TEST_THREAD_GRAPH_BINDING,
 ) -> CatalogSessionBundle:
     """按测试常用参数构造并播种一个固定 ID 会话。"""
 
@@ -216,6 +218,7 @@ def seed_catalog_session_bundle(
             session_kind=session_kind,
             context_source_session_id=context_source_session_id,
             updated_at=updated_at,
+            graph_binding=graph_binding,
         )
     )
 

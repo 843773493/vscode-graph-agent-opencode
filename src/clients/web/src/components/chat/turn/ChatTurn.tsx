@@ -1,3 +1,4 @@
+import type { ProcessDetailSelection } from "../../../api/session/sessionTurnHistory";
 import { ChatItemOwnerContext } from "../itemContextMenu";
 import React from "react";
 import ContextNotice from "../ContextNotice";
@@ -33,8 +34,8 @@ export interface ChatTurnProps extends ChatTurnHandlers {
     refreshAfterInFlight?: boolean,
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
   ) => Promise<void>;
-  onLoadToolDetails?: (turnId: string, toolCallId: string) => Promise<void>;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
 }
 
@@ -46,7 +47,6 @@ function ChatTurn({
   sessionBusy,
   onLoadAgentStateMessageRawContent,
   onLoadTurnDetails,
-  onLoadToolDetails,
   onReplayTurn,
   onRemovePending,
   onChangePendingPolicy,
@@ -82,7 +82,6 @@ function ChatTurn({
           showRawDetails={showRawDetails}
           actions={actions}
           onLoadTurnDetails={onLoadTurnDetails}
-          onLoadToolDetails={onLoadToolDetails}
           onForkConversation={onForkConversation}
         />
       </div>
@@ -138,11 +137,8 @@ function responsePartsEqual(
       && part.context_before_item_id === other.context_before_item_id
       && part.context_anchor_ordinal === other.context_anchor_ordinal
       && part.context_source_revision === other.context_source_revision
-      && part.source.message_sequence === other.source.message_sequence
-      && part.source.content_block_index === other.source.content_block_index
-      && part.source.item_index === other.source.item_index
-      && part.source.call_index === other.source.call_index
-      && part.source.result_message_sequence === other.source.result_message_sequence;
+      && Object.keys(part.source).length === Object.keys(other.source).length
+      && (Object.keys(part.source) as Array<keyof typeof part.source>).every(key => part.source[key] === other.source[key]);
   });
 }
 
@@ -162,7 +158,6 @@ export function areChatTurnPropsEqual(
     || previous.sessionBusy !== next.sessionBusy
     || previous.onLoadAgentStateMessageRawContent !== next.onLoadAgentStateMessageRawContent
     || previous.onLoadTurnDetails !== next.onLoadTurnDetails
-    || previous.onLoadToolDetails !== next.onLoadToolDetails
     || previous.onReplayTurn !== next.onReplayTurn
     || previous.onRemovePending !== next.onRemovePending
     || previous.onChangePendingPolicy !== next.onChangePendingPolicy
@@ -187,10 +182,14 @@ export function areChatTurnPropsEqual(
   }
   return left.turnId === right.turnId
     && left.turnRevision === right.turnRevision
+    && left.turnStatus === right.turnStatus
+    && left.turnFailure === right.turnFailure
     && left.sessionId === right.sessionId
     && left.threadId === right.threadId
     && left.sourceViewId === right.sourceViewId
     && left.sourceViewRevision === right.sourceViewRevision
+    && left.activityOutline?.beforeCursor === right.activityOutline?.beforeCursor
+    && left.bodyEvicted === right.bodyEvicted
     && left.turnItemsView === right.turnItemsView
     && left.status === right.status
     && left.pending === right.pending

@@ -50,11 +50,11 @@ async def test_release_completes_and_unlocks_peer_while_first_revision_waits(
     entered, release, peer_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
     original = bundle.transport.sync_owner_revision
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         if resource_id == rid:
             entered.set()
             await release.wait()
-        await original(resource_id, revision, for_stop=for_stop)
+        await original(resource_id, revision, for_stop=for_stop, **revision_options)
         if resource_id == peer:
             peer_done.set()
 
@@ -241,11 +241,11 @@ async def test_release_deadline_covers_preflight_and_dispatch_without_false_rele
             await release.wait()
         return await original_get(resource_id)
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         if resource_id == rid and ((phase == "revision" and for_stop) or (phase == "recovery" and not for_stop)):
             entered.set()
             await release.wait()
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
     async def deleting(resource_id: str) -> dict[str, object]:
         if resource_id == rid and phase == "delete":

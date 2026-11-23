@@ -20,7 +20,7 @@ from configs.runtime import read_jsonc_object, validate_config
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -110,7 +110,7 @@ def shutdown_environment(
     config["agents"]["default"]["model"]["fallbacks"] = []
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
-    ] = f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(21)}"
+    ] = f"http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(21)}"
     validate_config(config, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     with ExitStack() as lifetime:
         lifetime.callback(config_path.write_bytes, before)
@@ -133,9 +133,9 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
     prepared_developer_tools_package: Path,
 ) -> None:
     workspace = Path(integration_workspace_root_path)
-    output = workspace.parent / "artifacts"
-    output.mkdir(exist_ok=True)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    output = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
+    output.mkdir(parents=True, exist_ok=True)
+    ports = integration_ports_for_file(Path(request.node.path))
     boxteam_home = Path(os.environ["BOXTEAM_HOME"])
     copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     gateway = start_gateway_process(

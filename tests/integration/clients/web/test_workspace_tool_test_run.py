@@ -21,7 +21,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -40,7 +40,7 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
     prepared = os.getenv("BOXTEAM_TOOLS_UI_ASSETS")
     assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     workspace = prepare_default_test_workspace(
         workspace_root=context.workspace_root / context.run_root.name,
         template_root=root / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True,

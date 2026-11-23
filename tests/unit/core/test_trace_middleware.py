@@ -197,7 +197,7 @@ def test_failed_request_trace_is_emitted_with_exception(
     assert response.headers["X-Request-ID"] == "req_trace_failure"
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=RuntimeError",
+        "message": "请求处理失败: stage=http_request, error=RuntimeError, reason=测试请求失败",
         "data": None,
         "request_id": "req_trace_failure",
     }
@@ -297,7 +297,8 @@ def test_gateway_identity_consumers_reject_invalid_header(
             },
         )
         assert response.status_code == 500
-        assert response.json()["message"] == "请求处理失败: stage=http_request, error=ValueError"
+        assert response.json()["message"] == ("请求处理失败: stage=http_request, error=ValueError, reason="
+            + f"非法 gateway_id（要求 gateway_<32位小写hex>）: {gateway_id!r}")
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "invalid-gateway"
     assert get_current_gateway_id() is None
 
@@ -397,16 +398,11 @@ async def test_stream_chunk_is_forwarded_and_started_response_error_propagates(
         release_app.set()
         with pytest.raises(RuntimeError, match="流式响应开始后失败"):
             await task
-        record = next(
-            record
-            for record in caplog.records
-            if record.exc_info and record.exc_info[1]
-            and any("request_id=req_stream" in note for note in record.exc_info[1].__notes__)
-        )
-        assert record.exc_info is not None
-        assert record.exc_info[1] is not None
-        assert any("response_started=true" in note and "status=200" in note for note in record.exc_info[1].__notes__)
-        assert str(record.exc_info[1]) == "流式响应开始后失败"
+        diagnostic = next(record.getMessage() for record in caplog.records
+                          if "request_id=req_stream" in record.getMessage())
+        assert "response_started=true" in diagnostic and "status=200" in diagnostic
+        assert "流式响应开始后失败" in diagnostic
+        assert all(record.exc_info is None for record in caplog.records)
     finally:
         release_app.set()
         if not task.done():
@@ -494,6 +490,7 @@ async def test_http_failure_keeps_native_diagnostics_and_original_stream_identit
         expected = "请求处理失败: stage=http_request, error=" + error_type.__name__
         if error_type is OSError:
             expected += ", errno=5"
+        expected += ", reason=" + str(failure)
         if sink_fails:
             expected += ", diagnostic_sink_error=OSError"
         assert messages[0]["status"] == 500
@@ -503,7 +500,8 @@ async def test_http_failure_keeps_native_diagnostics_and_original_stream_identit
     if sink_fails:
         assert any(str(sink) in note for note in failure.__notes__)
     else:
-        assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+        assert all(record.exc_info is None for record in caplog.records)
+        assert str(failure) in caplog.text
         assert str(cause) in caplog.text and f"cleanup failed: {native_location}" in caplog.text
     fail_request = False
     messages.clear()

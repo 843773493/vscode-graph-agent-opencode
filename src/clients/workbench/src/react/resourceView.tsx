@@ -143,7 +143,7 @@ export function ResourceView({ input, runtime, editors, groupId, commands, activ
       onOpenSessionChangeFile={file => {
         const id = state.selectedChangesetId;
         if (!id) { onError(t('thread.resources.changesNotLoaded')); return; }
-        void editors.openEditor({ original: { resource: changeFileUri(owner, id, file, 'before') }, modified: { resource: changeFileUri(owner, id, file, 'after') }, label: file.file_path, options: { pinned: true } }).catch((cause: unknown) => onError(t('thread.resources.openChangesFailed', String(cause))));
+        void editors.openEditor({ original: { resource: changeFileUri(owner, id, file, 'before') }, modified: { resource: changeFileUri(owner, id, file, 'after') }, label: file.file_path, options: { pinned: true, sourceGroup: groupId } }).catch((cause: unknown) => onError(t('thread.resources.openChangesFailed', String(cause))));
       }}
       onOpenFile={filePreview.openWorkspaceFilePreview} onFileOpenMenu={onFileOpenMenu} onStatusChange={reportResourceStatus}
       attachmentPreview={attachment ? <WorkspaceAttachmentPreview attachment={attachment} apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId}
@@ -158,7 +158,7 @@ export function ResourceView({ input, runtime, editors, groupId, commands, activ
           const file = await revealWorkspaceFileEntry(0, path, owner.workspaceKey);
           const root = resourceFileRootUri(file.path);
           if (!root) throw new Error(t('thread.resources.debugRootMissing'));
-          await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root) });
+          await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root), options: { sourceGroup: groupId } });
         }} onStatusChange={reportResourceStatus} />}
       threadPanel={<ChildThreadPanel {...children} sessionId={owner.sessionId}
         mainThreadId={state.currentSession?.thread_id ?? null} activeThreadId={owner.threadId}

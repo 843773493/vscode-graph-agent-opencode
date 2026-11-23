@@ -17,7 +17,7 @@ from app.schemas.internal_v2.session import SessionTaskContext
 
 def create_session_subagent_tool(
     *,
-    parent_session_id: str,
+    parent_session_id: str | None,
     parent_agent_id: str,
     session_subagent_service: SessionSubagentProtocol,
     invocation_context: ToolInvocationContext,
@@ -55,8 +55,11 @@ def create_session_subagent_tool(
         if not parent_job_id:
             raise RuntimeError("task 工具调用缺少当前 job_id")
 
+        binding = invocation_context.thread_binding
+        if binding is None or binding.session_id != parent_session_id:
+            raise RuntimeError("task 缺少精确 source thread binding")
         accepted = await session_subagent_service.delegate(
-            parent_session_id=parent_session_id,
+            parent_session_id=binding.session_id,
             parent_thread_id=require_current_execution_admission().thread_id,
             parent_agent_id=parent_agent_id,
             parent_job_id=parent_job_id,

@@ -96,7 +96,7 @@ export async function agentSpecContract(mode) {
     return { object: {}, dispose() { released += 1; } }; } };
   const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) },
     { openEditor: async (input, id) => opened.push({ source: sourceDocumentSource(input.resource), options: input.options, group: id }) },
-    groups, configuration, models, {}, { getAssociationsForResource: () => [] });
+    groups, models, {}, { getAssociationsForResource: () => [] });
   const notifications = { error: cause => errors.push(String(cause)) };
   const focusHost = focusMode ? new PickerHost() : undefined;
   const picker = focusHost?.createQuickPick() ?? { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
@@ -112,7 +112,7 @@ export async function agentSpecContract(mode) {
   const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications, commands, {});
   const options = mode === 'no-owner' ? { searchOwnerError: '发起来源未明确' } : { searchOwners: focusMode ? [owners[0]] : owners };
   const controller = focusMode ? new QuickAccessController({ createQuickPick: () => picker }, { createInstance: () => provider },
-    { contextMatchesRules: () => true, getContextKeyValue: () => undefined }, {}) : undefined;
+    { contextMatchesRules: () => true, getContextKeyValue: () => undefined }, {}, groups) : undefined;
   const pendingPick = controller?.pick('resource ', { canPickMany: mode === 'focus-many-cancel', providerOptions: options });
   const lifetime = focusMode ? { dispose() {} } : provider.provide(picker, cancellation.token, options);
   let focus;
@@ -188,11 +188,19 @@ export async function agentSpecContract(mode) {
 /** 真实 Opener／客户端；只替换目录回执和编辑器宿主，验证异步准入期间的身份切换。 */
 export async function resourceOpenTargetContract(mode) {
   const previous = workspaceContext.getSnapshot(), owner = owners[0];
+  const subscribe = workspaceContext.subscribe, subscriptions = new Set();
+  workspaceContext.subscribe = listener => {
+    const release = subscribe(listener);
+    subscriptions.add(release);
+    return () => { subscriptions.delete(release); release(); };
+  };
   const target = { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, status: 'ready' };
   const sessionId = 'sess_20261112_000000_lifetime', threadId = 'thread_lifetime_exact';
   const kind = mode.split('-')[0], root = `boxteam://workspace/${owner.workspaceId}/resources/files/workspace`;
   const uri = kind === 'file' ? root + '/same.png'
-    : `boxteam://workspace/${owner.workspaceId}/resources/session/${sessionId}${kind === 'thread' ? '/threads/' + threadId : ''}`;
+    : `boxteam://workspace/${owner.workspaceId}/resources/session/${sessionId}${['thread', 'item'].includes(kind) ? '/threads/' + threadId : ''}${kind === 'item' ? '/items/internal-item' : ''}`;
+  const location = { item_id: 'internal-item', semantic_kind: 'reasoning', execution_id: 'internal-execution',
+    ...(mode === 'item-with-turn' ? { turn_id: 'ordinary-turn' } : {}), content_hash: 'hash', byte_length: 20 };
   const requests = [], opened = [], errors = [], inputs = [];
   let addedGroups = 0;
   workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId });
@@ -202,7 +210,12 @@ export async function resourceOpenTargetContract(mode) {
     if (path.endsWith('/parse')) return ok({ gateway_id: owner.gatewayId, scope: 'workspace', scope_id: owner.workspaceId,
       kind: kind === 'file' ? 'files' : 'session', uri, reference_uri: uri,
       file_root_uri: kind === 'file' ? root : null, session_id: kind === 'file' ? null : sessionId,
-      thread_id: kind === 'thread' ? threadId : null });
+      thread_id: ['thread', 'item'].includes(kind) ? threadId : null, item_id: kind === 'item' ? location.item_id : null });
+    if (path === `/api/v1/sessions/${sessionId}/threads/${threadId}/items/inspect`) {
+      if (JSON.parse(String(init.body)).operation !== 'location') throw new Error('定位不得额外读取 Item 正文');
+      if (mode === 'item-identity') invalidateGatewayToken(0);
+      return ok({ contents: [], ...(mode === 'item-location-missing' ? {} : { location }) });
+    }
     if (path === '/api/gateway/workspaces') {
       if (mode.endsWith('route-identity')) invalidateGatewayToken(0);
       if (mode.endsWith('route-gateway-returned')) {
@@ -228,15 +241,17 @@ export async function resourceOpenTargetContract(mode) {
       else opened.push({ source: workspaceFileSource(input.resource), group: options, options: input.options });
     },
   }, { activeGroup: { id: 7 }, getGroup: id => ({ id }), findGroup: () => undefined,
-    addGroup: () => { addedGroups++; return { id: 8 }; } }, { getValue: () => 'right' }, {
+    addGroup: () => { addedGroups++; return { id: 8 }; } }, {
     createModelReference: async () => { throw new Error('文件或Thread不得先读取只读来源'); },
   }, {}, { getAssociationsForResource: () => [] });
   try {
     try { await opener.open(uri, { boxteamResourceOwner: owner, openToSide: true, editorOptions: { pinned: true } }); }
     catch (cause) { errors.push(String(cause)); }
-    return { requests, opened, errors, addedGroups, owner, threadId };
+    return { requests, opened, errors, addedGroups, owner, threadId, location, subscriptionsAfterOpen: subscriptions.size };
   } finally {
     for (const input of inputs) input.dispose();
-    opener.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
+    opener.dispose(); unwrapSessionApiFetch();
+    for (const release of subscriptions) release();
+    workspaceContext.subscribe = subscribe; workspaceContext.publish(previous);
   }
 }

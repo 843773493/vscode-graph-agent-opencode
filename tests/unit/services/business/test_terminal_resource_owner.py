@@ -32,6 +32,32 @@ def terminal_owner(tmp_path: Path) -> TerminalOwnerFixture:
     return build_terminal_owner_fixture(tmp_path)
 
 
+async def test_association_changes_preserve_only_previously_authorized_surviving_connections(
+    terminal_owner: TerminalOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource = await terminal_owner.create()
+    rid = str(resource["resource_id"])
+    original = terminal_owner.transport.sync_owner_revision
+    retained: list[list[str | None] | None] = []
+
+    async def sync(resource_id: str, revision: int, *, for_stop: bool, retained_associations=None) -> None:
+        retained.append(retained_associations)
+        await original(resource_id, revision, for_stop=for_stop, retained_associations=retained_associations)
+
+    monkeypatch.setattr(terminal_owner.transport, "sync_owner_revision", sync)
+    await terminal_owner.command(rid, action="promote", expected_revision=1)
+    assert retained[-1] == [f"{SESSION_A}/{THREAD_A}"]
+    await terminal_owner.command(rid, action="attach", expected_revision=2, thread=ThreadRef(SESSION_B, THREAD_B))
+    assert retained[-1] == [f"{SESSION_A}/{THREAD_A}", None]
+    await terminal_owner.command(rid, action="detach", expected_revision=3, thread=ThreadRef(SESSION_A, THREAD_A))
+    assert retained[-1] == [f"{SESSION_B}/{THREAD_B}", None]
+    await terminal_owner.owner.cleanup_session(SESSION_B)
+    assert retained[-1] == [None]
+    current = await terminal_owner.owner.get_resource(rid)
+    await terminal_owner.command(rid, action="stop", expected_revision=current["owner_revision"])
+    assert retained[-1] is None
+
+
 async def test_list_has_command_summary_and_detail_has_selected_output(terminal_owner: TerminalOwnerFixture) -> None:
     first, second = await terminal_owner.create(), await terminal_owner.create()
     for item, text in ((first, "第一个终端输出"), (second, "第二个终端输出")):
@@ -366,11 +392,11 @@ async def test_management_and_grant_have_real_request_leases_and_do_not_add_asso
         assert len(leases) == 1
         observed.append((leases[0].turn_stream_id, leases[0].operation_id))
 
-    async def sync_checked(terminal_id: str, revision: int, *, for_stop: bool) -> None:
+    async def sync_checked(terminal_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         record_lease()
         saved = json.loads((terminal_owner.root / ".boxteam" / "terminal-resources.json").read_text())
         assert saved["records"][0]["owner_revision"] == revision
-        await sync(terminal_id, revision, for_stop=for_stop)
+        await sync(terminal_id, revision, for_stop=for_stop, **revision_options)
 
     async def grant_checked(terminal_id: str, **arguments: object) -> dict[str, object]:
         record_lease()
@@ -696,11 +722,11 @@ def revision_barrier(
         entered, release = asyncio.Event(), asyncio.Event()
         sync = terminal_owner.transport.sync_owner_revision
 
-        async def blocked(resource_id: str, revision: int, *, for_stop: bool) -> None:
+        async def blocked(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
             # 真实 owner 已持锁并落盘新 revision，传输同步回执在此挂起。
             entered.set()
             await release.wait()
-            await sync(resource_id, revision, for_stop=for_stop)
+            await sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
         monkeypatch.setattr(terminal_owner.transport, "sync_owner_revision", blocked)
         return entered, release
@@ -880,10 +906,10 @@ async def test_fork_dispatching_marker_does_not_replay_after_lost_transport_rece
     original = terminal_owner.transport.sync_owner_revision
     calls = 0
 
-    async def sync_then_lose(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def sync_then_lose(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         nonlocal calls
         calls += 1
-        await original(resource_id, revision, for_stop=for_stop)
+        await original(resource_id, revision, for_stop=for_stop, **revision_options)
         raise ConnectionError("传输已更新但响应丢失")
 
     monkeypatch.setattr(terminal_owner.transport, "sync_owner_revision", sync_then_lose)

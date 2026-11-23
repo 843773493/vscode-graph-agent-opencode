@@ -52,6 +52,13 @@ class SearchToolsInput(BaseModel):
         return self
 
 
+SEARCH_TOOLS_TOOL = StructuredTool(
+    name=TOOL_DISCOVERY_NAME, args_schema=SearchToolsInput,
+    description="按任务 query 搜索扩展工具，或用 tool_ids 读取完整定义。二者互斥。结果包含完整参数契约、策略、版本和实际调用入口；needs_read 须先用普通文件工具读取 read_path 的完整定义。只发现，不执行。续页须保持原查询和响应限制。",
+    handle_tool_error=True,
+)
+
+
 def create_search_tools_tool(
     *, catalog_resolver: Callable[[], FrozenToolCatalog],
     policy_resolver: Callable[[FrozenToolCatalog], Mapping[str, ToolCapabilityPolicy]],
@@ -84,8 +91,4 @@ def create_search_tools_tool(
         except (ExtensionCatalogBindingError, ResourceActivationStoreError, ToolSearchConflict, ToolSearchStorageError) as error:
             raise ToolException(str(error)) from error
 
-    return StructuredTool.from_function(
-        coroutine=search_tools, name=TOOL_DISCOVERY_NAME, args_schema=SearchToolsInput,
-        description="按任务 query 搜索扩展工具，或用 tool_ids 读取完整定义。二者互斥。结果包含完整参数契约、策略、版本和实际调用入口；needs_read 须先用普通文件工具读取 read_path 的完整定义。只发现，不执行。续页须保持原查询和响应限制。",
-        handle_tool_error=True,
-    )
+    return SEARCH_TOOLS_TOOL.model_copy(update={"coroutine": search_tools})

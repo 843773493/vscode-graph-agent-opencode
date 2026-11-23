@@ -1,6 +1,11 @@
 import '../../../../harness/js/workbench-locale.ts';
 import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
+import { ThreadPane } from '../../../../../src/clients/workbench/src/threadPane.js';
+import { InMemoryStorageService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/storage/common/storage.js';
+import { CancellationToken } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { EditorPaneSelectionChangeReason } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/common/editor.js';
+import { ChatSurface } from '../../../../../src/clients/workbench/src/react/chatView.js';
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
 import { GotoSymbolQuickAccessProvider } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/codeEditor/browser/quickaccess/gotoSymbolQuickAccess.js';
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
@@ -18,6 +23,109 @@ export { contentSelectionContract } from './content_selection.fixture.mjs';
 export { quickAccessControllerContract } from './quick_access_controller.fixture.mjs';
 export { typingSearchContract } from './typing_performance.fixture.mjs';
 export { canonicalSearchContract } from './canonical_search.fixture.mjs';
+
+/** 真实恢复入口与具名阅读控制器；原生恢复不得成为主动展示切换。 */
+export function viewportRestoreContract(ready) {
+  class Surface extends ChatSurface { render() {} }
+  const container = document.body.appendChild(document.createElement('div'));
+  const moves = [], shows = [], reasons = [];
+  const controller = { capture: () => undefined, navigate: (position, preview) => moves.push({ position, preview }),
+    showConversation: preview => shows.push(preview ?? false), cancel() {} };
+  const instantiation = { createInstance: () => ({ dispose() {}, hide() {} }),
+    invokeFunction: callback => callback({ get: () => ({ error() {} }) }) };
+  const surface = new Surface(container, {}, {}, true, () => {}, {}, {}, [], instantiation, 7, async () => {}, reason => reasons.push(reason));
+  const location = { kind: 'viewport', position: { reading_anchor: null, follow_latest: true } };
+  try {
+    if (ready) surface.onViewportReady(controller);
+    surface.revealLocation(location, EditorPaneSelectionChangeReason.PROGRAMMATIC);
+    if (!ready) surface.onViewportReady(controller);
+    const restored = { moves: [...moves], shows: [...shows], location: surface.getLocation() };
+    surface.revealLocation(location);
+    return { restored, moves, shows, reasons };
+  } finally { surface.dispose(); container.remove(); }
+}
+
+/** 实际 Pane setInput／clearInput 和原 memento；仅路由解析及宿主服务为具名边界。 */
+export async function threadViewStateContract() {
+  const storage = new InMemoryStorageService(), reasons = [];
+  const theme = { getColorTheme: () => ({}), onDidColorThemeChange: Event.None };
+  let restore = true;
+  const configuration = { onDidChangeConfiguration: Event.None,
+    getValue: (_resource, key) => key === 'workbench.editor.restoreViewState' ? restore : false };
+  const group = { id: 21, contains: () => true }, otherGroup = { id: 22, contains: () => true };
+  const groups = { getGroup: id => [group, otherGroup].find(item => item.id === id) };
+  const instantiation = { createInstance: () => ({ dispose() {}, hide() {} }),
+    invokeFunction: callback => callback({ get: () => ({ error() {} }) }) };
+  class Input extends ThreadInput { async resolveOwner() { return { owner: this.owner, workspaces: [] }; } }
+  class Pane extends ThreadPane { mount(parent) { this.createEditor(parent); } }
+  const makeInput = () => new Input({ gatewayId: 'gateway-a', workspaceId: 'workspace-a',
+    workspaceKey: '', sessionId: 'state-session', threadId: 'state-thread', title: '原生视图态' });
+  const makePane = selectedGroup => new Pane(selectedGroup, {}, theme, storage, configuration, {}, {}, groups, instantiation, {}, {}, {});
+  const container = document.body.appendChild(document.createElement('div'));
+  const pane = makePane(group), other = makePane(otherGroup), inputs = [makeInput(), makeInput(), makeInput()];
+  pane.mount(container); other.mount(container.appendChild(document.createElement('div')));
+  const listener = pane.onDidChangeSelection(event => reasons.push(event.reason));
+  const first = { reading_anchor: null, follow_latest: true }, second = { reading_anchor: null, follow_latest: false };
+  const open = (target, input, options, newInGroup = false) => target.setInput(input, options, { newInGroup }, CancellationToken.None);
+  try {
+    await open(pane, inputs[0], { boxteamViewport: first });
+    pane.clearInput();
+    await open(pane, inputs[0]);
+    const switchedBack = pane.getViewState().threadLocation;
+    await open(other, inputs[1], { boxteamViewport: second }); other.clearInput();
+    await open(other, inputs[1]);
+    const separateGroup = other.getViewState().threadLocation;
+    pane.clearInput(); inputs[0].dispose();
+    await open(pane, inputs[2], inputs[2].toUntyped().options, true);
+    const reopened = pane.getViewState().threadLocation;
+    pane.clearInput();
+    await open(pane, inputs[2], { viewState: { resourcesVisible: true, resourceTab: 'debug' } });
+    const partialOptions = pane.getViewState();
+    pane.clearInput(); restore = false;
+    await open(pane, inputs[2], undefined, false);
+    const existingWithRestoreDisabled = pane.getViewState().threadLocation;
+    pane.clearInput();
+    await open(pane, inputs[2], undefined, true);
+    const newWithRestoreDisabled = pane.getViewState().threadLocation;
+    pane.clearInput();
+    await open(pane, inputs[2], { viewState: { threadLocation: { kind: 'viewport', position: second } }, boxteamViewport: first });
+    return { switchedBack, separateGroup, reopened, partialOptions, newWithRestoreDisabled: newWithRestoreDisabled ?? null,
+      existingWithRestoreDisabled, explicit: pane.getViewState().threadLocation, reasons };
+  } finally {
+    listener.dispose(); pane.dispose(); other.dispose();
+    for (const input of inputs) input.dispose(); storage.dispose(); container.remove();
+  }
+}
+
+/** 真实宿主的阅读控制器接线；渲染和控制器是具名边界，不代替完整页面。 */
+export function loadingPreviewRestoreContract(accept) {
+  class Surface extends ChatSurface { render() {} }
+  const container = document.body.appendChild(document.createElement('div'));
+  const events = [], moves = [];
+  const original = { reading_anchor: null, follow_latest: true };
+  const controller = { capture: () => original, capturePresentation: () => () => events.push('presentation'),
+    navigate: (position, preview) => moves.push({ position, preview }), cancel: () => events.push('cancel'),
+    showConversation: preview => events.push(preview ? 'preview-presentation' : 'conversation') };
+  const instantiation = { createInstance: () => ({ dispose() {}, hide() {} }), invokeFunction: callback => callback({ get: () => ({ error() {} }) }) };
+  const surface = new Surface(container, {}, {}, true, () => {}, {}, {}, [], instantiation, 7, async () => {}, () => events.push('selection'));
+  try {
+    surface.onViewportReady(controller);
+    const restore = surface.captureViewState();
+    const preview = surface.revealTurn('preview-turn', true);
+    // around 读取使真实 Hook 暂时卸下控制器；Esc 在重新挂载之前到达。
+    surface.onViewportReady(undefined);
+    restore.dispose();
+    const afterCancel = [...events];
+    preview.dispose();
+    if (accept) surface.revealLocation({ kind: 'viewport', position: { reading_anchor: null, follow_latest: false } });
+    surface.onViewportReady(controller);
+    surface.onViewportReady(undefined);
+    surface.onViewportReady(controller);
+    const observed = { afterCancel, events: [...events], moves };
+    surface.onCloseNavigation();
+    return { ...observed, closedLocation: surface.getLocation() };
+  } finally { surface.dispose(); container.remove(); }
+}
 
 /** 原非文本 Provider 的分页更新，不替代真实 Thread 页面接线验收。 */
 export async function outlineContract(accept) {
@@ -69,25 +177,25 @@ const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
 function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } },
   editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false, instantiation,
-  notifications = { error(error) { throw error; } }, quickInput = {}) {
+  notifications = { error(error) { throw error; } }, quickInput = {}, configuration = { getValue: () => undefined }) {
   const changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
     buttons: [], quickNavigate: quickNavigate ? { keybindings: [] } : undefined, onDidTriggerButton: buttons.event,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
-    onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
+    onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; if (!this.selectedItems.length) cancellation.cancel(); lifetime.dispose(); } };
   const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined,
     findGroup: () => undefined, addGroup() { const added = { id: this.groups.length + 2 }; this.groups.push(added); return added; } };
   const provider = new WorkspaceQuickAccess(instantiation ?? { createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
     { getHistory: () => history, removeFromHistory(editor) { history.splice(history.indexOf(editor), 1); } },
-    { getValue: () => undefined }, quickInput, {}, { lookupKeybinding: () => undefined }, opener, notifications, { enabled: false }, {});
+    configuration, quickInput, {}, { lookupKeybinding: () => undefined }, opener, notifications, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, groups, accepts, triggerButton: button => buttons.fire(button), change(value) { picker.value = value; changes.fire(); },
     dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose(); } };
 }
 
 /** 只替换语言服务与模型引用，核真实 Provider 的模式转换和引用释放。 */
-export async function fileSymbolContract() {
-  const patterns = [], previews = [], symbols = [], releases = [], opened = [];
+export async function fileSymbolContract(mode) {
+  const patterns = [], previews = [], symbols = [], releases = [], opened = [], sequence = [], restoredStates = [];
   const files = [uri('symbol-a.json'), uri('symbol-b.json')];
   const symbolProvider = { getSymbolPicks(model, filter) {
     symbols.push({ resource: model.uri.toString(), filter });
@@ -95,8 +203,11 @@ export async function fileSymbolContract() {
       range: { selection: { startLineNumber: 3, startColumn: 3, endLineNumber: 3, endColumn: 7 },
         decoration: { startLineNumber: 3, startColumn: 1, endLineNumber: 4, endColumn: 1 } } }]);
   } };
-  const editors = { openEditor(input, group) {
+  const editors = { activeEditorPane: { input: {}, getControl() {}, getViewState: () => ({ position: "before-preview" }), group: {
+    async openEditor(_editor, options) { restoredStates.push(options.viewState); sequence.push('restore-start'); await Promise.resolve(); sequence.push('restore-end'); },
+  } }, openEditor(input, group) {
     (input.options.transient ? previews : opened).push({ resource: input.resource.toString(), options: input.options, group });
+    if (!input.options.transient) sequence.push('open');
     return Promise.resolve();
   } };
   const instantiation = {
@@ -126,10 +237,11 @@ export async function fileSymbolContract() {
     result = { ids, restoredIds: f.picker.items.map(item => item.id), active: f.picker.activeItems[0]?.id };
     f.change('symbol@beta'); await settle();
     f.picker.activeItems = f.picker.selectedItems = [f.picker.items[0]];
+    f.picker.keyMods.alt = mode === 'side';
     f.accepts.fire({ inBackground: false });
     await settle();
   } finally { f.dispose(); }
-  return { ...result, patterns, previews, symbols, releases, opened, target: files[1].toString() };
+  return { ...result, patterns, previews, symbols, releases, opened, sequence, restoredStates, target: files[1].toString() };
 }
 
 export async function quickNavigateContract() {
@@ -161,12 +273,12 @@ export async function quickNavigateContract() {
   } finally { f?.dispose(); registration.dispose(); globalThis.fetch = fetch; }
 }
 
-export function uriContract() {
+export async function uriContract() {
   const calls = [];
   for (const uri of [root + '/name%40target.txt', root + '/name%40target.txt#L2', 'https://example.test/file',
     'https://example.test:8042', 'https://example.test/file:2:3', 'https://example.test/#7', 'https://example.test/report,12']) {
     const f = defaultAccess({ searchOwner: owner }, [], { open(resource, options) {
-      calls.push({ uri: resource, group: options.boxteamTargetGroup, side: options.openToSide,
+      calls.push({ uri: resource, group: options.editorOptions?.sourceGroup, side: options.openToSide,
         pinned: options.editorOptions.pinned, preserveFocus: options.editorOptions.preserveFocus });
       return Promise.resolve(true);
     } });
@@ -175,6 +287,7 @@ export function uriContract() {
       f.picker.keyMods.alt = true;
       f.picker.activeItems = f.picker.selectedItems = [f.picker.items[0]];
       f.accepts.fire({ inBackground: true });
+      await new Promise(resolve => setTimeout(resolve, 0));
     } finally { f.dispose(); }
   }
   return calls;
@@ -328,8 +441,8 @@ export async function symbolContract() {
   const registration = WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols(query) { calls.push(query); queried.resolve(); return []; } });
   const provider = new WorkspaceSymbolsQuickAccess({}, {}, {}, { getValue: () => ({}) }, {}, {},
     { getWorkspace: () => ({ folders: ['workspace-a', 'workspace-b'].map(workspaceId => ({ uri: workspaceFileUri({ ...owner, workspaceId },
-      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) });
-  const changes = new Emitter(), accepts = new Emitter(), token = new CancellationTokenSource();
+      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) }, { activeGroup: { id: 7 } });
+  const changes = new Emitter(), accepts = new Emitter(), itemButtons = new Emitter(), token = new CancellationTokenSource();
   const picker = { value: '#needle', items: [], activeItems: [], keyMods: { alt: false, ctrlCmd: false },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None };
   const lifetime = [];
@@ -354,7 +467,7 @@ export async function symbolContract() {
   } finally {
     token.dispose(true);
     lifetime.forEach(item => item.dispose());
-    provider.dispose(); registration.dispose(); changes.dispose(); accepts.dispose();
+    provider.dispose(); registration.dispose(); changes.dispose(); accepts.dispose(); itemButtons.dispose();
   }
 }
 
@@ -379,7 +492,7 @@ export async function symbolProviderFailuresContract(mode) {
   const registrations = providers.map(provider => WorkspaceSymbolProviderRegistry.register(provider));
   const provider = new WorkspaceSymbolsQuickAccess({ getUriLabel: () => 'symbol-owner.ts' }, {}, {}, { getValue: () => ({}) }, {}, {},
     { getWorkspace: () => ({ folders: ['workspace-a', 'workspace-b'].map(workspaceId => ({ uri: workspaceFileUri({ ...owner, workspaceId },
-      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) });
+      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) }, { activeGroup: { id: 7 } });
   const picker = { value: '#needle', items: [], activeItems: [], keyMods: { alt: false, ctrlCmd: false },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None };
   let lifetime;
@@ -426,4 +539,68 @@ export function helpContract() {
     lifetime.dispose(); cancellation.dispose(true); accepts.dispose(); changes.dispose();
     for (const registration of registrations) registration.dispose();
   }
+}
+
+
+/** 真实符号 Provider、异步 resolve 与原 finder 共用同一发起组。 */
+export async function symbolGroupContract(mode) {
+  const unscoped = mode.startsWith('unscoped-');
+  const action = unscoped ? mode.slice('unscoped-'.length) : mode;
+  const button = action === 'button' || action === 'button-cancel';
+  const sequence = [];
+  const { findGroup } = await import('../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupFinder.js');
+  const { IEditorGroupsService } = await import('../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupsService.js');
+  const source = { id: 7, editors: [], isLocked: !unscoped }, other = { id: 9, editors: [], isLocked: false };
+  const neighbor = { id: 8, editors: [], isLocked: action === 'side', isActive: () => false };
+  const created = { id: 10, editors: [], isLocked: false };
+  const groups = { activeGroup: other, getGroup: id => [source, other, neighbor, created].find(group => group.id === id),
+    getGroups: () => [other, source, neighbor], findGroup: (_location, from) => {
+      if (from !== source) throw new Error('符号侧开丢失发起组');
+      return neighbor;
+    }, addGroup: from => {
+      if (from !== source) throw new Error('符号建组丢失发起组');
+      return created;
+    } };
+  const opened = [], opening = Promise.withResolvers(), resolving = Promise.withResolvers(), resolved = Promise.withResolvers();
+  const configuration = { getValue: key => key === undefined ? { workbench: { editor: { enablePreview: true, enablePreviewFromQuickOpen: true } } }
+    : key === 'workbench.editor.useModal' ? 'off' : key === 'workbench.editor.openSideBySideDirection' ? 'right' : false };
+  const symbol = { name: 'group-symbol', kind: 1, location: { uri: uri('symbol.ts') } };
+  const registration = WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols: () => [symbol],
+    resolveWorkspaceSymbol: async () => { resolving.resolve(); await resolved.promise; return symbol; } });
+  const provider = new WorkspaceSymbolsQuickAccess({ getUriLabel: () => 'symbol.ts' }, {}, {
+    openEditor: async (input, preferred) => {
+      const [target, activation] = await findGroup({ get: service => service === IEditorGroupsService ? groups : configuration }, input, preferred);
+      opened.push({ target: target.id, activation, sourceGroup: input.options.sourceGroup }); sequence.push("open"); opening.resolve();
+    },
+  }, configuration, {}, {}, { getWorkspace: () => ({ folders: [{ uri: uri('') }] }) }, groups);
+  const changes = new Emitter(), accepts = new Emitter(), itemButtons = new Emitter(), token = new CancellationTokenSource();
+  const picker = { value: '#group', items: [], activeItems: [], selectedItems: [], keyMods: { alt: action !== 'open', ctrlCmd: false },
+    onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: itemButtons.event, onDidTriggerSeparatorButton: Event.None,
+    hide() { sequence.push("hide"); if (!this.selectedItems.length) token.cancel(); lifetime.dispose(); } };
+  const lifetime = provider.provide(picker, token.token, { searchGroup: source.id, ...(unscoped ? {} : { searchOwners: [owner] }) });
+  try {
+    for (let index = 0; index < 100 && !picker.items.some(item => item.symbol); index++) await new Promise(resolve => setTimeout(resolve, 10));
+    const pick = picker.items.find(item => item.symbol);
+    if (!pick) throw new Error('原符号 Provider 未生成候选');
+    picker.activeItems = [pick];
+    if (button) itemButtons.fire({ item: pick, button: pick.buttons[0] });
+    else { picker.selectedItems = [pick]; accepts.fire({ inBackground: action === 'background-side' }); }
+    await resolving.promise;
+    groups.activeGroup = other;
+    if (action === 'button-cancel') picker.hide();
+    resolved.resolve();
+    if (action !== 'button-cancel') await opening.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return button ? { opened, sequence } : opened;
+  } finally {
+    resolved.resolve(); lifetime.dispose(); token.dispose(true); provider.dispose(); registration.dispose(); changes.dispose(); accepts.dispose(); itemButtons.dispose();
+  }
+}
+
+
+export async function sideDirectionContract(direction) {
+  const f = defaultAccess({ searchOwner: owner }, [{ resource: uri('side.txt') }], undefined, undefined,
+    true, undefined, undefined, {}, { getValue: key => key === 'workbench.editor.openSideBySideDirection' ? direction : undefined });
+  try { return f.picker.items.find(item => item.resource)?.buttons[0]; }
+  finally { f.dispose(); }
 }

@@ -224,7 +224,7 @@ def _retryable_browser_error_result(error: BrowserRequestError) -> str:
 @asynccontextmanager
 async def _browser_operation(context: CustomToolFactoryContext) -> AsyncIterator[BrowserOperations]:
     binding = context.invocation_context.thread_binding
-    if binding is None or binding.session_id != context.session_id:
+    if binding is None:
         raise RuntimeError("Browser 工具缺少匹配会话的真实 ThreadRuntimeBinding")
     admission = require_current_execution_admission(langgraph_thread_id=binding.thread_id)
     if (admission.session_id, admission.thread_id) != (binding.session_id, binding.thread_id):

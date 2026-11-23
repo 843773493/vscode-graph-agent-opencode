@@ -71,6 +71,7 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 async function openWorkbenchPage(page) {
   const target = new URL(baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0);
 }
 
 function isSessionMessageRequest(request) {
@@ -573,6 +574,7 @@ const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
 const perf = new Perf(runContext);
 let page;
 let executionError;
+let heldFinalCall;
 const pageErrors = [];
 const streamResponses = [];
 const traceStreams = [];
@@ -641,7 +643,8 @@ try {
 
   result.phase = "thread-open";
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.getByTestId(`workspace-node-${workspaceSelectionKey(owner)}`)).toBeVisible();
+  await page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0);
+  await expect(page.getByTestId(`workspace-node-${workspaceSelectionKey(owner)}`)).toBeVisible({timeout:30_000});
   const sessionButton = sessionRow(page, owner);
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
   await sessionButton.click();
@@ -661,6 +664,13 @@ try {
   result.phase = "navigation-clipboard-failure";
   result.clipboardFailure = await verifyClipboardFailure(page, owner, composer);
 
+  // 持有真实第二次模型响应：过程已运行，终态尚未提交。
+  heldFinalCall = modelCallIds[1];
+  expect(typeof heldFinalCall).toBe("string");
+  await testControl({ action: "arm", operation_id: heldFinalCall, phase: "model.response_ready" });
+  runContext.addCleanup("最终响应屏障", async () => {
+    if (heldFinalCall) await testControl({ action: "release", operation_id: heldFinalCall, phase: "model.response_ready" });
+  });
   result.phase = "send-message";
   const sendRequestPromise = page.waitForRequest(isSessionMessageRequest, {
     timeout: 30_000,
@@ -703,18 +713,36 @@ try {
     async () => streamResponses.some((url) => url.includes("/message-stream?")),
     "Turn message SSE",
   );
+  await testControl({ action: "acknowledged", operation_id: heldFinalCall, phase: "model.response_ready" });
+  const liveHeader = turn.locator(".chat-turn-activity > .chat-thinking-toggle");
+  await expect(liveHeader).toHaveAttribute("aria-expanded", "true");
+  await expect(turn.getByText(expectedFinalText, { exact: true })).toHaveCount(0);
+  const pendingDraft = "这条草稿不能被终态收起清除或抢走焦点";
+  await composer.fill(pendingDraft);
+  await expect(composer).toBeFocused();
+  await testControl({ action: "release", operation_id: heldFinalCall, phase: "model.response_ready" });
+  heldFinalCall = undefined;
   result.phase = "final-reply";
   await waitUntil(
     async () => turn.getByText(expectedFinalText, { exact: true }).isVisible(),
     "浏览器最终回复",
   );
+  await expect(liveHeader).toHaveAttribute("aria-expanded", "false");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue(pendingDraft);
+  result.autoFoldPreservedComposer = true;
+  await composer.fill("");
   result.phase = "tool-details";
   perf.record("end", "ui.send.final_visible", { stage_id: crypto.randomUUID(), status: "passed", inclusive: true,
     elapsed_ns: Math.round((performance.now() - sendStarted) * 1e6) });
   await observer.checkpoint("send.final_visible");
-  const thinkingToggle = turn.getByRole("button", { name: /^展开 Turn 中间消息：/ });
+  const thinkingToggle = turn.locator(".chat-turn-activity > .chat-thinking-toggle");
   await thinkingToggle.waitFor({ state: "visible", timeout: 30_000 });
   await thinkingToggle.click();
+  await expect(turn.locator(".chat-activity-group").first()).toBeVisible();
+  for (const group of await turn.locator('.chat-activity-group > button').all()) {
+    if (await group.getAttribute('aria-expanded') === 'false') await group.click();
+  }
   const completedTool = turn.locator(".chat-tool-row.is-complete").filter({
     hasText: "已运行 read_file",
   });

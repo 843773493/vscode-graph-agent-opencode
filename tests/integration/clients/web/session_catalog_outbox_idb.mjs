@@ -11,7 +11,7 @@ import { TestRunContext } from "../../../harness/js/run-context.mjs";
 const projectRoot = process.cwd();
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url), projectRoot);
 const artifactDirectory = runContext.artifactsDir;
-const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
+const runtimeDirectory = runContext.runtimeDir;
 await mkdir(runtimeDirectory, { recursive: true });
 for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
 const bundleDirectory = path.join(artifactDirectory, "bundle");

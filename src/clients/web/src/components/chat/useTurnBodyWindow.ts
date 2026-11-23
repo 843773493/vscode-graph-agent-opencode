@@ -41,7 +41,7 @@ export function useTurnBodyWindow({ items, scopeKey, retain, onError, onRendered
       item.kind === "turn" && item.conversation.turnId ? [item.conversation.turnId] : []);
     const executionItems = window.flatMap(item => item.kind === "internal_execution"
       ? [{ executionId: item.executionId, itemId: item.displayPart.item_id }]
-      : item.kind === "execution_response" ? [{ executionId: item.executionId, itemId: item.itemId }] : []);
+      : item.kind === "execution_response" ? item.parts.flatMap(part => part.source.item_id ? [{ executionId: item.executionId, itemId: part.source.item_id }] : []) : []);
     const identity = JSON.stringify([ids, executionItems]);
     if (identity === previousWindow.current) return;
     previousWindow.current = identity;

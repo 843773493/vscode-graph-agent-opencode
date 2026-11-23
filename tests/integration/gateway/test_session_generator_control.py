@@ -10,7 +10,8 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from configs.runtime import read_jsonc_object
-from tests.support.ports import integration_port_block_for_file
+from tests.harness.python.run_context import TestRunContext
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -37,8 +38,8 @@ def migration_gateway(request, integration_workspace_root_path):
     reset_gateway_persistent_state(workspace_root=workspace)
     home = workspace.parent / "boxteam-home"
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
-                                    port=integration_port_block_for_file(Path(request.node.fspath)).port(0),
-                                    boxteam_home=home, artifacts_dir=workspace.parent / "artifacts/gateway")
+                                    port=integration_ports_for_file(Path(request.node.fspath)).port(0),
+                                    boxteam_home=home, artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir / "gateway")
     try:
         yield gateway, workspace, home / "state/gateway"
     finally:

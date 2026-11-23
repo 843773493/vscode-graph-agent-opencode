@@ -24,7 +24,7 @@ pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
 @pytest.fixture
 def target_gateway_port(unused_tcp_port_factory: Callable[[], int]) -> Callable[[int], int]:
-    # 复用双 Gateway 装具；独立端口由 pytest 分配并交原 E2EProcessLease 核验。
+    # 复用双 Gateway 装具；独立端口由公共 TestFilePorts 分配并持有。
     ports = {offset: unused_tcp_port_factory() for offset in (0, 1, 20, 21, 22, 2)}
     return ports.__getitem__
 

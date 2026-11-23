@@ -250,9 +250,12 @@ async function ownerRequest(suffix = "", body = undefined) {
     cache: "no-store",
     headers: { ...backendRequestHeaders, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  }).catch(error => { throw Object.assign(error, { retryable: true }); });
+  if (!response.ok) throw Object.assign(
+    new Error(`终端 owner 请求失败 ${response.status}: ${await response.text()}`),
+    { retryable: response.status >= 500 || response.status === 409 || response.status === 429 },
+  );
   const payload = await response.json();
-  if (!response.ok) throw new Error(`终端 owner 请求失败 ${response.status}: ${JSON.stringify(payload.detail ?? payload.error ?? payload)}`);
   if (!payload.data) throw new Error("终端 owner 响应缺少完整 data");
   return payload.data;
 }
@@ -412,9 +415,8 @@ async function requestTransportGrant() {
     lastActionError = null;
   } catch (error) {
     lastActionError = error instanceof Error ? error.message : String(error);
-    try { acceptOwnerResource(await ownerRequest()); } catch (refreshError) { lastActionError += `；刷新失败: ${refreshError.message}`; }
     setStatus(lastActionError, true);
-    return;
+    throw error;
   }
   return grant;
 }

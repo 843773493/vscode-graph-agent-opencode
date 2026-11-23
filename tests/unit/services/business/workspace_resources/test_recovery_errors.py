@@ -120,9 +120,9 @@ async def test_interrupted_recovery_keeps_completed_errors_and_original_pending_
     failures = [TimeoutError("外部同步自己的超时"), ConnectionError("另一资源同步失败")]
     calls: list[tuple[str, int, bool]] = []
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((resource_id, revision, for_stop))
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if resource_id == first:
             # 反序完成仍须按原选择顺序归属，不能按回执先后拼接错误。
             await second_failed.wait()
@@ -177,9 +177,9 @@ async def test_interrupted_recovery_keeps_completed_errors_and_original_pending_
             await asyncio.gather(waiting, return_exceptions=True)
     before = list(calls)
 
-    async def recovered_sync(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def recovered_sync(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((resource_id, revision, for_stop))
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
     with monkeypatch.context() as patch:
         patch.setattr(bundle.transport, "sync_owner_revision", recovered_sync)

@@ -195,11 +195,15 @@ message InterruptRejected {
 
 message StreamCompleted {
   StreamStatus status = 1;
+  optional int64 terminal_commit_id = 2;
+  optional string terminal_outcome = 3;
 }
 
 message StreamInterrupted {
   string interrupt_request_id = 1;
   StreamStatus status = 2;
+  optional int64 terminal_commit_id = 3;
+  optional string terminal_outcome = 4;
 }
 
 message StreamFailure {
@@ -207,6 +211,9 @@ message StreamFailure {
   string message = 2;
   optional bool after_interrupt_requested = 3;
   optional bool resumable = 4;
+  optional google.protobuf.Struct details = 5;
+  optional int64 terminal_commit_id = 6;
+  optional string terminal_outcome = 7;
 }
 
 message MessageBlockSnapshot {
@@ -348,6 +355,8 @@ message StreamSnapshot {
   optional InterruptState interrupt_state = 17;
   optional RecoveryState recovery = 18;
   optional string workspace_id = 19;
+  optional int64 terminal_commit_id = 20;
+  optional string terminal_outcome = 21;
 }
 
 message MessageStreamEvent {

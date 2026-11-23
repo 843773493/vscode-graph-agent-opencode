@@ -29,7 +29,8 @@ export async function sourceReferenceSelectionContract(mode) {
   let parseCount = 0, pickerOptions, scopeOptions, beforeWrites;
   class Pane extends ThreadPane {
     constructor(index) {
-      super({ id: index + 7 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None });
+      super({ id: index + 7 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None, getObject: () => ({}) },
+        { getValue: () => undefined, onDidChangeConfiguration: Event.None });
       this.target = { input: new ThreadInput({ ...owners[0], workspaceKey: '', sessionId: 'ses_origin', threadId: `thr_${index}`, title: `Thread ${index}` }),
         conversation: { captureDraft() { events.push(`capture:${index}`); return { append: async text => drafts[index].push(text) }; } } };
     }

@@ -191,9 +191,13 @@ class ConfigSourceLayersMixin:
             )
             if user_override is not None:
                 source_configs[config_path] = user_override
+            schema_path = self._resolve_schema_path(source_configs=source_configs)
+            schema = self._load_schema(schema_path)
+            if user_override is not None:
                 config = merge_json_objects(
                     config,
                     user_override,
+                    schema=schema,
                 )
                 self._append_source_path(source_paths, config_path)
 
@@ -206,12 +210,11 @@ class ConfigSourceLayersMixin:
                 config = merge_json_objects(
                     config,
                     local_override,
+                    schema=schema,
                 )
                 self._append_source_path(source_paths, local_config_path)
 
-            schema_path: Path | None = None
             if self._workspace_root is not None:
-                schema_path = self._resolve_schema_path(source_configs=source_configs)
                 legacy_workspace_path = (
                     self._workspace_root / ".boxteam" / "boxteam.jsonc"
                 )
@@ -227,7 +230,7 @@ class ConfigSourceLayersMixin:
                     path=workspace_path,
                 )
                 if workspace_override is not None:
-                    config = merge_json_objects(config, workspace_override)
+                    config = merge_json_objects(config, workspace_override, schema=schema)
                     self._append_source_path(source_paths, workspace_path)
             if self._workspace_state_store is not None or self._runtime_config_overrides:
                 source_details.append(self._runtime_override_source())
@@ -242,8 +245,6 @@ class ConfigSourceLayersMixin:
                 source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
             if not operation_only:
                 self._validate_agent_tool_policies(config)
-            if schema_path is None:
-                schema_path = self._resolve_schema_path(source_configs=source_configs)
             return config, tuple(source_paths), tuple(source_details), schema_path
         except Exception as error:
             if import_sources:
@@ -746,7 +747,7 @@ class ConfigSourceLayersMixin:
         if override_path.is_file():
             override_config = self._read_config_source(override_path)
             return (
-                merge_json_objects(base_config, override_config),
+                merge_json_objects(base_config, override_config, schema=self._load_schema()),
                 override_path,
             )
         return base_config, None

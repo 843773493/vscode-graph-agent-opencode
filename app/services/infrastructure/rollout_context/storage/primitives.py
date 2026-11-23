@@ -89,6 +89,8 @@ class MessageCodec(Protocol):
 
     def visible_text(self, message: Mapping[str, object]) -> str: ...
 
+    def activity_outline(self, items: Sequence[CanonicalItemRecord]) -> dict[str, list[dict[str, object]]]: ...
+
     def reasoning_rows(self, message: Mapping[str, object]) -> list[dict[str, object]]: ...
 
     def from_dict(self, value: object) -> object: ...
@@ -168,7 +170,11 @@ class InternalExecutionHistoryEntry:
     elapsed_ms: int
     created_at: str
     updated_at: str
-    item: CanonicalItemRecord
+    item: CanonicalItemRecord | None
+    failure: dict[str, object] | None = None
+    activity: dict[str, object] | None = None
+    coordinates: dict[int, dict[str, object]] | None = None
+    terminal_commit_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

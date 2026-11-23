@@ -1,3 +1,5 @@
+import { useTranscriptDisclosure, useDisclosureFocus } from "./TranscriptViewContext";
+import { nodeAttributes, nodeKey, partNode, type TranscriptNodeKey } from "../../state/timeline/transcriptNodes";
 import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import { deriveToolRowDisplay } from "../../state/display/toolDisplay";
@@ -48,30 +50,28 @@ function toolStatus(item: ToolItem): {
   };
 }
 
-function fallbackContent(item: ToolItem): string {
-  return [
-    item.inputText ? t("chat.tool.inputBody", item.inputText) : "",
-    item.resultText ? t("chat.tool.outputBody", item.resultText) : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 function ToolRow({
   item,
   showRawDetails,
-  onLoadDetails,
+  onLoadDetails, parentNode,
 }: {
   item: ToolItem;
   showRawDetails: boolean;
   onLoadDetails?: (toolCallId: string) => Promise<void>;
+  parentNode?: TranscriptNodeKey;
 }): React.ReactNode {
-  const { message, tool, onMount } = React.useContext(MessageSearchLocationContext);
+  const { message, tool, item: locatedItem, onMount, close } = React.useContext(MessageSearchLocationContext);
+  const navigationTarget = locatedItem ?? tool ?? message;
   const locatedToolId = tool && item.responseSources?.some(entry => entry.source?.item_id === tool.item_id) ? tool.item_id : undefined;
   const locatedItemId = message?.role === "tool" && item.responseSources?.some(entry => entry.source?.item_id === message.reference?.item_id)
     ? message.reference?.item_id : undefined;
-  const [open, setOpen] = React.useState(false);
-  React.useEffect(() => { if (locatedItemId || locatedToolId) setOpen(true); }, [locatedItemId, locatedToolId, message, tool]);
+  const source = item.responseSources?.[0];
+  const key = source ? partNode(source, "header") : nodeKey({ kind: "stream", id: item.id }, "header");
+  const [open, setOpen] = useTranscriptDisclosure(key);
+  const focus = useDisclosureFocus(open);
+  const itemLocated = locatedItem && item.responseSources?.some(entry => entry.source.item_id === locatedItem.item_id);
+  const containsTarget = Boolean(locatedItemId || locatedToolId || itemLocated);
+  React.useEffect(() => { if (containsTarget) setOpen(true); }, [navigationTarget, containsTarget, setOpen]);
   const locateRef = React.useCallback((element: HTMLElement | null) => { if (element && locatedToolId && open) onMount(); }, [locatedToolId, open, onMount]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -89,34 +89,24 @@ function ToolRow({
   const canLoadDetails = Boolean(item.toolCallId && onLoadDetails);
   const hasDetails = hasMaterializedDetails || canLoadDetails;
   const display = deriveToolRowDisplay(item, open);
-  const handleClick = async () => {
-    if (loading) return;
-    if (!item.detailsLoaded && item.toolCallId && onLoadDetails) {
-      setLoading(true);
-      setError(null);
-      try {
-        await onLoadDetails(item.toolCallId);
-      } catch (loadError) {
-        setError(errorMessage(loadError));
-      } finally {
-        setLoading(false);
-      }
-      // 详情区是错误提示的唯一出口：加载失败也必须展开，否则用户点击后
-      // 只看到按钮停止转圈，失败被静默吞掉，表现为「点了没反应」。
-      setOpen(true);
-      return;
-    }
-    setOpen((current) => !current);
-  };
+  React.useEffect(() => {
+    if (!open || loading || error || item.detailsLoaded || !item.toolCallId || !onLoadDetails) return;
+    setLoading(true);
+    void onLoadDetails(item.toolCallId).catch(cause => setError(errorMessage(cause)))
+      .finally(() => setLoading(false));
+  }, [open, item.detailsLoaded, item.toolCallId, onLoadDetails, error]);
+  const handleClick = () => { if (open && containsTarget) close(); setError(null); setOpen(!open); };
   const content = open
-    ? display.detailsContent ?? fallbackContent(item)
+    ? display.detailsContent
     : null;
 
+  const inputSource = item.responseSources?.find(part => part.kind === "tool_call");
+  const resultSource = item.responseSources?.find(part => part.kind === "tool_result");
   return (
-    <section ref={locateRef} data-tool-result-item-id={locatedToolId} className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
-      <button
+    <section ref={element => { focus.root.current = element; locateRef(element); }} data-tool-result-item-id={locatedToolId} className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
+      <button ref={focus.header}
         type="button"
-        className="chat-tool-summary"
+        className="chat-tool-summary" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.map(part => partNode(part).source_ref) ?? [key.source_ref])}
         aria-expanded={open}
         aria-busy={loading}
         disabled={!hasDetails}
@@ -140,7 +130,12 @@ function ToolRow({
           {error ? (
             <div className="chat-inline-error" role="alert">{error}</div>
           ) : null}
-          {content ? <MarkdownContent value={content} /> : null}
+          {content && (inputSource || content.input) ? <div {...nodeAttributes(inputSource ? partNode(inputSource,"tool_input") : nodeKey({kind: "stream", id: item.id}, "tool_input"), key)}>
+            <MarkdownContent value={content.input} />
+          </div> : null}
+          {content && (resultSource || content.result) ? <div {...nodeAttributes(resultSource ? partNode(resultSource,"tool_output") : nodeKey({kind: "stream", id: item.id}, "tool_output"), key)}>
+            <MarkdownContent value={content.result} />
+          </div> : null}
           {showRawDetails ? (
             <details className="chat-tool-raw">
               <summary>{t("chat.tool.raw")}</summary>

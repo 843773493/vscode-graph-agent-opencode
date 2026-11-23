@@ -168,11 +168,10 @@ class ContextSourceControlStorageMixin:
         session_id: str,
         thread_id: str,
     ) -> str | None:
-        """返回 durable Thread ID；没有 catalog Session 的合成 owner 返回 None。
+        """返回 durable Thread ID；没有 catalog Session 时返回 None。
 
-        只有「会话不在权威目录索引中」这一种情况会被识别为没有 durable owner
-        （例如工具清单检查用的 ``tools_inspection_session``：它从不落盘，也不是
-        目录损坏）。已登记 Session 下缺失的 Thread 必须显式失败，不能静默短路
+        只有「会话不在权威目录索引中」这一种情况会被识别为没有 durable owner。
+        已登记 Session 下缺失的 Thread 必须显式失败，不能静默短路
         为「该 Thread 没有控制状态」。物理节点/manifest 损坏时严格解析仍抛
         RuntimeError，本方法不吞掉这类错误。
         """

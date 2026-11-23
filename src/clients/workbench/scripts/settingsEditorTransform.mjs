@@ -293,12 +293,12 @@ export class SettingsEditor2 extends EditorPane {`);
   private showDefinitions(kind?: DefinitionEditorOptions['definitionKind'], id?: string, hideManagement = true, modelId?: string): void {
     if (hideManagement) this.managementView.hide();
     const source = this.targetSettingsContext.target;
-    this.entityKind = source?.location.workspace_id && !this.searchWidget.getValue().trim() ? kind : undefined;
+    this.entityKind = source?.location.workspace_id ? kind : undefined;
     this.settingsTree.getHTMLElement().style.display = this.entityKind ? 'none' : '';
     this.entityContainer.style.display = this.entityKind ? 'block' : 'none';
     if (source && this.entityKind) {
       this.entityView ??= this.modelDisposables.add(this.instantiationService.createInstance(ConfigurationEntityView, this.entityContainer, source, this.group.id));
-      this.entityView.show(this.entityKind, id, modelId);
+      this.entityView.show(this.entityKind, id, modelId, this.searchWidget.getValue().trim());
     } else this.entityView?.setVisible(false);
     if (this.dimension) this.layoutSplitView(this.dimension);
   }
@@ -353,11 +353,15 @@ export class SettingsEditor2 extends EditorPane {`);
   }
 
 \tprivate async onSearchInputChanged(expandResults: boolean): Promise<void> {`);
-    contents = replaceOnce(contents, '\t\t\tconst searchVal = this.searchWidget.getValue();', '\t\t\tif (this.entityKind || this.managementView.active) this.showDefinitions();\n\t\t\tthis.cancelSettingsSearch();\n\t\t\tconst searchVal = this.searchWidget.getValue();');
+    contents = replaceOnce(contents, '\t\t\tconst searchVal = this.searchWidget.getValue();', '\t\t\tif (this.managementView.active) this.showDefinitions();\n\t\t\tthis.cancelSettingsSearch();\n\t\t\tconst searchVal = this.searchWidget.getValue();');
     contents = replaceOnce(contents, 'this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true));', `this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true)).catch(error => {
         if (!isCancellationError(error)) this.logService.error(error);
       });`);
-    contents = replaceOnce(contents, "await this.triggerSearch(query.replace(/\\u203A/g, ' '), expandResults);", `await this.triggerSearch(query.replace(/\\u203A/g, ' '), expandResults);
+    contents = replaceOnce(contents, "await this.triggerSearch(query.replace(/\\u203A/g, ' '), expandResults);", `if (this.targetSettingsContext.target?.location.workspace_id && (this.settingsNavigation.selected === 'providers' || this.settingsNavigation.selected === 'agents')) {
+      this.showDefinitions(this.settingsNavigation.selected, this.entityView?.selection.definitionId, true, this.entityView?.selection.definitionModelId);
+      return;
+    }
+    await this.triggerSearch(query.replace(/\\u203A/g, ' '), expandResults);
     if (!this.searchWidget.getValue().trim() && this.settingsNavigation.selected !== 'client') this.showCategory(this.settingsNavigation.selected);`);
     contents = replaceOnce(contents, '\tprivate async triggerSearch(query: string, expandResults: boolean): Promise<void> {', `\tprivate async triggerSearch(query: string, expandResults: boolean): Promise<void> {
     this.cancelSettingsSearch();

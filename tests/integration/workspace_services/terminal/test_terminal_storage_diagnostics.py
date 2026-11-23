@@ -23,12 +23,13 @@ from tests.harness.python.terminal_backend import (
     stop_terminal_plugin_service,
 )
 from tests.harness.python.terminal_state import read_terminal_state
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 def terminal_service(
-    request: pytest.FixtureRequest, integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest, integration_backend_port: int, integration_service_ports: TestFilePorts, monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[TerminalPluginService, Path, Path, TestRunContext]]:
     with TestRunContext.from_test_file(Path(request.path)) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
@@ -64,7 +65,7 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
 """, encoding="utf-8")
         monkeypatch.setenv("NODE_OPTIONS", f"{os.environ.get('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
         monkeypatch.setenv("BOXTEAM_TEST_TERMINAL_STORAGE_CONTROL", str(control))
-        port = integration_backend_port + 62
+        port = integration_service_ports.port(62)
         process = start_terminal_plugin_service(backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir)
         run.add_cleanup("Terminal 插件进程", lambda: stop_terminal_plugin_service(process))
         yield process, root, control, run

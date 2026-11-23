@@ -28,7 +28,7 @@ from app.services.infrastructure.workspace_files.paths import (
     GatewayNativeDirectoryClient,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -79,7 +79,7 @@ def native_gateway(
     control = context.runtime_root_for_node(request.node.nodeid) / "publication.json"
     control.parent.mkdir(parents=True, exist_ok=True)
     control.write_text("{}", encoding="utf-8")
-    port = integration_port_block_for_file(Path(__file__)).port(1)
+    port = integration_ports_for_file(Path(__file__)).port(1)
     gateway = start_gateway_process(
         workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{integration_backend_port}",
         port=port, artifacts_dir=context.artifacts_dir, asgi_app=f"{__name__}:create_gateway_app",

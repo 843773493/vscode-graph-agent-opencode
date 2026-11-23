@@ -4,6 +4,9 @@ from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
+from app.runtime.network_proxy import ProxyRoutes
+from configs.network import DirectProxy, EnvironmentProxy
+
 
 @dataclass(frozen=True, slots=True)
 class LiteLLMEmbeddingComputer:
@@ -16,7 +19,7 @@ class LiteLLMEmbeddingComputer:
     api_key: str
     custom_llm_provider: str
     default_headers: Mapping[str, str]
-    no_proxy: bool
+    proxy_routes: ProxyRoutes
 
     @classmethod
     def from_model(
@@ -63,7 +66,7 @@ class LiteLLMEmbeddingComputer:
             api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             default_headers=normalized_headers,
-            no_proxy=no_proxy,
+            proxy_routes=ProxyRoutes.from_configuration(DirectProxy() if no_proxy else EnvironmentProxy()),
         )
 
     async def compute(self, inputs: Sequence[str]) -> list[list[float]]:
@@ -84,8 +87,9 @@ class LiteLLMEmbeddingComputer:
                 # SDK client 持有本次明确凭据，避免 LiteLLM 将空 Key 回退到进程环境。
                 client = await scope.enter_async_context(build_provider_openai_client(
                     is_async=True, base_url=self.endpoint, api_key=self.api_key,
-                    trust_env=not self.no_proxy,
+                    routes=self.proxy_routes,
                 ))
+            # TODO: 其余 Embedding 适配族须接入已准备路由；不能把 OpenAI 出口的验证当成全适配族支持。
             response = await litellm.aembedding(
                 model=self.model,
                 input=list(inputs),

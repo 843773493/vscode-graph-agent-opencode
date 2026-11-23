@@ -18,7 +18,7 @@ from app.agents.tools.team import create_team_tools
 
 def build_agent_collaboration_tools(
     *,
-    session_id: str,
+    session_id: str | None,
     agent_id: str,
     session_subagent_service: SessionSubagentProtocol,
     team_service: TeamCoordinationProtocol | None,

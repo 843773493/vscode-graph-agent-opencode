@@ -300,3 +300,74 @@ async def test_web_dependency_failure_keeps_native_diagnostics_out_of_execution_
     assert original.status_code == 200 and original.json()["data"] == frozen_stream
     assert case.sql(session_id, thread_id, "SELECT item_id,content_hash FROM item_catalog ORDER BY item_sequence")[:len(original_items)] == original_items
     case.write_actual(tool_name + "-dependency-failure", {"job": job, "tool_result": result.payload, "message_stream": frozen_stream})
+
+
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_tool_configuration_failure_before_first_item_keeps_one_terminal_reason(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实发送在工具配置解析失败；快照、回放和历史读取同一原提交。"""
+    case = source_case
+    session_id, thread_id, _ = await _target(case)
+    monkeypatch.setattr(case.container.config_service, "get_agent_tool_config",
+        lambda _agent_id: {"custom": [{"name": "broken", "factory": 7}]})
+    accepted = await _send(case, session_id, "工具配置错误应保留具体原因。")
+    await _job(case, str(accepted["job_id"]), expected="failed")
+    turn_id = str(accepted["turn_id"])
+    root = f"/api/v1/sessions/{session_id}/turns/{turn_id}/message-stream"
+    response = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    assert response.status_code == 200, response.text
+    snapshot = response.json()["data"]
+    assert snapshot["stream_status"] == "failed" and snapshot["blocks"] == []
+    failure = {key: snapshot["failure"][key] for key in ("code", "message", "details")}
+    assert failure["code"] == "execution_error" and "factory" in failure["message"]
+    assert failure["details"]["error_type"] == "ValueError"
+    assert case.call_count(session_id, thread_id) == 0
+    history_url = f"/api/v1/sessions/{session_id}/threads/{thread_id}/history"
+    history = await case.client.post(history_url, json={"turn_ids": [turn_id]})
+    assert history.status_code == 200, history.text
+    detail = history.json()["data"]["items"][0]
+    assert detail["activity_stats"]["item_count"] == 0
+    assert detail["failure"] == failure
+    summary = await case.client.post(history_url, json={"include": ["user"]})
+    assert summary.status_code == 200, summary.text
+    page = summary.json()["data"]
+    rows = [*page["items"], *page["summaries"]]
+    assert next(row for row in rows if row["turn_id"] == turn_id)["failure"] == failure
+    events = await case.container.message_stream_store.list_events(
+        session_id=session_id, turn_stream_id=snapshot["turn_stream_id"], after_seq=0,
+    )
+    final = events[-1]
+    assert final["type"] == "stream.failed"
+    assert {key: final["payload"][key] for key in failure} == failure
+    assert final["payload"]["terminal_commit_id"] == snapshot["terminal_commit_id"]
+    refreshed = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
+    assert refreshed.json()["data"] == snapshot
+
+
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_tool_business_error_followed_by_success_has_no_turn_failure(source_case: RuntimeSourceCase) -> None:
+    case = source_case
+    session_id, thread_id, _ = await _target(case)
+    await case.plan(session_id, [
+        _tool_reply("read_file", {"path": "does-not-exist.txt"}, "missing-file"),
+        {"content": "文件不存在，已向用户说明。"},
+    ])
+    accepted = await _send(case, session_id, "读取不存在的文件并说明结果。")
+    await _job(case, str(accepted["job_id"]))
+    assert case.call_count(session_id, thread_id) == 2
+    history = await case.client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/history",
+        json={"turn_ids": [accepted["turn_id"]]})
+    assert history.status_code == 200, history.text
+    turn = history.json()["data"]["items"][0]
+    assert turn["status"] == "completed" and turn.get("failure") is None
+    result, = [item for item in case.container.checkpointer._storage.storage.read_items(session_id, thread_id)
+               if item.semantic_kind == "tool_result"]
+    assert result.payload["tool_outcome"] == "failure"
+    snapshot = await case.client.get(
+        f"/api/v1/sessions/{session_id}/turns/{accepted['turn_id']}/message-stream/snapshot",
+        params={"thread_id": thread_id},
+    )
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["data"]["stream_status"] == "completed"
+    assert snapshot.json()["data"].get("failure") is None

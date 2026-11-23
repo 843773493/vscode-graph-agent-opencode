@@ -77,7 +77,8 @@ app/agents/
 - `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。
 
 - `agents_md_publication.py` 登记工作区 AGENTS.md 文件并发布已接受版本的有序指令链，不管理 Agent 实例；`skill_catalog.py` 在目录构建与来源通知中调用它，冻结链的 CSM 安装归 `rollout_context/runtime/context_sources/agents_md_context.py`。
-- `agent_factory.py::assemble_deep_agent` 装配工具并构建单代图，`assembly_mode="execution"` 返回单代图，`"tool_catalog"` 只返回工具注册列表且不绑定 Thread owner。模型候选、路由中间件与指令来源由 `runtime/agent_runtime.py::prepare_agent_model` 准备为 `AgentModelSetup`；配置读取、依赖收集和冻结工厂选择统一归该 runtime 模块的 `assemble_agent`，图复用与释放归 Thread tracker。
+- `agent_factory.py::assemble_deep_agent` 只构建真实 Thread 的单代图：先构造并校验本地工具，再调用 `runtime/agent_runtime.py::prepare_agent_model` 准备模型候选、路由和指令来源。工具目录由原 `AgentToolCatalog` 直接复用工具工厂与参数声明，不进入执行装配或合成 SessionThread。配置读取、依赖收集和冻结工厂选择归 `assemble_agent`，图复用与释放归 Thread tracker；动态工具一次构造后直接用于执行。
+- 本地声明检查覆盖隐藏的内置／自定义工具、工具中间件、启用的运行中间件，以及压缩工具的共享声明；通过后再应用执行可见性。`build_deep_agent_tool_middleware` 不提前按用户 denylist 删声明；目录与执行不得对同名冲突给出不同结论。
 - `graph_binding.py` 只声明、校验和解析持久化的图 factory selector；真实线程归属由 `tool_invocation_context.py::ThreadRuntimeBinding` 在执行装配时绑定，两者不再包装成另一种 invocation binding。读取 selector 或注册 factory 不应加载工具执行和 Agent SDK。
 - `instruction_producers.py` 定义指令来源及其发布绑定，生产入口 `register_instruction_producer` 将声明登记到唯一 CSM；base/delta、激活和待处理决策由 CSM 的来源生命周期链路生成。
 - `tool_set_producer.py` 保存注册工具与结构化输出工具的冻结 schema，按原子 selection 生成模型可见的 ToolSet；结构化输出 schema 的 `None` 表示尚未绑定，空 tuple 表示已绑定为空，实际请求工具列表不参与反向构建。

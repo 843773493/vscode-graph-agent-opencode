@@ -432,13 +432,12 @@ def remote_gateway_clients(
         "remote_gateway_port": distribution.port,
         "activate": False,
     }]
-    from tests.support.e2e_control.harness import E2EProcessLease
-    from tests.support.ports import integration_port_block_for_file
+    from tests.support.ports import integration_ports_for_file
 
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "ports.json",
-                            (ports.port(0), ports.port(1), ports.port(2)))
-    lease.acquire()
+    ports = integration_ports_for_file(Path(request.node.path))
+    ports.port(0)
+    ports.port(1)
+    ports.port(2)
     gateway_config_path.write_text(json.dumps(gateway_config, ensure_ascii=False, indent=2), encoding="utf-8")
     gateway = None
     tunnel = None
@@ -509,7 +508,6 @@ def remote_gateway_clients(
             tunnel.close()
         if gateway is not None:
             close_gateway_process(gateway)
-        lease.release()
 
 
 @pytest.mark.parametrize("runtime", ["python", "node"])

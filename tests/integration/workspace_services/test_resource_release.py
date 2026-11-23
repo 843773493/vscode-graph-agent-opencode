@@ -125,8 +125,8 @@ async def test_real_release_preflights_then_unlocks_peer_and_reconciles_original
                 deadlines.append(context)
             return context
 
-        async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
-            await original_sync(resource_id, revision, for_stop=for_stop)
+        async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
+            await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
             if resource_id == rid and for_stop:
                 revision_entered.set()
                 await revision_release.wait()
@@ -314,10 +314,10 @@ async def test_real_management_command_total_deadline_preserves_facts_and_reconc
                     acquired = True
                     entered.set()
 
-            async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+            async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
                 if is_command():
                     sync_deadlines.append(deadlines[0].when())
-                await sync(resource_id, revision, for_stop=for_stop)
+                await sync(resource_id, revision, for_stop=for_stop, **revision_options)
 
             async def stopping(resource_id: str, *, reason: str | None = None):
                 stops.append(resource_id)

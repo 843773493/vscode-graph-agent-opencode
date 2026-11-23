@@ -24,9 +24,12 @@ import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTrans
 import { pluginCommandSourcePaths, transformPluginCommands } from './pluginCommandTransform.mjs';
 import { legacyCustomizationPluginSourcePaths, transformLegacyCustomizationPlugins } from './legacyCustomizationPluginTransform.mjs';
 import { harnessWelcomeSourcePaths, transformHarnessWelcome } from './harnessWelcomeTransform.mjs';
+import { editorGroupSourcePaths, transformEditorGroups } from './editorGroupTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
+  'src/vs/workbench/services/themes/browser/workbenchThemeService.ts',
+  'src/vs/workbench/contrib/themes/browser/themes.contribution.ts',
   'src/vs/workbench/browser/web.main.ts',
   'src/vs/workbench/browser/layout.ts',
   'src/vs/workbench/browser/quickaccess.ts',
@@ -90,6 +93,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/platform/webview/common/mimeTypes.ts',
   'extensions/markdown-language-features/src/preview/preview.ts',
   ...searchEditorSourcePaths,
+  ...editorGroupSourcePaths,
   ...searchModelSourcePaths,
   ...findSourcePaths,
   ...outlineSourcePaths,
@@ -178,6 +182,7 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     contents = transformTestingExtensions(root, path, contents, replaceOnce);
     contents = transformOnboardingKeymaps(root, path, contents, replaceOnce);
     contents = transformHarnessWelcome(root, path, contents, replaceOnce);
+    contents = transformEditorGroups(root, path, contents, replaceOnce);
     contents = transformChatExtensionCompletion(root, path, contents);
     contents = transformLegacyCustomizationPlugins(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);
@@ -868,6 +873,11 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
       contents = `import { scopeQueryOptions, assertSearchFolders, scopedSearch } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/browser/quickaccess.ts')) {
+      // 文本、Thread 和其它编辑器共用原 Pane 视图态合同，不限定 Monaco 控件。
+      contents = replaceOnce(contents, "import { getIEditor } from '../../editor/browser/editorBrowser.js';\n", '');
+      contents = replaceOnce(contents, "import { ICodeEditorViewState, IDiffEditorViewState } from '../../editor/common/editorCommon.js';\n", '');
+      contents = replaceOnce(contents, 'state: ICodeEditorViewState | IDiffEditorViewState | undefined;', 'state: object | undefined;');
+      contents = replaceOnce(contents, 'getIEditor(activeEditorPane.getControl())?.saveViewState() ?? undefined', 'activeEditorPane.getViewState()');
       // hide 会释放 Provider；异步关闭前先消费本次状态，不能在 await 后读取已 reset 的字段。
       contents = replaceOnce(contents, '\tasync restore(): Promise<void> {\n\t\tif (this.editorViewState) {\n\t\t\tfor (const editor of this.openedTransientEditors) {',
         '\tasync restore(): Promise<void> {\n\t\tconst editorViewState = this.editorViewState;\n\t\tconst openedTransientEditors = [...this.openedTransientEditors];\n\t\tthis.reset();\n\t\tif (editorViewState) {\n\t\t\tfor (const editor of openedTransientEditors) {');
@@ -889,9 +899,9 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
     }
     if (path === join(upstream, 'src/vs/platform/quickinput/browser/quickAccess.ts')) {
       contents = replaceOnce(contents, '@IContextKeyService private readonly contextKeyService: IContextKeyService',
-        '@IContextKeyService private readonly contextKeyService: IContextKeyService,\n@IEditorService private readonly editors: IEditorService');
+        '@IContextKeyService private readonly contextKeyService: IContextKeyService,\n@IEditorService private readonly editors: IEditorService,\n@IEditorGroupsService private readonly groups: IEditorGroupsService');
       const entry = 'private doShowOrPick(value: string, pick: boolean, options?: IQuickAccessOptions): Promise<IQuickPickItem[] | undefined> | void {';
-      contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors, this.editors.activeEditorPane?.scopedContextKeyService || this.contextKeyService);`);
+      contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors, this.editors.activeEditorPane?.scopedContextKeyService || this.contextKeyService, this.groups.activeGroup.id);`);
       const picker = 'const picker = disposables.add(this.quickInputService.createQuickPick({ useSeparators: true }));';
       contents = replaceOnce(contents, picker, `${picker}\nconst canPickMany = pick && options?.canPickMany === true;\npicker.canSelectMany = canPickMany;`);
       contents = replaceOnce(contents, 'let pickPromise: DeferredPromise<IQuickPickItem[]> | undefined = undefined;',
@@ -901,7 +911,7 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
       contents = replaceOnce(contents, 'if (picker.selectedItems.length === 0) {',
         'const selectedItems = canPickMany && !didAccept ? [] : picker.selectedItems.slice(0);\nif (selectedItems.length === 0) {');
       contents = replaceOnce(contents, 'pickPromise?.complete(picker.selectedItems.slice(0));', 'pickPromise?.complete(selectedItems);');
-      contents = `import { prepareSearchInvocation } from ${JSON.stringify(join(root, 'src/search/target.js'))};\nimport { IEditorService } from ${JSON.stringify(join(root, 'upstream/src/vs/workbench/services/editor/common/editorService.js'))};\n` + contents;
+      contents = `import { prepareSearchInvocation } from ${JSON.stringify(join(root, 'src/search/target.js'))};\nimport { IEditorService } from ${JSON.stringify(join(root, 'upstream/src/vs/workbench/services/editor/common/editorService.js'))};\nimport { IEditorGroupsService } from ${JSON.stringify(join(root, 'upstream/src/vs/workbench/services/editor/common/editorGroupsService.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/platform/quickinput/browser/helpQuickAccess.ts')) {
       contents = replaceOnce(contents, 'provide(picker: IQuickPick<IHelpQuickAccessPickItem, { useSeparators: true }>): IDisposable {',
@@ -1008,6 +1018,24 @@ try {
       contents = `import { transferSearchContext } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
     contents = transformOutline(root, path, contents, replaceOnce);
+    if (path === join(upstream, 'src/vs/workbench/contrib/themes/browser/themes.contribution.ts')) {
+      // 原 picker 承担一次操作的通知；恢复仍交原主题服务，不交全局未处理异常出口。
+      contents = replaceOnce(contents,
+        '@IInstantiationService private readonly instantiationService: IInstantiationService\n',
+        '@IInstantiationService private readonly instantiationService: IInstantiationService,\n\t\t@INotificationService private readonly notificationService: INotificationService\n');
+      contents = replaceOnce(contents,
+        'onUnexpectedError(err);\n\t\t\t\t\t\tthis.setTheme(currentTheme, undefined);',
+        'this.notificationService.error(failureMessage(err));\n\t\t\t\t\t\tthis.setTheme(currentTheme, undefined);');
+      contents = `import { failureMessage } from '@boxteam/plugin-sdk/failures';\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/themes/browser/workbenchThemeService.ts')) {
+      // 保留原生预览／默认恢复，只修复加载失败的原因交付。
+      contents = replaceOnce(contents, 'themeData.location?.toString(), error.message));', 'themeData.location?.toString(), failureMessage(error)), { cause: error });');
+      contents = replaceOnce(contents,
+        "this.logService.info('Unable to reload {0}: {1}', this.currentColorTheme.location?.toString());",
+        "this.logService.error('Unable to reload {0}: {1}', this.currentColorTheme.location?.toString(), failureMessage(error));");
+      contents = `import { failureMessage } from '@boxteam/plugin-sdk/failures';\n` + contents;
+    }
     contents = transformMcp(root, path, contents, replaceOnce);
     contents = transformSearchEditor(root, path, contents, replaceOnce);
     contents = transformSearchModel(root, path, contents, replaceOnce);

@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "bun:test";
 import type { ConversationView } from "../../types/frontend";
-import type { InternalExecutionHistory } from "../../types/backend";
+import type { InternalExecutionHistory, TurnResponsePart } from "../../types/backend";
 import InternalExecutionTranscriptItem from "./InternalExecutionTranscriptItem";
 import { chatTranscriptItems } from "./transcriptItems";
 
@@ -65,6 +65,35 @@ const internalExecution: InternalExecutionHistory = {
 };
 
 describe("standalone internal execution display", () => {
+  test("输出前后的上下文补页仍是同一节点，并按真实输出位置插入", () => {
+    const placeholder: TurnResponsePart = {
+      kind: "context_notice", part_id: "notice-before-output", projection: "summary",
+      source: { message_sequence: 0, execution_id: internalExecution.execution_id },
+      context_model_call_id: "model-call", context_anchor: "before_model_call",
+      context_anchor_ordinal: 2, context_plan_ordinal: 1,
+    };
+    const positioned: TurnResponsePart = {
+      ...placeholder, part_id: "notice-later-page", context_plan_ordinal: 129,
+      context_before_item_id: "answer", context_anchor_ordinal: 10,
+    };
+    const answer: TurnResponsePart = {
+      kind: "text", part_id: "answer", projection: "detail", text: "输出",
+      source: { message_sequence: 1, item_id: "answer", part_ordinal: 0,
+        logical_item_ordinal: 10, model_call_id: "model-call", execution_id: internalExecution.execution_id },
+    };
+    const initial = chatTranscriptItems([], [{ ...internalExecution,
+      display_parts: [], response_parts: [placeholder] }], true)
+      .find(item => item.kind === "context_event");
+    expect(initial).toBeDefined();
+    for (const notices of [[placeholder, positioned], [positioned, placeholder]]) {
+      const items = chatTranscriptItems([turn("other-turn", 1, 5, 5, 5)], [{ ...internalExecution,
+        display_parts: [], response_parts: [...notices, answer] }], true);
+      expect(items.map(item => item.kind)).toEqual(["turn", "context_event", "execution_response"]);
+      expect(items[1].key).toBe(initial!.key);
+      expect(items[1].kind === "context_event" && items[1].notices).toHaveLength(2);
+    }
+  });
+
   test("没有 internal display 时也按 root membership 排列逆序到达的 Turn", () => {
     const conversations = [turn("turn-after", 2, 17, 17, 20), turn("turn-before", 1, 1, 1, 4)];
     for (const executions of [[], [{ ...internalExecution, display_parts: [] }]]) {

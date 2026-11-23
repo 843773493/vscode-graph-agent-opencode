@@ -537,7 +537,7 @@ class PersistentTaskRuntime:
                         await self._orchestrator.submit_runtime_event(
                             session_id, message, thread_id=thread_id, source_id=source_id, idempotency_key=run.run_id,
                             delivery_policy=action.delivery_policy,
-                            context_mode=context_mode,
+                            context_mode=context_mode, background=True,
                         )
                         wakeup = self._dispatcher.submitted(session_id, thread_id, idempotency_key=run.run_id)
                         if wakeup is None:
@@ -653,14 +653,15 @@ class PersistentTaskRuntime:
                     sections=(PromptSection("control_context", {"run_id": run.run_id, "definition_revision": run.definition_revision}),
                               PromptSection("untrusted_instructions", json.dumps({"condition": model.instruction,
                                   "input": condition_input(configuration, run, workspace_id=self.store.workspace_id)}, ensure_ascii=False))),
-                    metadata={"source": "persistent_task_check"},
+                    metadata={"source": "persistent_task_check", "task_id": run.task_id,
+                              "task_revision": run.task_revision, "task_check_only": run.check_only},
                 )
                 gateway_token = set_current_gateway_id(resource.gateway_authority)
                 request_token = set_current_request_id(run.request_id)
                 try:
                     await self._orchestrator.submit_runtime_event(
                         session_id, message, thread_id=thread_id, source_id=f"persistent-task-check:{run.task_id}",
-                        idempotency_key=key, delivery_policy="after_turn",
+                        idempotency_key=key, delivery_policy="after_turn", background=True,
                     )
                 except (NotFoundError, ValueError) as error:
                     raise TaskCheckError(failure_detail(error, stage="model-check-admission",

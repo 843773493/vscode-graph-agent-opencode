@@ -236,7 +236,7 @@ def test_restart_recovery_does_not_reinject_tracked_source(
 
 @pytest.mark.parametrize("damage", ["missing", "symlink"])
 @pytest.mark.parametrize("read_kind", ["control", "rebuild"])
-def test_source_state_read_resolves_thread_once_and_rechecks_next_read(
+def test_source_state_read_checks_thread_locator_once_and_rechecks_next_read(
     rollout_storage: RolloutContextStore,
     control_state_port: RolloutCheckpointSaver,
     owner: ContextSourceOwnerKey,
@@ -249,14 +249,17 @@ def test_source_state_read_resolves_thread_once_and_rechecks_next_read(
     _track_skill(_new_manager(owner, control_state_port), seal_sources)
     resolver = rollout_storage.storage._path_resolver
     thread_node = resolver.resolve_thread_node(owner.session_id, owner.thread_id)
-    resolve_thread = resolver.resolve_thread_node
+    from app.core import session_catalog_resolver
+
+    open_control = session_catalog_resolver.SessionControlStore
     resolutions = []
 
-    def resolve(session_id: str, thread_id: str) -> Path:
-        resolutions.append((session_id, thread_id))
-        return resolve_thread(session_id, thread_id)
+    def open_thread_catalog(path, **options):
+        resolutions.append(path)
+        return open_control(path, **options)
 
-    monkeypatch.setattr(resolver, "resolve_thread_node", resolve)
+    # 观察真正读取 locator 的控制库，缓存命中的方法调用不等于重复磁盘检查。
+    monkeypatch.setattr(session_catalog_resolver, "SessionControlStore", open_thread_catalog)
     read = (control_state_port.load_context_source_control_states if read_kind == "control"
             else control_state_port.load_context_source_rebuild_state)
     states = read(owner)
@@ -265,7 +268,7 @@ def test_source_state_read_resolves_thread_once_and_rechecks_next_read(
         assert states[0].latest_visible_committed_revision == states[0].latest_revision
     else:
         assert states is None
-    assert resolutions == [(owner.session_id, owner.thread_id)]
+    assert len(resolutions) == 1
 
     moved = thread_node.with_name(thread_node.name + ".moved")
     thread_node.rename(moved)
@@ -281,7 +284,7 @@ def test_source_state_read_resolves_thread_once_and_rechecks_next_read(
 
     # 成功与失败都不能把路径校验结果留给下一次存储操作。
     assert read(owner) == states
-    assert resolutions == [(owner.session_id, owner.thread_id)] * 3
+    assert len(resolutions) == 3 and resolutions == [resolutions[0]] * 3
 
 
 def test_restart_recovery_keeps_untrack_state(
@@ -367,30 +370,30 @@ def test_owner_availability_matches_authoritative_index(
         thread_id=rollout_storage.storage.main_thread_id(CHILD_SESSION_ID),
     )
     assert not rollout_storage.checkpoints.context_source_control_owner_available(
-        "tools_inspection_session",
+        "ses_missing_owner",
         thread_id=rollout_storage.storage.main_thread_id(SESSION_ID),
     )
     assert not control_state_port.context_source_control_owner_available(
         ContextSourceOwnerKey(
-            session_id="tools_inspection_session",
+            session_id="ses_missing_owner",
             thread_id=rollout_storage.storage.main_thread_id(SESSION_ID),
         )
     )
 
 
-def test_synthetic_session_has_no_restorable_control_state(
+def test_unregistered_session_has_no_restorable_control_state(
     rollout_storage: RolloutContextStore,
     control_state_port: RolloutCheckpointSaver,
 ) -> None:
-    """合成 session 没有 ContextStore：恢复短路返回空，而不是解析失败。"""
+    """未登记 session 没有 ContextStore：恢复短路返回空，而不是解析失败。"""
     owner = ContextSourceOwnerKey(
-        session_id="tools_inspection_session",
+        session_id="ses_missing_owner",
         thread_id=rollout_storage.storage.main_thread_id(SESSION_ID),
     )
 
     assert (
         rollout_storage.checkpoints.read_context_source_control_states(
-            "tools_inspection_session",
+            "ses_missing_owner",
             thread_id=owner.thread_id,
         )
         == ()

@@ -65,6 +65,10 @@ export function conversation(
     jobId: "job_1",
     pending: false,
     source: "turn",
+    turnId: "turn_fixture",
+    turnStatus: status === "running" ? "running" : status === "done" ? "completed" : "failed",
+    sourceViewId: "view_fixture", sourceViewRevision: 1,
+    activityOutline: {beforeCursor: null},
   };
 }
 

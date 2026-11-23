@@ -8,12 +8,14 @@ import {
 } from "../../api/session/sessionTurnHistory";
 import {
   applyTurnHistoryPage,
+  applyHistoryFragment,
   decideTurnProjectionEpoch,
   writeTurnTimelineCache,
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   preserveTimelineAfterTransientNetworkFailure,
   timelineForScope,
@@ -497,8 +499,8 @@ export function useAroundTurnLoader({
 }: Omit<Parameters<typeof useDirectionalTurnLoader>[0], "direction">):
   LoadAroundTurn {
   const activeRequestRef = useRef<AbortController | null>(null);
-  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage, toolResultId, item) => {
-    if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId) {
+  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage, toolResultId, item, executionId, context) => {
+    if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId && !item && !executionId) {
       throw new Error("当前会话尚未就绪，无法定位轮次");
     }
     const targetGeneration = generationRef.current;
@@ -552,13 +554,13 @@ export function useAroundTurnLoader({
         apiPort,
         sessionId,
         {
-          direction: "around",
-          anchor_turn_id: anchorTurnId,
+          direction: executionId ? "tail" : "around",
+          ...(executionId ? { execution_id: executionId } : item ? { anchor_item_id: item.item_id } : { anchor_turn_id: anchorTurnId }),
           ...(anchorMessage ? { anchor_message: anchorMessage } : {}),
           ...(toolResultId ? { anchor_tool_result: toolResultId } : {}),
-          ...(item ? { include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_summary", "tool_call"] as const } : {}),
-          before_turns: CURSOR_HISTORY_TURNS,
-          after_turns: CURSOR_HISTORY_TURNS,
+          ...(context ? {anchor_context:context} : {}),
+          ...(item ? { include: ["user", "metadata", "internal", "final_response"] as const } : {}),
+          ...(!executionId ? { before_turns: CURSOR_HISTORY_TURNS, after_turns: CURSOR_HISTORY_TURNS } : { include: ["internal", "text", "final_response"] as const }),
         },
         workspaceId,
         signal,
@@ -567,15 +569,32 @@ export function useAroundTurnLoader({
       signal.throwIfAborted();
       if (!isCurrentRequest()) throw new Error("轮次定位请求的会话线程已切换");
       if (page.thread_id !== currentTimeline.threadId) throw new Error("指定轮次历史的 thread owner 与请求不一致");
+      if (context && ![...page.items.flatMap(turn => turn.response_parts ?? []),
+        ...(page.internal_executions ?? []).flatMap(execution => execution.response_parts)].some(part =>
+        part.kind === "context_notice" && part.context_model_call_id === context.model_call_id && part.context_anchor === context.anchor)) {
+        throw new Error(t("chat.process.positionLost"));
+      }
       if (anchorMessage && !page.located_message) throw new Error("指定消息缺少后端核验的原文，无法定位");
       if (toolResultId && page.located_tool_result?.item_id !== toolResultId) throw new Error("指定工具结果缺少后端核验的原调用身份");
-      if (![...page.items, ...(page.summaries ?? [])].some((turn) => turn.turn_id === anchorTurnId)) {
+      if (!item && !executionId && ![...page.items, ...(page.summaries ?? [])].some((turn) => turn.turn_id === anchorTurnId)) {
         throw new Error("当前会话线程中未找到指定轮次：" + anchorTurnId);
       }
       const epochDecision = decideTurnProjectionEpoch(getCurrentTimeline()?.projectionEpoch ?? null, page.projection_epoch);
       if (epochDecision !== "apply") {
         throw new Error("轮次历史版本已变化，请刷新历史后重试指定轮次");
       }
+      const targetItemId = item?.item_id ?? toolResultId ?? anchorMessage?.item_id;
+      const targetTurnId = page.located_item?.turn_id ?? page.located_tool_result?.turn_id ?? page.located_message?.turn_id;
+      const targetExecutionId = page.located_item?.execution_id;
+      const body = targetItemId && (targetTurnId || targetExecutionId) && page.located_item?.semantic_kind !== "user_input" && page.located_message?.role !== "user"
+        ? await loadSessionHistory(apiPort, sessionId, {
+          direction: "tail", item_ids: [targetItemId],
+          ...(targetTurnId ? {turn_ids: [targetTurnId]} : {execution_id: targetExecutionId}),
+          source_view_id: page.source_view_id, source_view_revision: page.source_view_revision,
+          include: ["internal", "text", "reasoning_detail", "reasoning_summary", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response"],
+        }, workspaceId, signal, currentTimeline.threadId) : undefined;
+      signal.throwIfAborted();
+      if (!isCurrentRequest()) throw new Error("定位正文返回时线程已切换");
       setState((previous) => {
         if (signal.aborted || !isCurrentRequest()) return previous;
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
@@ -585,11 +604,12 @@ export function useAroundTurnLoader({
           turnTimelinesBySession: writeTurnTimelineCache(
             previous.turnTimelinesBySession,
             sessionCacheKey,
-            applyTurnHistoryPage(timeline, page, "around"),
+            body ? applyHistoryFragment(applyTurnHistoryPage(timeline, page, "around"), body)
+              : applyTurnHistoryPage(timeline, page, "around"),
           ),
         };
       });
-      return page.located_message ?? page.located_tool_result ?? undefined;
+      return page.located_item ?? page.located_message ?? page.located_tool_result ?? undefined;
     } catch (error) {
       if (signal.aborted) {
         releaseLoading();

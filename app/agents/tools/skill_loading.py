@@ -18,7 +18,7 @@ import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -40,6 +40,12 @@ class SkillLoadInput(BaseModel):
         default="snapshot",
         description="snapshot（默认）刷新到本次冻结版本并停止已有追踪；tracked 刷新并建立或保持追踪；同版本复用正文仍切换模式。untrack 仅停止追踪，不移除已有内容。",
     )
+
+
+SKILL_LOAD_TOOL = StructuredTool(
+    name="skill_load", args_schema=SkillLoadInput,
+    description="按冻结 activation snapshot 解析 Skill binding；正文不经文件工具读取。",
+)
 
 
 def _error_result(name: str, mode: str, code: str, message: str) -> str:
@@ -68,7 +74,6 @@ def create_skill_load_tool(
     control_admission: Callable[[str, SkillLoadMode], AbstractAsyncContextManager[None]],
     activation_snapshot_resolver: Callable[[str], SkillCatalogActivationSnapshot] | None = None,
 ) -> BaseTool:
-    @tool("skill_load", args_schema=SkillLoadInput)
     async def skill_load(name: str, mode: SkillLoadMode = "snapshot") -> str:
         """按冻结 activation snapshot 解析 Skill binding；正文不经文件工具读取。"""
         try:
@@ -101,7 +106,7 @@ def create_skill_load_tool(
             separators=(",", ":"),
         )
 
-    return skill_load
+    return SKILL_LOAD_TOOL.model_copy(update={"coroutine": skill_load})
 
 
 __all__ = ["SkillLoadInput", "create_skill_load_tool"]

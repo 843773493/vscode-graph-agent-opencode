@@ -17,7 +17,7 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -54,7 +54,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     if chromium_path is None:
         pytest.fail("手动浏览器连接 Web Integration 需要 Chromium")
 
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     gateway_port = port_block.port(20)
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
     workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"

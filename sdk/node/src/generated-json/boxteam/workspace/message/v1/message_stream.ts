@@ -519,11 +519,15 @@ export interface InterruptRejected {
 
 export interface StreamCompleted {
   status: StreamStatus;
+  terminal_commit_id?: number | undefined;
+  terminal_outcome?: string | undefined;
 }
 
 export interface StreamInterrupted {
   interrupt_request_id: string;
   status: StreamStatus;
+  terminal_commit_id?: number | undefined;
+  terminal_outcome?: string | undefined;
 }
 
 export interface StreamFailure {
@@ -531,6 +535,9 @@ export interface StreamFailure {
   message: string;
   after_interrupt_requested?: boolean | undefined;
   resumable?: boolean | undefined;
+  details?: { [key: string]: any } | undefined;
+  terminal_commit_id?: number | undefined;
+  terminal_outcome?: string | undefined;
 }
 
 export interface MessageBlockSnapshot {
@@ -672,6 +679,8 @@ export interface StreamSnapshot {
   interrupt_state?: InterruptState | undefined;
   recovery?: RecoveryState | undefined;
   workspace_id?: string | undefined;
+  terminal_commit_id?: number | undefined;
+  terminal_outcome?: string | undefined;
 }
 
 export interface MessageStreamEvent {
@@ -1547,18 +1556,28 @@ export const InterruptRejected: MessageFns<InterruptRejected> = {
 };
 
 function createBaseStreamCompleted(): StreamCompleted {
-  return { status: 0 };
+  return { status: 0, terminal_commit_id: undefined, terminal_outcome: undefined };
 }
 
 export const StreamCompleted: MessageFns<StreamCompleted> = {
   fromJSON(object: any): StreamCompleted {
-    return { status: isSet(object.status) ? streamStatusFromJSON(object.status) : 0 };
+    return {
+      status: isSet(object.status) ? streamStatusFromJSON(object.status) : 0,
+      terminal_commit_id: isSet(object.terminal_commit_id) ? globalThis.Number(object.terminal_commit_id) : undefined,
+      terminal_outcome: isSet(object.terminal_outcome) ? globalThis.String(object.terminal_outcome) : undefined,
+    };
   },
 
   toJSON(message: StreamCompleted): unknown {
     const obj: any = {};
     if (message.status !== 0) {
       obj.status = streamStatusToJSON(message.status);
+    }
+    if (message.terminal_commit_id !== undefined) {
+      obj.terminal_commit_id = Math.round(message.terminal_commit_id);
+    }
+    if (message.terminal_outcome !== undefined) {
+      obj.terminal_outcome = message.terminal_outcome;
     }
     return obj;
   },
@@ -1569,12 +1588,14 @@ export const StreamCompleted: MessageFns<StreamCompleted> = {
   fromPartial<I extends Exact<DeepPartial<StreamCompleted>, I>>(object: I): StreamCompleted {
     const message = createBaseStreamCompleted();
     message.status = object.status ?? 0;
+    message.terminal_commit_id = object.terminal_commit_id ?? undefined;
+    message.terminal_outcome = object.terminal_outcome ?? undefined;
     return message;
   },
 };
 
 function createBaseStreamInterrupted(): StreamInterrupted {
-  return { interrupt_request_id: "", status: 0 };
+  return { interrupt_request_id: "", status: 0, terminal_commit_id: undefined, terminal_outcome: undefined };
 }
 
 export const StreamInterrupted: MessageFns<StreamInterrupted> = {
@@ -1582,6 +1603,8 @@ export const StreamInterrupted: MessageFns<StreamInterrupted> = {
     return {
       interrupt_request_id: isSet(object.interrupt_request_id) ? globalThis.String(object.interrupt_request_id) : "",
       status: isSet(object.status) ? streamStatusFromJSON(object.status) : 0,
+      terminal_commit_id: isSet(object.terminal_commit_id) ? globalThis.Number(object.terminal_commit_id) : undefined,
+      terminal_outcome: isSet(object.terminal_outcome) ? globalThis.String(object.terminal_outcome) : undefined,
     };
   },
 
@@ -1593,6 +1616,12 @@ export const StreamInterrupted: MessageFns<StreamInterrupted> = {
     if (message.status !== 0) {
       obj.status = streamStatusToJSON(message.status);
     }
+    if (message.terminal_commit_id !== undefined) {
+      obj.terminal_commit_id = Math.round(message.terminal_commit_id);
+    }
+    if (message.terminal_outcome !== undefined) {
+      obj.terminal_outcome = message.terminal_outcome;
+    }
     return obj;
   },
 
@@ -1603,12 +1632,22 @@ export const StreamInterrupted: MessageFns<StreamInterrupted> = {
     const message = createBaseStreamInterrupted();
     message.interrupt_request_id = object.interrupt_request_id ?? "";
     message.status = object.status ?? 0;
+    message.terminal_commit_id = object.terminal_commit_id ?? undefined;
+    message.terminal_outcome = object.terminal_outcome ?? undefined;
     return message;
   },
 };
 
 function createBaseStreamFailure(): StreamFailure {
-  return { code: "", message: "", after_interrupt_requested: undefined, resumable: undefined };
+  return {
+    code: "",
+    message: "",
+    after_interrupt_requested: undefined,
+    resumable: undefined,
+    details: undefined,
+    terminal_commit_id: undefined,
+    terminal_outcome: undefined,
+  };
 }
 
 export const StreamFailure: MessageFns<StreamFailure> = {
@@ -1620,6 +1659,9 @@ export const StreamFailure: MessageFns<StreamFailure> = {
         ? globalThis.Boolean(object.after_interrupt_requested)
         : undefined,
       resumable: isSet(object.resumable) ? globalThis.Boolean(object.resumable) : undefined,
+      details: isObject(object.details) ? object.details : undefined,
+      terminal_commit_id: isSet(object.terminal_commit_id) ? globalThis.Number(object.terminal_commit_id) : undefined,
+      terminal_outcome: isSet(object.terminal_outcome) ? globalThis.String(object.terminal_outcome) : undefined,
     };
   },
 
@@ -1637,6 +1679,15 @@ export const StreamFailure: MessageFns<StreamFailure> = {
     if (message.resumable !== undefined) {
       obj.resumable = message.resumable;
     }
+    if (message.details !== undefined) {
+      obj.details = message.details;
+    }
+    if (message.terminal_commit_id !== undefined) {
+      obj.terminal_commit_id = Math.round(message.terminal_commit_id);
+    }
+    if (message.terminal_outcome !== undefined) {
+      obj.terminal_outcome = message.terminal_outcome;
+    }
     return obj;
   },
 
@@ -1649,6 +1700,9 @@ export const StreamFailure: MessageFns<StreamFailure> = {
     message.message = object.message ?? "";
     message.after_interrupt_requested = object.after_interrupt_requested ?? undefined;
     message.resumable = object.resumable ?? undefined;
+    message.details = object.details ?? undefined;
+    message.terminal_commit_id = object.terminal_commit_id ?? undefined;
+    message.terminal_outcome = object.terminal_outcome ?? undefined;
     return message;
   },
 };
@@ -2431,6 +2485,8 @@ function createBaseStreamSnapshot(): StreamSnapshot {
     interrupt_state: undefined,
     recovery: undefined,
     workspace_id: undefined,
+    terminal_commit_id: undefined,
+    terminal_outcome: undefined,
   };
 }
 
@@ -2472,6 +2528,8 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
       interrupt_state: isSet(object.interrupt_state) ? InterruptState.fromJSON(object.interrupt_state) : undefined,
       recovery: isSet(object.recovery) ? RecoveryState.fromJSON(object.recovery) : undefined,
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      terminal_commit_id: isSet(object.terminal_commit_id) ? globalThis.Number(object.terminal_commit_id) : undefined,
+      terminal_outcome: isSet(object.terminal_outcome) ? globalThis.String(object.terminal_outcome) : undefined,
     };
   },
 
@@ -2534,6 +2592,12 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
     if (message.workspace_id !== undefined) {
       obj.workspace_id = message.workspace_id;
     }
+    if (message.terminal_commit_id !== undefined) {
+      obj.terminal_commit_id = Math.round(message.terminal_commit_id);
+    }
+    if (message.terminal_outcome !== undefined) {
+      obj.terminal_outcome = message.terminal_outcome;
+    }
     return obj;
   },
 
@@ -2569,6 +2633,8 @@ export const StreamSnapshot: MessageFns<StreamSnapshot> = {
       ? RecoveryState.fromPartial(object.recovery)
       : undefined;
     message.workspace_id = object.workspace_id ?? undefined;
+    message.terminal_commit_id = object.terminal_commit_id ?? undefined;
+    message.terminal_outcome = object.terminal_outcome ?? undefined;
     return message;
   },
 };

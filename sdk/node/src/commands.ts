@@ -5,6 +5,7 @@ import type { PluginCommandCancelRequest } from "./generated-json/boxteam/gatewa
 import type { DescMessage, JsonValue } from "@bufbuild/protobuf";
 import type { PluginCommandCallRequest } from "./generated-json/boxteam/gateway/v2/plugin_commands.js";
 /** 具名命令复用插件 HTTP listener；实际 handler 和取消由所属实例持有。 */
+import { failureMessage, formatFailureDiagnostic } from "./failures.js";
 import { randomUUID } from "node:crypto";
 import { Ajv2020 as Ajv } from "ajv/dist/2020.js";
 import { fromJson, toJson } from "@bufbuild/protobuf";
@@ -128,8 +129,8 @@ export function createPluginCommands(
       } catch (error) {
         if (controller.signal.aborted && !expired) await emit("cancelled");
         else {
-          logger.error("插件命令失败", error);
-          await emit("error", { error_code: expired ? "deadline-exceeded" : "handler-failed", message: (error as Error).message });
+          logger.error("插件命令失败", formatFailureDiagnostic(error, { maxBytes: 65536 - 64 }));
+          await emit("error", { error_code: expired ? "deadline-exceeded" : "handler-failed", message: failureMessage(error) });
         }
       } finally {
         clearTimeout(timer);

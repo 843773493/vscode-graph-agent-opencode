@@ -8,7 +8,7 @@ import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/tool_results.test.mjs').prepare();
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'tool-results-contract.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/resources/tool_results.fixture.mjs')], outfile: bundle,
-  bundle: true, format: 'esm', platform: 'browser', target: 'es2024', tsconfig: join(workbench, 'tsconfig.jsonc'),
+  bundle: true, format: 'esm', platform: 'browser', target: 'es2024', loader: { '.css': 'empty' }, tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   return new URL(request.url).pathname === '/' ? new Response('<!doctype html><title>工具结果合同</title>')
@@ -78,8 +78,8 @@ test('接受冻结工具结果身份并沿原 Thread 传递 typed boxteamMessage
   const result = await exercise('freeze');
   expect(result.errors).toEqual([]); expect(lists(result)).toHaveLength(1);
   expect(result.opened).toEqual([{ owner: { ...result.owner, workspaceKey: JSON.stringify([result.owner.gatewayId, result.owner.workspaceId]),
-    sessionId: result.sessionId, threadId: result.threadId, title: result.threadId }, group: 7,
-    options: { pinned: false, preserveFocus: false, boxteamMessage: result.items[0], viewState: { resourcesVisible: false } } }]);
+    sessionId: result.sessionId, threadId: result.threadId, title: result.threadId }, group: -1,
+    options: { sourceGroup: 7, pinned: false, preserveFocus: false, boxteamMessage: result.items[0], viewState: { resourcesVisible: false } } }]);
 });
 
 test('冷 Thread 允许 null source view 的空目录，且没有明确 Thread 时不扫描', async () => {

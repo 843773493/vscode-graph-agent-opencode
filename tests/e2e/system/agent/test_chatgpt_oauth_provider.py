@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import (
     read_llm_request_logs,
     with_message_run_operation_id,
@@ -122,11 +123,8 @@ def e2e_backend_process(
     if not litellm_auth.is_file() and not codex_auth.is_file():
         pytest.skip("需要 BoxTeam ChatGPT OAuth 或 Codex OAuth 凭据")
 
-    output_root = output_root_for_test(
-        Path(request.node.fspath),
-        test_layer="e2e",
-    )
-    isolated_home = output_root / "artifacts" / "boxteam-home"
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    isolated_home = context.boxteam_home_for_node("chatgpt-oauth")
     token_dir = isolated_home / "auth" / "chatgpt"
     if isolated_home.exists():
         shutil.rmtree(isolated_home)

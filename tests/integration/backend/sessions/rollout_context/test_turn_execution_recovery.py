@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -47,7 +48,10 @@ from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.message_stream_store import MessageStreamStore
+from app.services.infrastructure.message_stream_store import (
+    MessageStreamError,
+    MessageStreamStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -1059,7 +1063,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
             outcome="user_interrupt",
             retryable=False,
         )
-        await writer.close_interrupted("interrupt-partial-restart")
+        await writer.commit("stream.interrupted", {"interrupt_request_id": "interrupt-partial-restart", "status": "interrupted"})
 
     partial_items = [
         item
@@ -2913,3 +2917,180 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
     }
     print("TC001_ACTUAL=" + json.dumps(actual, ensure_ascii=False, default=str))
     assert actual == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "completed_empty", "cancelled", "interrupted"])
+async def test_committed_result_survives_startup_before_stream_closure(
+    tmp_path: Path, session_bundle_factory, outcome: str, execution_scope,
+    frozen_provider_activation, frozen_provider_wire,
+) -> None:
+    """真实启动恢复只镜像已提交终态，不创建 Job、重放执行或追加失联 Trace。"""
+    from unittest.mock import AsyncMock
+
+    from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+    from app.services.infrastructure.session_trace.store import TraceEventStore
+    from app.services.orchestration.execution_queue import ExecutionQueueService
+    from app.services.orchestration.workspace_runtime_lifecycle import (
+        WorkspaceRuntimeLifecycleService,
+    )
+
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, SESSION_ID)
+    if outcome == "completed_empty":
+        _register_provider_model_call(saver, accepted, execution_scope, frozen_provider_activation,
+            frozen_provider_wire, key="startup-completed")
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    admission = saver.execution_admission(SESSION_ID, thread_id=thread, execution_id="execution-user-1")
+    resolver = get_session_path_resolver(sessions_dir)
+    store = MessageStreamStore(path_resolver=resolver)
+    writer = await store.open(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1", job_id="job-user-1")
+    failure = {"code": "execution_error", "message": "工具配置校验失败", "details": {"stage": "agent_execution"}} if outcome == "failed" else None
+    # 原提交之后、Job/stream 收尾之前发生进程中断。
+    commit_id = saver.converge_execution(SESSION_ID, thread_id=thread, turn_id="turn-user-1",
+        execution_id="execution-user-1", outcome=outcome, turn_status=outcome, failure=failure)
+    if outcome == "completed_empty":
+        # 取消意图晚于原成功提交；恢复不得把成功镜像成 interrupted。
+        await writer.commit("interrupt.requested", {"interrupt_request_id": "late-interrupt", "reason": "user_requested"})
+    terminal = saver.execution_terminal_result(admission)
+    assert terminal is not None and terminal.commit_id == commit_id and terminal.failure == failure
+    await asyncio.gather(*store._snapshot_tasks.values())
+    restarted = RolloutCheckpointSaver(sessions_dir)
+    cold = MessageStreamStore(path_resolver=resolver)
+    trace = TraceEventStore(sessions_dir=sessions_dir)
+    jobs = SimpleNamespace(restore_paused_threads=lambda _pauses: None, restore_active_job=AsyncMock())
+    inspector = AsyncMock(side_effect=AssertionError("已提交终态不得读取或恢复 checkpoint"))
+    runtime = WorkspaceRuntimeLifecycleService(
+        workspace_id="00000000-0000-4000-8000-000000000001", job_service=jobs,
+        background_task_registry=SimpleNamespace(), trace_event_store=trace, message_stream_store=cold,
+        terminal_status_writer=restarted, pending_tool_checkpoint_id=inspector,
+        execution_queue_service=ExecutionQueueService(sessions_dir=sessions_dir, owner=restarted,
+            input_reader=lambda _reference: pytest.fail("已提交执行不得重读输入")),
+    )
+    assert await runtime.reconcile_stale_executions() == 1
+    await cold.open_existing(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1")
+    state = await cold.get_state(writer.turn_stream_id)
+    assert state["terminal_commit_id"] == commit_id
+    assert state["terminal_outcome"] == outcome
+    assert state["stream_status"] == ("completed" if outcome == "completed_empty" else "failed" if outcome == "failed" else "interrupted")
+    if failure is not None:
+        assert {key: state["failure"][key] for key in failure} == failure
+    assert trace.read_events(SESSION_ID) == []
+    jobs.restore_active_job.assert_not_awaited()
+    inspector.assert_not_awaited()
+    before = await cold.list_events(session_id=SESSION_ID, turn_stream_id=writer.turn_stream_id)
+    assert await runtime.reconcile_stale_executions() == 0
+    await cold.open_existing(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1")
+    assert await cold.list_events(session_id=SESSION_ID, turn_stream_id=writer.turn_stream_id) == before
+    page = restarted.load_history(SESSION_ID, thread, TurnHistoryLoadRequest(turn_ids=[str(accepted["turn_id"])]))
+    assert page.items[0].activity_stats.item_count == 0
+    assert (page.items[0].failure.model_dump(exclude_none=True) if page.items[0].failure else None) == failure
+    await asyncio.gather(*cold._snapshot_tasks.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed_empty", "failed", "cancelled", "interrupted"])
+@pytest.mark.parametrize("canonical_mirror", [False, True])
+async def test_startup_preserves_already_closed_streams(
+    tmp_path: Path, session_bundle_factory, outcome: str, canonical_mirror: bool,
+    execution_scope, frozen_provider_activation, frozen_provider_wire,
+) -> None:
+    """闭合事件不因缺少或已持有 canonical 镜像身份而在重启时重复追加。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, SESSION_ID)
+    if outcome == "completed_empty":
+        _register_provider_model_call(saver, accepted, execution_scope, frozen_provider_activation,
+            frozen_provider_wire, key="closed-stream")
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    admission = saver.execution_admission(SESSION_ID, thread_id=thread, execution_id="execution-user-1")
+    resolver = get_session_path_resolver(sessions_dir)
+    store = MessageStreamStore(path_resolver=resolver)
+    writer = await store.open(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1", job_id="job-user-1")
+    failure = {"code": "execution_error", "message": "执行失败"} if outcome == "failed" else None
+    saver.converge_execution(SESSION_ID, thread_id=thread, turn_id="turn-user-1",
+        execution_id=admission.execution_id, outcome=outcome, turn_status=outcome, failure=failure)
+    if canonical_mirror:
+        await writer.close_from_execution(saver, admission)
+    elif outcome == "completed_empty":
+        await writer.commit("stream.completed", {"status": "completed"})
+    elif outcome == "failed":
+        await writer.commit("stream.failed", failure)
+    else:
+        await writer.commit("stream.interrupted", {"status": "interrupted"})
+    await asyncio.gather(*store._snapshot_tasks.values())
+    events = await store.list_events(session_id=SESSION_ID, turn_stream_id=writer.turn_stream_id)
+    stream_path = resolver.resolve_session_node(SESSION_ID) / "message_streams" / f"{writer.turn_stream_id}.jsonl"
+    original = stream_path.read_bytes()
+    cold = MessageStreamStore(path_resolver=resolver)
+    for _ in range(2):
+        assert await cold.reconcile_unfinished_streams(terminal_status_writer=saver) == 0
+        assert cold._states == {} and cold._event_ids == {}
+        assert stream_path.read_bytes() == original
+    await cold.open_existing(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1")
+    assert await cold.list_events(session_id=SESSION_ID, turn_stream_id=writer.turn_stream_id) == events
+
+
+@pytest.mark.asyncio
+async def test_lost_mirror_accepts_only_new_committed_control_correction(
+    tmp_path: Path, session_bundle_factory,
+) -> None:
+    from dataclasses import replace
+
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    admission = saver.execution_admission(SESSION_ID, thread_id=thread, execution_id="execution-user-1")
+    store = MessageStreamStore(path_resolver=get_session_path_resolver(sessions_dir))
+    writer = await store.open(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1", job_id="job-user-1")
+    saver.mark_execution_lost(SESSION_ID, thread_id=thread, turn_id="turn-user-1", execution_id=admission.execution_id,
+        failure={"code": "execution_lost", "message": "原执行丢失"})
+    lost = saver.execution_terminal_result(admission)
+    assert lost is not None
+    first = await store.mirror_terminal_result(writer.turn_stream_id, admission, lost)
+    frozen = await store.get_state(writer.turn_stream_id)
+    with pytest.raises(MessageStreamError, match="event_id"):
+        await store.mirror_terminal_result(writer.turn_stream_id, admission, replace(lost, failure={"code": "execution_lost", "message": "冲突内容"}))
+    saver.converge_execution(SESSION_ID, thread_id=thread, turn_id="turn-user-1", execution_id=admission.execution_id,
+        outcome="cancelled", turn_status="cancelled")
+    corrected = saver.execution_terminal_result(admission)
+    assert corrected is not None and corrected.commit_id > lost.commit_id
+    assert await store.reconcile_unfinished_streams(terminal_status_writer=saver) == 1
+    await store.open_existing(session_id=SESSION_ID, thread_id=thread, turn_id="turn-user-1")
+    second = await store.mirror_terminal_result(writer.turn_stream_id, admission, corrected)
+    assert first["event_id"] != second["event_id"]
+    current = await store.get_state(writer.turn_stream_id)
+    assert current["stream_status"] == "interrupted" and "failure" not in current
+    assert frozen["stream_status"] == "failed" and frozen["failure"]["message"] == "原执行丢失"
+    assert await store.mirror_terminal_result(writer.turn_stream_id, admission, corrected) == second
+    await asyncio.gather(*store._snapshot_tasks.values())
+
+
+def test_resumed_execution_does_not_inherit_previous_terminal_failure(tmp_path: Path, session_bundle_factory) -> None:
+    from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    original = saver.execution_admission(SESSION_ID, thread_id=thread, execution_id="execution-user-1")
+    saver.mark_execution_lost(SESSION_ID, thread_id=thread, turn_id="turn-user-1", execution_id=original.execution_id,
+        failure={"code": "execution_lost", "message": "保留原执行失败原因"})
+    request = TurnHistoryLoadRequest(turn_ids=[str(accepted["turn_id"])])
+    frozen = saver.load_history(SESSION_ID, thread, request).items[0]
+    assert frozen.failure is not None and frozen.failure.message == "保留原执行失败原因"
+    resumed = saver.resume_turn(SESSION_ID, thread_id=thread, turn_id="turn-user-1", job_id="job-resumed")
+    active = saver.load_history(SESSION_ID, thread, request).items[0]
+    assert active.status.value == "running" and active.failure is None
+    saver.converge_execution(SESSION_ID, thread_id=thread, turn_id="turn-user-1",
+        execution_id=str(resumed["execution_id"]), outcome="completed_empty", turn_status="completed_empty")
+    completed = saver.load_history(SESSION_ID, thread, request).items[0]
+    assert completed.status.value == "completed" and completed.failure is None
+    assert frozen.failure.message == "保留原执行失败原因"
+    assert saver.execution_terminal_result(original).failure["message"] == "保留原执行失败原因"

@@ -1,3 +1,4 @@
+import type { ProcessDetailSelection } from "../../api/session/sessionTurnHistory";
 import {
   startTransition,
   useCallback,
@@ -12,6 +13,7 @@ import {
 } from "../../api/session/sessionTurnHistory";
 import {
   applyTurnDetails,
+  applyHistoryFragment,
   decideTurnProjectionEpoch,
   markTurnsLoading,
   upsertTurns,
@@ -57,6 +59,7 @@ export function useTurnDetailLoader({
   refreshAfterInFlight?: boolean,
   include?: TurnHistoryInclude[],
   toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
 ) => Promise<void> {
   const inFlightByTurnId = useRef(new Map<string, {
     requestIdentity: string | null;
@@ -77,6 +80,7 @@ export function useTurnDetailLoader({
     requestIds: TurnDetailBatchRequest["turn_ids"],
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
   ) => {
     if (apiPort === null || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
@@ -236,8 +240,29 @@ export function useTurnDetailLoader({
     refreshAfterInFlight: boolean = false,
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
   ) => {
-    if (apiPort === null || !sessionId || !sessionCacheKey || turnIds.length === 0) return;
+    if (apiPort === null || !sessionId || !sessionCacheKey) return;
+    if (selection) {
+      const targetGeneration = generationRef.current;
+      const page = await loadSessionHistory(apiPort, sessionId, {
+        direction: selection.beforeCursor ? "before" : "tail",
+        ...(selection.executionId ? { execution_id: selection.executionId } : { turn_ids: turnIds }),
+        ...(selection.itemIds ? { item_ids: selection.itemIds } : {}),
+        ...(selection.beforeCursor ? { cursor: selection.beforeCursor } : {}),
+        source_view_id: selection.sourceViewId, source_view_revision: selection.sourceViewRevision,
+        include,
+      }, workspaceId, requestSignal, threadId);
+      if (requestSignal.aborted || generationRef.current !== targetGeneration) return;
+      setState(previous => {
+        const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
+        if (timeline.generation !== targetGeneration) return previous;
+        return { ...previous, turnTimelinesBySession: writeTurnTimelineCache(previous.turnTimelinesBySession,
+          sessionCacheKey, applyHistoryFragment(timeline, page, include?.includes("activity_outline"))) };
+      });
+      return;
+    }
+    if (turnIds.length === 0) return;
     const requestIds = detailRequestIds(turnIds);
     if (refreshAfterInFlight) {
       const refreshLoops = requestIds.map((turnId) => {
@@ -341,6 +366,6 @@ export function useTurnDetailLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
-    threadId,
+    threadId, workspaceId, generationRef, setState,
   ]);
 }

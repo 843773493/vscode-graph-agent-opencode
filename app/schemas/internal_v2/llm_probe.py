@@ -78,9 +78,40 @@ class LlmProbeObservationDTO(BaseModel):
     observed_at: str
 
 
+class LlmModelMetadataDTO(BaseModel):
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    supports_vision: bool | None = None
+    supports_video_input: bool | None = None
+    supports_audio_input: bool | None = None
+    supports_audio_output: bool | None = None
+    supports_function_calling: bool | None = None
+    supports_reasoning: bool | None = None
+    sources: dict[str, Literal["provider", "upstream", "litellm"]] = Field(default_factory=dict)
+    catalog_provider: str | None = None
+
+
 class LlmDiscoveredModelDTO(BaseModel):
     model: str
     name: str | None = None
+    metadata: LlmModelMetadataDTO | None = None
+
+
+class LlmModelCatalogDTO(BaseModel):
+    provider: str
+    models: list[LlmDiscoveredModelDTO]
+
+
+class LlmProviderDTO(BaseModel):
+    provider: str
+    model_count: int
+    chat_model_count: int
+    default_endpoint: str | None = None
+    protocol: str | None = None
+    upstream_discovery: bool
+
+
+class LlmProvidersDTO(BaseModel):
+    providers: list[LlmProviderDTO]
 
 
 class LlmProbeErrorDTO(BaseModel):

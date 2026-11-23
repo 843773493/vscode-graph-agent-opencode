@@ -1,5 +1,6 @@
 import datetime
 
+from boxteam.common.v1 import error_pb2 as _error_pb2
 from boxteam.gateway.v2 import service_plugin_pb2 as _service_plugin_pb2
 from boxteam.workspace.v2 import message_pb2 as _message_pb2
 from google.protobuf import struct_pb2 as _struct_pb2
@@ -428,13 +429,74 @@ class LlmProbeObservationDTO(_message.Message):
     observed_at: str
     def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., mode: _Optional[str] = ..., provider_id: _Optional[str] = ..., edit_version: _Optional[int] = ..., source_key: _Optional[str] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_revision: _Optional[int] = ..., active_digest: _Optional[str] = ..., credential: _Optional[_Union[LlmCredentialObservationDTO, _Mapping]] = ..., protocol: _Optional[str] = ..., endpoint: _Optional[str] = ..., observed_at: _Optional[str] = ...) -> None: ...
 
+class LlmModelMetadataDTO(_message.Message):
+    __slots__ = ("max_input_tokens", "supports_vision", "supports_video_input", "supports_audio_input", "supports_audio_output", "supports_function_calling", "supports_reasoning", "sources", "catalog_provider")
+    class SourcesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    MAX_INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_VISION_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_VIDEO_INPUT_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_AUDIO_INPUT_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_AUDIO_OUTPUT_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_FUNCTION_CALLING_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTS_REASONING_FIELD_NUMBER: _ClassVar[int]
+    SOURCES_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    max_input_tokens: int
+    supports_vision: bool
+    supports_video_input: bool
+    supports_audio_input: bool
+    supports_audio_output: bool
+    supports_function_calling: bool
+    supports_reasoning: bool
+    sources: _containers.ScalarMap[str, str]
+    catalog_provider: str
+    def __init__(self, max_input_tokens: _Optional[int] = ..., supports_vision: _Optional[bool] = ..., supports_video_input: _Optional[bool] = ..., supports_audio_input: _Optional[bool] = ..., supports_audio_output: _Optional[bool] = ..., supports_function_calling: _Optional[bool] = ..., supports_reasoning: _Optional[bool] = ..., sources: _Optional[_Mapping[str, str]] = ..., catalog_provider: _Optional[str] = ...) -> None: ...
+
+class LlmModelCatalogDTO(_message.Message):
+    __slots__ = ("provider", "models")
+    PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    MODELS_FIELD_NUMBER: _ClassVar[int]
+    provider: str
+    models: _containers.RepeatedCompositeFieldContainer[LlmDiscoveredModelDTO]
+    def __init__(self, provider: _Optional[str] = ..., models: _Optional[_Iterable[_Union[LlmDiscoveredModelDTO, _Mapping]]] = ...) -> None: ...
+
+class LlmProviderDTO(_message.Message):
+    __slots__ = ("provider", "model_count", "chat_model_count", "default_endpoint", "protocol", "upstream_discovery")
+    PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    MODEL_COUNT_FIELD_NUMBER: _ClassVar[int]
+    CHAT_MODEL_COUNT_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_ENDPOINT_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_FIELD_NUMBER: _ClassVar[int]
+    UPSTREAM_DISCOVERY_FIELD_NUMBER: _ClassVar[int]
+    provider: str
+    model_count: int
+    chat_model_count: int
+    default_endpoint: str
+    protocol: str
+    upstream_discovery: bool
+    def __init__(self, provider: _Optional[str] = ..., model_count: _Optional[int] = ..., chat_model_count: _Optional[int] = ..., default_endpoint: _Optional[str] = ..., protocol: _Optional[str] = ..., upstream_discovery: _Optional[bool] = ...) -> None: ...
+
+class LlmProvidersDTO(_message.Message):
+    __slots__ = ("providers",)
+    PROVIDERS_FIELD_NUMBER: _ClassVar[int]
+    providers: _containers.RepeatedCompositeFieldContainer[LlmProviderDTO]
+    def __init__(self, providers: _Optional[_Iterable[_Union[LlmProviderDTO, _Mapping]]] = ...) -> None: ...
+
 class LlmDiscoveredModelDTO(_message.Message):
-    __slots__ = ("model", "name")
+    __slots__ = ("model", "name", "metadata")
     MODEL_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     model: str
     name: str
-    def __init__(self, model: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+    metadata: LlmModelMetadataDTO
+    def __init__(self, model: _Optional[str] = ..., name: _Optional[str] = ..., metadata: _Optional[_Union[LlmModelMetadataDTO, _Mapping]] = ...) -> None: ...
 
 class LlmProbeErrorDTO(_message.Message):
     __slots__ = ("category", "message", "status_code", "field")
@@ -1488,7 +1550,7 @@ class McpToolDTO(_message.Message):
     def __init__(self, tool_id: _Optional[str] = ..., server_id: _Optional[str] = ..., remote_name: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
 
 class McpConnectionOperationDTO(_message.Message):
-    __slots__ = ("operation_id", "connection_id", "server_id", "action", "status", "stage", "created_at", "deadline", "updated_at", "error_code")
+    __slots__ = ("operation_id", "connection_id", "server_id", "action", "status", "stage", "created_at", "deadline", "updated_at", "error_code", "error_message")
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     SERVER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1499,6 +1561,7 @@ class McpConnectionOperationDTO(_message.Message):
     DEADLINE_FIELD_NUMBER: _ClassVar[int]
     UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
     ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     operation_id: str
     connection_id: str
     server_id: str
@@ -1509,7 +1572,8 @@ class McpConnectionOperationDTO(_message.Message):
     deadline: float
     updated_at: float
     error_code: str
-    def __init__(self, operation_id: _Optional[str] = ..., connection_id: _Optional[str] = ..., server_id: _Optional[str] = ..., action: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., deadline: _Optional[float] = ..., updated_at: _Optional[float] = ..., error_code: _Optional[str] = ...) -> None: ...
+    error_message: str
+    def __init__(self, operation_id: _Optional[str] = ..., connection_id: _Optional[str] = ..., server_id: _Optional[str] = ..., action: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., deadline: _Optional[float] = ..., updated_at: _Optional[float] = ..., error_code: _Optional[str] = ..., error_message: _Optional[str] = ...) -> None: ...
 
 class McpConnectionRequestDTO(_message.Message):
     __slots__ = ("operation_id", "server_id", "action")
@@ -4770,7 +4834,7 @@ class TurnDetailCursorDTO(_message.Message):
     def __init__(self, version: _Optional[int] = ..., session_id: _Optional[str] = ..., projection_epoch: _Optional[int] = ..., turn_id: _Optional[str] = ..., event_index: _Optional[int] = ..., include_hash: _Optional[str] = ...) -> None: ...
 
 class TurnDetailDTO(_message.Message):
-    __slots__ = ("turn_id", "job_id", "session_id", "ordinal", "revision", "status", "created_at", "updated_at", "completed_at", "items_view", "source_message_ids", "merged_job_ids", "user_messages", "response_preview", "preview_truncated", "assistant_text", "thinking_blocks", "tool_summary", "response_parts", "final_response", "items", "detail_truncated", "detail_next_cursor", "activity_stats", "root_logical_item_ordinal", "source_view_id", "source_view_revision", "tool_summary_truncated")
+    __slots__ = ("turn_id", "job_id", "session_id", "ordinal", "revision", "status", "created_at", "updated_at", "completed_at", "items_view", "source_message_ids", "merged_job_ids", "user_messages", "response_preview", "preview_truncated", "assistant_text", "thinking_blocks", "tool_summary", "response_parts", "final_response", "items", "detail_truncated", "detail_next_cursor", "activity_stats", "root_logical_item_ordinal", "source_view_id", "source_view_revision", "tool_summary_truncated", "failure")
     TURN_ID_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -4799,6 +4863,7 @@ class TurnDetailDTO(_message.Message):
     SOURCE_VIEW_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_VIEW_REVISION_FIELD_NUMBER: _ClassVar[int]
     TOOL_SUMMARY_TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     job_id: str
     session_id: str
@@ -4827,7 +4892,8 @@ class TurnDetailDTO(_message.Message):
     source_view_id: str
     source_view_revision: int
     tool_summary_truncated: bool
-    def __init__(self, turn_id: _Optional[str] = ..., job_id: _Optional[str] = ..., session_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., revision: _Optional[int] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., items_view: _Optional[str] = ..., source_message_ids: _Optional[_Iterable[str]] = ..., merged_job_ids: _Optional[_Iterable[str]] = ..., user_messages: _Optional[_Iterable[_Union[TurnUserMessageDTO, _Mapping]]] = ..., response_preview: _Optional[str] = ..., preview_truncated: _Optional[bool] = ..., assistant_text: _Optional[_Iterable[str]] = ..., thinking_blocks: _Optional[_Iterable[_Union[TurnThinkingBlockDTO, _Mapping]]] = ..., tool_summary: _Optional[_Iterable[_Union[TurnToolSummaryDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., final_response: _Optional[str] = ..., items: _Optional[_Iterable[_Union[TraceEventDTO, _Mapping]]] = ..., detail_truncated: _Optional[bool] = ..., detail_next_cursor: _Optional[str] = ..., activity_stats: _Optional[_Union[TurnActivityStatsDTO, _Mapping]] = ..., root_logical_item_ordinal: _Optional[int] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., tool_summary_truncated: _Optional[bool] = ...) -> None: ...
+    failure: _error_pb2.Error
+    def __init__(self, turn_id: _Optional[str] = ..., job_id: _Optional[str] = ..., session_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., revision: _Optional[int] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., items_view: _Optional[str] = ..., source_message_ids: _Optional[_Iterable[str]] = ..., merged_job_ids: _Optional[_Iterable[str]] = ..., user_messages: _Optional[_Iterable[_Union[TurnUserMessageDTO, _Mapping]]] = ..., response_preview: _Optional[str] = ..., preview_truncated: _Optional[bool] = ..., assistant_text: _Optional[_Iterable[str]] = ..., thinking_blocks: _Optional[_Iterable[_Union[TurnThinkingBlockDTO, _Mapping]]] = ..., tool_summary: _Optional[_Iterable[_Union[TurnToolSummaryDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., final_response: _Optional[str] = ..., items: _Optional[_Iterable[_Union[TraceEventDTO, _Mapping]]] = ..., detail_truncated: _Optional[bool] = ..., detail_next_cursor: _Optional[str] = ..., activity_stats: _Optional[_Union[TurnActivityStatsDTO, _Mapping]] = ..., root_logical_item_ordinal: _Optional[int] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., tool_summary_truncated: _Optional[bool] = ..., failure: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
 
 class TurnToolResultDTO(_message.Message):
     __slots__ = ("item_id", "turn_id", "tool_call_id", "tool_name", "status")
@@ -4973,8 +5039,16 @@ class WorkspaceMessageSearchResultsDTO(_message.Message):
     scanned_bytes: int
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceMessageMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_sessions: _Optional[int] = ..., scanned_threads: _Optional[int] = ..., scanned_items: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
+class ContextNoticeAnchorDTO(_message.Message):
+    __slots__ = ("model_call_id", "anchor")
+    MODEL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
+    ANCHOR_FIELD_NUMBER: _ClassVar[int]
+    model_call_id: str
+    anchor: str
+    def __init__(self, model_call_id: _Optional[str] = ..., anchor: _Optional[str] = ...) -> None: ...
+
 class TurnHistoryLoadRequest(_message.Message):
-    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result", "context_cursor", "execution_item_ids")
+    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result", "context_cursor", "item_ids", "anchor_item_id", "source_view_id", "source_view_revision", "anchor_context")
     DIRECTION_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TURN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -4988,7 +5062,11 @@ class TurnHistoryLoadRequest(_message.Message):
     ANCHOR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
-    EXECUTION_ITEM_IDS_FIELD_NUMBER: _ClassVar[int]
+    ITEM_IDS_FIELD_NUMBER: _ClassVar[int]
+    ANCHOR_ITEM_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_VIEW_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ANCHOR_CONTEXT_FIELD_NUMBER: _ClassVar[int]
     direction: str
     cursor: str
     anchor_turn_id: str
@@ -5002,8 +5080,12 @@ class TurnHistoryLoadRequest(_message.Message):
     anchor_message: TurnMessageReferenceDTO
     anchor_tool_result: str
     context_cursor: str
-    execution_item_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ..., context_cursor: _Optional[str] = ..., execution_item_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+    item_ids: _containers.RepeatedScalarFieldContainer[str]
+    anchor_item_id: str
+    source_view_id: str
+    source_view_revision: int
+    anchor_context: ContextNoticeAnchorDTO
+    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ..., context_cursor: _Optional[str] = ..., item_ids: _Optional[_Iterable[str]] = ..., anchor_item_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., anchor_context: _Optional[_Union[ContextNoticeAnchorDTO, _Mapping]] = ...) -> None: ...
 
 class ContextNoticeBatchDTO(_message.Message):
     __slots__ = ("owner_id", "owner_kind", "parts")
@@ -5016,7 +5098,7 @@ class ContextNoticeBatchDTO(_message.Message):
     def __init__(self, owner_id: _Optional[str] = ..., owner_kind: _Optional[str] = ..., parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ...) -> None: ...
 
 class TurnHistoryPageDTO(_message.Message):
-    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision", "located_message", "located_tool_result", "context_notices")
+    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision", "located_message", "located_tool_result", "context_notices", "located_item")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
     HAS_MORE_FIELD_NUMBER: _ClassVar[int]
@@ -5033,6 +5115,7 @@ class TurnHistoryPageDTO(_message.Message):
     LOCATED_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     LOCATED_TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_NOTICES_FIELD_NUMBER: _ClassVar[int]
+    LOCATED_ITEM_FIELD_NUMBER: _ClassVar[int]
     items: _containers.RepeatedCompositeFieldContainer[TurnDetailDTO]
     next_cursor: str
     has_more: bool
@@ -5049,10 +5132,11 @@ class TurnHistoryPageDTO(_message.Message):
     located_message: TurnMessageLocationDTO
     located_tool_result: TurnToolResultDTO
     context_notices: _containers.RepeatedCompositeFieldContainer[ContextNoticeBatchDTO]
-    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., located_message: _Optional[_Union[TurnMessageLocationDTO, _Mapping]] = ..., located_tool_result: _Optional[_Union[TurnToolResultDTO, _Mapping]] = ..., context_notices: _Optional[_Iterable[_Union[ContextNoticeBatchDTO, _Mapping]]] = ...) -> None: ...
+    located_item: ThreadItemLocationDTO
+    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., located_message: _Optional[_Union[TurnMessageLocationDTO, _Mapping]] = ..., located_tool_result: _Optional[_Union[TurnToolResultDTO, _Mapping]] = ..., context_notices: _Optional[_Iterable[_Union[ContextNoticeBatchDTO, _Mapping]]] = ..., located_item: _Optional[_Union[ThreadItemLocationDTO, _Mapping]] = ...) -> None: ...
 
 class InternalExecutionHistoryDTO(_message.Message):
-    __slots__ = ("execution_id", "job_id", "status", "created_at", "display_parts", "response_parts", "session_id", "thread_id", "updated_at")
+    __slots__ = ("execution_id", "job_id", "status", "created_at", "display_parts", "response_parts", "session_id", "thread_id", "updated_at", "failure", "terminal_commit_id")
     EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -5062,6 +5146,8 @@ class InternalExecutionHistoryDTO(_message.Message):
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_COMMIT_ID_FIELD_NUMBER: _ClassVar[int]
     execution_id: str
     job_id: str
     status: str
@@ -5071,7 +5157,9 @@ class InternalExecutionHistoryDTO(_message.Message):
     session_id: str
     thread_id: str
     updated_at: _timestamp_pb2.Timestamp
-    def __init__(self, execution_id: _Optional[str] = ..., job_id: _Optional[str] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., display_parts: _Optional[_Iterable[_Union[InternalExecutionDisplayPartDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    failure: _error_pb2.Error
+    terminal_commit_id: int
+    def __init__(self, execution_id: _Optional[str] = ..., job_id: _Optional[str] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., display_parts: _Optional[_Iterable[_Union[InternalExecutionDisplayPartDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., failure: _Optional[_Union[_error_pb2.Error, _Mapping]] = ..., terminal_commit_id: _Optional[int] = ...) -> None: ...
 
 class InternalExecutionDisplayPartDTO(_message.Message):
     __slots__ = ("kind", "text", "item_id", "item_sequence", "provenance", "created_at", "logical_item_ordinal")
@@ -5200,7 +5288,7 @@ class TurnResponsePartDTO(_message.Message):
     def __init__(self, part_id: _Optional[str] = ..., kind: _Optional[str] = ..., projection: _Optional[str] = ..., status: _Optional[str] = ..., source: _Optional[_Union[TurnResponseSourceDTO, _Mapping]] = ..., text: _Optional[str] = ..., carrier_type: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[str] = ..., result: _Optional[str] = ..., truncated: _Optional[bool] = ..., final: _Optional[bool] = ..., outcome_unknown: _Optional[bool] = ..., completion_reason: _Optional[str] = ..., partial: _Optional[bool] = ..., context_kind: _Optional[str] = ..., context_source_id: _Optional[str] = ..., context_model_call_id: _Optional[str] = ..., context_before_item_id: _Optional[str] = ..., context_content_ref: _Optional[_Union[ContextContentReferenceDTO, _Mapping]] = ..., context_source_revision: _Optional[str] = ..., context_content_length: _Optional[int] = ..., context_availability: _Optional[str] = ..., context_anchor: _Optional[str] = ..., context_anchor_ordinal: _Optional[int] = ..., context_plan_ordinal: _Optional[int] = ..., context_cursor: _Optional[str] = ...) -> None: ...
 
 class TurnResponseSourceDTO(_message.Message):
-    __slots__ = ("message_sequence", "assistant_message_sequence", "content_block_index", "item_index", "call_index", "result_message_sequence", "item_id", "item_sequence", "part_ordinal", "created_at", "elapsed_ms", "logical_item_ordinal", "model_call_id")
+    __slots__ = ("message_sequence", "assistant_message_sequence", "content_block_index", "item_index", "call_index", "result_message_sequence", "item_id", "item_sequence", "part_ordinal", "created_at", "elapsed_ms", "logical_item_ordinal", "model_call_id", "activity_group_item_id", "activity_group_part_ordinal", "turn_id", "execution_id", "process_segment_item_id")
     MESSAGE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     ASSISTANT_MESSAGE_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     CONTENT_BLOCK_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -5214,6 +5302,11 @@ class TurnResponseSourceDTO(_message.Message):
     ELAPSED_MS_FIELD_NUMBER: _ClassVar[int]
     LOGICAL_ITEM_ORDINAL_FIELD_NUMBER: _ClassVar[int]
     MODEL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
+    ACTIVITY_GROUP_ITEM_ID_FIELD_NUMBER: _ClassVar[int]
+    ACTIVITY_GROUP_PART_ORDINAL_FIELD_NUMBER: _ClassVar[int]
+    TURN_ID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    PROCESS_SEGMENT_ITEM_ID_FIELD_NUMBER: _ClassVar[int]
     message_sequence: int
     assistant_message_sequence: int
     content_block_index: int
@@ -5227,10 +5320,15 @@ class TurnResponseSourceDTO(_message.Message):
     elapsed_ms: int
     logical_item_ordinal: int
     model_call_id: str
-    def __init__(self, message_sequence: _Optional[int] = ..., assistant_message_sequence: _Optional[int] = ..., content_block_index: _Optional[int] = ..., item_index: _Optional[int] = ..., call_index: _Optional[int] = ..., result_message_sequence: _Optional[int] = ..., item_id: _Optional[str] = ..., item_sequence: _Optional[int] = ..., part_ordinal: _Optional[int] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_ms: _Optional[int] = ..., logical_item_ordinal: _Optional[int] = ..., model_call_id: _Optional[str] = ...) -> None: ...
+    activity_group_item_id: str
+    activity_group_part_ordinal: int
+    turn_id: str
+    execution_id: str
+    process_segment_item_id: str
+    def __init__(self, message_sequence: _Optional[int] = ..., assistant_message_sequence: _Optional[int] = ..., content_block_index: _Optional[int] = ..., item_index: _Optional[int] = ..., call_index: _Optional[int] = ..., result_message_sequence: _Optional[int] = ..., item_id: _Optional[str] = ..., item_sequence: _Optional[int] = ..., part_ordinal: _Optional[int] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., elapsed_ms: _Optional[int] = ..., logical_item_ordinal: _Optional[int] = ..., model_call_id: _Optional[str] = ..., activity_group_item_id: _Optional[str] = ..., activity_group_part_ordinal: _Optional[int] = ..., turn_id: _Optional[str] = ..., execution_id: _Optional[str] = ..., process_segment_item_id: _Optional[str] = ...) -> None: ...
 
 class TurnSummaryDTO(_message.Message):
-    __slots__ = ("turn_id", "job_id", "session_id", "ordinal", "revision", "status", "created_at", "updated_at", "completed_at", "items_view", "source_message_ids", "source_message_count", "merged_job_ids", "merged_job_count", "sources_truncated", "user_messages", "user_message_count", "user_messages_truncated", "response_preview", "preview_truncated", "item_count", "thinking_blocks", "tool_summary", "response_parts", "activity_stats", "root_logical_item_ordinal", "source_view_id", "source_view_revision", "tool_summary_truncated")
+    __slots__ = ("turn_id", "job_id", "session_id", "ordinal", "revision", "status", "created_at", "updated_at", "completed_at", "items_view", "source_message_ids", "source_message_count", "merged_job_ids", "merged_job_count", "sources_truncated", "user_messages", "user_message_count", "user_messages_truncated", "response_preview", "preview_truncated", "item_count", "thinking_blocks", "tool_summary", "response_parts", "activity_stats", "root_logical_item_ordinal", "source_view_id", "source_view_revision", "tool_summary_truncated", "failure")
     TURN_ID_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -5260,6 +5358,7 @@ class TurnSummaryDTO(_message.Message):
     SOURCE_VIEW_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_VIEW_REVISION_FIELD_NUMBER: _ClassVar[int]
     TOOL_SUMMARY_TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     job_id: str
     session_id: str
@@ -5289,7 +5388,8 @@ class TurnSummaryDTO(_message.Message):
     source_view_id: str
     source_view_revision: int
     tool_summary_truncated: bool
-    def __init__(self, turn_id: _Optional[str] = ..., job_id: _Optional[str] = ..., session_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., revision: _Optional[int] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., items_view: _Optional[str] = ..., source_message_ids: _Optional[_Iterable[str]] = ..., source_message_count: _Optional[int] = ..., merged_job_ids: _Optional[_Iterable[str]] = ..., merged_job_count: _Optional[int] = ..., sources_truncated: _Optional[bool] = ..., user_messages: _Optional[_Iterable[_Union[TurnUserMessageSummaryDTO, _Mapping]]] = ..., user_message_count: _Optional[int] = ..., user_messages_truncated: _Optional[bool] = ..., response_preview: _Optional[str] = ..., preview_truncated: _Optional[bool] = ..., item_count: _Optional[int] = ..., thinking_blocks: _Optional[_Iterable[_Union[TurnThinkingBlockDTO, _Mapping]]] = ..., tool_summary: _Optional[_Iterable[_Union[TurnToolSummaryDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., activity_stats: _Optional[_Union[TurnActivityStatsDTO, _Mapping]] = ..., root_logical_item_ordinal: _Optional[int] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., tool_summary_truncated: _Optional[bool] = ...) -> None: ...
+    failure: _error_pb2.Error
+    def __init__(self, turn_id: _Optional[str] = ..., job_id: _Optional[str] = ..., session_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., revision: _Optional[int] = ..., status: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., items_view: _Optional[str] = ..., source_message_ids: _Optional[_Iterable[str]] = ..., source_message_count: _Optional[int] = ..., merged_job_ids: _Optional[_Iterable[str]] = ..., merged_job_count: _Optional[int] = ..., sources_truncated: _Optional[bool] = ..., user_messages: _Optional[_Iterable[_Union[TurnUserMessageSummaryDTO, _Mapping]]] = ..., user_message_count: _Optional[int] = ..., user_messages_truncated: _Optional[bool] = ..., response_preview: _Optional[str] = ..., preview_truncated: _Optional[bool] = ..., item_count: _Optional[int] = ..., thinking_blocks: _Optional[_Iterable[_Union[TurnThinkingBlockDTO, _Mapping]]] = ..., tool_summary: _Optional[_Iterable[_Union[TurnToolSummaryDTO, _Mapping]]] = ..., response_parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ..., activity_stats: _Optional[_Union[TurnActivityStatsDTO, _Mapping]] = ..., root_logical_item_ordinal: _Optional[int] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., tool_summary_truncated: _Optional[bool] = ..., failure: _Optional[_Union[_error_pb2.Error, _Mapping]] = ...) -> None: ...
 
 class TurnThinkingBlockDTO(_message.Message):
     __slots__ = ("kind", "text")

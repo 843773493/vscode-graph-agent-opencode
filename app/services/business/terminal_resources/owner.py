@@ -59,6 +59,16 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         return (await self._transport.list_resources() if resource_ids is None else
                 await self._transport.list_resources(resource_ids=resource_ids))
 
+    async def _sync_owner_revision(
+        self, record: OwnedResourceRecord, *, for_stop: bool,
+        retained_associations: list[str | None] | None,
+    ) -> None:
+        # 只续准入变更前后都合法的现有连接；冷恢复仍撤销全部旧授权。
+        await self._transport.sync_owner_revision(
+            record.resource_id, record.owner_revision, for_stop=for_stop,
+            retained_associations=retained_associations,
+        )
+
     async def runtime_changes(self) -> AsyncIterator[ResourceChanges]:
         connected = False
         try:

@@ -18,7 +18,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -64,12 +64,12 @@ def browser_backend(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     assert Path(integration_workspace_config_path).is_file()
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.run_root / "artifacts", runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="read-only-boundary-cases-display",
     ) as replay:
         backend = start_backend_process(
@@ -144,7 +144,7 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
                     for part in item["response_parts"] if part["kind"] == kind
                 ] == expected
 
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
         workspace_root=Path(browser_backend[1]),
         default_backend_url=browser_backend[0],
@@ -207,6 +207,7 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert len(result["cases"]) == len(BOUNDARY_CASES)
         assert all(item["finalTextVisible"] for item in result["cases"])
+        assert all(item["processTextInsideDisclosure"] for item in result["cases"])
         assert all(item["statusVisible"] for item in result["cases"])
         assert all(item["forbiddenTextsAbsent"] for item in result["cases"])
         assert all(item["expandedTextsVisible"] for item in result["cases"])

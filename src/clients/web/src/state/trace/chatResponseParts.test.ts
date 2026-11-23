@@ -1,5 +1,4 @@
 import type { TraceEvent } from "../../types/backend";
-import { compactWorkMarkdown } from "../../components/chat/ThinkingSection";
 import { aggregateConversationEvents } from "./traceAggregation";
 import { buildTraceEvent } from "../traceEvents";
 import { errorMessage } from "../../utils/errorMessage";
@@ -29,12 +28,6 @@ function event(
   };
 }
 
-assert(
-  compactWorkMarkdown(
-    "G\n\nrep\n\n \n\n已\n\n恢复\n\n \n\nmatched\n\n。\n\n现在\n\n读取\n\n命中\n\n行\n\n附近\n\n（\n\n行\n\n3-\n\n4\n\n）\n\n。",
-  ) === "Grep 已恢复 matched。现在读取命中行附近（行3-4）。",
-  "工作组应合并模型按 token 插入的异常空段落，同时保留显式空格",
-);
 
 const streamingEvents = [
   event(1, "text_start", { kind: "reasoning" }, "reasoning_1"),

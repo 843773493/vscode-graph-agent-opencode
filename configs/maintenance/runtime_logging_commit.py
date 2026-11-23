@@ -120,18 +120,20 @@ def validate_runtime_logging_plan(
              for item in plan.inputs if item.kind == "file" and (
                  item.payload is not None or item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None
              )}
+    schemas = {domain: read_jsonc_object(resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root))
+               for domain in ("gateway", "workspace")}
     effective = dict(inline)
     for item in plan.inputs:
         if item.kind == "file" and item.path in files and item.path.parent.name != ".boxteam":
-            effective[item.domain] = merge_json_objects(effective[item.domain], files[item.path])
+            effective[item.domain] = merge_json_objects(effective[item.domain], files[item.path], schema=schemas[item.domain])
     for domain in ("gateway", "workspace"):
         validate_config(effective[domain], schema_path=resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root))
     for path, payload in files.items():
         if path.name == "workspace.jsonc" and path.parent.name == ".boxteam":
-            validate_config(merge_json_objects(effective["workspace"], payload), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
+            validate_config(merge_json_objects(effective["workspace"], payload, schema=schemas["workspace"]), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
     for item in plan.inputs:
         if item.kind in {"active", "pending"} and item.payload is not None:
-            candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries)
+            candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries, schema=schemas[item.domain])
             if item.domain == "workspace":
                 candidate = cast(dict[str, object], restore_environment_secret_references(candidate))
             validate_config(candidate, schema_path=resolve_config_resource_source(f"{item.domain}_schema.jsonc", project_root=project_root))
@@ -180,6 +182,7 @@ def _prepare(
                 target, domain=domain, source_path=path, plan=plan, file_digests=digests,
                 inline_config=read_jsonc_object(resolve_config_resource_source(f"{domain}_inline.jsonc", project_root=project_root)),
                 connection_entries=connection_entries,
+                schema=read_jsonc_object(resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root)),
             )
             target.commit()
             after_digest = _database_digest(target)

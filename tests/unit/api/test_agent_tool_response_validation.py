@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
+from boxteam_plugin_sdk.failures import failure_message
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
@@ -143,7 +144,7 @@ def test_internal_validation_is_server_failure_without_echo(
     assert response.status_code == 500, response.text
     assert response.json() == {
         "code": 500,
-        "message": "请求处理失败: stage=http_request, error=ValidationError",
+        "message": "请求处理失败: stage=http_request, error=ValidationError, reason=" + failure_message(service.error),
         "data": None,
         "request_id": REQUEST_ID,
     }
@@ -156,9 +157,9 @@ def test_internal_validation_is_server_failure_without_echo(
     diagnostics = [
         record
         for record in caplog.records
-        if record.exc_info and record.exc_info[1] is service.error
+        if "ValidationError:" in record.getMessage() and record.exc_info is None
     ]
-    assert len(diagnostics) == 1 and "agent-tool-sentinel" in caplog.text
+    assert len(diagnostics) == 1 and "ValidationError" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -270,15 +271,14 @@ def test_real_agent_catalog_validation_can_be_retried_after_repair(
     response = client.get("/api/v1/agents/default")
     assert response.status_code == 500, response.text
     assert (
-        response.json()["message"]
-        == "请求处理失败: stage=http_request, error=ValidationError"
+        response.json()["message"].startswith("请求处理失败: stage=http_request, error=ValidationError, reason=")
     )
     assert (
         response.json()["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
     )
     assert (
         "agent-catalog-sentinel" not in response.text
-        and "agent-catalog-sentinel" in caplog.text
+        and "ValidationError" in caplog.text
     )
     catalog["default"]["name"] = original_name
     repaired = client.get("/api/v1/agents/default")

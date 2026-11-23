@@ -4,6 +4,7 @@ import json
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -34,8 +35,9 @@ def replay_lifetime(
     server.server_close.side_effect = lambda: cleanups.append("socket-close")
     monkeypatch.setattr(replay_case, "ThreadingHTTPServer", Mock(return_value=server))
     monkeypatch.setattr(http_server, "Thread", Mock(return_value=thread))
-    fixture = replay_case.model_replay.__wrapped__(str(tmp_path / "workspace"), request.param)
-    return ReplayLifetime(fixture, server, thread, cleanups, tmp_path / "artifacts/model-replay-requests.json")
+    monkeypatch.setattr(replay_case.TestRunContext, "from_test_file", lambda _path: SimpleNamespace(run_root=tmp_path))
+    fixture = replay_case.model_replay.__wrapped__(request, request.param)
+    return ReplayLifetime(fixture, server, thread, cleanups, tmp_path / "artifacts" / request.param / "model-replay-requests.json")
 
 
 @pytest.mark.parametrize("interrupted", [False, True])

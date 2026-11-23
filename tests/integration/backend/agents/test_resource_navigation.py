@@ -20,7 +20,8 @@ from app.services.infrastructure.tool_output_store import (
     ToolOutputStore,
     extract_tool_output_reference,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.harness.python.run_context import TestRunContext
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -50,7 +51,11 @@ def _tracking_counts(root: Path) -> dict[str, int]:
 
 
 @pytest.fixture
-def navigation_files(integration_workspace_root_path: str, integration_config_path: str):
+def navigation_files(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+    integration_config_path: str,
+):
     workspace = Path(integration_workspace_root_path)
     # 每个场景都从模板重建，避免上一个场景的文件编辑及Gateway注册污染后续断言。
     reset_gateway_persistent_state(workspace_root=workspace)
@@ -63,8 +68,8 @@ def navigation_files(integration_workspace_root_path: str, integration_config_pa
         workspace_root=workspace, config_path=Path(integration_config_path),
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
-    artifacts = workspace.parent / "artifacts"
-    artifacts.mkdir(exist_ok=True)
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir
+    artifacts.mkdir(parents=True, exist_ok=True)
     home = workspace.parent / "boxteam-home"
     for root in (workspace / ".boxteam/skills/demo", home / "skills/demo"):
         (root / "references/deep").mkdir(parents=True, exist_ok=True)
@@ -96,7 +101,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
 ) -> None:
     assert Path(integration_workspace_config_path).is_file()
     workspace, home, artifacts, outside = navigation_files
-    port = integration_port_block_for_file(Path(request.node.path)).port(11)
+    port = integration_ports_for_file(Path(request.node.path)).port(11)
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=port,
         boxteam_home=home, artifacts_dir=artifacts / "gateway",
@@ -486,7 +491,7 @@ async def test_real_gateway_navigation_grammar_errors_do_not_echo_native_input(
     assert Path(integration_workspace_config_path).is_file()
     workspace, home, artifacts, outside = navigation_files
     original = outside.read_bytes()
-    port = integration_port_block_for_file(Path(request.node.path)).port(12)
+    port = integration_ports_for_file(Path(request.node.path)).port(12)
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
         boxteam_home=home, artifacts_dir=artifacts / "grammar-errors-gateway")
     try:

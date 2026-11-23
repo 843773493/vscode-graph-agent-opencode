@@ -70,13 +70,17 @@ export function applyMessageStreamEvent(
   }
   // 终态互斥且幂等：completed/interrupted/failed 一旦确定，后续业务事件一律不得
   // 改写 streamStatus、failure 或连接镜像，否则第二个终态会覆盖第一个，乱序或重复
-  // 帧还会把连接状态翻回 connected。后端在同一状态机上以 MessageStreamTerminalError
-  // 拒绝终态后的业务事件，只放行 interrupt.rejected 与 stream.snapshot 两类控制帧
-  // （app/services/infrastructure/message_stream_store.py:1106），前端镜像同一准入集合。
-  // interrupt.rejected 是「中断请求在终态后到达」的可见反馈；快照控制帧仍是恢复权威，
-  // 二者都必须继续走各自分支，其余事件直接丢弃。
+  // 闭合后仅接收原 rollout 允许的 execution_lost 控制修正，引用必须前进。
+  const controlCorrection = current.streamStatus === "failed"
+    && current.terminalOutcome === "execution_lost"
+    && event.type === "stream.interrupted"
+    && (event.payload.terminal_outcome === "cancelled" || event.payload.terminal_outcome === "interrupted")
+    && typeof current.terminalCommitId === "number"
+    && typeof event.payload.terminal_commit_id === "number"
+    && event.payload.terminal_commit_id > current.terminalCommitId;
   if (
     isTerminalStatus(current.streamStatus)
+    && !controlCorrection
     && event.type !== "interrupt.rejected"
     && event.type !== "stream.snapshot"
   ) {
@@ -110,6 +114,10 @@ export function applyMessageStreamEvent(
     };
   }
 
+  if (event.type === "stream.completed" || event.type === "stream.interrupted" || event.type === "stream.failed") {
+    state.terminalCommitId = typeof event.payload.terminal_commit_id === "number" ? event.payload.terminal_commit_id : null;
+    state.terminalOutcome = typeof event.payload.terminal_outcome === "string" ? event.payload.terminal_outcome : null;
+  }
   state.lastEventSeq = event.event_seq;
   state.workspaceId = event.workspace_id ?? state.workspaceId;
   state.turnStreamId = event.turn_stream_id;
@@ -336,6 +344,9 @@ export function applyMessageStreamEvent(
       };
       break;
     case "stream.completed":
+      state.interruptState = null;
+      state.failure = null;
+      state.recovery = null;
       state.streamStatus = "completed";
       state.agentLoopStatus = "completed";
       state.resumable = false;
@@ -347,6 +358,8 @@ export function applyMessageStreamEvent(
       );
       break;
     case "stream.interrupted":
+      state.failure = null;
+      state.recovery = null;
       state.streamStatus = "interrupted";
       state.agentLoopStatus = "interrupted";
       state.resumable = false;

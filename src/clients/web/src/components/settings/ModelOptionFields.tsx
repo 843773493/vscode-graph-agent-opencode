@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from 'react';
+import { useRef, type FormEvent, type ReactNode } from 'react';
 import { t } from '../../../../shared/core/i18n/index.js';
 
 interface OptionSchema {
@@ -17,10 +17,55 @@ function shown(value: unknown): string {
   return value === undefined ? '' : JSON.stringify(value, null, 2);
 }
 
+const capacityNumber = new Intl.NumberFormat('en-US');
+const capacityCompact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
+
+/** 千位分隔只属于展示；原来源仍接收整数，按数字位置恢复编辑光标。 */
+function ContextCapacityInput({ value, minimum, maximum, disabled, onEdit }: {
+  value: unknown; minimum?: number; maximum?: number; disabled: boolean; onEdit: (value: number | undefined) => void;
+}) {
+  const selection = useRef<[number, number]>();
+  const formatted = typeof value === 'number' ? capacityNumber.format(value) : '';
+  const restoreSelection = (element: HTMLInputElement) => {
+    if (!selection.current) return;
+    const position = (digits: number) => {
+      let offset = 0, seen = 0;
+      while (offset < element.value.length && seen < digits) {
+        if (element.value[offset] !== ',') seen++;
+        offset++;
+      }
+      return offset;
+    };
+    element.setSelectionRange(position(selection.current[0]), position(selection.current[1]));
+  };
+  return <span className="configuration-capacity-input">
+    <input ref={element => { if (element) { restoreSelection(element); selection.current = undefined; } }} type="text" inputMode="numeric" value={formatted} disabled={disabled}
+      onBlur={() => { selection.current = undefined; }} onKeyDown={event => {
+        const element = event.currentTarget, caret = element.selectionStart;
+        if (caret === null || caret !== element.selectionEnd || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === 'Backspace' && element.value[caret - 1] === ',') element.setSelectionRange(caret - 1, caret - 1);
+        if (event.key === 'Delete' && element.value[caret] === ',') element.setSelectionRange(caret + 1, caret + 1);
+      }} onChange={event => {
+        const element = event.currentTarget, raw = element.value, digits = raw.replaceAll(',', '');
+        const next = digits === '' ? undefined : Number(digits);
+        if (!/^[0-9,]*$/.test(raw) || next !== undefined && (!Number.isSafeInteger(next) || next < (minimum ?? 1) || maximum !== undefined && next > maximum)) {
+          element.setCustomValidity(t('configuration.options.capacityInvalid')); element.reportValidity(); return;
+        }
+        element.setCustomValidity('');
+        selection.current = [element.selectionStart ?? raw.length, element.selectionEnd ?? raw.length]
+          .map(offset => raw.slice(0, offset).replaceAll(',', '').length) as [number, number];
+        element.value = next === undefined ? '' : capacityNumber.format(next);
+        restoreSelection(element);
+        onEdit(next);
+      }} />
+    {typeof value === 'number' && value >= 1000 ? <small>{t('configuration.options.capacityApprox', capacityCompact.format(value))}</small> : null}
+  </span>;
+}
+
 /** JSON 输入只是待确认的单个字段；应用后只改原来源文本，不持有另一份配置。 */
-function JsonOption({ label, value, inherited, disabled, objectOnly = false, onEdit }: {
+function JsonOption({ label, value, inherited, disabled, objectOnly = false, onEdit, actions }: {
   label: string; value: unknown; inherited: unknown; disabled: boolean; objectOnly?: boolean;
-  onEdit: (value: unknown) => void;
+  onEdit: (value: unknown) => void; actions?: ReactNode;
 }) {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -34,16 +79,22 @@ function JsonOption({ label, value, inherited, disabled, objectOnly = false, onE
     }
     onEdit(parsed);
   };
-  return <div className="configuration-option-json">
+  const scalar = !objectOnly && (value === undefined || value === null || typeof value !== 'object') && (inherited === undefined || inherited === null || typeof inherited !== 'object');
+  return <div className={scalar ? 'configuration-option-json configuration-option-scalar' : 'configuration-option-json'}>
     <form onSubmit={submit}>
-      <label className="configuration-entity-field">{label}
-        <textarea key={shown(value)} name="value" aria-label={label} defaultValue={shown(value)} placeholder={shown(inherited)} rows={3} required disabled={disabled}
+      <label className="configuration-entity-field"><span>{label}</span>
+        {scalar ? <input type={typeof (value ?? inherited) === 'number' ? 'number' : 'text'} step="any" key={shown(value)} name="value" aria-label={label} defaultValue={shown(value)} placeholder={shown(inherited)} required disabled={disabled}
           onInput={event => event.currentTarget.setCustomValidity('')} />
+          : <textarea key={shown(value)} name="value" aria-label={label} defaultValue={shown(value)} placeholder={shown(inherited)} rows={3} required disabled={disabled}
+            onInput={event => event.currentTarget.setCustomValidity('')} />}
       </label>
-      <button type="submit" disabled={disabled}>{t('configuration.options.applyValue')}</button>
+      <div className="configuration-option-actions">
+        <button type="submit" disabled={disabled}>{t('configuration.options.applyValue')}</button>
+        {value !== undefined ? <button type="button" disabled={disabled} onClick={() => onEdit(undefined)}>{t(inherited === undefined ? 'configuration.options.clear' : 'configuration.entities.restoreField')}</button> : null}
+        {actions}
+      </div>
     </form>
     {inherited !== undefined ? <small>{t('configuration.options.lowerDefinition', shown(inherited))}</small> : null}
-    {value !== undefined ? <button type="button" disabled={disabled} onClick={() => onEdit(undefined)}>{t(inherited === undefined ? 'configuration.options.clear' : 'configuration.entities.restoreField')}</button> : null}
   </div>;
 }
 
@@ -57,14 +108,15 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
   const protocol = read(['api_mode', 'protocol']);
   const stream = read(['api_mode', 'streaming']);
   const booleanField = (name: string, path: OptionPath, description?: string) => {
-    const value = read(path);
-    return <label key={name} className="configuration-entity-field">{name}
-      <select value={typeof value === 'boolean' ? String(value) : ''} disabled={disabled}
+    const value = read(path), label = t(`configuration.capability.${path.at(-1)}`);
+    const capability = path.at(-1) !== 'no_proxy';
+    return <label key={name} className="configuration-entity-field" data-search-key={path.join('.')} title={description}>{label}
+      <select aria-label={label} value={typeof value === 'boolean' ? String(value) : ''} disabled={disabled}
         onChange={event => onEdit(path, event.target.value === '' ? undefined : event.target.value === 'true')}>
         <option value="">{t('configuration.entities.defaultValue')}</option>
-        <option value="true">true</option><option value="false">false</option>
+        <option value="true">{t(capability ? 'configuration.options.enabled' : 'configuration.options.on')}</option><option value="false">{t(capability ? 'configuration.options.disabled' : 'configuration.options.off')}</option>
       </select>
-      {description ? <small>{description}</small> : null}
+
     </label>;
   };
   const rawParameters = read(['request_options', 'parameters']);
@@ -86,8 +138,9 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
     form.reset();
   };
   return <>
+    <div className="configuration-form-grid">
     <label className="configuration-entity-field">{t('configuration.entities.protocolLabel')}
-      <select value={typeof protocol === 'string' ? protocol : ''} disabled={disabled} onChange={event => {
+      <select aria-label={t('configuration.entities.protocolLabel')} value={typeof protocol === 'string' ? protocol : ''} disabled={disabled} onChange={event => {
         const value = read(['api_mode']);
         const next = value && typeof value === 'object' && !Array.isArray(value) ? { ...value } as Record<string, unknown> : {};
         if (event.target.value) { next.protocol = event.target.value; next.supports_reasoning = {}; }
@@ -99,7 +152,7 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
       </select>
     </label>
     <label className="configuration-entity-field">{t('configuration.entities.streaming')}
-      <select value={typeof stream === 'boolean' ? String(stream) : ''} disabled={disabled}
+      <select aria-label={t('configuration.entities.streaming')} value={typeof stream === 'boolean' ? String(stream) : ''} disabled={disabled}
         onChange={event => onEdit(['api_mode', 'streaming'], event.target.value === '' ? undefined : event.target.value === 'true')}>
         <option value="">{t(scope === 'model' ? 'configuration.entities.useServiceDefault'
           : inherited(['api_mode', 'streaming']) === undefined ? 'configuration.entities.defaultStreaming' : 'configuration.entities.defaultValue')}</option>
@@ -107,37 +160,41 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
         <option value="false">{t('configuration.entities.streamDisabled')}</option>
       </select>
     </label>
-    <details className="configuration-model-options">
-      <summary>{t('configuration.options.advanced')}</summary>
+    </div>
+    <div className="configuration-model-options">
       {advanced}
-      <h4>{t('configuration.options.capabilities')}</h4>
+      <details className="configuration-option-section"><summary>{t('configuration.options.capabilities')}</summary>
+      <p>{t('configuration.catalog.autoCapabilities')}</p>
+      <div className="configuration-form-grid">
       {Object.entries(apiMode?.model_info.properties ?? {}).map(([key, field]) => {
         const path = ['api_mode', 'model_info', key], value = read(path);
         if (field.type === 'boolean') return booleanField(field.title ?? key, path, field.description);
-        return <label key={key} className="configuration-entity-field">{field.title ?? key}
-          <input type="number" value={typeof value === 'number' ? value : ''} step={field.type === 'integer' ? 1 : 'any'}
+        return <label key={key} className="configuration-entity-field" data-search-key={path.join('.')} title={field.description}>{t(`configuration.capability.${key}`)}
+          {key === 'max_input_tokens' ? <ContextCapacityInput value={value} minimum={field.minimum} maximum={field.maximum}
+            disabled={disabled} onEdit={next => onEdit(path, next)} /> : <input type="number" value={typeof value === 'number' ? value : ''} step={field.type === 'integer' ? 1 : 'any'}
             min={field.minimum} max={field.maximum} disabled={disabled} onChange={event => {
               if (event.target.value === '') onEdit(path, undefined);
               else if (event.target.validity.valid) onEdit(path, event.target.valueAsNumber);
-            }} />
-          {field.description ? <small>{field.description}</small> : null}
+            }} />}
+
         </label>;
       })}
-      <h4>{t('configuration.options.reasoning')}</h4>
+      </div></details>
+      <details className="configuration-option-section"><summary>{t('configuration.options.reasoning')}</summary>
       <p>{t('configuration.options.reasoningHint')}</p>
-      <JsonOption label="api_mode.supports_reasoning" value={read(['api_mode', 'supports_reasoning'])} inherited={inherited(['api_mode', 'supports_reasoning'])}
-        objectOnly disabled={disabled} onEdit={value => onEdit(['api_mode', 'supports_reasoning'], value)} />
-      <button type="button" disabled={disabled} onClick={() => onEdit(['api_mode', 'supports_reasoning'], {})}>{t('configuration.options.emptyReasoning')}</button>
-      <h4>{t('configuration.options.parameters')}</h4>
+      <JsonOption label={t('configuration.options.reasoning')} value={read(['api_mode', 'supports_reasoning'])} inherited={inherited(['api_mode', 'supports_reasoning'])}
+        objectOnly disabled={disabled} onEdit={value => onEdit(['api_mode', 'supports_reasoning'], value)}
+        actions={<button type="button" disabled={disabled} onClick={() => onEdit(['api_mode', 'supports_reasoning'], {})}>{t('configuration.options.emptyReasoning')}</button>} />
+      </details>
+      <details className="configuration-option-section"><summary>{t('configuration.options.parameters')}</summary>
       <p>{t('configuration.options.parametersHint')}</p>
       {[...parameterNames].map(name => {
         const path = ['request_options', 'parameters', name], value = read(path);
         return <section key={name} className="configuration-request-parameter" data-parameter={name}>
-          <strong>{name}</strong>
-          <p>{t(value === undefined ? 'configuration.entities.inherit' : value === null ? 'configuration.options.omitted' : 'configuration.options.explicit')}</p>
+          <strong>{name}</strong><small>{t(value === undefined ? 'configuration.entities.inherit' : value === null ? 'configuration.options.omitted' : 'configuration.options.explicit')}</small>
           <JsonOption label={t('configuration.options.parameterValue', name)} value={value} inherited={inherited(path)} disabled={disabled}
-            onEdit={next => onEdit(path, next)} />
-          <button type="button" disabled={disabled} onClick={() => onEdit(path, null)}>{t('configuration.options.omit')}</button>
+            onEdit={next => onEdit(path, next)}
+            actions={<button type="button" disabled={disabled} onClick={() => onEdit(path, null)}>{t('configuration.options.omit')}</button>} />
         </section>;
       })}
       <form className="configuration-parameter-add" onSubmit={addParameter}>
@@ -149,11 +206,13 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
         </label>
         <button type="submit" disabled={disabled}>{t('configuration.options.addParameter')}</button>
       </form>
-      <h4>{t('configuration.options.network')}</h4>
-      <JsonOption label="request_options.default_headers" value={read(['request_options', 'default_headers'])}
+      </details>
+      <details className="configuration-option-section"><summary>{t('configuration.options.network')}</summary>
+      <JsonOption label={t('configuration.options.headers')} value={read(['request_options', 'default_headers'])}
         inherited={inherited(['request_options', 'default_headers'])} objectOnly disabled={disabled}
         onEdit={value => onEdit(['request_options', 'default_headers'], value)} />
       {booleanField('request_options.no_proxy', ['request_options', 'no_proxy'], schema.properties?.request_options.properties?.no_proxy.description)}
-    </details>
+      </details>
+    </div>
   </>;
 }

@@ -22,10 +22,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -55,8 +54,8 @@ def change_document_backend(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> Generator[tuple[str, Path, ModelStreamReplay, Path, Callable[[], None]], None, None]:
-    """为本测试冻结同一端口块中的 Gateway 控制面地址和模型回放。"""
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    """为本测试冻结公共端口计划中的 Gateway 控制面地址和模型回放。"""
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     gateway_url = f"http://127.0.0.1:{port_block.port(20)}"
@@ -72,25 +71,23 @@ def change_document_backend(
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.run_root / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     boxteam_home = context.runtime_root_for_node(request.node.nodeid) / "boxteam-home"
     with model_stream_replay(
-        context.artifacts_dir,
+        context.run_root / "artifacts",
         runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="real-workbench-changeset-and-diff-navigation",
     ) as replay, ExitStack() as services:
-        lease = E2EProcessLease(
-            context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-            tuple(port_block.port(offset) for offset in (0, 10, 20)),
-        )
-        lease.acquire()
-        services.callback(lease.release)
+        for offset in (0, 10, 20):
+            port_block.port(offset)
         backend = start_backend_process(
             workspace_root=str(workspace),
             boxteam_home=boxteam_home,
             port=port_block.port(0),
             log_name="change-documents-backend",
             asgi_app="tests.support.e2e_control.backend_app:app",
-            artifacts_dir=context.artifacts_dir,
+            artifacts_dir=artifacts,
             env_overrides={
                 "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key",
                 "BOXTEAM_GATEWAY_URL": gateway_url,
@@ -120,7 +117,7 @@ async def test_diff_and_source_models_share_references_and_restore(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "只读模型验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     (workspace / "AGENTS.md").write_text("只读来源模型验收\n", encoding="utf-8")
     before = "".join(f"history v1 line {index:02d}\n" for index in range(1, 21))
     after = before.replace("v1", "v2")

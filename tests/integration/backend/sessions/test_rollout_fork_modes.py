@@ -891,7 +891,7 @@ def test_fork_watchdog_terminates_exact_group_when_all_diagnostics_fail(
     )
 
     exit_code = fork_deadline_module._watchdog_main(
-        Path.cwd() / "out/tests/temp/2026/10/18/fork60-deadline/fork60_closeout/artifacts/python",
+        TestRunContext.from_test_file(Path(__file__)).artifacts_dir / "watchdog-sidecar-failure",
         7123,
         7123,
     )
@@ -1006,7 +1006,7 @@ class ForkLiveTransport:
     async def get_resource(self, resource_id: str) -> RuntimeResourceSnapshot:
         return dict(self.records[resource_id])
 
-    async def sync_owner_revision(self, resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def sync_owner_revision(self, resource_id: str, revision: int, *, for_stop: bool, retained_associations: list[str | None] | None = None) -> None:
         self.revisions.append((resource_id, revision))
         self.records[resource_id]["transport_owner_revision"] = revision
 

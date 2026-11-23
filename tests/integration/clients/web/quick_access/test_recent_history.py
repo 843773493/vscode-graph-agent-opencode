@@ -30,13 +30,10 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_data,
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
-    metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
-)
 from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -61,7 +58,7 @@ async def history_cache_case(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=backend_url,
-        port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        port=integration_ports_for_file(Path(request.node.path)).port(20),
         artifacts_dir=context.artifacts_dir / "cache-gateway",
     )
     try:
@@ -182,7 +179,7 @@ async def cache_cleanup_case(
     roots = await metadata_data(client, "/api/v1/workspace/files/roots")
     recovery_file = browser_backend[1] / "cache-protected.txt"
     recovery_file.write_text("原始磁盘正文\n", encoding="utf-8")
-    endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
+    endpoint = integration_ports_for_file(Path(request.node.path)).port(10)
     identities: list[dict[str, str]] = []
     for label in ("A", "B"):
         response = await client.post("/api/v1/sessions", json={"title": f"缓存清理 {label}"})

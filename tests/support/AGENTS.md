@@ -11,13 +11,13 @@
 ```text
 测试辅助职责
 ├── 环境、路径与输入
-│   ├── paths.py / ports.py                正式输出根、测试文件端口块
+│   ├── paths.py / ports.py                正式输出根、测试运行端口租约
 │   ├── workspaces.py                      从只读模板准备独立工作区
 │   └── custom_tool_test_workspace.py      工具历史装具准备与阶段计时
 ├── 进程、连接与存储生命周期
 │   ├── processes/scope.py                    进程句柄登记及作用域释放
-│   ├── processes/workspace.py                Workspace后端、日志、端口预检与限频监听/HTTP就绪
-│   ├── processes/gateway.py                  Gateway进程、配置和就绪
+│   ├── processes/workspace.py                Workspace后端、现场路径登记、日志、端口预检与限频监听/HTTP就绪
+│   ├── processes/gateway.py                  Gateway进程、配置、就绪及受现场owner保护的Home重置
 │   ├── http_server.py                      本地HTTP测试服务的socket与线程生命周期
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放
@@ -117,8 +117,8 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 ### 进程、端口与HTTP就绪
 
-- `ports.py`将integration和e2e的文件快照依次排序，先分配8800–65535中的完整92端口块（偏移0–91），耗尽后使用1024–7999；不使用特权端口或8000–8799开发服务段。总容量由两段范围推导，不再给两层预留固定配额。两层共用同一缓存快照，超出总容量时从首个分配就明确失败，不能循环复用端口；显式`tests_root`指包含两层的测试根。文件池不替代独占闸门或原生端口租约，也不支持测试运行中修改文件树。
-- `TestFilePortBlock.port()` 同时校验偏移上限和块的实际末尾；调用方在本文件端口块内平移服务布局时不得延伸原末尾或重新分配到其他文件的范围。
+- `ports.py` 是 integration/e2e 服务端口的统一申请入口；允许范围为 8800–65535 和 1024–7999，排除特权端口、8000–8799 开发服务段及 WHATWG Fetch 禁用端口（如 10080）；连续池也不能夹入禁用端口。每次运行从范围内随机起点有界扫描，服务独立分配，不能用一个空闲基准端口加偏移推导其他服务。只跳过原生锁冲突或 EADDRINUSE，权限与租约记录错误立即传播；池耗尽明确失败，不重跑业务测试或终止未知占用者。
+- `integration_ports_for_file`／`e2e_ports_for_file` 返回本进程本文件共享的 `TestFilePorts`；`port(key)` 的整数或字符串仅是服务标识，同 key 返回同一实际端口，不表达端口差。只有 SSH 隧道池等连续需求使用 `port_range(key, count=...)`。同仓库 worktree 共用主 worktree 下的原生端口锁与既有 `E2EProcessLease`，锁及 Linux 非监听绑定在发布地址前取得，服务关闭后统一释放；各场景不得另写扫描、bind(0) 后释放或第二份租约。模块结束先清理进程再归还本文件端口，跨文件 fixture 的剩余租约在 session 结束结清。
 - `ensure_local_port_available`按显式`host`瞬时检查监听地址，缺省仍为IPv4回环；主机名逐一检查系统解析的地址，IPv6按Node默认双栈语义绑定。不预留端口或声明长期租约。Windows使用独占地址选项，避免REUSEADDR把重复绑定误报为空闲；Linux/macOS保留REUSEADDR处理已关闭连接。探针成功或冲突都关闭自己的socket，不能终止原监听者。
 - Workspace和Gateway启动装具在创建进程前持有日志文件，任何文件打开或创建进程失败都要立即关闭已打开的文件；创建成功后由返回的进程句柄接管，关闭进程时一并关闭日志。
 - 关闭进程和各日志是独立释放动作；一个释放失败或中断时仍尝试其余动作，再用BaseExceptionGroup保留全部原始错误。全部释放成功后再注销进程句柄。

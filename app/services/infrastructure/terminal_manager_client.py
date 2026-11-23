@@ -238,10 +238,13 @@ class TerminalManagerClient:
             raise self._protocol_error("cancel_creation.data", response)
         return data
 
-    async def sync_owner_revision(self, resource_id: str, owner_revision: int, *, for_stop: bool) -> None:
+    async def sync_owner_revision(
+        self, resource_id: str, owner_revision: int, *, for_stop: bool,
+        retained_associations: list[str | None] | None = None,
+    ) -> None:
         await self._json_request(
             "POST", f"/api/terminals/{resource_id}/owner-revision",
-            {"owner_revision": owner_revision, "for_stop": for_stop},
+            {"owner_revision": owner_revision, "for_stop": for_stop, "retained_associations": retained_associations},
         )
 
     async def issue_transport_grant(

@@ -6,7 +6,7 @@ import { Disposable, DisposableStore } from '../../upstream/src/vs/base/common/l
 import { IContextMenuService, IContextViewService } from '../../upstream/src/vs/platform/contextview/browser/contextView.js';
 import { IHoverService } from '../../upstream/src/vs/platform/hover/browser/hover.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
-import type { ChatItemMenuRequest } from '../../../web/src/components/chat/itemContextMenu.js';
+import type { ChatItemMenuRequest, ChatHoverRow } from '../../../web/src/components/chat/itemContextMenu.js';
 import { t } from '../../../shared/core/i18n/index.js';
 
 /** 内容动作由 React 提供，菜单、主题、键盘导航及 Hover 由 Workbench 承载。 */
@@ -14,6 +14,24 @@ export class ChatItemMenu extends Disposable {
   private readonly bindings = this._register(new DisposableStore());
   private readonly runner = this._register(new ActionRunner());
   private opened = false;
+
+  readonly bindHover = (element: HTMLElement, rows: () => readonly ChatHoverRow[]): (() => void) => {
+    const binding = this.hover.setupDelayedHover(element, () => {
+      const table = element.ownerDocument.createElement('table');
+      for (const { label, value } of rows()) {
+        const row = table.insertRow();
+        const heading = element.ownerDocument.createElement('th');
+        heading.scope = 'row'; heading.textContent = label;
+        heading.style.textAlign = 'start'; heading.style.paddingRight = '12px';
+        row.append(heading);
+        const cell = row.insertCell();
+        cell.textContent = value; cell.style.whiteSpace = 'pre-line';
+        cell.style.overflowWrap = 'anywhere';
+      }
+      return { content: table, position: { hoverPosition: HoverPosition.ABOVE } };
+    });
+    return () => binding.dispose();
+  };
 
   constructor(
     @IContextMenuService private readonly menus: IContextMenuService,

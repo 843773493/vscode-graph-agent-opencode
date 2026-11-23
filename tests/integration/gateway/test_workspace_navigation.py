@@ -8,7 +8,7 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from tests.integration.stubs.http_stubs import generation_target_stub
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -26,7 +26,7 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
 ) -> None:
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    port_block = integration_ports_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
     secondary_workspace = workspace_root / "secondary-workspace"
     secondary_workspace.mkdir(parents=True, exist_ok=True)

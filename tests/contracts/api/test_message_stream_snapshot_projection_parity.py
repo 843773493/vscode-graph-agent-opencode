@@ -289,7 +289,7 @@ async def test_recovery_control_frame_matches_http_snapshot(
         "activity.completed",
         {"activity_id": "a1", "kind": "tool", "status": "completed", "outcome": "success"},
     )
-    await writer.close_failed(code="execution_lost", message="后端重启", resumable=False)
+    await writer.commit("stream.failed", {"code": "execution_lost", "message": "后端重启", "resumable": False, "after_interrupt_requested": False})
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),

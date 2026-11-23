@@ -11,6 +11,7 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import { IFileService, FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
   type IFileChange, type IFileSystemProviderWithFileReadWriteCapability, type IFileWriteOptions, type IStat } from '../../upstream/src/vs/platform/files/common/files.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../upstream/src/vs/platform/storage/common/storage.js';
+import { ILabelService } from '../../upstream/src/vs/platform/label/common/label.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../upstream/src/vs/workbench/common/contributions.js';
 import { ITextFileService, TextFileEditorModelState } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
@@ -20,6 +21,7 @@ import type { GatewayRequestTarget } from '../../../web/src/api/workspaceIdentit
 import type { ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
+import { workspaceContext } from '../workspaceContext.js';
 
 export const configSourceScheme = 'boxteam-config-source';
 
@@ -314,10 +316,28 @@ export async function restoreConfigSourceBackup(files: IFileService, resource: U
 
 class ConfigurationSourceEditors extends Disposable {
   constructor(@IFileService files: IFileService, @IDialogService dialogs: IDialogService, @INotificationService notifications: INotificationService,
-    @IModelService models: IModelService, @IFilesConfigurationService configuration: IFilesConfigurationService, @IStorageService storage: IStorageService, @ITextFileService textFiles: ITextFileService) {
+    @IModelService models: IModelService, @IFilesConfigurationService configuration: IFilesConfigurationService, @IStorageService storage: IStorageService,
+    @ITextFileService textFiles: ITextFileService, @ILabelService labels: ILabelService) {
     super();
     const provider = this._register(new ConfigurationSourceFiles(dialogs, notifications, storage));
     this._register(files.registerProvider(configSourceScheme, provider));
+    // 显示根与资源身份分离；沿用原标签服务刷新 Tab、悬停和面包屑，不改 URI 或保存归属。
+    const labelChanged = this._register(new Emitter<void>());
+    this._register({ dispose: workspaceContext.subscribe(() => labelChanged.fire()) });
+    for (const path of ['/workspace/${workspaceId}', '/gateway/-']) {
+      this._register(labels.registerFormatter({
+        home: URI.from({ scheme: configSourceScheme, path }),
+        onDidChangeFormatting: labelChanged.event,
+        formatting: ({ resource, parameters }) => {
+          const snapshot = workspaceContext.getSnapshot();
+          const workspace = snapshot.workspaces.find(item => item.gateway_id === resource.authority
+            && item.workspace_id === parameters.get('workspaceId'));
+          const remote = snapshot.workspaces.flatMap(item => item.remote_gateways).find(item => item.gateway_id === resource.authority);
+          const target = resource.authority === snapshot.gatewayId ? t('workbench.managementTarget.local') : remote?.name ?? resource.authority;
+          return { label: `${target} / ${workspace?.name ?? parameters.get('workspaceId') ?? t('settings.editor.gatewayConfiguration')}`, separator: '/' };
+        },
+      }));
+    }
     this._register(textFiles.files.onDidSave(({ model }) => {
       if (model.resource.scheme !== configSourceScheme || model.textEditorModel?.getValue() === provider.currentDocument(model.resource).jsonc) return;
       // 秘密占位随服务端数组位置归一；只刷新已经保存且未再编辑的原文本模型。

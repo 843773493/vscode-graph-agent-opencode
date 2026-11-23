@@ -23,7 +23,7 @@ from app.core.resource_uri import resource_display_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.harness.python.terminal_state import read_terminal_state
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.resource_owners.lease_storage import read_lease_snapshot
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
@@ -79,7 +79,7 @@ async def terminal_runtime(
             )
             shell.chmod(0o700)
             monkeypatch.setenv("SHELL", "./startup-shell")
-    port = integration_port_block_for_file(Path(request.node.path)).port(40)
+    port = integration_ports_for_file(Path(request.node.path)).port(40)
     run = TestRunContext.from_test_file(Path(request.node.path))
     home = run.boxteam_home_for_node(request.node.nodeid)
     monkeypatch.setenv("BOXTEAM_HOME", str(home))
@@ -472,7 +472,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
     from app.core.workspace_identity import load_or_create_workspace_id
 
     root = Path(terminal_workspace_root_path)
-    port = integration_port_block_for_file(Path(request.node.path)).port(40)
+    port = integration_ports_for_file(Path(request.node.path)).port(40)
     child = dedent(r"""
         import asyncio, json, os, sys
         from pathlib import Path

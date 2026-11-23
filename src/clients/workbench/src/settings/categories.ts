@@ -10,6 +10,7 @@ export const settingsCategories = [
   { id: 'tools', label: 'settings.category.tools', scopes: ['backend', 'workspace', 'gateway'], groups: ['tooling', 'mcp', 'resources'] },
   { id: 'plugins', label: 'settings.category.plugins', scopes: ['gateway', 'workspace'], groups: ['plugins'] },
   { id: 'connections', label: 'settings.category.connections', scopes: ['gateway'], groups: ['workspaces'] },
+  { id: 'network', label: 'settings.category.network', scopes: ['backend', 'gateway'], groups: ['network'] },
   { id: 'observability', label: 'settings.category.observability', scopes: ['gateway', 'backend', 'workspace'], groups: ['logging', 'telemetry', 'statistics', 'development'] },
   { id: 'runtime', label: 'settings.category.runtime', scopes: ['backend', 'workspace', 'gateway'], groups: [] },
 ] as const;

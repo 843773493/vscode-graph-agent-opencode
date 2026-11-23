@@ -6,7 +6,7 @@ import { responsePartsToTimelineItems } from "./responseParts";
 export type ToolTimelineItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 export type WorkItem = Extract<TimelineItem, { kind: "aggregated_text" }> | Extract<TimelineItem, { kind: "aggregated_tool" }>;
 export type RenderGroup = { kind: "work"; id: string; items: WorkItem[] } | { kind: "response"; id: string; item: TimelineItem };
-export type HistoricalBoundaryStatus = { kind: "user-interrupted" | "cancelled" | "tool-incomplete" | "tool-outcome-unknown" | "tool-failed" | "turn-failed" | "turn-timed-out"; role: "status" | "alert"; className: string; icon: string; title: string; detail?: string };
+export type HistoricalBoundaryStatus = { kind: "user-interrupted" | "cancelled" | "turn-failed" | "turn-timed-out"; role: "status" | "alert"; className: string; icon: string; title: string; detail?: string };
 
 export function historicalBoundaryStatus(conversation: ConversationView): HistoricalBoundaryStatus | null {
   if (conversation.displayMode !== "history") return null;
@@ -15,44 +15,16 @@ export function historicalBoundaryStatus(conversation: ConversationView): Histor
   if (userInterrupted) return { kind: "user-interrupted", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.interrupted"), detail: t("chat.status.contentKept") };
   if (conversation.turnStatus === "cancelled") return { kind: "cancelled", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.cancelled"), detail: t("chat.status.contentKept") };
 
-  const toolItems = responsePartsToTimelineItems(responseParts, {
-    terminalFailure: conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out",
-  }).filter((item): item is ToolTimelineItem => item.kind === "aggregated_tool");
-  const incompleteToolNames = new Set<string>();
-  const unknownToolNames = new Set<string>();
-  const failedToolNames = new Set<string>();
-  for (const item of toolItems) {
-    if (item.incomplete) incompleteToolNames.add(item.toolName);
-    if (item.outcomeUnknown) unknownToolNames.add(item.toolName);
-    if (item.failed) failedToolNames.add(item.toolName);
-  }
-  if (incompleteToolNames.size > 0) return { kind: "tool-incomplete", role: "status", className: "chat-inline-cancelled chat-inline-tool-status", icon: "codicon-debug-stop", title: t("chat.status.toolIncomplete"), detail: t("chat.status.incompleteDetail", [...incompleteToolNames].join(t("chat.nameSeparator"))) };
-  if (unknownToolNames.size > 0) return { kind: "tool-outcome-unknown", role: "alert", className: "chat-inline-error chat-inline-tool-unknown", icon: "codicon-warning", title: t("chat.status.toolUnknown"), detail: t("chat.status.unknownDetail", [...unknownToolNames].join(t("chat.nameSeparator"))) };
-  if (failedToolNames.size > 0) return { kind: "tool-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: t("chat.status.toolFailed"), detail: t("chat.status.failedDetail", [...failedToolNames].join(t("chat.nameSeparator"))) };
-  if (conversation.turnStatus === "failed") return { kind: "turn-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: t("chat.status.turnFailed"), detail: t("chat.status.noDetails") };
-  if (conversation.turnStatus === "timed_out") return { kind: "turn-timed-out", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-watch", title: t("chat.status.timedOut"), detail: t("chat.status.timeoutDetail") };
+  // 工具 attempt 的失败留在对应工具行；整轮状态只取权威终态。
+  if (conversation.turnStatus === "failed") return { kind: "turn-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: t("chat.status.turnFailed"), detail: conversation.turnFailure?.message ?? t("chat.status.noDetails") };
+  if (conversation.turnStatus === "timed_out") return { kind: "turn-timed-out", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-watch", title: t("chat.status.timedOut"), detail: conversation.turnFailure?.message ?? t("chat.status.noDetails") };
   return null;
 }
 
 export function responseItemsForConversation(conversation: ConversationView): TimelineItem[] {
   const terminalCancellation = conversation.turnStatus === "cancelled" || conversation.messageStream?.streamStatus === "interrupted";
   const items = responsePartsToTimelineItems(conversation.responseParts ?? [], { terminalFailure: !terminalCancellation && (conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out" || (!conversation.turnStatus && conversation.status === "error")), terminalCancellation });
-  const assistantMessages = conversation.assistantMessages ?? [];
-  let longestAssistantMessage: (typeof assistantMessages)[number] | undefined;
-  for (const candidate of assistantMessages) {
-    if (!longestAssistantMessage || candidate.content.length > longestAssistantMessage.content.length) {
-      longestAssistantMessage = candidate;
-    }
-  }
-  const longestAssistantText = longestAssistantMessage?.content?.trim() ?? "";
-  if (!longestAssistantText) return items;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item?.kind !== "aggregated_text" || item.partKind !== "markdown") continue;
-    if (item.text.trim() === longestAssistantText) return items;
-    break;
-  }
-  return [...items, { kind: "aggregated_text", id: conversation.conversationId + ":assistant-final", text: longestAssistantMessage?.content ?? "", partKind: "markdown", active: false, timestamp: longestAssistantMessage?.created_at ?? null, eventCount: 1, rawEvents: [] }];
+  return items;
 }
 
 export function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
@@ -61,7 +33,12 @@ export function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
     const isWork = item.kind === "aggregated_tool" || (item.kind === "aggregated_text" && item.partKind === "reasoning");
     if (!isWork) { groups.push({ kind: "response", id: item.id, item }); continue; }
     const previous = groups[groups.length - 1];
-    if (previous?.kind === "work") previous.items.push(item); else groups.push({ kind: "work", id: "work-" + item.id, items: [item] });
+    const source = item.responseSources?.[0]?.source;
+    const group = source?.activity_group_item_id;
+    const groupId = group ? `group:${group}:${source.activity_group_part_ordinal ?? 0}` : undefined;
+    if (previous?.kind === "work" && (!groupId || previous.id === groupId)) previous.items.push(item); else {
+      groups.push({ kind: "work", id: group ? `group:${group}:${source.activity_group_part_ordinal ?? 0}` : "work-" + item.id, items: [item] });
+    }
   }
   return groups;
 }

@@ -22,6 +22,7 @@ from tests.harness.python.terminal_backend import (
     stop_terminal_plugin_service,
 )
 from tests.harness.python.terminal_state import read_terminal_state
+from tests.support.ports import TestFilePorts
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux PTY父子及信号；不代替Windows验收")
@@ -29,7 +30,7 @@ TerminalService = tuple[TestRunContext, TerminalPluginService, str, str, Path, P
 
 
 @pytest.fixture
-def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
+def terminal_service(integration_backend_port: int, integration_service_ports: TestFilePorts, monkeypatch: pytest.MonkeyPatch,
                      request: pytest.FixtureRequest) -> Iterator[TerminalService]:
     with TestRunContext.from_test_file(Path(request.node.path)) as run:
         root = prepare_default_test_workspace(
@@ -117,7 +118,7 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
             env.setenv("BOXTEAM_TEST_TERMINAL_EXIT_CONTROL", str(control))
             process = start_terminal_plugin_service(
-                backend_port=integration_backend_port + 63, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
+                backend_port=integration_service_ports.port(63), workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
         tracked: list[psutil.Process] = []
         try:

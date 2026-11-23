@@ -24,7 +24,7 @@ from tests.integration.gateway.workspace_identity_legacy_input import (
     business_snapshot,
     data,
 )
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -103,13 +103,13 @@ def legacy_input(request: pytest.FixtureRequest) -> LegacyInput:
     assert all(package in current_lock["package"] for package in legacy_lock["package"]
                if "virtual" not in package["source"]), "旧源码锁定的外部依赖与复用环境不一致"
     (source / ".venv").symlink_to(context.project_root / ".venv", target_is_directory=True)
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     script = context.project_root / "tests/integration/gateway/workspace_identity_legacy_input.py"
     command = [str(resolve_workspace_python_executable(context.project_root)), "-c",
                "import runpy, sys; runpy.run_path(sys.argv.pop(1), run_name='__main__')", str(script),
                "--workspace", str(workspace), "--home", str(home), "--artifacts", str(artifacts / "legacy"),
                "--runtime", str(runtime / "legacy-control"), "--backend-port", str(ports.port(0)),
-               "--gateway-port", str(ports.port(1)), "--model-port", str(ports.port(80))]
+               "--gateway-port", str(ports.port(1)), "--model-port", str(ports.port(48))]
     _command(command, cwd=source, artifacts=artifacts, label="generate-legacy")
     before = json.loads((artifacts / "legacy/legacy-input.json").read_text(encoding="utf-8"))
     (artifacts / "source.json").write_text(json.dumps({

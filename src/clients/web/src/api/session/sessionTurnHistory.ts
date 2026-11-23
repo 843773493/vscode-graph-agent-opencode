@@ -6,7 +6,7 @@ import type {
   TurnHistoryLoadRequest,
   TurnHistoryPage,
 } from "../../types/backend";
-import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO, TurnToolResultDTO, TurnMessageMatchDTO, ThreadItemLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { ContextNoticeAnchorDTO, TurnMessageSearchRequest, TurnMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO, TurnToolResultDTO, TurnMessageMatchDTO, ThreadItemLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import {
   HttpRequestError,
   requestJson,
@@ -16,9 +16,9 @@ import {
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 
-export type TurnItemNavigation = ThreadItemLocationDTO & { turn_id: string };
+export type TurnItemNavigation = ThreadItemLocationDTO;
 export type TurnNavigationTarget = TurnMessageMatchDTO | TurnToolResultDTO | TurnItemNavigation;
-export type LoadAroundTurn = (turnId: string, signal?: AbortSignal, message?: TurnMessageReferenceDTO, toolResultId?: string, item?: TurnItemNavigation) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void>;
+export type LoadAroundTurn = (turnId: string, signal?: AbortSignal, message?: TurnMessageReferenceDTO, toolResultId?: string, item?: Pick<TurnItemNavigation, "item_id">, executionId?: string, context?: ContextNoticeAnchorDTO) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | ThreadItemLocationDTO | void>;
 
 export async function searchThreadHistoryMessages(
   apiPort: number, sessionId: string, threadId: string,
@@ -34,6 +34,7 @@ export async function searchThreadHistoryMessages(
 }
 
 export type TurnHistoryInclude =
+  | "activity_outline"
   | "user"
   | "text"
   | "reasoning_summary"
@@ -49,20 +50,29 @@ export type TurnHistoryInclude =
   | "metadata"
   | "final_response";
 
+/** 过程详情复用同一 history 请求和 canonical reducer；分页不改变主窗口。 */
+export interface ProcessDetailSelection {
+  executionId?: string;
+  itemIds?: string[];
+  beforeCursor?: string;
+  sourceViewId: string;
+  sourceViewRevision: number;
+}
+
 export type TurnHistoryLoadRequestPayload = Omit<TurnHistoryLoadRequest, "include"> & {
   include?: TurnHistoryInclude[];
 };
 
 export class StaleTurnCursorHttpError extends Error {
   constructor(readonly detail: StaleTurnCursorError, readonly requestId?: string | null) {
-    super(detail.message);
+    super(detail.message + (requestId ? `；request_id=${requestId}` : ""));
     this.name = "StaleTurnCursorHttpError";
   }
 }
 
 export class StaleTurnReferenceHttpError extends Error {
   constructor(readonly detail: StaleTurnReferenceError, readonly requestId?: string | null) {
-    super(detail.message);
+    super(detail.message + (requestId ? `；request_id=${requestId}` : ""));
     this.name = "StaleTurnReferenceHttpError";
   }
 }

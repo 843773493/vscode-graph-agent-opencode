@@ -599,6 +599,16 @@ export declare type StreamCompleted = Message<"boxteam.workspace.message.v1.Stre
    * @generated from field: boxteam.workspace.message.v1.StreamStatus status = 1;
    */
   status: StreamStatus;
+
+  /**
+   * @generated from field: optional int64 terminal_commit_id = 2;
+   */
+  terminalCommitId?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string terminal_outcome = 3;
+   */
+  terminalOutcome?: string | undefined;
 };
 
 /**
@@ -620,6 +630,16 @@ export declare type StreamInterrupted = Message<"boxteam.workspace.message.v1.St
    * @generated from field: boxteam.workspace.message.v1.StreamStatus status = 2;
    */
   status: StreamStatus;
+
+  /**
+   * @generated from field: optional int64 terminal_commit_id = 3;
+   */
+  terminalCommitId?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string terminal_outcome = 4;
+   */
+  terminalOutcome?: string | undefined;
 };
 
 /**
@@ -651,6 +671,21 @@ export declare type StreamFailure = Message<"boxteam.workspace.message.v1.Stream
    * @generated from field: optional bool resumable = 4;
    */
   resumable?: boolean | undefined;
+
+  /**
+   * @generated from field: optional google.protobuf.Struct details = 5;
+   */
+  details?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional int64 terminal_commit_id = 6;
+   */
+  terminalCommitId?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string terminal_outcome = 7;
+   */
+  terminalOutcome?: string | undefined;
 };
 
 /**
@@ -1320,6 +1355,16 @@ export declare type StreamSnapshot = Message<"boxteam.workspace.message.v1.Strea
    * @generated from field: optional string workspace_id = 19;
    */
   workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 terminal_commit_id = 20;
+   */
+  terminalCommitId?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string terminal_outcome = 21;
+   */
+  terminalOutcome?: string | undefined;
 };
 
 /**

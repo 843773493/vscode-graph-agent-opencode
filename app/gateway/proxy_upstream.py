@@ -22,6 +22,7 @@ from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection
 
+from app.core.async_channel import close_channel
 from app.core.failures import HTTP_FAILURE_HEADER, mark_http_failure
 from app.core.identifier import validate_gateway_id
 
@@ -319,11 +320,17 @@ async def relay_websocket_client_to_upstream(
 async def relay_websocket_upstream_to_client(
     websocket: WebSocket, upstream: ClientConnection,
 ) -> None:
-    async for message in upstream:
-        if isinstance(message, str):
-            await websocket.send_text(message)
-        else:
-            await websocket.send_bytes(message)
+    try:
+        async for message in upstream:
+            if isinstance(message, str):
+                await websocket.send_text(message)
+            else:
+                await websocket.send_bytes(message)
+    finally:
+        if upstream.close_code is not None:
+            # 保留原服务的撤权／握手失败语义；保留码不能作为wire关闭帧发送。
+            code = 1011 if upstream.close_code in {1005, 1006, 1015} else upstream.close_code
+            await close_channel(websocket, code=code, reason=upstream.close_reason)
 
 
 class ProxyStreamingResponse(StreamingResponse):

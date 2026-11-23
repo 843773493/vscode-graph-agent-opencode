@@ -1,7 +1,8 @@
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { describe, expect, mock, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import ChatTurn from "./turn/ChatTurn";
+import OriginalChatTurn from "./turn/ChatTurn";
 import { chatTurnProps, conversation } from "./turn/chatTurnTestFixtures";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "./itemContextMenu";
 
@@ -38,6 +39,7 @@ describe("Item 原生菜单接线", () => {
     </ChatItemMenuContext.Provider>); });
     try {
       await act(async () => { await renderer.root.findByProps({ className: "chat-thinking-toggle" }).props.onClick(); });
+      await act(async () => { renderer.root.findByProps({ className: "chat-activity-group" }).findByType("button").props.onClick(); });
       const card = renderer.root.findByProps({ "data-chat-item-id": "call" });
       card.props.onContextMenu(menuEvent());
       expect(menu!.actions.map(action => action.id)).toEqual(["copyItem", "copyArguments", "copyResult", "forkItem"]);
@@ -121,3 +123,5 @@ describe("Item 原生菜单接线", () => {
     }
   });
 });
+
+function ChatTurn(props: React.ComponentProps<typeof OriginalChatTurn>) { return <TranscriptTestView><OriginalChatTurn {...props} /></TranscriptTestView>; }

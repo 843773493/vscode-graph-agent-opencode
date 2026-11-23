@@ -21,10 +21,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import native_plugin_target
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     clear_test_provider_api_keys,
@@ -59,14 +58,11 @@ asyncio.run(server.serve())
 @pytest.fixture
 def plugin_commands_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.path))
-    lease, probes = E2EProcessLease.acquire_available(
-        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", range(ports.port(20), ports.end + 1))
-    try:
-        (context.artifacts_dir / "port-allocation.json").write_text(json.dumps(probes), encoding="utf-8")
-        yield lease.ports[0]
-    finally:
-        lease.release()
+    port = integration_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
+    )
+    yield port
 
 
 def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web_workbench_assets: Path,

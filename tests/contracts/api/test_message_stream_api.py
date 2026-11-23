@@ -147,7 +147,7 @@ async def test_message_stream_sse_replay_and_terminal_close(
             "completion_reason": "upstream_completed",
         },
     )
-    await writer.close_completed()
+    await writer.commit("stream.completed", {"status": "completed"})
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),
@@ -229,11 +229,7 @@ async def test_message_stream_snapshot_replaces_state_and_preserves_request_id(
         },
         model_call_id="model_1",
     )
-    await writer.close_failed(
-        code="execution_lost",
-        message="后端重启",
-        resumable=False,
-    )
+    await writer.commit("stream.failed", {"code": "execution_lost", "message": "后端重启", "resumable": False, "after_interrupt_requested": False})
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),
@@ -279,11 +275,7 @@ async def test_failed_legacy_snapshot_drops_internal_tool_call_error_without_500
             "error": "内部错误详情不属于公共 ToolCall schema",
         },
     )
-    await writer.close_failed(
-        code="agent_event_timeout",
-        message="Agent 事件流等待模型响应超过 60 秒",
-        resumable=False,
-    )
+    await writer.commit("stream.failed", {"code": "agent_event_timeout", "message": "Agent 事件流等待模型响应超过 60 秒", "resumable": False, "after_interrupt_requested": False})
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),
@@ -372,7 +364,7 @@ async def test_message_stream_replay_after_cursor_and_unknown_stream_error(
         "interrupt.requested",
         {"interrupt_request_id": "intr_api", "reason": "user_requested"},
     )
-    await writer.close_interrupted("intr_api")
+    await writer.commit("stream.interrupted", {"interrupt_request_id": "intr_api", "status": "interrupted"})
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),

@@ -116,14 +116,10 @@ def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
 def build_deep_agent_tool_middleware(
     *, backend: BackendProtocol, workspace_root: Path,
     resource_navigation: ResourceNavigation, text_mutations: WorkspaceTextMutationOwner,
-    artifact_reader: ResourceFileReader, permissions: list[FilesystemPermission] | None,
-    resolved_tool_denylist: set[str],
-) -> tuple[SourceOwnedTodoListMiddleware | None, FilesystemMiddleware]:
-    """目录和执行共用的、无需模型的工具注册。"""
-    todo_middleware = (
-        SourceOwnedTodoListMiddleware(system_prompt="", tool_description=TODO_TOOL_DESCRIPTION)
-        if "write_todos" not in resolved_tool_denylist else None
-    )
+    artifact_reader: ResourceFileReader | None, permissions: list[FilesystemPermission] | None,
+) -> tuple[SourceOwnedTodoListMiddleware, FilesystemMiddleware]:
+    """完整构造模型无关的工具；执行可见性在声明检查后应用。"""
+    todo_middleware = SourceOwnedTodoListMiddleware(system_prompt="", tool_description=TODO_TOOL_DESCRIPTION)
     filesystem_middleware = FilesystemMiddleware(
         backend=backend,
         system_prompt="",
@@ -140,7 +136,7 @@ def build_deep_agent_tool_middleware(
     )
     _filter_middleware_tools(
         filesystem_middleware,
-        resolved_tool_denylist | FILESYSTEM_INTERNAL_TOOL_DENYLIST,
+        FILESYSTEM_INTERNAL_TOOL_DENYLIST,
     )
     return todo_middleware, filesystem_middleware
 
@@ -149,11 +145,7 @@ def build_deep_agent_middleware(
     *,
     model: BaseChatModel,
     backend: BackendProtocol,
-    workspace_root: Path,
-    resource_navigation: ResourceNavigation,
-    text_mutations: WorkspaceTextMutationOwner,
-    artifact_reader: ResourceFileReader,
-    permissions: list[FilesystemPermission] | None,
+    tool_middleware: tuple[SourceOwnedTodoListMiddleware, FilesystemMiddleware],
     resolved_skills: PublishedSkillCatalog | None,
     compaction_preflight: CompactionPreflightPort,
     context_source_manager: ContextSourceManager | None = None,
@@ -172,13 +164,8 @@ def build_deep_agent_middleware(
         tool_invocation_context_middleware,
         tool_output_middleware,
     ]
-    todo_middleware, filesystem_middleware = build_deep_agent_tool_middleware(
-        backend=backend, workspace_root=workspace_root,
-        resource_navigation=resource_navigation, text_mutations=text_mutations,
-        artifact_reader=artifact_reader, permissions=permissions,
-        resolved_tool_denylist=resolved_tool_denylist,
-    )
-    if todo_middleware is not None:
+    todo_middleware, filesystem_middleware = tool_middleware
+    if "write_todos" not in resolved_tool_denylist:
         middleware_stack.append(todo_middleware)
     if (resolved_skills is not None and resolved_skills.entries) or source_registry is not None:
         middleware_stack.append(WorkspaceSkillsMiddleware(
@@ -191,6 +178,7 @@ def build_deep_agent_middleware(
             context_source_reactor=context_source_reactor,
             execution_owned_catalog=execution_owned_skill_catalog,
         ))
+    _filter_middleware_tools(filesystem_middleware, resolved_tool_denylist)
     if filesystem_middleware.tools:
         middleware_stack.append(filesystem_middleware)
 
@@ -218,7 +206,8 @@ def build_deep_agent_middleware(
         middleware_stack.append(model_routing_middleware)
 
     for middleware_item in middleware_stack:
-        _filter_middleware_tools(middleware_item, resolved_tool_denylist)
+        if middleware_item is not filesystem_middleware:
+            _filter_middleware_tools(middleware_item, resolved_tool_denylist)
 
     if context_source_manager is not None:
         for producer_id, source_name, content, policy_key, present in (

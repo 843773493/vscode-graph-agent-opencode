@@ -1,7 +1,8 @@
+import { TranscriptTestView } from "../../../tests/fixtures/transcriptView";
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import ChatTurn from "./ChatTurn";
+import OriginalChatTurn from "./ChatTurn";
 import {
   chatTurnProps,
   conversation,
@@ -23,17 +24,17 @@ describe("ChatTurn 用户动作", () => {
       let renderer!: ReactTestRenderer;
       act(() => { renderer = create(<ChatTurn {...chatTurnProps(value)} />); });
       try {
-        const header = renderer.root.findByProps({ className: "chat-turn-activity-header" });
+        const header = renderer.root.findByProps({ className: "chat-thinking-toggle" });
         const usage = header.findByProps({ className: "chat-response-token-usage" });
-        expect(usage.children).toEqual(["本次 0 · 缓存 0"]);
-        expect(usage.props.title).toContain("非整个 Thread 总计");
-        expect(usage.props.title).toContain("输入：0");
-        expect(usage.props.title).toContain("输出：0");
+        expect(usage.findByProps({ className: "chat-usage-total" }).children).toEqual(["本次 0"]);
+        expect(usage.findByProps({ className: "chat-usage-cache" }).children).toEqual(["缓存 0"]);
+        expect(usage.props["aria-label"]).toContain("非整个 Thread 总计");
+        expect(usage.props["aria-label"]).toContain("输入：0");
+        expect(usage.props["aria-label"]).toContain("输出：0");
         expect(renderer.root.findAllByProps({ className: "chat-response-actions" })).toHaveLength(0);
         if (displayMode === "live") expect(JSON.stringify(renderer.toJSON())).not.toContain("Item 计数同步中");
         act(() => renderer.update(<ChatTurn {...chatTurnProps({ ...value, events: [] })} />));
         expect(renderer.root.findAllByProps({ className: "chat-response-token-usage" })).toHaveLength(0);
-        if (displayMode === "live") expect(renderer.root.findAllByProps({ className: "chat-turn-activity-header" })).toHaveLength(0);
       } finally { act(() => renderer.unmount()); }
     });
   }
@@ -226,3 +227,5 @@ describe("ChatTurn 用户动作", () => {
     expect(html).not.toContain("generated_session_result");
   });
 });
+
+function ChatTurn(props: React.ComponentProps<typeof OriginalChatTurn>) { return <TranscriptTestView><OriginalChatTurn {...props} /></TranscriptTestView>; }

@@ -91,11 +91,13 @@ export function conversationFromTurn(turn: TurnRecord, threadId: string): Conver
     turnRevision: turn.revision,
     bodyEvicted: turn.bodyEvicted,
     sourceViewId: turn.source_view_id,
+    activityOutline: turn.activityOutline,
     sourceViewRevision: turn.source_view_revision,
     turnOrdinal: turn.ordinal,
     turnItemsView: isTurnDetail(turn) ? "full" : "summary",
     rootLogicalItemOrdinal: turn.root_logical_item_ordinal,
     turnStatus: turn.status as ConversationView["turnStatus"],
+    turnFailure: turn.failure,
     activityStats: turn.activity_stats
       ? {
           duration_ms: turn.activity_stats.duration_ms ?? null,

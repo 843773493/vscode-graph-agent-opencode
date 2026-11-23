@@ -7,8 +7,10 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from app.runtime.network_proxy import ProxyRoutes
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from app.testing.model_stream.context import ModelCallIdentity, replay_model_call
+from configs.network import EnvironmentProxy
 from tests.integration.conftest import inprocess_model_replay
 
 
@@ -35,6 +37,7 @@ def replay_owner_factory(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_sequential_replay_owners_use_live_sdk_clients(replay_owner_factory):
+    from app.agents.providers.provider_http_client import build_provider_openai_client
     from app.runtime.litellm_runtime import litellm
 
     session = "ses_00000000400070008000000000000021"
@@ -55,18 +58,20 @@ async def test_sequential_replay_owners_use_live_sdk_clients(replay_owner_factor
             (call_id,) = replay.control.plan_model_calls(
                 session, thread, [cassette.raw["interactions"][0]],
             )
-            controller.ensure_installed()
-            with replay_model_call(ModelCallIdentity(session, thread, call_id)):
-                stream = await litellm.acompletion(
-                    model="openai/gpt-4.1", api_base=endpoint, api_key="replay-cache-key",
-                    messages=[{"role": "user", "content": "验证真实 SDK client 生命周期"}],
-                    stream=True, num_retries=0,
-                )
-                content = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+            async with build_provider_openai_client(
+                is_async=True, base_url=endpoint, api_key="replay-cache-key", routes=ProxyRoutes.from_configuration(EnvironmentProxy()),
+            ) as client:
+                with replay_model_call(ModelCallIdentity(session, thread, call_id)):
+                    stream = await litellm.acompletion(
+                        model="openai/gpt-4.1", api_base=endpoint, api_key="replay-cache-key",
+                        messages=[{"role": "user", "content": "验证真实 SDK client 生命周期"}],
+                        stream=True, num_retries=0, client=client,
+                    )
+                    content = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+                clients.append(client)
             assert content == f"owner-{ordinal}"
             assert controller.transport.call_count == 1
             assert list(controller.transport.hit_counts.values()) == [1]
-            clients.append(controller.client)
         assert clients[-1] is not None and clients[-1].is_closed
         assert litellm.in_memory_llm_clients_cache is original_cache
     assert clients[0] is not clients[1]

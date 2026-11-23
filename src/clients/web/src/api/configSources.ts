@@ -1,7 +1,8 @@
 import type { APIResponse, ConfigSourcesDTO } from "../types/backend";
-import type { ConfigReloadStatusDTO, ConfigSourceDocumentDTO, ConfigSourceEditRequest, ConfigSourcePreflightDTO, LlmDiscoverRequest, LlmDiscoverResultDTO, LlmTestRequest, LlmTestStartDTO, LlmTestDeltaDTO, LlmTestResultDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
-import { LlmProbeObservationDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
+import type { ConfigReloadStatusDTO, ConfigSourceDocumentDTO, ConfigSourceEditRequest, ConfigSourcePreflightDTO, LlmDiscoverRequest, LlmTestRequest, LlmTestStartDTO, LlmTestDeltaDTO, LlmTestResultDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
+import { LlmProbeObservationDTO, LlmDiscoverResultDTO, LlmModelCatalogDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { ModelReferenceDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
+import type { LlmProvidersDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { gatewayWorkspaceRequestHeaders, requestGatewayResponse, requestJson, unwrapApiData } from "./http";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
@@ -29,15 +30,28 @@ export async function listConfigSources(port: number, target: GatewayWorkspaceRe
   }));
 }
 
+export async function listLlmCatalog(target: GatewayWorkspaceRequestTarget, provider: string, signal?: AbortSignal): Promise<LlmModelCatalogDTO> {
+  return LlmModelCatalogDTO.fromJSON(unwrapApiData(await requestJson<APIResponse<LlmModelCatalogDTO>>(0,
+    `/api/v1/config/llm/catalog?provider=${encodeURIComponent(provider)}`, {
+      headers: gatewayWorkspaceRequestHeaders(target), cache: "no-store", signal,
+    })));
+}
+
+export async function listLlmProviders(target: GatewayWorkspaceRequestTarget, signal?: AbortSignal): Promise<LlmProvidersDTO> {
+  return unwrapApiData(await requestJson<APIResponse<LlmProvidersDTO>>(0, '/api/v1/config/llm/providers', {
+    headers: gatewayWorkspaceRequestHeaders(target), cache: 'no-store', signal,
+  }));
+}
+
 /** 一次性目录请求使用独立的完整期限；不保存来源、不重放上游操作。 */
 export async function discoverLlmModels(port: number, target: GatewayWorkspaceRequestTarget, input: LlmDiscoverRequest,
   signal?: AbortSignal): Promise<LlmDiscoverResultDTO> {
   const route = { ...target };
   if (input.gateway_id !== route.gateway_id || input.workspace_id !== route.workspace_id) throw new Error("模型发现请求不属于原 Gateway／工作区");
-  const result = unwrapApiData(await requestJson<APIResponse<LlmDiscoverResultDTO>>(port, "/api/v1/config/llm/discover", {
+  const result = LlmDiscoverResultDTO.fromJSON(unwrapApiData(await requestJson<APIResponse<LlmDiscoverResultDTO>>(port, "/api/v1/config/llm/discover", {
     method: "POST", headers: gatewayWorkspaceRequestHeaders(route), body: JSON.stringify(input),
     cache: "no-store", timeoutMs: 20_000, signal,
-  }));
+  })));
   assertProbeTarget(result.observation, input);
   return result;
 }

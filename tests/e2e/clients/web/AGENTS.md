@@ -1,6 +1,6 @@
 # 目录用途
 
-存放浏览器 Web UI 的真实端到端测试，覆盖页面初始化、交互和可量化性能行为。
+存放用户明确提出的浏览器 Web UI 完整业务流程验收，覆盖页面初始化、交互和可量化性能行为。
 
 ## 职责树
 
@@ -26,7 +26,7 @@ clients/web/
 - 产品前端与后端实现
 - `asset/` 中的只读测试模板
 - 项目根目录或其他 E2E 的运行数据
-- Playwright `route.fulfill()`、响应修改、模型 stub、替代 Gateway/后端或测试页面服务
+- 不以测试页面、伪造产品状态或替代 Gateway/后端冒充被验收的产品链路；模型 HTTP 响应允许显式真实调用、上游重放或手工 SSE，并注明替换边界。
 
 ## 规范
 
@@ -41,15 +41,15 @@ clients/web/
 - 使用 fork deadline watchdog 的 browser driver 在 POSIX 由 owner 设置 `start_new_session=True`；Windows 由外置 Python watchdog 校验 matrix runner 祖先并按进程树回收
 - 纯 Web 是当前唯一实现的客户端 E2E；不得据此宣称 Electron、VS Code 或 React Native 已通过
 - 缺少 Chromium 或真实服务时明确报告未满足前置条件，不得切换到替身
-- 使用固定模型回放的子 Thread 委派场景归 `tests/integration/clients/web/test_child_thread_panel.py`，不保留 E2E 别名或旧入口。
+- 子 Thread 委派场景保留在 `tests/integration/clients/web/test_child_thread_panel.py`，不因模型模式或本次语义调整迁移，也不保留重复入口。
 - 会话目录场景使用 `web_workbench_assets` 和真实 Gateway，保留目录操作 acceptance/commit、拖拽、跨工作区、真实模型历史与 fork 原期限；按完整 owner 核新编辑器，删除 Session 后核所有所属标签关闭，其他 Session 不受影响。
 
-- 模型回放的持久资源生命周期已迁至 `tests/integration/clients/web/test_persistent_resource_lifecycle.py`，不保留旧扩展窗口测试入口。
+- 持久资源生命周期既有 owner 保留在 `tests/integration/clients/web/test_persistent_resource_lifecycle.py`，不保留旧扩展窗口测试入口。
 
 - `test_quick_access_file_cache.py` 使用真实 Gateway、两个托管后端和原图片编辑器；只准备普通文件并通过实际外部文件改写触发更新。CDP记录实际条件头、网络200／304／206和正文传输量，不能以浏览器合成的fetch200或图片可见代替缓存证明。原watcher可能在建连后再验证，每次暖读都必须304及零正文；认证、错误owner、删除、原保存CAS及两个HTTP寻址载体继续按真实产品验证，不用响应替身或预写缓存。
   - POSIX撤销真实文件权限后核原延迟I/O的500及no-store、原图片撤下和错误可见，恢复权限后原Pane重新显示；删除及重建同样核失败与恢复。权限始终在finally恢复，不将原生I/O失败改称API授权403，不代替断连、认证切换、Webview或Electron验收。
   - 文本模型场景复用同一正式页面及 A/B 后端；真实键盘编辑和剪贴板证明分屏正文共享、选区独立、关闭一组保留 dirty、外部改写冲突及最后关闭后重读。原 FileService 可以在 PUT 前拒绝 modified-since，核精确冲突提示与两侧正文，不强造网络写入；只读历史／Diff 和 Electron 另行验收。
 
-- Section 8 精确模型回放的唯一 owner 已迁至 `tests/integration/clients/web/conversation_lifecycle/`；完整 E2E suite 不再要求 Section 8 focus。
+- Section 8 唯一 owner 保留在 `tests/integration/clients/web/conversation_lifecycle/`，不因模型模式迁移或复制；现有 E2E suite 不要求 Section 8 focus。
 
 - `test_quick_access_file_coverage.py` 经正式 Workbench、真实 Gateway 和 A/B 后端验证未保存模型的负命中覆盖、小配额分支及原 cursor。通过原命令关闭上一轮干净预览，保留 dirty 正文；核磁盘未保存、实际请求排除集与后端 request_id 分发，不以 UI 不显示 B 代替零读取证明。搜索／设置观察复用 `tests/support/workbench/`，不使用网络或业务替身。

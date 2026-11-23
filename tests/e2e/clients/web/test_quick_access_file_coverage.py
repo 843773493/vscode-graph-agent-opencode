@@ -12,9 +12,8 @@ from pathlib import Path
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import e2e_port_block_for_file
+from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -35,13 +34,11 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 @pytest.fixture
 def coverage_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port = e2e_port_block_for_file(Path(request.node.path)).port(20)
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
-    lease.acquire()
-    try:
-        yield port
-    finally:
-        lease.release()
+    port = e2e_ports_for_file(Path(request.node.path)).port(20)
+    (context.artifacts_dir / "port-allocation.json").write_text(
+        json.dumps({"gateway": port}) + "\n", encoding="utf-8",
+    )
+    yield port
 
 
 async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(

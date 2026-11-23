@@ -40,6 +40,17 @@ export interface ChatItemMenuRequest {
 }
 
 export const ChatItemMenuContext = React.createContext<((request: ChatItemMenuRequest) => void) | null>(null);
+export type ChatHoverRow = { label: string; value: string };
+export const ChatHoverContext = React.createContext<((element: HTMLElement, rows: () => readonly ChatHoverRow[]) => () => void) | null>(null);
+
+/** 使用宿主原生 Hover；数据在打开时读取，不为计时每一跳重建浮层。 */
+export function useChatHover(rows: readonly ChatHoverRow[]) {
+  const bind = React.useContext(ChatHoverContext);
+  const latest = React.useRef(rows); latest.current = rows;
+  const [element, setElement] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => element && bind ? bind(element, () => latest.current) : undefined, [bind, element]);
+  return setElement;
+}
 export type ChatItemMenuHandlers = Pick<React.HTMLAttributes<HTMLElement>,
   "tabIndex" | "aria-haspopup" | "aria-label" | "onContextMenu" | "onKeyDown">;
 

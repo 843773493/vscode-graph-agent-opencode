@@ -49,6 +49,7 @@ function installIntersectionObserver(): TestIntersectionObserverHandle[] {
   class TestIntersectionObserver implements IntersectionObserver {
     readonly root: Element | null = null;
     readonly rootMargin: string;
+    readonly scrollMargin = "0px";
     readonly thresholds: readonly number[];
     readonly callback: IntersectionObserverCallback;
     target: Element | null = null;

@@ -387,7 +387,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.failed", "error"}:
             error = RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise error
 
@@ -573,8 +573,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             resource_refs=binding.resource_refs if binding is not None else (),
         )
         client = self._provider_http_client(is_async=asynchronous)
-        if client is not None:
-            payload["client"] = client
+        payload["client"] = client
         if self.invocation_purpose == "model_test":
             payload["max_retries"] = payload["num_retries"] = 0
 
@@ -595,7 +594,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
 
@@ -616,7 +615,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         await self._publish_nonstream_result(result, run_manager)
@@ -636,7 +635,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
@@ -649,7 +648,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         terminal_received = False
@@ -662,14 +661,14 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                         "Responses 流协议错误: EOF 前未收到 "
                         "response.completed/response.incomplete terminal event"
                     )
-                    mark_provider_failure(error)
+                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise error
                 break
             except ScopeCancelledError:
                 raise
             except Exception as error:
-                mark_provider_failure(error)
+                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             try:
@@ -687,7 +686,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     original_schema=original_schema,
                 )
             except Exception as error:
-                mark_provider_failure(error)
+                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:
@@ -761,7 +760,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 stream = await litellm.aresponses(**raw_payload)
         except TimeoutError as error:
             if not open_timeout.expired():
-                mark_provider_failure(error)
+                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             logger.warning(
@@ -781,7 +780,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
@@ -813,7 +812,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error)
+            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         terminal_received = False
@@ -828,14 +827,14 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                             "Responses 流协议错误: EOF 前未收到 "
                             "response.completed/response.incomplete terminal event"
                         )
-                        mark_provider_failure(error)
+                        mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                         record_upstream_error(error)
                         raise error
                     break
                 except ScopeCancelledError:
                     raise
                 except Exception as error:
-                    mark_provider_failure(error)
+                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise
                 if scope is not None:
@@ -855,7 +854,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                         original_schema=original_schema,
                     )
                 except Exception as error:
-                    mark_provider_failure(error)
+                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise
                 if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:

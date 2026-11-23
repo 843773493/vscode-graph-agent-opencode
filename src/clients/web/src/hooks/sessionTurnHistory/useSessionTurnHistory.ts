@@ -1,3 +1,4 @@
+import type { ProcessDetailSelection } from "../../api/session/sessionTurnHistory";
 import {
   useCallback,
   useEffect,
@@ -108,17 +109,19 @@ export function useSessionTurnHistory({
     refreshAfterInFlight = false,
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
+    selection?: ProcessDetailSelection,
   ): Promise<void> => {
     const loadableTurnIds = turnIds.filter(
       (turnId) => !invalidatedTurnIdsRef.current.has(turnId),
     );
-    if (loadableTurnIds.length === 0) return;
+    if (loadableTurnIds.length === 0 && !selection?.executionId) return;
     await loadTurnDetailsRaw(
       loadableTurnIds,
       requestIdentity,
       refreshAfterInFlight,
       include,
       toolCallIds,
+      selection,
     );
   }, [loadTurnDetailsRaw]);
   const executionLoads = useRef(new Map<string, Promise<void>>());
@@ -148,8 +151,7 @@ export function useSessionTurnHistory({
     const byExecution = new Map<string, string[]>();
     for (const reference of executionItems) {
       const execution = timeline?.internalExecutions.find(item => item.execution_id === reference.executionId);
-      if (!execution?.display_parts.some(part => part.item_id === reference.itemId && part.bodyEvicted)
-        && !execution?.response_parts.some(part => part.source.item_id === reference.itemId && part.bodyEvicted)) continue;
+      if (!execution?.display_parts.some(part => part.item_id === reference.itemId && part.bodyEvicted)) continue;
       const ids = byExecution.get(reference.executionId) ?? [];
       if (!ids.includes(reference.itemId)) ids.push(reference.itemId);
       byExecution.set(reference.executionId, ids);
@@ -164,7 +166,9 @@ export function useSessionTurnHistory({
       if (!request) {
         request = (async () => {
           const page = await loadSessionHistory(apiPort, sessionId, { execution_id: executionId,
-            execution_item_ids: selected, include: ["internal", "assistant", "thinking", "tool_call", "tool_result"] },
+            source_view_id: timeline?.internalExecutions.find(entry => entry.execution_id === executionId)?.sourceViewId,
+            source_view_revision: timeline?.historyViewRevision ?? undefined,
+            item_ids: selected, include: ["internal", "assistant", "thinking", "tool_call", "tool_result"] },
             workspaceId, requestScopeController.signal, threadId);
           if (requestScopeController.signal.aborted || generation !== generationRef.current) return;
           setState(previous => {

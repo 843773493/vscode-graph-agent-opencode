@@ -13,6 +13,7 @@ from typing import Literal
 
 import httpx
 import psutil
+from boxteam_plugin_sdk.failures import bounded_failure_text, failure_message
 
 from app.core.async_channel import run_channel
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -271,10 +272,10 @@ def _request_identity(request: InstallPluginRequest) -> str:
 
 def _operation_error(error: Exception) -> str:
     if isinstance(error, httpx.HTTPStatusError):
-        return f"插件来源请求失败: HTTP {error.response.status_code}"
+        return bounded_failure_text(f"插件来源请求失败: HTTP {error.response.status_code}: {failure_message(error)}", max_bytes=2000)
     if isinstance(error, httpx.HTTPError):
-        return f"插件来源传输失败: {type(error).__name__}"
-    return str(error)[:2000]
+        return bounded_failure_text(f"插件来源传输失败: {type(error).__name__}: {failure_message(error)}", max_bytes=2000)
+    return failure_message(error, max_bytes=2000)
 
 
 def _process_identity_alive(pid: object, created_at: object) -> bool:

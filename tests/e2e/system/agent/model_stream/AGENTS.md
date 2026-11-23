@@ -17,4 +17,4 @@
 - 文件名直接说明协议和场景，目录已表达 `model_stream`，不再重复此前缀。
 - 每个模块用 `MODEL_STREAM_CONFIG_NAME` 声明场景配置名，由本目录 `conftest.py` 统一解析路径。
 - 回放资产从 `tests/fixtures/model_stream/` 加载。
-- 产物通过 `output_root_for_test(Path(__file__), test_layer="e2e")` 写入镜像测试路径。
+- 复查产物通过 `TestRunContext.from_test_file(Path(__file__)).artifacts_dir` 写入本次 run 和节点的镜像路径；模块共享 transport 仍使用 run 的共享 artifacts。

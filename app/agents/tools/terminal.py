@@ -33,7 +33,7 @@ from app.services.business.terminal_resources.owner import TerminalResourceOwner
 
 @asynccontextmanager
 async def _terminal_operation(
-    owner: TerminalResourceOwner, session_id: str, context: ToolInvocationContext,
+    owner: TerminalResourceOwner, session_id: str | None, context: ToolInvocationContext,
 ) -> AsyncIterator[TerminalOperations]:
     binding = context.thread_binding
     if binding is None or binding.session_id != session_id:
@@ -73,7 +73,7 @@ async def _read_pending_output(
 
 
 def create_exec_command_tool(
-    session_id: str,
+    session_id: str | None,
     agent_id: str = "default",
     *,
     terminal_owner: TerminalResourceOwner,
@@ -215,7 +215,7 @@ def create_exec_command_tool(
 
 
 def create_write_stdin_tool(
-    session_id: str,
+    session_id: str | None,
     *,
     terminal_owner: TerminalResourceOwner,
     invocation_context: ToolInvocationContext,
@@ -305,7 +305,7 @@ def create_write_stdin_tool(
 
 
 def create_list_terminal_sessions_tool(
-    session_id: str,
+    session_id: str | None,
     *,
     terminal_owner: TerminalResourceOwner,
     invocation_context: ToolInvocationContext,
@@ -349,7 +349,7 @@ def create_list_terminal_sessions_tool(
 
 
 def create_kill_terminal_tool(
-    session_id: str,
+    session_id: str | None,
     *,
     terminal_owner: TerminalResourceOwner,
     invocation_context: ToolInvocationContext,

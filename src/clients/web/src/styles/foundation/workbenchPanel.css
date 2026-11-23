@@ -17,8 +17,9 @@
   bottom: 4px;
   background: var(--bt-terminal-background);
   display: flex;
+  flex-direction: column;
   max-height: 40%;
-  align-items: center;
+  align-items: stretch;
   min-width: 0;
   padding: 0 10px;
   overflow: auto;
@@ -28,6 +29,16 @@
 }
 
 .terminal-panel-error-slot:empty { display: none; }
+
+.terminal-panel-resource-warning {
+  width: 100%;
+  color: var(--bt-status-warning);
+  overflow-wrap: anywhere;
+}
+
+.terminal-panel-resource-warning summary {
+  cursor: pointer;
+}
 
 .terminal-panel-error-slot [role="alert"] {
   min-width: 0;

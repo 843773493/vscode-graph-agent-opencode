@@ -1475,6 +1475,7 @@
             "supports_reasoning": {
               "type": "object",
               "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
+              "x-merge": "replace",
               "oneOf": [
                 {
                   "additionalProperties": false,
@@ -1606,6 +1607,7 @@
             "default_headers": {
               "type": "object",
               "description": "Additional default HTTP headers for this provider.",
+              "x-key-casefold": true,
               "additionalProperties": {
                 "type": "string"
               },
@@ -1619,6 +1621,8 @@
             "parameters": {
               "type": "object",
               "description": "请求默认或覆盖；Agent 及本次调用显式参数优先，最终 null 表示不发送，扩展放入 extra_body。",
+              "x-key-aliases": {"max_tokens": "max_output_tokens"},
+              // TODO: Workspace v4 信封切换时，将参数的对象值改为 x-merge: replace，和版本语义一起切换。
               "additionalProperties": true,
               "default": {}
             }

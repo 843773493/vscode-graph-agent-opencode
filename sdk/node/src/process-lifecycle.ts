@@ -9,6 +9,7 @@ export interface ProcessStat {
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
+import { boundedFailureText, failureMessage, formatFailureDiagnostic } from "./failures.js";
 import { createRuntimeLogger } from "./logging.js";
 
 type ProcessOperationFailure = Error & { code?: string | number; signal?: string | null; killed?: boolean };
@@ -21,9 +22,9 @@ const logger = createRuntimeLogger("process", "process.lifecycle");
 
 function processOperationError(stage: string, primary: ProcessOperationFailure, { pid = null, processSessionId = null, signal = primary.signal ?? "none" }: { pid?: number | null; processSessionId?: number | string | null; signal?: string | null } = {}, cause: unknown = primary) {
   const code = primary.code ?? "none";
-  const message = `进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}`;
+  const message = boundedFailureText(`进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}, reason=${failureMessage(primary)}`);
   try {
-    logger.error(`[process] ${message}`, cause);
+    logger.error(`[process] ${message}`, formatFailureDiagnostic(cause, { maxBytes: 65536 - new TextEncoder().encode(message).byteLength - 16 }));
   } catch (diagnosticError) {
     cause = new AggregateError([cause, diagnosticError], "进程操作与诊断输出均失败", { cause });
   }

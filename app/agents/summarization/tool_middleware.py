@@ -15,12 +15,45 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.types import Command
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.planning import build_safe_compaction_partition
 from app.agents.summarization.state import CachePreservingPartition
 from app.core.failures import failure_detail
+
+
+class CompactConversationInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    runtime: ToolRuntime
+
+
+class ReadCompactionHistoryInput(CompactConversationInput):
+    line_offset: Annotated[int, Field(ge=1)] = 1
+    limit: Annotated[int, Field(ge=1, le=2000)] = 200
+
+
+# 声明本身没有可调用实现；目录和执行共用同一参数模型与描述。
+COMPACT_CONVERSATION_TOOL = StructuredTool(
+    name="compact_conversation",
+    description=(
+        "Compact the conversation by summarizing older messages "
+        "into a concise summary. Use this proactively when the "
+        "conversation is getting long to free up context window "
+        "space. This tool takes no arguments."
+    ),
+    args_schema=CompactConversationInput,
+)
+READ_COMPACTION_HISTORY_TOOL = StructuredTool(
+    name="read_compaction_history",
+    description=(
+        "读取当前会话精确 thread 的压缩归档原文，包含已从模型上下文移除的消息。"
+        "line_offset 从1开始，limit 是行数；返回带行号的原文，可按下一行继续读取。"
+        "不接受路径、Session ID 或 Thread ID。"
+    ),
+    args_schema=ReadCompactionHistoryInput,
+    handle_tool_error=True,
+)
 
 
 def create_compact_conversation_tool(
@@ -33,17 +66,9 @@ def create_compact_conversation_tool(
     async def async_compact(runtime: ToolRuntime) -> Command:
         return await arun(runtime)
 
-    return StructuredTool.from_function(
-        name="compact_conversation",
-        description=(
-            "Compact the conversation by summarizing older messages "
-            "into a concise summary. Use this proactively when the "
-            "conversation is getting long to free up context window "
-            "space. This tool takes no arguments."
-        ),
-        func=sync_compact,
-        coroutine=async_compact,
-    )
+    return COMPACT_CONVERSATION_TOOL.model_copy(update={
+        "func": sync_compact, "coroutine": async_compact,
+    })
 
 
 def create_read_compaction_history_tool(
@@ -82,17 +107,9 @@ def create_read_compaction_history_tool(
         result = await resolve_backend(runtime).aread(path, offset=line_offset - 1, limit=limit)
         return content(result, line_offset)
 
-    return StructuredTool.from_function(
-        name="read_compaction_history",
-        description=(
-            "读取当前会话精确 thread 的压缩归档原文，包含已从模型上下文移除的消息。"
-            "line_offset 从1开始，limit 是行数；返回带行号的原文，可按下一行继续读取。"
-            "不接受路径、Session ID 或 Thread ID。"
-        ),
-        func=read_history,
-        coroutine=aread_history,
-        handle_tool_error=True,
-    )
+    return READ_COMPACTION_HISTORY_TOOL.model_copy(update={
+        "func": read_history, "coroutine": aread_history,
+    })
 
 
 class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):

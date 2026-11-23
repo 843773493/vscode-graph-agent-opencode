@@ -1,9 +1,10 @@
+import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { expect, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { MessageSearchLocation, MessageSearchLocationContext, messageRangeOffsets } from "./messageSearchLocation";
 import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
-import ToolRow from "./ToolRow";
+import OriginalToolRow from "./ToolRow";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 
 test("码点位置在多行、emoji 和重复词原文中定位指定一次命中", () => {
@@ -61,3 +62,5 @@ test("工具命中只展开具备原 canonical 结果身份的详情，不跳到
       .map(button => button.props["aria-expanded"])).toEqual([true, false]);
   } finally { act(() => renderer.unmount()); }
 });
+
+function ToolRow(props: React.ComponentProps<typeof OriginalToolRow>) { return <TranscriptTestView><OriginalToolRow {...props} /></TranscriptTestView>; }

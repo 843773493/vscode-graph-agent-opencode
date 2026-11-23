@@ -221,7 +221,7 @@ def inspect_item_metadata(connection: sqlite3.Connection, view_id: str, *, item_
         "WHERE (item.semantic_kind<>'runtime_notice' OR notice.model_call_id IS NOT NULL) "
         "AND EXISTS(SELECT 1 FROM context_view_items member WHERE member.view_id=? "
         "AND member.item_id=item.item_id AND member.visible=1 "
-        "AND (member.source_kind='canonical' OR (item.semantic_kind='runtime_notice' AND notice.model_call_id IS NOT NULL)))",
+        "AND (member.source_kind='canonical' OR (member.source_kind='display_only' AND item.turn_id IS NULL AND execution.execution_origin='internal') OR (item.semantic_kind='runtime_notice' AND notice.model_call_id IS NOT NULL)))",
         (item_id, message_id, view_id),
     ).fetchone()
     return tuple(row) if row is not None else None

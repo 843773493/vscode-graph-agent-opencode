@@ -108,9 +108,9 @@ async def test_cold_recovery_and_dispatched_command_share_one_deadline_and_keep_
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
+    async def syncing(resource_id: str, revision: int, *, for_stop: bool, **revision_options: object) -> None:
         calls.append((resource_id, revision))
-        await original_sync(resource_id, revision, for_stop=for_stop)
+        await original_sync(resource_id, revision, for_stop=for_stop, **revision_options)
         if len(calls) == 1:
             advance_clock(20)
         else:

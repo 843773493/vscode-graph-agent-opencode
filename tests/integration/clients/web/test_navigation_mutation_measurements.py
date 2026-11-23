@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import integration_ports_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -149,7 +149,7 @@ async def navigation_measurement_stack(
                         (source_files_root / source_filename).write_text(
                             "正式量化复制内容\n", encoding="utf-8"
                         )
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = integration_ports_for_file(Path(request.node.path))
     backend = start_backend_process(
         workspace_root=str(workspace), port=ports.port(0), log_name="measurements",
         asgi_app="tests.integration.clients.web.navigation_measurement_app:app",

@@ -98,6 +98,7 @@ async def test_status_reads_use_exit_notification_without_polling_process(
     process = processes[0]
     process.is_alive.side_effect = AssertionError("状态读取不应重复探活")
     process.process = Mock()
+    process.process.poll.return_value = 23
     exited = asyncio.Event()
 
     async def wait_exit(process_id: int) -> None:
@@ -116,7 +117,7 @@ async def test_status_reads_use_exit_notification_without_polling_process(
         status = PluginSlotStatusDTO.model_validate(slot.describe())
         assert status.state == "failed" and status.instance is not None
         assert status.instance.instance_id == "instance-1"
-        assert status.error == "插件进程已退出；需显式重启，不自动重放在途操作"
+        assert status.error == "插件进程已退出: exit_code=23；需显式重启，不自动重放在途操作"
         assert slot.stopped.is_set() and changed.is_set()
         process.process.poll.assert_called_once_with()
     finally:
@@ -368,3 +369,73 @@ async def test_adoption_checks_process_identity_before_loading_saved_package(
     assert owner.key(binding) not in owner.slots
     assert owner.slots[owner.key(original)].state == "ready"
     assert len(processes) == 1 and processes[0].close.call_count == 0
+
+
+@pytest.fixture
+async def noisy_plugin(tmp_path: Path) -> AsyncIterator[tuple[GatewayPluginRuntime, PluginBinding, bytes, Path]]:
+    """真实子进程输出大块第三方 stderr；原日志不参与公共失败摘要。"""
+    source = tmp_path / "noisy-package"
+    source.mkdir()
+    head = b"third-party-stderr-head https://user:raw-secret@host/path\n"
+    tail = b"\nthird-party-stderr-tail\n"
+    payload = head + b"x" * (2 * 1024 * 1024) + tail
+    (source / "entry.py").write_text(
+        "import os\n"
+        f"payload = {head!r} + b'x' * {2 * 1024 * 1024} + {tail!r}\n"
+        "while payload:\n"
+        "    written = os.write(2, payload)\n"
+        "    payload = payload[written:]\n"
+        "raise SystemExit(42)\n",
+        encoding="utf-8",
+    )
+    (source / "plugin.jsonc").write_text(json.dumps({
+        "package_id": "stderr.probe", "version": "1.0.0", "name": "Stderr probe",
+        "target": native_plugin_target("python"),
+        "plugins": [{"id": "probe", "name": "Probe", "instance_scope": "gateway",
+                     "runtime": "python", "entrypoint": ["entry.py"], "management_protocol_version": 1,
+                     "requires": [{"extension_point": "services", "version": 1},
+                                  {"extension_point": "configuration", "version": 1}],
+                     "contributes": {"configuration": {"type": "object", "additionalProperties": False},
+                                     "services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]}}],
+    }), encoding="utf-8")
+    packages = PluginPackageStore(tmp_path / "packages")
+    packages.install_directory(source)
+    skills = GatewaySkillSourceOwner(gateway_id="gateway_" + "b" * 32, skills_root=tmp_path / "skills")
+    await skills.start()
+    home = tmp_path / "home"
+    owner = GatewayPluginRuntime(home=home, gateway_id=skills.gateway_id, packages=packages,
+        settings=lambda: {"logging": {}, "observation": {}}, workspace_root=lambda _: tmp_path, skill_sources=skills)
+    try:
+        yield owner, PluginBinding(package_id="stderr.probe", package_version="1.0.0", plugin_id="probe", enabled=True), payload, home / "state/logs"
+    finally:
+        await owner.close()
+        await skills.close()
+
+
+async def test_large_stderr_is_not_read_or_copied_into_failure_status(
+    noisy_plugin: tuple[GatewayPluginRuntime, PluginBinding, bytes, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, binding, payload, logs = noisy_plugin
+    original_open = Path.open
+    reads: list[Path] = []
+
+    def open_without_reading_raw_log(path: Path, mode: str = "r", *args, **kwargs):
+        if path.is_relative_to(logs) and path.suffix == ".log" and ("r" in mode or "+" in mode):
+            reads.append(path)
+            raise AssertionError("公共失败状态不得读取第三方原日志")
+        return original_open(path, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", open_without_reading_raw_log)
+        status = await owner.apply_binding(binding, revision="noisy-exit", parameters={})
+        reread = owner.slots[owner.key(binding)].describe()
+    assert reads == []
+    assert status == reread
+    assert status["state"] == "failed"
+    assert status["error"] == "启动实例失败: 插件在 ready 前退出: exit_code=42"
+    assert isinstance(status["log_id"], str) and status["log_id"].startswith("gateway:file:")
+    assert len(json.dumps(status, ensure_ascii=False).encode()) < 8192
+    assert "third-party-stderr" not in str(status) and "raw-secret" not in str(status)
+    raw_logs = list(logs.rglob("*.log"))
+    assert len(raw_logs) == 1
+    assert raw_logs[0].read_bytes() == payload

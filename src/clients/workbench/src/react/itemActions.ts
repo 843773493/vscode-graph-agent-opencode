@@ -58,7 +58,7 @@ export class ChatItemActions extends Disposable {
         const source = await this.selectContextSource(target.contextSources);
         check();
         if (source) await this.editors.openEditor({ resource: contextContentUri(owner, source.reference),
-          options: { pinned: true } }, groupId);
+          options: { pinned: true, sourceGroup: groupId } });
         return;
       }
       let itemId = target.itemIds?.at(-1)?.id;
@@ -82,12 +82,12 @@ export class ChatItemActions extends Disposable {
       if (!pick) return;
       const content = result.contents[pick.index];
       if (content.uri) {
-        const options: ResourceOpenOptions = { openExternal: false, boxteamResourceOwner: owner, boxteamTargetGroup: groupId };
+        const options: ResourceOpenOptions = { openExternal: false, boxteamResourceOwner: owner, editorOptions: { sourceGroup: groupId } };
         await this.opener.open(content.uri, options); return;
       }
       const resource = itemContentUri(owner, result.location!.item_id, pick.index, content);
-      await this.editors.openEditor({ resource, options: { pinned: true,
-        override: content.language === 'markdown' ? pick.preview ? 'vscode.markdown.preview.editor' : 'default' : undefined } }, groupId);
+      await this.editors.openEditor({ resource, options: { pinned: true, sourceGroup: groupId,
+        override: content.language === 'markdown' ? pick.preview ? 'vscode.markdown.preview.editor' : 'default' : undefined } });
     });
   }
 

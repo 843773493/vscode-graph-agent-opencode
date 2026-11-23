@@ -78,8 +78,8 @@ norecursedirs = ["out"]
 markers = [
     "unit: 单元测试",
     "contract: 跨进程或跨语言公开协议契约测试",
-    "integration: 多模块集成测试，包含受控服务替身",
-    "e2e: 端到端测试",
+    "integration: 生产组件之间的协作、协议与故障边界测试，允许真实依赖或显式替身",
+    "e2e: 用户明确业务流程的完整验收，允许真实模型、上游重放或手工 SSE",
     "live_model: 需要真实外部模型的测试",
     "windows_gateway_server: Windows 远端 Gateway 生命周期验收的专用服务进程",
 ]

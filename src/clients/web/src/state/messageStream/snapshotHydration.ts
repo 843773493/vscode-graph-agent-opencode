@@ -81,6 +81,8 @@ export function applySnapshotState(
   const next = createMessageStreamState(current.sessionId, current.turnId, identity.turn_stream_id, current.sessionCacheKey, current.threadId);
   next.workspaceId = snapshot.workspace_id ?? identity.workspace_id ?? current.workspaceId;
   next.lastEventSeq = snapshot.snapshot_seq;
+  next.terminalCommitId = snapshot.terminal_commit_id ?? null;
+  next.terminalOutcome = snapshot.terminal_outcome ?? null;
   next.streamStatus = snapshot.stream_status;
   next.agentLoopStatus = snapshot.agent_loop_status;
   next.currentModelCallId = snapshot.current_model_call_id ?? null;

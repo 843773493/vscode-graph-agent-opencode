@@ -24,9 +24,13 @@ let actual = { owner, phase: "setup", pageErrors: [] };
 async function inspectTurn(thread, turnId) {
   const turn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await expect(turn.getByText(final, { exact: true })).toBeVisible({ timeout: 45_000 });
-  const expand = turn.getByRole("button", { name: /^展开 Turn 中间消息：/ });
+  const expand = turn.locator(".chat-turn-activity > .chat-thinking-toggle");
   await expect(expand).toBeVisible();
   await expand.click();
+  await expect(turn.locator(".chat-activity-group").first()).toBeVisible();
+  for (const group of await turn.locator('.chat-activity-group > button').all()) {
+    if (await group.getAttribute('aria-expanded') === 'false') await group.click();
+  }
   const history = await page.evaluate(async ({ owner, turnId }) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`本地凭据 HTTP ${credential.status}`);
@@ -79,7 +83,7 @@ async function inspectTurn(thread, turnId) {
       assert.equal(JSON.parse(await output.innerText()).scope, "workspace");
     }
   }
-  assert.deepEqual(sources, parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })));
+  assert.deepEqual(sources.map(({ part_id, kind, source }) => ({ part_id, kind, source })), parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })));
   return { failed: 6, completed: 1, results, partIds: sources.map(part => part.part_id) };
 }
 

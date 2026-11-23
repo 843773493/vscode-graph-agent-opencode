@@ -70,6 +70,9 @@ def dap_workspace_proxy(monkeypatch: pytest.MonkeyPatch):
     )
 
     class Upstream:
+        close_code = None
+        close_reason = ""
+
         subprotocol = None
 
         async def send(self, message: str | bytes) -> None:

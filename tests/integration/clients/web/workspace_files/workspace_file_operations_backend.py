@@ -32,9 +32,9 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 from tests.support.workspaces import prepare_test_workspace
 
 
-def make_app(output_root: Path) -> FastAPI:
+def make_app(output_root: Path, runtime_root: Path) -> FastAPI:
     gateway_id = "gateway_01900000000070008000000000000001"
-    state = GatewayStateStore(path=output_root / "runtime/gateway.sqlite")
+    state = GatewayStateStore(path=runtime_root / "gateway.sqlite")
 
     class Bindings:
         """受控 Gateway 传输边界内仍复用唯一原生根持久化 owner。"""
@@ -182,5 +182,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--runtime-root", type=Path, required=True)
     args = parser.parse_args()
-    uvicorn.run(make_app(args.output_root), host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run(make_app(args.output_root, args.runtime_root), host="127.0.0.1", port=args.port, log_level="warning")

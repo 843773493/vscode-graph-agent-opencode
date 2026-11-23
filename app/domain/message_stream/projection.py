@@ -270,11 +270,16 @@ def apply_event(
                 "reason": payload.get("reason"),
             }
     elif event_type == "stream.completed":
+        next_state.pop("failure", None)
+        next_state.pop("recovery", None)
+        next_state.pop("interrupt_state", None)
         next_state["stream_status"] = "completed"
         next_state["agent_loop_status"] = "completed"
         next_state["resumable"] = False
         _set_terminal_active_state(next_state, "completed", payload)
     elif event_type == "stream.interrupted":
+        next_state.pop("failure", None)
+        next_state.pop("recovery", None)
         next_state["stream_status"] = "interrupted"
         next_state["agent_loop_status"] = "interrupted"
         next_state["resumable"] = False
@@ -299,7 +304,7 @@ def apply_event(
     elif event_type == "stream.failed":
         next_state["stream_status"] = "failed"
         next_state["agent_loop_status"] = "failed"
-        next_state["failure"] = _clone_json_tree(dict(payload))
+        next_state["failure"] = _clone_json_tree({key: value for key, value in payload.items() if key not in {"terminal_commit_id", "terminal_outcome"}})
         next_state["resumable"] = bool(payload.get("resumable", False))
         _finish_running_model_calls(next_state, outcome="execution_lost")
         _finish_running_blocks(next_state, status="failed")
@@ -318,6 +323,10 @@ def apply_event(
             "resumable": bool(payload.get("resumable", False)),
         }
         _set_terminal_active_state(next_state, "failed", payload)
+    if event_type in {"stream.completed", "stream.interrupted", "stream.failed"}:
+        for key in ("terminal_commit_id", "terminal_outcome"):
+            if key in payload:
+                next_state[key] = payload[key]
     _mark_event_lifecycle(next_state, event)
     return next_state
 

@@ -44,6 +44,7 @@ class _MessageStreamDTO(BaseModel):
 class MessageStreamFailureDTO(_MessageStreamDTO):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
+    details: dict[str, JsonValue] | None = None
     after_interrupt_requested: bool | None = None
     resumable: bool | None = None
 
@@ -200,6 +201,8 @@ class MessageStreamSnapshotDTO(_MessageStreamDTO):
     turn_id: str = Field(min_length=1)
     turn_stream_id: str = Field(min_length=1)
     workspace_id: str | None = Field(default=None, min_length=1)
+    terminal_commit_id: int | None = Field(default=None, ge=1)
+    terminal_outcome: str | None = None
     snapshot_seq: int = Field(ge=0)
     stream_status: StreamStatus
     agent_loop_status: str = Field(min_length=1)

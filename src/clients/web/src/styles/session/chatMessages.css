@@ -874,19 +874,8 @@
   padding: 0;
 }
 
-.chat-turn-activity[data-status-kind="tool-outcome-unknown"] .chat-thinking-toggle,
-.chat-turn-activity[data-status-kind="tool-failed"] .chat-thinking-toggle,
 .chat-turn-activity[data-status-kind="turn-failed"] .chat-thinking-toggle {
   color: var(--bt-status-danger);
-}
-
-.chat-turn-activity[data-status-kind="tool-incomplete"] .chat-thinking-toggle {
-  color: var(--bt-status-warning);
-}
-
-.chat-thinking-empty {
-  color: var(--bt-text-muted);
-  font-size: var(--bt-font-size-small);
 }
 
 .chat-thinking-toggle,
@@ -910,21 +899,11 @@
   color: var(--bt-text-primary);
 }
 
-.chat-thinking-toggle.is-static {
-  cursor: default;
-}
-
-.chat-thinking-toggle.is-static:hover {
-  color: inherit;
-}
-
-.chat-thinking-label,
 .chat-tool-label {
   flex: 0 0 auto;
   font-weight: 500;
 }
 
-.chat-thinking-preview,
 .chat-tool-preview {
   min-width: 0;
   overflow: hidden;
@@ -946,37 +925,6 @@
   border-left: 1px solid var(--bt-border);
   color: var(--bt-text-muted);
   font-size: var(--bt-font-size-small);
-}
-
-.chat-thinking-notice {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin: 0 0 5px;
-  color: var(--bt-text-muted);
-  font-size: var(--bt-font-size-small);
-}
-
-.chat-thinking.is-active .chat-thinking-label {
-  background: linear-gradient(
-    90deg,
-    var(--bt-text-muted) 25%,
-    var(--bt-text-primary) 50%,
-    var(--bt-text-muted) 75%
-  );
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: chat-thinking-shimmer 2s linear infinite;
-}
-
-@keyframes chat-thinking-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
-  }
 }
 
 .chat-tool-row {
@@ -1116,20 +1064,14 @@
   background: color-mix(in srgb, var(--bt-focus-border) 8%, transparent);
 }
 
-.chat-turn-activity-header {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.chat-turn-activity-header > .chat-thinking-toggle {
+.chat-turn-activity > .chat-thinking-toggle {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   flex: 1;
   min-width: 0;
 }
 
-.chat-turn-activity-header > .chat-thinking-toggle.is-static {
+.chat-turn-activity > .chat-thinking-toggle:disabled {
   grid-template-columns: auto minmax(0, 1fr);
 }
 
@@ -1163,6 +1105,16 @@
   display: contents;
   color: var(--bt-text-muted);
   font-size: var(--bt-font-size-small);
+}
+
+.chat-activity-group .chat-thinking-body {
+  padding-inline-start: 12px;
+  border-inline-start: 1px solid var(--vscode-tree-indentGuidesStroke);
+}
+
+.chat-turn-activity > .chat-thinking-toggle:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .chat-response-token-usage > span + span::before {
@@ -1257,8 +1209,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-markdown.is-streaming::after,
-  .chat-thinking.is-active .chat-thinking-label {
+  .chat-markdown.is-streaming::after {
     animation: none;
   }
 }

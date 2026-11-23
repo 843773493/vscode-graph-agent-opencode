@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 
 def build_default_tools(
-    session_id: str,
+    session_id: str | None,
     agent_id: str = "default",
     *,
     text_mutations: WorkspaceTextMutationOwner,
