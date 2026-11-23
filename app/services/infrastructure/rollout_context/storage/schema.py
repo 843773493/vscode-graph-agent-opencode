@@ -45,6 +45,11 @@ VIEW_MEMBERSHIP_SCHEMA_SQL = load_sql(__package__, "migrations/views/view_member
 VIEW_MEMBERSHIP_MIGRATION_SQL = load_sql(__package__, "migrations/views/view_membership_022_023_prepare.sql") + VIEW_MEMBERSHIP_SCHEMA_SQL
 
 MESSAGES_SCHEMA_SQL = load_sql(__package__, "migrations/checkpoint/messages.sql")
+MESSAGE_PROJECTIONS_SCHEMA_SQL = load_sql(__package__, "migrations/checkpoint/message_projections.sql")
+RESPONSE_OUTLINE_MIGRATION_SQL = (
+    load_sql(__package__, "migrations/checkpoint/v29_sqlite_to_v30_sqlite.sql")
+    + MESSAGE_PROJECTIONS_SCHEMA_SQL
+)
 MESSAGES_VERSION_MIGRATION_SQL = (
     load_sql(__package__, "migrations/checkpoint/messages_020_021_prepare.sql")
     + MESSAGES_SCHEMA_SQL
@@ -102,6 +107,7 @@ def initialize_rollout_schema(
         + ASSEMBLY_REF_SCHEMA_SQL
         + CHANNEL_VALUES_SCHEMA_SQL
         + MESSAGES_SCHEMA_SQL
+        + MESSAGE_PROJECTIONS_SCHEMA_SQL
         + load_sql(__package__, "migrations/rollout.sql")
         + VIEW_CREATION_SCHEMA_SQL
         + ASSEMBLY_CONTENT_SCHEMA_SQL

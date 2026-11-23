@@ -32,7 +32,11 @@ from app.services.infrastructure.rollout_context.storage.migrations.v22_sqlite_t
 from app.services.infrastructure.rollout_context.storage.migrations.v27_sqlite_to_v28_sqlite import (
     migrate_team_source_observations,
 )
+from app.services.infrastructure.rollout_context.storage.migrations.v29_sqlite_to_v30_sqlite import (
+    migrate_response_outlines,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
+    MessageCodec,
     RolloutManifest,
     _storage_failure,
     _storage_io,
@@ -48,10 +52,11 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
-    EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_PAUSE_SCHEMA_SQL,
+    EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
+    RESPONSE_OUTLINE_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
     TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
@@ -113,6 +118,7 @@ def migrate_schema_snapshot(
     connection: sqlite3.Connection, *, current_version: int, to_version: int,
     migration_name: str, migration_sql: str, jsonl_path: Path,
     transaction_id: str, timestamp: str,
+    message_codec: MessageCodec | None = None,
 ) -> None:
     """在调用方持有的候选事务内沿唯一 SQL／审计合同执行一阶迁移。"""
     checksum = _hash_bytes(migration_sql.encode("utf-8"))
@@ -155,7 +161,15 @@ def migrate_schema_snapshot(
         raise ValueError("schema migration 27→28 必须使用登记的团队投递回执 SQL")
     if (current_version, to_version) == (28, 29) and migration_sql != EXECUTION_PAUSE_SCHEMA_SQL:
         raise ValueError("schema migration 28→29 必须使用登记的 Thread 暂停 SQL")
+    if (current_version, to_version) == (29, 30) and (
+        migration_sql != RESPONSE_OUTLINE_MIGRATION_SQL or message_codec is None
+    ):
+        raise ValueError("schema migration 29→30 必须使用登记的轮廓 SQL 和原消息 codec")
     execute_atomic_schema_sql(connection, migration_sql)
+    if (current_version, to_version) == (29, 30):
+        assert message_codec is not None
+        migrate_response_outlines(connection, jsonl_path, message_codec)
+        execute_atomic_schema_sql(connection, load_sql(__package__, "migrations/checkpoint/message_projections_029_030_finish.sql"))
     if (current_version, to_version) == (27, 28):
         migrate_team_source_observations(connection)
     if (current_version, to_version) == (21, 22):
@@ -297,7 +311,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27), (27, 28)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27), (27, 28), (28, 29)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -334,6 +348,7 @@ class RolloutMaintenanceOwner(
                         migration_name=migration_name, migration_sql=migration_sql,
                         jsonl_path=self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
                         transaction_id=transaction_id, timestamp=timestamp,
+                        message_codec=self._host._codec() if (current_version, to_version) == (29, 30) else None,
                     )
                     connection.commit()
             except BaseException as error:

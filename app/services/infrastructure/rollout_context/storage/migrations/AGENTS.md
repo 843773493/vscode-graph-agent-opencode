@@ -9,6 +9,7 @@ migrations/
 ├── v21_sqlite_to_v22_sqlite.py  assembly 共享内容转换
 ├── v22_sqlite_to_v23_sqlite.py  view 成员共享转换
 ├── v27_sqlite_to_v28_sqlite.py  团队投递 facet 回执转换
+├── v29_sqlite_to_v30_sqlite.py  已授权 v29 消息活动轮廓补算
 ├── assembly/         请求引用、共享内容、计划与工具快照
 ├── checkpoint/       通道值与消息版本
 ├── context_sources/  来源控制状态、版本与索引
@@ -34,3 +35,4 @@ migrations/
 - `assembly/assembly_refs_018_019.sql` 保持原始 UTF-8 字节（含无末尾换行），以保留迁移 checksum。
 - 按职责归组仅改变资源路径，不改变既有 SQL 名称、schema 版本、加载后的语句文本或有序迁移登记。
 - 修改后验证建库、冷重开、失败回滚及对应 fork/activation 入口。
+- v29→v30 仅通过显式维护入口执行，复用原 owner 的停写锁、备份、事务与 codec；正常读取不自动转换开发数据，不能只更改版本号或填空轮廓。
