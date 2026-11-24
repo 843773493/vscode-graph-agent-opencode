@@ -102,9 +102,9 @@ test('发现能力逐字段说明来源，保留上游否定声明且不把参�
   respond((_url, init) => {
     const result = directory(JSON.parse(String(init.body)));
     return ok({ ...result, models: [{ model: 'new-model', name: '新模型', metadata: {
-      max_input_tokens: 32000, supports_vision: false, supports_function_calling: true,
+      max_input_tokens: 32000, context_window: 128000, supports_vision: false, supports_function_calling: true,
       supports_reasoning: null, catalog_provider: 'openai',
-      sources: { max_input_tokens: 'provider', supports_vision: 'upstream', supports_function_calling: 'litellm' },
+      sources: { max_input_tokens: 'provider', context_window: 'upstream', supports_vision: 'upstream', supports_function_calling: 'litellm' },
     } }] });
   });
   const fixture = setup();
@@ -112,6 +112,7 @@ test('发现能力逐字段说明来源，保留上游否定声明且不把参�
   const markup = JSON.stringify(view!.toJSON());
   expect(markup).toContain(t('configuration.catalog.providerSource'));
   expect(markup).toContain(t('configuration.catalog.capacity', 32000));
+  expect(markup).toContain(t('configuration.catalog.contextWindow', 128000));
   expect(markup).toContain(t('configuration.catalog.upstreamSource'));
   expect(markup).toContain(t('configuration.catalog.unsupported', t('configuration.catalog.vision')));
   expect(markup).toContain(t('configuration.catalog.referenceSource', 'openai'));
@@ -120,7 +121,7 @@ test('发现能力逐字段说明来源，保留上游否定声明且不把参�
   await click('configuration.probe.selectMatching');
   await click('configuration.probe.importSelected');
   expect(fixture.onImport.mock.calls[0][0][0].metadata.sources).toEqual({
-    max_input_tokens: 'provider', supports_vision: 'upstream', supports_function_calling: 'litellm',
+    max_input_tokens: 'provider', context_window: 'upstream', supports_vision: 'upstream', supports_function_calling: 'litellm',
   });
   expect(fixture.editor.jsonc).toBe('// 当前来源原文\n{}');
 });

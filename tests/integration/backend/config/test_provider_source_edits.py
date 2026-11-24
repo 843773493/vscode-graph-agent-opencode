@@ -152,6 +152,41 @@ async def test_source_validation_delivers_safe_issues_with_original_source_uri(
     assert case.source.read_bytes() == original and case.service.get_snapshot() is active
 
 
+async def test_context_window_round_trips_source_and_removing_model_override_restores_provider(
+    provider_case: ProviderCase,
+) -> None:
+    case = provider_case
+    payload = parse_source_text((await case.document())["jsonc"])
+    payload["profiles"]["primary"]["settings"]["model_options"]["api_mode"]["model_info"].update(
+        max_input_tokens=64000, context_window=128000,
+    )
+    payload["profiles"]["capacity-model"] = {"extends": "context:provider/edit-primary", "settings": {
+        "model_options": {"api_mode": {"model_info": {"context_window": 96000}}},
+    }}
+    payload["settings"]["workspace"]["llm"]["providers"]["edit-primary"]["models"]["main"]["config_ref"] = "#/profiles/capacity-model"
+    for override, expected in ((True, 96000), (False, 128000)):
+        if not override:
+            payload["profiles"]["capacity-model"]["settings"]["model_options"]["api_mode"]["model_info"].pop("context_window")
+        saved = await case.save(payload, f"context-window-{override}")
+        assert saved["edit"]["state"] == "active"
+        document = await case.document()
+        persisted = parse_source_text(document["jsonc"])
+        assert persisted == parse_source_text(case.source.read_text(encoding="utf-8"))
+        local = persisted["profiles"]["capacity-model"]["settings"]["model_options"]["api_mode"]["model_info"]
+        assert local == ({"context_window": 96000} if override else {})
+        response = await case.client.post(URL + "/preflight", params=PRIMARY,
+            json=_request(document, persisted, f"inspect-context-window-{override}"))
+        assert response.status_code == 200, response.text
+        result = response.json()["data"]
+        for projection in ("model_options", "active_model_options"):
+            options = result[projection]["options"]
+            assert options["api_mode"]["model_info"]["context_window"] == expected
+            assert options["api_mode"]["model_info"]["max_input_tokens"] == 64000
+            assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"}.intersection(
+                options.get("request_options", {}).get("parameters", {}),
+            )
+
+
 async def test_agent_source_crud_and_remove_override_reveal_lower_definition(
     provider_case: ProviderCase,
 ) -> None:

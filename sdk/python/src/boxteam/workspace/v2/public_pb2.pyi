@@ -435,7 +435,7 @@ class LlmProbeObservationDTO(_message.Message):
     def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., mode: _Optional[str] = ..., provider_id: _Optional[str] = ..., edit_version: _Optional[int] = ..., source_key: _Optional[str] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_revision: _Optional[int] = ..., active_digest: _Optional[str] = ..., credential: _Optional[_Union[LlmCredentialObservationDTO, _Mapping]] = ..., protocol: _Optional[str] = ..., endpoint: _Optional[str] = ..., observed_at: _Optional[str] = ...) -> None: ...
 
 class LlmModelMetadataDTO(_message.Message):
-    __slots__ = ("max_input_tokens", "supports_vision", "supports_video_input", "supports_audio_input", "supports_audio_output", "supports_function_calling", "supports_reasoning", "sources", "catalog_provider")
+    __slots__ = ("max_input_tokens", "supports_vision", "supports_video_input", "supports_audio_input", "supports_audio_output", "supports_function_calling", "supports_reasoning", "sources", "catalog_provider", "context_window")
     class SourcesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -452,6 +452,7 @@ class LlmModelMetadataDTO(_message.Message):
     SUPPORTS_REASONING_FIELD_NUMBER: _ClassVar[int]
     SOURCES_FIELD_NUMBER: _ClassVar[int]
     CATALOG_PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_WINDOW_FIELD_NUMBER: _ClassVar[int]
     max_input_tokens: int
     supports_vision: bool
     supports_video_input: bool
@@ -461,7 +462,8 @@ class LlmModelMetadataDTO(_message.Message):
     supports_reasoning: bool
     sources: _containers.ScalarMap[str, str]
     catalog_provider: str
-    def __init__(self, max_input_tokens: _Optional[int] = ..., supports_vision: _Optional[bool] = ..., supports_video_input: _Optional[bool] = ..., supports_audio_input: _Optional[bool] = ..., supports_audio_output: _Optional[bool] = ..., supports_function_calling: _Optional[bool] = ..., supports_reasoning: _Optional[bool] = ..., sources: _Optional[_Mapping[str, str]] = ..., catalog_provider: _Optional[str] = ...) -> None: ...
+    context_window: int
+    def __init__(self, max_input_tokens: _Optional[int] = ..., supports_vision: _Optional[bool] = ..., supports_video_input: _Optional[bool] = ..., supports_audio_input: _Optional[bool] = ..., supports_audio_output: _Optional[bool] = ..., supports_function_calling: _Optional[bool] = ..., supports_reasoning: _Optional[bool] = ..., sources: _Optional[_Mapping[str, str]] = ..., catalog_provider: _Optional[str] = ..., context_window: _Optional[int] = ...) -> None: ...
 
 class LlmModelCatalogDTO(_message.Message):
     __slots__ = ("provider", "models")

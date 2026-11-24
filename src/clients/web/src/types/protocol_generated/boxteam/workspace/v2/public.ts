@@ -263,7 +263,11 @@ export interface LlmModelMetadataDTO {
     | undefined;
   /** 逐字段标记 provider／upstream／litellm；目录声明均不代表实测通过。 */
   sources: { [key: string]: string };
-  catalog_provider?: string | undefined;
+  catalog_provider?:
+    | string
+    | undefined;
+  /** 输入与输出合计的总上下文窗口；不代表请求输出上限。 */
+  context_window?: number | undefined;
 }
 
 export interface LlmModelMetadataDTO_SourcesEntry {
@@ -5822,6 +5826,7 @@ function createBaseLlmModelMetadataDTO(): LlmModelMetadataDTO {
     supports_reasoning: undefined,
     sources: {},
     catalog_provider: undefined,
+    context_window: undefined,
   };
 }
 
@@ -5858,6 +5863,7 @@ export const LlmModelMetadataDTO: MessageFns<LlmModelMetadataDTO> = {
         )
         : {},
       catalog_provider: isSet(object.catalog_provider) ? globalThis.String(object.catalog_provider) : undefined,
+      context_window: isSet(object.context_window) ? globalThis.Number(object.context_window) : undefined,
     };
   },
 
@@ -5896,6 +5902,9 @@ export const LlmModelMetadataDTO: MessageFns<LlmModelMetadataDTO> = {
     if (message.catalog_provider !== undefined) {
       obj.catalog_provider = message.catalog_provider;
     }
+    if (message.context_window !== undefined) {
+      obj.context_window = Math.round(message.context_window);
+    }
     return obj;
   },
 
@@ -5921,6 +5930,7 @@ export const LlmModelMetadataDTO: MessageFns<LlmModelMetadataDTO> = {
       {},
     );
     message.catalog_provider = object.catalog_provider ?? undefined;
+    message.context_window = object.context_window ?? undefined;
     return message;
   },
 };

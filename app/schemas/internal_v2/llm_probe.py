@@ -80,6 +80,7 @@ class LlmProbeObservationDTO(BaseModel):
 
 class LlmModelMetadataDTO(BaseModel):
     max_input_tokens: int | None = Field(default=None, gt=0)
+    context_window: int | None = Field(default=None, gt=0)
     supports_vision: bool | None = None
     supports_video_input: bool | None = None
     supports_audio_input: bool | None = None

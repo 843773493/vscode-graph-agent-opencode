@@ -25,6 +25,7 @@ from app.protocol.codecs.workspace_events import (
     file_change_batch_to_proto,
 )
 from app.schemas.internal_v2.attachment import AttachmentRef
+from app.schemas.internal_v2.llm_probe import LlmModelMetadataDTO
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
@@ -39,6 +40,16 @@ from app.schemas.internal_v2.workspace_file_operations import (
 )
 
 BASELINE_PATH = Path(__file__).with_name("protocol_baseline.json")
+
+
+@pytest.mark.parametrize("context_window", [None, 128000])
+def test_model_capacity_preserves_unknown_and_independent_limits_through_proto_wire(context_window: int | None) -> None:
+    value = LlmModelMetadataDTO(max_input_tokens=64000, context_window=context_window,
+        sources={"max_input_tokens": "provider", **({"context_window": "upstream"} if context_window is not None else {})})
+    wire = ParseDict(value.model_dump(exclude_none=True), public_pb2.LlmModelMetadataDTO()).SerializeToString()
+    received = public_pb2.LlmModelMetadataDTO.FromString(wire)
+    assert received.HasField("context_window") is (context_window is not None)
+    assert LlmModelMetadataDTO.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == value
 
 
 @pytest.mark.parametrize("has_directory", [True, False], ids=["directory", "legacy"])

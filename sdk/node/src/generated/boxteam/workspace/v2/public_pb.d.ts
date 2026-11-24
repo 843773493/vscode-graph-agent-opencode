@@ -1071,6 +1071,13 @@ export declare type LlmModelMetadataDTO = Message<"boxteam.workspace.v2.LlmModel
    * @generated from field: optional string catalog_provider = 9;
    */
   catalogProvider?: string | undefined;
+
+  /**
+   * 输入与输出合计的总上下文窗口；不代表请求输出上限。
+   *
+   * @generated from field: optional int64 context_window = 10;
+   */
+  contextWindow?: bigint | undefined;
 };
 
 /**

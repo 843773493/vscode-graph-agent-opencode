@@ -169,7 +169,7 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
         const path = ['api_mode', 'model_info', key], value = read(path);
         if (field.type === 'boolean') return booleanField(field.title ?? key, path, field.description);
         return <label key={key} className="configuration-entity-field" data-search-key={path.join('.')} title={field.description}>{t(`configuration.capability.${key}`)}
-          {key === 'max_input_tokens' ? <ContextCapacityInput value={value} minimum={field.minimum} maximum={field.maximum}
+          {key === 'max_input_tokens' || key === 'context_window' ? <ContextCapacityInput value={value} minimum={field.minimum} maximum={field.maximum}
             disabled={disabled} onEdit={next => onEdit(path, next)} /> : <input type="number" value={typeof value === 'number' ? value : ''} step={field.type === 'integer' ? 1 : 'any'}
             min={field.minimum} max={field.maximum} disabled={disabled} onChange={event => {
               if (event.target.value === '') onEdit(path, undefined);

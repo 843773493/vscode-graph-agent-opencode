@@ -211,7 +211,7 @@ test('能力容量不变成输出限制，参数null/0/删除与reasoning整块�
     document={sourceDocument()} {...callbacks} onEditOptions={onEditOptions} />);
   const provider = view.root.findAllByProps({ className: 'configuration-model-options' })[0];
   provider.findAllByType('label').find(label => label.children.includes(t('configuration.capability.supports_function_calling')))!.findByType('select').props.onChange({ target: { value: 'false' } });
-  const capacity = provider.findByProps({ className: 'configuration-capacity-input' }).findByType('input');
+  const capacity = provider.findByProps({ 'data-search-key': 'api_mode.model_info.max_input_tokens' }).findByType('input');
   expect(capacity.props.inputMode).toBe('numeric');
   const input = { value: '128000', selectionStart: 6, selectionEnd: 6, setCustomValidity: mock(), reportValidity: mock(), setSelectionRange: mock() };
   capacity.props.onChange({ currentTarget: input }); expect(input.value).toBe('128,000'); expect(input.setSelectionRange).toHaveBeenLastCalledWith(7, 7);
@@ -230,4 +230,33 @@ test('能力容量不变成输出限制，参数null/0/删除与reasoning整块�
     [{ provider_id: 'team', model_id: 'main' }, ['model_options', 'request_options', 'parameters', 'temperature'], 0],
     [{ provider_id: 'team', model_id: 'main' }, ['model_options', 'api_mode', 'supports_reasoning'], {}],
   ]); expect(value.reportValidity).not.toHaveBeenCalled(); view.unmount();
+});
+
+test('总上下文窗口独立显示和编辑，非法整数不写入且清空恢复继承', () => {
+  const onEditOptions = mock();
+  const view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
+    draft={providerDraft({ api_mode: { model_info: { max_input_tokens: 128000, context_window: 200000 } } },
+      { api_mode: { model_info: { context_window: 160000 } } })}
+    document={sourceDocument()} {...callbacks} onEditOptions={onEditOptions} />);
+  const provider = view.root.findAllByProps({ className: 'configuration-model-options' })[0];
+  expect(provider.findByProps({ 'data-search-key': 'api_mode.model_info.max_input_tokens' }).findByType('input').props.value).toBe('128,000');
+  const field = provider.findByProps({ 'data-search-key': 'api_mode.model_info.context_window' });
+  expect(field.children).toContain(t('configuration.capability.context_window'));
+  expect(field.findByType('input').props.value).toBe('200,000');
+  const model = view.root.findByProps({ 'data-model-id': 'main' });
+  const capacity = model.findByProps({ 'data-search-key': 'api_mode.model_info.context_window' }).findByType('input');
+  expect(capacity.props.value).toBe('160,000');
+  const input = { value: '256000', selectionStart: 6, selectionEnd: 6, setCustomValidity: mock(), reportValidity: mock(), setSelectionRange: mock() };
+  capacity.props.onChange({ currentTarget: input });
+  expect(input.value).toBe('256,000');
+  for (const invalid of ['0', '-1', '1.5', '9007199254740992']) {
+    input.value = invalid; capacity.props.onChange({ currentTarget: input });
+  }
+  expect(input.reportValidity).toHaveBeenCalledTimes(4);
+  input.value = ''; capacity.props.onChange({ currentTarget: input });
+  expect(onEditOptions.mock.calls).toEqual([
+    [{ provider_id: 'team', model_id: 'main' }, ['model_options', 'api_mode', 'model_info', 'context_window'], 256000],
+    [{ provider_id: 'team', model_id: 'main' }, ['model_options', 'api_mode', 'model_info', 'context_window'], undefined],
+  ]);
+  view.unmount();
 });

@@ -244,6 +244,8 @@ message LlmModelMetadataDTO {
   // 逐字段标记 provider／upstream／litellm；目录声明均不代表实测通过。
   map<string, string> sources = 8;
   optional string catalog_provider = 9;
+  // 输入与输出合计的总上下文窗口；不代表请求输出上限。
+  optional int64 context_window = 10;
 }
 
 message LlmModelCatalogDTO {

@@ -17,6 +17,9 @@ export function modelMetadataDetails(metadata: LlmModelMetadataDTO | undefined):
     if (metadata.max_input_tokens !== undefined && metadata.sources.max_input_tokens === source) {
       details.push(t('configuration.catalog.capacity', metadata.max_input_tokens));
     }
+    if (metadata.context_window !== undefined && metadata.sources.context_window === source) {
+      details.push(t('configuration.catalog.contextWindow', metadata.context_window));
+    }
     for (const [field, key] of fields) {
       if (metadata[field] !== undefined && metadata.sources[field] === source) {
         details.push(metadata[field] ? t(key) : t('configuration.catalog.unsupported', t(key)));

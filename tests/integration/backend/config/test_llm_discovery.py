@@ -291,20 +291,26 @@ async def test_directory_enriches_available_models_and_catalog_is_not_account_au
     assert probe_case.source.read_bytes() == before
 
 
+@pytest.mark.parametrize("provider_context_window", [None, 48000])
 async def test_directory_capabilities_keep_field_sources_and_provider_priority(
-    probe_case: ProbeCase, catalog: Catalog, monkeypatch: pytest.MonkeyPatch,
+    probe_case: ProbeCase, catalog: Catalog, monkeypatch: pytest.MonkeyPatch, provider_context_window: int | None,
 ) -> None:
     from app.runtime import model_metadata
+    from app.services.infrastructure.config import llm_catalog
 
-    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: {"same-name": {
-        "litellm_provider": "openai", "mode": "chat", "max_input_tokens": 922000,
+    reference = {"same-name": {
+        "litellm_provider": "openai", "mode": "chat", "max_input_tokens": 922000, "context_window": 1000000,
         "supports_vision": True, "supports_function_calling": True,
-    }})
+    }}
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: reference)
+    monkeypatch.setattr(llm_catalog, "local_model_catalog", lambda **_kwargs: reference)
     catalog.pages = [{"data": [{"id": "same-name", "max_input_tokens": 64000, "supports_vision": False,
-        "max_output_tokens": 999}, {"id": "unknown", "context_length": 1000000}]}]
+        "context_window": 128000, "max_output_tokens": 999}, {"id": "unknown", "context_length": 1000000}]}]
     request = probe_case.draft()
     payload = json.loads(request["jsonc"])
     payload["profiles"]["team"]["settings"]["model_options"]["api_mode"]["model_info"] = {"max_input_tokens": 32000}
+    if provider_context_window is not None:
+        payload["profiles"]["team"]["settings"]["model_options"]["api_mode"]["model_info"]["context_window"] = provider_context_window
     request["jsonc"] = json.dumps(payload)
     before, original = probe_case.rows(), probe_case.source.read_bytes()
     response = await probe_case.client.post(URL, json=request)
@@ -313,20 +319,31 @@ async def test_directory_capabilities_keep_field_sources_and_provider_priority(
     assert result["complete"]
     info = result["models"][0]["metadata"]
     assert info["max_input_tokens"] == 32000
+    assert info["context_window"] == (128000 if provider_context_window is None else provider_context_window)
     assert info["supports_vision"] is False
     assert info["supports_function_calling"] is True
-    assert info["sources"] == {"max_input_tokens": "provider", "supports_vision": "upstream", "supports_function_calling": "litellm"}
+    assert info["sources"] == {"max_input_tokens": "provider", "supports_vision": "upstream", "supports_function_calling": "litellm",
+        "context_window": "upstream" if provider_context_window is None else "provider"}
     assert info["catalog_provider"] == "openai" and "max_output_tokens" not in info
     # 未知模型不会按总上下文猜输入容量；当前 Provider 的显式值仍适用。
     assert result["models"][1]["metadata"]["max_input_tokens"] == 32000
-    assert result["models"][1]["metadata"]["sources"] == {"max_input_tokens": "provider"}
+    assert result["models"][1]["metadata"]["context_window"] == provider_context_window
+    assert result["models"][1]["metadata"]["sources"] == {"max_input_tokens": "provider",
+        **({"context_window": "provider"} if provider_context_window is not None else {})}
+    response = await probe_case.client.get("/api/v1/config/llm/catalog?provider=openai")
+    assert response.status_code == 200, response.text
+    metadata = response.json()["data"]["models"][0]["metadata"]
+    assert metadata["context_window"] == 1000000 and metadata["max_input_tokens"] == 922000
+    assert metadata["sources"]["context_window"] == "litellm"
     assert probe_case.source.read_bytes() == original and probe_case.rows() == before
 
 
+@pytest.mark.parametrize("field", ["max_input_tokens", "context_window"])
+@pytest.mark.parametrize("value", [True, 0, "128000"])
 async def test_directory_invalid_explicit_capacity_is_not_replaced_by_reference(
-    probe_case: ProbeCase, catalog: Catalog,
+    probe_case: ProbeCase, catalog: Catalog, field: str, value: object,
 ) -> None:
-    catalog.pages = [{"data": [{"id": "gpt-6-luna", "max_input_tokens": True}]}]
+    catalog.pages = [{"data": [{"id": "gpt-6-luna", field: value}]}]
     response = await probe_case.client.post(URL, json=probe_case.draft())
     assert response.status_code == 200, response.text
     result = response.json()["data"]
