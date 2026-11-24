@@ -64,11 +64,6 @@ from app.services.mapping.itemized.canonical_langchain import (
 )
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
-
-class _SummarizationBoundaryStub:
-    """纯分区测试不需要构建真实模型。"""
-
-
 _PREFLIGHT_OWNER = MutationIntentOwner("ses_preflight", "thr_preflight")
 _PREFLIGHT_WORKSPACE_ID = "019c58e6-e9f5-7137-85f9-9a3f3e5768d8"
 
@@ -176,11 +171,11 @@ def _make_preflight_middleware(
     middleware._compaction_preflight = port  # type: ignore[attr-defined]
     middleware._lc_helper = SimpleNamespace(  # type: ignore[attr-defined]
         _should_summarize=lambda messages, total_tokens: True,
-        _determine_cutoff_index=lambda messages: 7,
         token_counter=lambda counted, tools=None: sum(
             len(str(getattr(message, "text", "") or "")) for message in counted
         ),
     )
+    middleware._determine_cutoff_index = lambda messages: 7  # type: ignore[method-assign]
     middleware._backend = object()  # type: ignore[attr-defined]
     middleware._offload_to_backend = (  # type: ignore[attr-defined]
         lambda backend, messages: offloaded.append(messages)
@@ -198,7 +193,6 @@ def test_first_compaction_preserves_complete_prefix_and_recent_tail() -> None:
     messages = _conversation(7)
 
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         messages,
         None,
         summarize_end=10,
@@ -214,7 +208,6 @@ def test_first_compaction_preserves_complete_prefix_and_recent_tail() -> None:
 def test_cache_preserving_event_keeps_prefix_byte_equivalent() -> None:
     messages = _conversation(7)
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         messages,
         None,
         summarize_end=10,
@@ -239,7 +232,6 @@ def test_cache_preserving_event_keeps_prefix_byte_equivalent() -> None:
 def test_repeated_compaction_rolls_old_summary_without_moving_prefix() -> None:
     raw_messages = _conversation(9)
     first_partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         raw_messages,
         None,
         summarize_end=10,
@@ -252,7 +244,6 @@ def test_repeated_compaction_rolls_old_summary_without_moving_prefix() -> None:
     first_effective = apply_summarization_event(raw_messages, first_event)
 
     second_partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         first_effective,
         first_event,
         summarize_end=len(first_effective) - 2,
@@ -317,7 +308,6 @@ def test_summary_overflow_retries_with_media_removed_after_exact_prefix() -> Non
         ]
     )
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         [*prefix, media_message, AIMessage(content="图像分析")],
         None,
         summarize_end=5,
@@ -365,7 +355,6 @@ def test_summary_overflow_retries_with_media_removed_after_exact_prefix() -> Non
 def test_summary_tool_call_is_rejected_and_retried_without_tools() -> None:
     messages = _conversation(7)
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         messages,
         None,
         summarize_end=10,
@@ -417,7 +406,6 @@ def test_summary_tool_call_is_rejected_and_retried_without_tools() -> None:
 async def test_reasoning_only_summary_is_retried_with_minimal_request(asynchronous: bool) -> None:
     messages = _conversation(7)
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         messages,
         None,
         summarize_end=10,
@@ -485,7 +473,6 @@ def test_tool_call_fallback_overflow_continues_with_media_retry() -> None:
         ]
     )
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         [*prefix, media_message, AIMessage(content="图片回复")],
         None,
         summarize_end=5,
@@ -556,7 +543,6 @@ def test_overflow_final_fallback_drops_prefix_and_uses_minimal_request() -> None
         AIMessage(content="中段回复二"),
     ]
     cache_partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         [*prefix, *middle, HumanMessage(content="最近消息")],
         None,
         summarize_end=8,
@@ -917,7 +903,6 @@ async def test_async_summary_path_matches_media_overflow_fallback() -> None:
         ]
     )
     cache_partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         [*prefix, media_message, AIMessage(content="异步回复")],
         None,
         summarize_end=5,
@@ -1105,37 +1090,19 @@ def test_compact_tool_schedules_emergency_replacement_when_regular_cutoff_is_zer
 
 
 @pytest.mark.asyncio
-async def test_http_compaction_check_uses_emergency_replacement_partition(tmp_path, monkeypatch) -> None:
+async def test_http_compaction_check_uses_emergency_replacement_partition(monkeypatch) -> None:
     messages = [*_conversation(2), HumanMessage(content="当前用户消息")]
-
-    class _SummarizationStub:
-        @staticmethod
-        def _determine_cutoff_index(_: list) -> int:
-            return 0
-
-    compactor = object.__new__(AgentSummarizationCompactor)
-    compactor._config_service = SimpleNamespace(
+    compactor = AgentSummarizationCompactor(config_service=SimpleNamespace(
         get_snapshot=lambda: object(), use_snapshot=lambda _: nullcontext(),
-        get_agent_runtime_config=lambda _: {"models": [{"provider_id": "selected", "model_id": "primary"}]},
-        resolve_llm_model=AsyncMock(return_value={"provider_id": "selected", "model_id": "primary"}),
-    )
-    compactor._workspace_root = tmp_path
-    model = SimpleNamespace(aclose=AsyncMock())
-    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", lambda *_: model)
-    monkeypatch.setattr(
-        "app.agents.summarization.factory.create_cache_preserving_summarization_middleware",
-        lambda *_args, **_kwargs: _SummarizationStub(),
-    )
-
-    check = await compactor.check(
-        agent_id="default",
-        raw_messages=messages,
-        event=None,
-    )
-
+        get_agent_runtime_config=lambda _: {"models": [{"api_mode": {
+            "protocol": "chat_completions", "model_info": {"max_input_tokens": 400000},
+        }}]},
+    ))
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider",
+                        lambda *_args, **_kwargs: pytest.fail("预览不得构造模型"))
+    check = await compactor.check(agent_id="default", raw_messages=messages, event=None)
     assert check.cutoff == 4
     assert check.effective_messages == messages
-    model.aclose.assert_awaited_once()
 
 
 def test_untriggered_path_calls_handler_without_parent_argument_truncation() -> None:
@@ -1853,7 +1820,6 @@ def test_encrypted_reasoning_block_survives_prefix_and_tail_projection() -> None
         tail_ai,
     ]
     partition = build_cache_preserving_partition(
-        _SummarizationBoundaryStub(),  # type: ignore[arg-type]
         messages,
         None,
         summarize_end=6,

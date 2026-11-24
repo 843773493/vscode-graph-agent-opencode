@@ -8,6 +8,7 @@ from langchain.chat_models import BaseChatModel as RuntimeBaseChatModel
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
+from app.agents.summarization.planning import compaction_retention
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -26,7 +27,7 @@ def create_cache_preserving_summarization_middleware(
         model=model,
         backend=backend,
         trigger=defaults["trigger"],
-        keep=defaults["keep"],
+        keep=compaction_retention((model.profile or {}).get("max_input_tokens")),
         trim_tokens_to_summarize=None,
         truncate_args_settings=defaults["truncate_args_settings"],
         compaction_preflight=compaction_preflight,

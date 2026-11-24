@@ -76,5 +76,5 @@ app/runtime/
 - `agent_runtime.py::assemble_agent` 统一读取配置、注入依赖并选择冻结 selector，`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。本入口仅返回真实执行图，工具目录不进入 runtime 装配；`preload_agent_dependencies` 只预加载固定依赖，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
 - `agent_runtime.py::prepare_agent_model` 只准备模型候选、路由和指令来源，返回具名字段的 `AgentModelSetup`，仅供正式执行使用；它不创建 Thread、工具或图。模型实现与路由依赖在该函数内加载，不能为读取声明导入 SDK。
 - 正式 Thread 装配在模型构造成功后、解析候选能力之前，将其 `aclose` 登记到既有 Thread generation 的 `LifetimeScope`，后续绑定失败也能释放；先排空该代 lease 再关闭池。不为模型另建常驻回收器；直接使用低层模型工厂的调用方仍持有并关闭自己创建的模型。
-- 工具管理目录及其缓存归 `business/agent_tool_settings/catalog.py`，纯转换归 `mapping/tool_catalog.py`；runtime 不导出目录 DTO。压缩检查直接消费原单模型构造与原规划算法，只解析所选模型凭据并关闭自己创建的模型；显式 override 不构造配置模型。
-- 压缩预览固定一次配置 snapshot，经已有 `resolve_llm_model` 只展开所选模型的凭据；向工作线程传递该模型及原 runtime 配置，不在仅绑定首选密钥的 scope 中再次读取并展开所有回退模型。
+- 工具管理目录及其缓存归 `business/agent_tool_settings/catalog.py`，纯转换归 `mapping/tool_catalog.py`；runtime 不导出目录 DTO。压缩检查只消费冻结配置中的模型元数据与共用保留范围规划，不构造模型、图、backend，不解析凭据。
+- 压缩预览固定一次配置 snapshot，从原模型解析结果读取所选模型容量与协议；工作线程只接收元数据和待规划消息，不调用 `resolve_llm_model` 或准备任何凭据。

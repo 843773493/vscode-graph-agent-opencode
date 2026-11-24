@@ -140,9 +140,9 @@ class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
         if not self._is_eligible_for_compaction(effective):
             return None
         partition = build_safe_compaction_partition(
-            summarization,
             effective,
             event,
+            summarize_end=summarization._determine_cutoff_index(effective),
         )
         if partition is None:
             return None

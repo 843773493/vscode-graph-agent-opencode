@@ -47,6 +47,7 @@ from app.agents.summarization.planning import (
     _prefix_cutoff_candidates,
     build_cache_preserving_event,
     build_safe_compaction_partition,
+    compaction_retention_cutoff,
 )
 from app.agents.summarization.projection import (
     apply_summarization_event,
@@ -121,6 +122,13 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
     def name(self) -> str:
         return "SummarizationMiddleware"
 
+    def _determine_cutoff_index(self, messages: list[AnyMessage]) -> int:
+        return compaction_retention_cutoff(
+            messages, keep=self._lc_helper.keep,
+            max_input_tokens=self._get_profile_limits(), token_counter=self.token_counter,
+            partial_token_counter=self._lc_helper._partial_token_counter,
+        )
+
     def _get_history_path(self) -> str:
         """通过显式 SessionThread owner 隔离每个 thread 的压缩历史。"""
         thread_id = get_config().get("configurable", {}).get("thread_id")
@@ -189,9 +197,9 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             list(state_prefix_candidates.values()),
         )
         partition = build_safe_compaction_partition(
-            self,
             effective,
             event,
+            summarize_end=summarize_end,
             prefix_cutoff_candidates=[
                 index for index, state_index in state_prefix_candidates.items()
                 if state_index in safe_prefix

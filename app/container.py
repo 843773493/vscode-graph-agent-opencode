@@ -1127,10 +1127,7 @@ def _build_app_container(
     compaction_checkpoint_adapter = ManualCompactionCheckpointAdapter(
         checkpointer=checkpointer,
     )
-    summarization_compactor = AgentSummarizationCompactor(
-        config_service=config_service,
-        workspace_root=resolved_workspace_root,
-    )
+    summarization_compactor = AgentSummarizationCompactor(config_service=config_service)
     context_compaction_service = ContextCompactionService(
         checkpoint_adapter=compaction_checkpoint_adapter,
         job_service=job_service,

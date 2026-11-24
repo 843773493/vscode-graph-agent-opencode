@@ -6,7 +6,7 @@
 
 - `state.py`：策略常量、错误类型与 `CachePreservingPartition`，不导入 Agent 图或中间件。
 - `projection.py`：把 `_summarization_event` 投影为模型可见消息与状态边界（`apply_summarization_event` 及两个 cutoff 映射）。
-- `planning.py`：缓存前缀切点候选、自动/HTTP/工具入口共用的安全压缩分区与事件构造。
+- `planning.py`：只读保留范围规划、缓存前缀切点候选、自动/HTTP/工具入口共用的安全压缩分区与事件构造。预览与执行共用容量、计数和尾部切点算法，分区只消费明确切点，不持有模型或中间件。
 - `retry.py`：摘要指令构造、媒体剥离、大型工具载荷压缩、overflow 重试中段切分、重试标记与摘要文本校验。
 - `responses.py`：把摘要 handler 的 `ModelResponse` 解释为摘要正文。
 - `middleware.py`：`CachePreservingSummarizationState`（LangGraph 状态 schema）与同步 `wrap_model_call` 与异步 `awrap_model_call`/`_awrap_model_call_impl` 两条对等 wrap 链路。

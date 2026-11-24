@@ -1,106 +1,96 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import nullcontext
+from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
+from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.agents.summarization.factory import (
-    create_cache_preserving_summarization_middleware,
-)
-from app.agents.summarization.planning import build_safe_compaction_partition
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
-from app.agents.workspace_backend import build_workspace_backend
+from app.agents.summarization.planning import compaction_retention_cutoff
 from app.runtime.context_compaction import AgentSummarizationCompactor
-from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config_service import ConfigService
 
 
+@pytest.mark.parametrize("keep", [("messages", 2), ("tokens", 150), ("fraction", 0.1)])
+@pytest.mark.parametrize("message_count", [0, 1, 10])
+def test_readonly_retention_preserves_execution_cutoffs(keep, message_count):
+    messages = [HumanMessage(content="历史正文" * 60) for _ in range(message_count)]
+    if message_count > 1:
+        messages[-2:] = [AIMessage(content="", tool_calls=[
+            {"name": "lookup", "args": {}, "id": "call-1", "type": "tool_call"},
+        ]), ToolMessage(content="结果" * 200, tool_call_id="call-1")]
+    execution = SummarizationMiddleware(
+        model=FakeListChatModel(responses=[], profile={"max_input_tokens": 1000}), keep=keep,
+    )
+    assert compaction_retention_cutoff(
+        messages, keep=keep, max_input_tokens=1000,
+        token_counter=execution.token_counter,
+        partial_token_counter=execution._partial_token_counter,
+    ) == execution._determine_cutoff_index(messages)
+
+
 @pytest.fixture
-def compaction_case(tmp_path, monkeypatch):
-    model = FakeListChatModel(responses=["不能请求上游"])
-    closed = AsyncMock()
-    monkeypatch.setattr(type(model), "aclose", closed, raising=False)
-    selected, unused = {"provider_id": "selected", "model_id": "primary"}, {"provider_id": "unused"}
+def compaction_case(monkeypatch):
+    selected = {"api_mode": {"protocol": "chat_completions", "model_info": {"max_input_tokens": 1000}}}
     config = SimpleNamespace(
         get_snapshot=lambda: object(), use_snapshot=lambda _: nullcontext(),
-        get_agent_runtime_config=lambda _: {"models": [selected, unused]},
-        resolve_llm_model=AsyncMock(return_value=selected),
+        get_agent_runtime_config=lambda _: {"models": [selected]},
     )
-    builds = []
-
-    def build(provider, _runtime):
-        builds.append(provider)
-        return model
-
-    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", build)
-    monkeypatch.setattr("app.runtime.agent_runtime.prepare_agent_model", lambda *_a, **_k: pytest.fail("压缩不能准备 Agent 候选"))
-    return SimpleNamespace(
-        compactor=AgentSummarizationCompactor(config_service=config, workspace_root=tmp_path),
-        config=config, model=model, closed=closed, builds=builds, selected=selected, root=tmp_path,
-    )
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider",
+                        lambda *_args, **_kwargs: pytest.fail("只读压缩预览不得创建模型"))
+    monkeypatch.setattr("app.runtime.agent_runtime.prepare_agent_model",
+                        lambda *_args, **_kwargs: pytest.fail("只读压缩预览不得创建执行图"))
+    return SimpleNamespace(compactor=AgentSummarizationCompactor(config_service=config), selected=selected)
 
 
-async def test_compaction_uses_same_partition_and_only_selected_model(compaction_case):
-    case = compaction_case
-    messages = [message for i in range(4) for message in (HumanMessage(content=f"用户 {i}"), AIMessage(content=f"回复 {i}"))]
-    before = create_cache_preserving_summarization_middleware(
-        case.model, build_workspace_backend(case.root), compaction_preflight=NoDurableOwnerCompactionPreflight(),
-    )
-    partition = build_safe_compaction_partition(before, messages, None)
-    expected = len(partition.prefix_messages) + len(partition.messages_to_summarize) if partition else 0
-    result = await case.compactor.check(agent_id="default", raw_messages=messages, event=None)
-    assert result.cutoff == expected
+async def test_preview_keeps_latest_input_and_complete_tool_group(compaction_case):
+    messages = [HumanMessage(content="旧输入" * 200), AIMessage(content="", tool_calls=[
+        {"name": "lookup", "args": {}, "id": "call-1", "type": "tool_call"},
+    ]), ToolMessage(content="查询结果" * 100, tool_call_id="call-1"), HumanMessage(content="当前输入")]
+    result = await compaction_case.compactor.check(agent_id="default", raw_messages=messages, event=None)
+    assert result.cutoff == 3
     assert result.effective_messages == messages
-    assert case.builds == [case.selected]
-    case.config.resolve_llm_model.assert_awaited_once_with(ModelReferenceDTO(provider_id="selected", model_id="primary"))
-    case.closed.assert_awaited_once()
 
 
-async def test_compaction_failure_closes_its_model_and_preserves_both_errors(compaction_case, monkeypatch):
-    case = compaction_case
-    failure, release = ValueError("规划失败"), RuntimeError("释放失败")
-    case.closed.side_effect = release
+async def test_preview_reports_original_planning_failure(compaction_case, monkeypatch):
+    failure = ValueError("规划失败")
 
     def fail(*_args, **_kwargs):
         raise failure
 
-    monkeypatch.setattr("app.agents.summarization.planning.build_safe_compaction_partition", fail)
-    with pytest.raises(BaseExceptionGroup) as error:
-        await case.compactor.check(agent_id="default", raw_messages=[], event=None)
-    assert error.value.exceptions[0] is failure
-    assert error.value.exceptions[1].exceptions[0].__cause__ is release
-    case.closed.assert_awaited_once()
+    monkeypatch.setattr("app.runtime.context_compaction.build_safe_compaction_partition", fail)
+    with pytest.raises(ValueError) as captured:
+        await compaction_case.compactor.check(agent_id="default", raw_messages=[], event=None)
+    assert captured.value is failure
 
 
-async def test_cancelled_check_settles_worker_before_closing_model(compaction_case, monkeypatch):
-    from threading import Event
+async def test_cancelled_preview_settles_owned_worker(compaction_case, monkeypatch):
+    entered, finish, settled = Event(), Event(), Event()
 
-    case = compaction_case
-    entered, finish = Event(), Event()
-
-    def partition(*_args):
+    def partition(*_args, **_kwargs):
         entered.set()
         assert finish.wait(5)
+        settled.set()
 
-    monkeypatch.setattr("app.agents.summarization.planning.build_safe_compaction_partition", partition)
-    task = asyncio.create_task(case.compactor.check(agent_id="default", raw_messages=[], event=None))
+    monkeypatch.setattr("app.runtime.context_compaction.build_safe_compaction_partition", partition)
+    task = asyncio.create_task(compaction_case.compactor.check(agent_id="default", raw_messages=[], event=None))
     assert await asyncio.to_thread(entered.wait, 5)
     task.cancel()
-    case.closed.assert_not_called()
     finish.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    case.closed.assert_awaited_once()
+    assert settled.is_set()
 
 
 @pytest.mark.parametrize("fallback_key", ["secret:sec_22222222222222222222222222222222", "${BOXTEAM_TEST_UNUSED_FALLBACK_KEY}"])
-async def test_compaction_does_not_expand_unused_fallback_credentials(
-    tmp_path, empty_workspace_scope, monkeypatch, fallback_key, workspace_config_snapshots,
+async def test_real_configuration_preview_never_resolves_credentials(
+    tmp_path, monkeypatch, fallback_key,
 ):
     document = {
         "config_version": 4,
@@ -113,41 +103,28 @@ async def test_compaction_does_not_expand_unused_fallback_credentials(
             "fallbacks": [{"provider_id": "backup_1", "model_id": "default"}],
         }}}}},
         "profiles": {
-            "selected": {
-                "extends": "builtin:workspace#/profiles/provider.primary",
-                "settings": {"model_options": {"api_key": "secret:sec_11111111111111111111111111111111"}},
-            },
-            "fallback": {
-                "extends": "builtin:workspace#/profiles/provider.backup_1",
-                "settings": {"model_options": {"api_key": fallback_key}},
-            },
+            "selected": {"extends": "builtin:workspace#/profiles/provider.primary", "settings": {
+                "model_options": {"api_key": "secret:sec_11111111111111111111111111111111"},
+            }},
+            "fallback": {"extends": "builtin:workspace#/profiles/provider.backup_1", "settings": {
+                "model_options": {"api_key": fallback_key},
+            }},
         },
     }
-    config = workspace_config_snapshots.service_for_document(document, "compaction_workspace.jsonc")
-    payload = config.get_snapshot().to_dict()
-    provider_id = "primary"
-    config._snapshot_store.initialize(
-        workspace_config_snapshots.build(payload, graph=config.get_snapshot().graph)
-    )
-    monkeypatch.delenv("BOXTEAM_TEST_UNUSED_FALLBACK_KEY", raising=False)
-    credentials = AsyncMock(return_value={
-        "sec_11111111111111111111111111111111": ResolvedSecret(revision=1, value="test-primary-key"),
-    })
-    monkeypatch.setattr(config, "prepare_llm_credentials", credentials)
-    model = FakeListChatModel(responses=["不能请求上游"])
-    closed = AsyncMock()
-    monkeypatch.setattr(type(model), "aclose", closed, raising=False)
-    built = []
+    source = tmp_path / ".boxteam/workspace.jsonc"
+    source.parent.mkdir()
+    source.write_text(json.dumps(document), encoding="utf-8")
+    config = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=tmp_path)
+    async def reject_credentials(*_args, **_kwargs):
+        pytest.fail("只读预览不得解析任何模型凭据")
 
-    def build(provider, _runtime):
-        built.append(provider)
-        return model
-
-    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", build)
-    compactor = AgentSummarizationCompactor(config_service=config, workspace_root=empty_workspace_scope[1])
-    result = await compactor.check(agent_id="default", raw_messages=[], event=None)
-    assert result.cutoff == 0
-    assert [(item["provider_id"], item["api_key"]) for item in built] == [(provider_id, "test-primary-key")]
-    assert [item["provider_id"] for item in credentials.await_args.args[0]] == [provider_id]
-    credentials.assert_awaited_once()
-    closed.assert_awaited_once()
+    monkeypatch.setattr(config, "prepare_llm_credentials", reject_credentials)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider",
+                        lambda *_args, **_kwargs: pytest.fail("只读预览不得构造模型"))
+    try:
+        result = await AgentSummarizationCompactor(config_service=config).check(
+            agent_id="default", raw_messages=[], event=None,
+        )
+        assert result.cutoff == 0
+    finally:
+        await config.close()

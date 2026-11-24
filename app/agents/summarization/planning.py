@@ -6,13 +6,15 @@ _summarization_event；安全性判定委托唯一 compaction preflight。"""
 from __future__ import annotations
 
 from collections.abc import (
+    Callable,
     Mapping,
     Sequence,
 )
 
-# TODO: DeepAgents 暴露公共的压缩扩展基类后，改用公共 API，避免依赖私有实现类。
-from deepagents.middleware.summarization import _DeepAgentsSummarizationMiddleware
-from langchain.agents.middleware.summarization import SummarizationMiddleware
+from langchain.agents.middleware.summarization import (
+    ContextSize,
+    SummarizationMiddleware,
+)
 from langchain_core.messages import (
     AnyMessage,
     HumanMessage,
@@ -33,6 +35,41 @@ from app.agents.summarization.state import (
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     closed_tool_prefix_cutoffs,
 )
+
+
+def compaction_retention(max_input_tokens: int | None) -> ContextSize:
+    """近期尾部策略在执行与预览间共享，容量不从模型名称猜测。"""
+    return ("fraction", 0.10) if max_input_tokens is not None else ("messages", 6)
+
+
+def compaction_retention_cutoff(
+    messages: list[AnyMessage],
+    *,
+    keep: ContextSize,
+    max_input_tokens: int | None,
+    token_counter: Callable[[list[AnyMessage]], int],
+    partial_token_counter: Callable[[list[AnyMessage]], int],
+) -> int:
+    """执行与只读预览共用保留策略，不为规划构造模型或执行图。"""
+    kind, value = keep
+    if kind == "messages":
+        proposed = max(0, len(messages) - int(value))
+    else:
+        if kind == "fraction" and max_input_tokens is None:
+            raise ValueError("比例保留策略需要明确的模型输入容量")
+        target = max(1, int(value if kind == "tokens" else max_input_tokens * value))
+        if token_counter(messages) <= target:
+            return 0
+        left, right = 0, len(messages)
+        while left < right:
+            middle = (left + right) // 2
+            if partial_token_counter(messages[middle:]) <= target:
+                right = middle
+            else:
+                left = middle + 1
+        proposed = min(left, max(0, len(messages) - 1))
+    # 工具组的最终 durable 边界仍由原 preflight owner 裁决。
+    return SummarizationMiddleware._find_safe_cutoff_point(messages, proposed)
 
 
 def _prefix_cutoff_candidates(
@@ -72,7 +109,6 @@ def _prefix_cutoff_candidates(
 
 
 def build_cache_preserving_partition(
-    summarization: _DeepAgentsSummarizationMiddleware,
     effective_messages: list[AnyMessage],
     event: object,
     summarize_end: int,
@@ -115,14 +151,13 @@ def build_cache_preserving_partition(
 
 
 def build_safe_compaction_partition(
-    summarization: _DeepAgentsSummarizationMiddleware,
     effective_messages: list[AnyMessage],
     event: object,
     *,
+    summarize_end: int,
     prefix_cutoff_candidates: Sequence[int] | None = None,
 ) -> CachePreservingPartition | None:
     """统一计算自动、HTTP 与工具入口使用的安全压缩分区。"""
-    summarize_end = summarization._determine_cutoff_index(effective_messages)
     replacement_required = summarize_end <= 0
     if replacement_required:
         if len(effective_messages) <= 1:
@@ -138,7 +173,6 @@ def build_safe_compaction_partition(
     partition = None
     if not replacement_required:
         partition = build_cache_preserving_partition(
-            summarization,
             effective_messages,
             event,
             summarize_end,
