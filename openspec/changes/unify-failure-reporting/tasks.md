@@ -44,7 +44,7 @@
 - [ ] 6.4 在原配置编辑器接通校验 issue.path_exact 与模型版本／草稿核验，迁齐类型和实际字段映射；失真／不可映射／过期诊断保留原因但停用精确定位。复用真实配置／主题装具验收校验脱敏、同 URI 编辑／数组重排、字段跳转及原主题恢复，保持草稿和提交资格。
 - [ ] 6.5 收敛原 HTTP 读取／解析及 HttpRequestError 消费：保留原安全原因、身份及来源损坏诊断，非 2xx 正文故障不抹掉响应，2xx 解包失败保留关联；摘要不混 path／HTML，非展示消费者不被视觉截短。复用 http.test.ts 和 HTTP／DAP 装具验收缺失／损坏元数据、正文中断／期限、允许空正文与合法 source／target 角色差异，不新增 parser、重读或 wire 字段。
 - [ ] 6.6 原操作入口复用 ReportedError 确定一次主要提示，保留失败返回；验收无可见区域、多视图镜像、混合已报告成员、用户取消与超时、旧回调及状态清除。沿原领域结果提供动作，保留部分搜索结果和已保存／未生效／结果未知，不在展示层猜重试资格或建去重状态。
-- [ ] 6.7 统一设置页及两处插件日志到原输出命令，删除旧 viewer／展示路由／局部读取和 readPluginInstanceLog UI 导出；输出用既有 Gateway API，保留诊断配置、进程概览及 query／locate。迁移旧有效断言，验收打开／读取／定位、未完成查询、多候选、轮转／实例替换、晚到结果／尾读及正文与状态分离；原坐标只在输出 adapter 转换到 UTF-16，覆盖非 BMP／重复命中／CRLF，不新增读取 facade 或索引。
+- [x] 6.7 统一设置页及两处插件日志到原输出命令，删除旧 viewer／展示路由／局部读取和 readPluginInstanceLog UI 导出；输出用既有 Gateway API，保留诊断配置、进程概览及 query／locate。迁移旧有效断言，验收打开／读取／定位、未完成查询、多候选、轮转／实例替换、晚到结果／尾读及正文与状态分离；原坐标只在输出 adapter 转换到 UTF-16，覆盖非 BMP／重复命中／CRLF，不新增读取 facade 或索引。
 - [ ] 6.8 原局部渲染边界及顶层故障页接通窗口日志；整体不可用时可本地展开／复制安全诊断及重载，不依赖后端或输出成功，不扩散为各组件详情系统。
 - [ ] 6.9 复用现有真实 UI 装具验收一次宽／窄摘要、单出口、配置定位、插件日志、搜索部分结果、切目标后日志归属、无 sink 和故障页；刷新并丢弃旧内存异常、日志不可用时仍能读取／复制历史 failure。复制沿原 clipboard 入口验证成功／拒绝、临时节点清理及不改草稿／抢焦点。验证稳定合同，不新增易变文字／像素快照；完成相关真实类型检查与 Web 构建，记录源码／请求关联、原始结果和未验范围。
 - [ ] 6.10 沿原 query／locate 路由及 read_diagnostic_log_target 接通同名可选 gateway_connection_id，原注册表验证明确连接、错属／失效及未指定唯一连接；按 descriptor 核对插件 Gateway 日志源、仅尾读能力及本地窗口日志。保持记录引用和联邦权限，连同 6.7／6.9 真实导航验证，不新建插件日志 API。
@@ -66,3 +66,5 @@
 - [x] 8.5 保留原始命令、源码指纹、退出码及未验证范围。正式测试沿 `out/tests/<同名测试路径>/`，临时产物沿 `out/tests/temp/<UTC日期>/unify-failure-reporting/`；在本 change 中标记实际验收，不新增总结文档，不把局部通过表述为所有错误已穷尽覆盖。
 
 2026-11-24 实时失败链路补齐：原 Gateway WebSocket route 在响应开始后交付 SDK 有界安全原因及原 request_id／subscription_id／path，客户端沿 RealtimeTransportError 和原 HttpRequestError cause 保留结构，不向默认摘要拼身份。共享连接故障按原订阅派生异常而不改共享对象，原认证刷新、取消、反压及重连规则保留。真实 ASGI WebSocket owner 6项、原 Trace 回归47项、前端订阅11项、HTTP／通道合同41项通过；SDK诊断追加投影另有定向通过。已核已持有本机令牌不出现在响应及两层诊断日志，未扫描环境或密钥库。Workbench真实类型检查12及Web完整构建08通过，原件位于 `out/tests/temp/2026/11/24/realtime_failure/artifacts/` 和 `out/tests/temp/2026/11/24/configuration_inheritance/artifacts/`。后端独立边界提交为 `ccc64ebf4`。这些定向结果不代替6.9的其它真实UI验收。
+
+2026-11-24 日志定位补验（9451854cb）：真实双 Gateway／Workbench 覆盖三入口、显式分页和候选选择、非 BMP／CRLF 精确复制、晚到结果、轮转／截断／删除、多连接归属及插件实例替换。旧构建在失效引用后跨 3.4 秒误读尾部的断言失败，新构建通过；Output 10 项、Web／Workbench 真实类型检查与完整构建通过。证据位于 `out/tests/temp/2026/11/24/failure_log_navigation/artifacts/failure-log-refresh-final-receipt.json`。6.10 的仅尾读受控边界与工作区 binding 仍未完整验收，Windows／Electron 未验证；不据此勾选。
