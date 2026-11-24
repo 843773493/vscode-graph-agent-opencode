@@ -48,6 +48,10 @@
 - **WHEN** 布局变化后内容不足一屏，或目标过于靠近首尾，原 viewport_offset_px 超出合法滚动范围
 - **THEN** 保留真实内容目标并一次钳制到可达位置，不持续补偿、不新增空白垫高、不把几何限制报告为资源丢失
 
+#### Scenario: 历史加载后当前 Job 完成
+- **WHEN** 用户阅读历史期间当前 Job 完成
+- **THEN** 沿用户选择保持阅读位置，不能被终态、final 移位或新摘要抢回尾部；明确跳到最新才恢复跟随。
+
 ### Requirement: 历史体验具备可重复的 stub 验收
 
 项目 SHALL 复用隔离 workspace 的 deterministic stub integration/component/API tests，覆盖最新窗口、Turn／Item around、before/after、三层按需加载、普通与内部执行、活动统计、慢请求和实时更新；并通过真实 Workbench → Gateway → Workspace 页面验收折叠、刷新、搜索定位、终态结算及窄宽布局。测试 SHALL 验证 Composer 可用、窗口完整、旧历史不丢失和真实 owner／revision，不要求真实模型或默认全仓长跑。不为文案、CSS 类名和每个计时 tick 编写脆弱断言。

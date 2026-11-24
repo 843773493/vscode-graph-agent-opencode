@@ -23,6 +23,10 @@
 - **WHEN** 用户先展开过程、再打开活动组、最后展开一个工具
 - **THEN** 各步只加载对应缺失的受限投影；工具正文只在第三步取得，其它工具和 Turn 不详情化，重复开关复用已经满足的投影
 
+#### Scenario: 展开统计行
+- **WHEN** 用户点击某一 Turn 的统计行
+- **THEN** 按三层展开只取得本层缺失的有界投影，第三层才补读目标成员正文；其它 Turn 不详情化，开关复用已取得内容。
+
 ### Requirement: Web 正式入口支持按稳定来源坐标重复定位
 
 Web 主窗口的主聊天区域 SHALL 保留用户可操作的“跳到指定轮次”入口，并将其与 Item／Part 搜索、引用和浏览恢复统一到原历史读取与虚拟列表定位链路。Turn 入口允许输入稳定 turn_id 或选择已加载轮次；内容目标使用真实 Item／Part，支持没有 turn_id 的内部 execution。目标 MUST 固定到完整 Gateway／工作区／Session／Thread，展示序号和虚拟列表索引不得作为身份。
@@ -54,6 +58,10 @@ Web 主窗口的主聊天区域 SHALL 保留用户可操作的“跳到指定轮
 #### Scenario: 没有 Turn 的内容恢复与定位
 - **WHEN** 用户恢复或显式定位无 turn_id 的内部执行 Item
 - **THEN** 沿真实 execution 和 Item 加载相应窗口，恢复遵守原折叠，显式定位展开必要祖先；均不伪造 Turn 或强制回最新
+
+#### Scenario: 无 Turn 锚点时恢复到最新尾部
+- **WHEN** 恢复记录没有 Turn 引用
+- **THEN** 有有效 Item／execution／上下文来源时沿真实来源恢复；只有明确 follow_latest 或确无可恢复来源时使用最新窗口，不因缺 turn_id 丢弃有效位置。
 
 ### Requirement: Turn 是默认分页边界
 

@@ -185,3 +185,11 @@ v2 token MUST 绑定 `session_id`、`thread_id`、`checkpoint_ns`、`rollout_id`
 - **WHEN** 用户展开已终态化 Turn、切换会话、重启后端，或实时 block/tool 正文持续增长
 - **THEN** 历史详情只请求 canonical Turn history API，不查询或拼接 `message.v1` availability/snapshot；实时消息流只承载当前未终态 Turn
 - **AND** 前后端限制终态 stream cache、乱序事件、block 正文、工具正文、跨会话 timeline 和详情正文的驻留规模；启动恢复不 materialize 全部终态 snapshot，越界时明确截断或要求 snapshot 恢复，不得无界增长、静默丢失或卡死服务
+
+#### Scenario: 历史 detail 补齐同一 Turn
+- **WHEN** 用户展开 Turn 详情
+- **THEN** Saver 沿原索引与有界 JSONL locator 补齐同一 Turn 的已请求内容；与 live 保持同一身份和顺序，不把片段当作完整过程。
+
+#### Scenario: history detail 只补正文且前端整体替换
+- **WHEN** 详情补回工具参数或结果
+- **THEN** 后端保留原身份、数量及顺序；完整 owner 快照替换同 binding 的完整镜像，受限片段只丰富命中成员、不删除其它已加载成员，旧 binding 不应用。
