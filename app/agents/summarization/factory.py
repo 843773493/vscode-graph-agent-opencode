@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from deepagents.backends.protocol import BACKEND_TYPES
-from deepagents.middleware.summarization import compute_summarization_defaults
 from langchain.chat_models import BaseChatModel as RuntimeBaseChatModel
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.planning import compaction_retention
+from app.domain.context_compaction import CompactionPolicy
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -19,16 +19,20 @@ def create_cache_preserving_summarization_middleware(
     backend: BACKEND_TYPES,
     *,
     compaction_preflight: CompactionPreflightPort,
+    policy: CompactionPolicy,
+    automatic_enabled: bool,
 ) -> CachePreservingSummarizationMiddleware:
     if not isinstance(model, RuntimeBaseChatModel):
         raise TypeError("缓存优先压缩需要 BaseChatModel 实例")
-    defaults = compute_summarization_defaults(model)
+    capacity = (model.profile or {}).get("max_input_tokens")
+    # TODO: 后台候选接通唯一准备链后，由该链消费 prepare/target/apply_policy，
+    # 并移除此处按初始模型触发的阈值；当前仅接通自动开关和应用阈值。
     return CachePreservingSummarizationMiddleware(
         model=model,
         backend=backend,
-        trigger=defaults["trigger"],
-        keep=compaction_retention((model.profile or {}).get("max_input_tokens")),
+        trigger=("fraction", policy.apply_fraction) if capacity is not None else None,
+        keep=compaction_retention(capacity),
         trim_tokens_to_summarize=None,
-        truncate_args_settings=defaults["truncate_args_settings"],
         compaction_preflight=compaction_preflight,
+        automatic_enabled=automatic_enabled and capacity is not None,
     )

@@ -85,6 +85,12 @@
         }
       },
       "context": {
+        "compaction": {
+          "prepare_fraction": 0.70,
+          "apply_fraction": 0.85,
+          "target_fraction": 0.55,
+          "apply_policy": "on_demand"
+        },
         "source_messages": {
           "grouping": "aggregate"
         },

@@ -168,6 +168,7 @@ def _make_preflight_middleware(
     offloaded: list[object],
 ) -> CachePreservingSummarizationMiddleware:
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
+    middleware._automatic_enabled = True
     middleware._compaction_preflight = port  # type: ignore[attr-defined]
     middleware._lc_helper = SimpleNamespace(  # type: ignore[attr-defined]
         _should_summarize=lambda messages, total_tokens: True,
@@ -994,6 +995,7 @@ def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments(
     ]
 
     class _PrepareStub:
+        _automatic_enabled = True
         @staticmethod
         def _get_effective_messages(_: ModelRequest) -> list:
             return messages
@@ -1448,6 +1450,7 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary(
     messages = _single_human_tool_rounds()
 
     class _PrepareStub:
+        _automatic_enabled = True
         @staticmethod
         def _get_effective_messages(_: ModelRequest) -> list:
             return messages
@@ -1606,6 +1609,7 @@ def emergency_replacement_partition(preflight_runtime: SimpleNamespace) -> tuple
     messages = [*_conversation(2), HumanMessage(content="当前用户消息")]
 
     class _EmergencyPrepareStub:
+        _automatic_enabled = True
         _compaction_preflight = _ScriptedPreflight()
         _preflight_safe_cutoffs = (
             CachePreservingSummarizationMiddleware._preflight_safe_cutoffs
@@ -1741,6 +1745,7 @@ def test_replacement_rolls_existing_cache_prefix_and_summary_together(
     assert replacement_effective_cutoff_to_state_cutoff(old_event, 6) == 9
 
     class _PrepareStub:
+        _automatic_enabled = True
         @staticmethod
         def _get_effective_messages(_: ModelRequest) -> list:
             return effective

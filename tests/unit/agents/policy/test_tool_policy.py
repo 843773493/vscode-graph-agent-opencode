@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -28,6 +29,21 @@ from app.agents.tool_invocation_context import (
 )
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.tool_discovery import create_search_tools_tool
+from app.core.path_utils import workspace_context
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.context_compaction import CompactionPolicy
+from tests.support.communication.probe import CommunicationProbe
+
+
+@pytest.fixture
+def policy_workspace(tmp_path: Path) -> Iterator[Path]:
+    with workspace_context(load_or_create_workspace_id(tmp_path), tmp_path):
+        yield tmp_path
+
+
+@pytest.fixture
+def communication_probe() -> CommunicationProbe:
+    return CommunicationProbe()
 
 
 def test_default_policy_enables_entire_universe() -> None:
@@ -149,9 +165,9 @@ def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
 def test_policy_default_names_match_actual_agent_graph_tools(
     text_mutations_factory,
     communication_probe,
-    empty_workspace_scope: tuple[str, Path],
+    policy_workspace: Path,
 ) -> None:
-    workspace_root = empty_workspace_scope[1]
+    workspace_root = policy_workspace
     invocation_context = ToolInvocationContext()
     direct_tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root),
         session_id="ses_policy_consistency",
@@ -178,6 +194,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         # 本测试只关注工具名集合，不装配 Skill middleware。
         resolved_skills=None,
         compaction_preflight=NoDurableOwnerCompactionPreflight(),
+        compaction_policy=CompactionPolicy(), automatic_compaction_enabled=True,
         resolved_tool_denylist=set(),
         interrupt_on=None,
         runtime_middleware=[],

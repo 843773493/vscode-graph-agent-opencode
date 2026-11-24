@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any, Literal
 
+from app.domain.context_compaction import CompactionPolicy
 from app.domain.session_stop import SessionStopPolicy
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
@@ -56,6 +57,15 @@ class ConfigRuntimeAccessorsMixin:
         if value not in {"aggregate", "separate"}:
             raise ValueError("context.source_messages.grouping 必须是 aggregate 或 separate")
         return value
+
+    def get_compaction_policy(self) -> CompactionPolicy:
+        """读取当前冻结快照的策略；在途摘要不重新读取磁盘。"""
+        return CompactionPolicy.model_validate(
+            self._get_effective_config()["context"].get("compaction", {})
+        )
+
+    def is_automatic_compaction_enabled(self) -> bool:
+        return self._get_effective_config()["ui"]["auto_summarize"]
 
     def get_gateway_skill_update_policy(self) -> SourceUpdatePolicy:
         return SourceUpdatePolicy.model_validate(

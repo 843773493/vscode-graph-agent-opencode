@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncIterator, Iterator, Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.policy import ToolPolicyResolver
+from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
+from app.core.path_utils import workspace_context
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.context_compaction import CompactionPolicy
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -17,6 +25,35 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+
+
+@pytest.fixture
+def factory_workspace(tmp_path: Path) -> Iterator[Path]:
+    with workspace_context(load_or_create_workspace_id(tmp_path), tmp_path):
+        yield tmp_path
+
+
+@pytest.fixture
+async def factory_config(
+    factory_workspace: Path, request: pytest.FixtureRequest,
+) -> AsyncIterator[ConfigService]:
+    source = factory_workspace / ".boxteam" / "workspace.jsonc"
+    source.write_text(json.dumps({
+        "config_version": 4,
+        "extends": "builtin:workspace",
+        "settings": {"workspace": {
+            "context": {"compaction": {
+                "prepare_fraction": 0.6, "apply_fraction": 0.8,
+                "target_fraction": 0.4, "apply_policy": "next_request",
+            }},
+            "ui": {"auto_summarize": getattr(request, "param", False)},
+        }},
+    }), encoding="utf-8")
+    service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=factory_workspace)
+    try:
+        yield service
+    finally:
+        await service.close()
 
 
 @pytest.fixture
@@ -31,17 +68,12 @@ def graph_observations(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
 
 
 def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
-    tmp_path: Path,
+    factory_workspace: Path,
+    factory_config: ConfigService,
     graph_observations: list[dict[str, object]],
 ) -> None:
     """扩展目录为空且过滤掉信封时，Provider 仍收到固定入口。"""
 
-    config_service = MagicMock()
-    config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
-        policy_defaults={},
-        policy_rules={},
-        restrictions={},
-    )
     built_agent = MagicMock()
     configured_agent = MagicMock()
     built_agent.with_config.return_value = configured_agent
@@ -52,7 +84,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
             agent_id="default", content="测试提示词", config_revision="config:1",
             runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
         ),
-        "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
+        "tool_selection_reader": ToolSelectionStore(boxteam_root=factory_workspace / ".boxteam"),
         "checkpointer": MagicMock(),
         "session_id": "ses_empty_extension_catalog",
         "thread_id": "thr_00000000400070008000000000000002",
@@ -70,12 +102,12 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "team_service": MagicMock(),
         "session_context_query_service": MagicMock(),
         "workspace_session_context_client": MagicMock(),
-        "config_service": config_service,
+        "config_service": factory_config,
         "resource_registry": ResourceRegistry(),
         "resource_activation": None,
         "resource_navigation": MagicMock(),
         "text_mutations": MagicMock(),
-        "workspace_root": tmp_path,
+        "workspace_root": factory_workspace,
         "skill_catalog": MagicMock(),
         "middleware": [],
     }
@@ -118,14 +150,12 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
 
 
 @pytest.fixture
-def local_factory_arguments(empty_workspace_scope):
+def local_factory_arguments(factory_workspace: Path, factory_config: ConfigService):
     from types import SimpleNamespace
 
     from app.agents.policy import parse_custom_tool_specs
 
-    root = empty_workspace_scope[1]
-    config = MagicMock()
-    config.get_tool_policy_resolver.return_value = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={})
+    root = factory_workspace
     session = MagicMock()
     thread = "thr_00000000400070008000000000000002"
     session.path_resolver.main_thread_id.return_value = thread
@@ -133,7 +163,7 @@ def local_factory_arguments(empty_workspace_scope):
         "model": None, "instruction_producers": (), "tool_selection_reader": ToolSelectionStore(boxteam_root=root / ".boxteam"),
         "session_id": "ses_local_factory", "thread_id": thread, "agent_id": "default", "checkpointer": MagicMock(),
         "custom_tool_specs": parse_custom_tool_specs([{"name": "dynamic", "factory": "builtins:str"}]),
-        "config_service": config, "session_service": session, "background_task_registry": MagicMock(),
+        "config_service": factory_config, "session_service": session, "background_task_registry": MagicMock(),
         "background_mailbox": MagicMock(), "job_event_bus": MagicMock(), "job_service": MagicMock(), "message_service": MagicMock(),
         "session_orchestrator": MagicMock(), "session_subagent_service": MagicMock(), "terminal_resource_owner": MagicMock(),
         "browser_resource_owner": MagicMock(), "session_communication_service": MagicMock(),
@@ -142,6 +172,56 @@ def local_factory_arguments(empty_workspace_scope):
         "resource_navigation": MagicMock(), "text_mutations": MagicMock(),
         "skill_catalog": SimpleNamespace(entries=(), sources=(), gateway_id=None),
     }
+
+
+@pytest.mark.parametrize(
+    "factory_config,automatic_enabled", [(False, False), (True, True)],
+    indirect=["factory_config"], ids=["automatic-disabled", "automatic-enabled"],
+)
+def test_agent_factory_assembles_configured_compaction_middleware(
+    local_factory_arguments, automatic_enabled: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实配置、middleware 与图编译贯通；不执行模型或工具。"""
+    local_factory_arguments.update(
+        model=FakeListChatModel(responses=[], profile={"max_input_tokens": 1000}),
+        checkpointer=InMemorySaver(), custom_tool_specs=(), tools=[], middleware=[],
+        instruction_producers=runtime_instruction_producers(
+            agent_id="default", content="测试提示词", config_revision="config:1",
+            runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
+        ),
+    )
+    monkeypatch.setattr(
+        agent_factory, "prepare_agent_model",
+        lambda **_: pytest.fail("显式模型的装配不能构造 Provider 模型"),
+    )
+    with (
+        patch.object(
+            agent_factory, "build_deep_agent_middleware",
+            wraps=agent_factory.build_deep_agent_middleware,
+        ) as build_middleware,
+        patch.object(
+            agent_factory, "create_model_call_agent", wraps=agent_factory.create_model_call_agent,
+        ) as create_agent,
+    ):
+        agent = agent_factory.assemble_deep_agent(**local_factory_arguments)
+
+    build_middleware.assert_called_once()
+    options = build_middleware.call_args.kwargs
+    assert isinstance(options["compaction_policy"], CompactionPolicy)
+    assert options["compaction_policy"] == CompactionPolicy(
+        prepare_fraction=0.6, apply_fraction=0.8, target_fraction=0.4, apply_policy="next_request",
+    )
+    assert options["automatic_compaction_enabled"] is automatic_enabled
+    create_agent.assert_called_once()
+    summarization, = (
+        item for item in create_agent.call_args.kwargs["middleware"]
+        if isinstance(item, CachePreservingSummarizationMiddleware)
+    )
+    assert summarization._automatic_enabled is automatic_enabled
+    assert not summarization._should_summarize([], 799)
+    assert summarization._should_summarize([], 800)
+    assert "model" in agent.get_graph().nodes
+    assert {"compact_conversation", "read_compaction_history"} <= set(extract_agent_tools_by_name(agent))
 
 
 def test_local_factory_error_precedes_model_construction_and_graph(local_factory_arguments, monkeypatch):

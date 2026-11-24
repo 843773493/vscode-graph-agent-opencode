@@ -757,6 +757,8 @@ def assemble_deep_agent(
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
+        compaction_policy=config_service.get_compaction_policy(),
+        automatic_compaction_enabled=config_service.is_automatic_compaction_enabled(),
         context_source_manager=context_source_manager,
         source_registry=workspace_file_resource_registry,
         context_source_reactor=context_source_reactor,

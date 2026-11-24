@@ -111,12 +111,14 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         self,
         *args: Any,
         compaction_preflight: CompactionPreflightPort,
+        automatic_enabled: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         # compaction preflight port 必填：Agent 层不得持有 SQLite connection，
         # durable 闭包验证统一经该只读端口进入唯一 Saver owner。
         self._compaction_preflight = compaction_preflight
+        self._automatic_enabled = automatic_enabled
 
     @property
     def name(self) -> str:
@@ -174,8 +176,10 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
             if effective_messages is not None
             else self._get_effective_messages(request)
         )
-        total_tokens = self._count_request_tokens(request, effective)
         force_compaction = request.state.get("_force_cache_compaction") is True
+        if not force_compaction and not self._automatic_enabled:
+            return None
+        total_tokens = self._count_request_tokens(request, effective)
         if not force_compaction and not self._should_summarize(effective, total_tokens):
             return None
         state_messages = list(request.messages)

@@ -9,6 +9,7 @@ from referencing.exceptions import Unresolvable
 
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
+from app.domain.context_compaction import CompactionPolicy
 from app.services.infrastructure.config.policy import (
     gateway_config_policy,
     validate_policy_manifest,
@@ -86,7 +87,10 @@ def validate_config_payload(
         if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
             runtime["level"] = runtime["level"].strip().lower()
     definition = f"{domain}Payload" if domain in {"gateway", "workspace"} else None
-    return _validate_config_schema(config, schema=schema, definition=definition)
+    _validate_config_schema(config, schema=schema, definition=definition)
+    if domain == "workspace":
+        CompactionPolicy.model_validate(config.get("context", {}).get("compaction", {}))
+    return config
 
 
 def _validate_config_schema(

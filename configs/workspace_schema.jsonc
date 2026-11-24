@@ -2028,6 +2028,17 @@
             "resource_activation"
           ],
           "properties": {
+            "compaction": {
+              "type": "object",
+              "description": "上下文压缩策略，沿实际父链继承；下一次使用新配置快照的准备生效，在途摘要保留冻结策略。比例必须满足 target < prepare < apply。",
+              "additionalProperties": false,
+              "properties": {
+                "prepare_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.70 },
+                "apply_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.85 },
+                "target_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.55 },
+                "apply_policy": { "type": "string", "enum": ["on_demand", "next_request"], "default": "on_demand" }
+              }
+            },
             "source_messages": {
               "type": "object",
               "description": "来源消息分组；按已有配置层覆盖，只影响后续新 preparation，不重组历史封存。",
@@ -2320,9 +2331,45 @@
       "identity_key": null
     },
     {
-      "pattern": "/ui/**",
+      "pattern": "/ui/default_model",
       "policy": "next_session",
       "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/default_orchestration",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/max_concurrent_agents",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/allow_shell_tools",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/ignored_paths",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/ignored_paths/**",
+      "policy": "next_session",
+      "activation_scope": "next_session",
+      "identity_key": null
+    },
+    {
+      "pattern": "/ui/auto_summarize",
+      "policy": "next_job",
+      "activation_scope": "next_job",
       "identity_key": null
     },
     {
@@ -2375,6 +2422,18 @@
     },
     {
       "pattern": "/context/resource_activation/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/context/compaction",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/context/compaction/**",
       "policy": "next_job",
       "activation_scope": "next_job",
       "identity_key": null

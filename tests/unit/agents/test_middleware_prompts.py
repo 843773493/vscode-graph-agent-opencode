@@ -40,6 +40,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
+from app.domain.context_compaction import CompactionPolicy
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -89,6 +90,7 @@ def _build_middleware(
         resolved_skills=resolved_skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),
         compaction_preflight=NoDurableOwnerCompactionPreflight(),
+        compaction_policy=CompactionPolicy(), automatic_compaction_enabled=True,
         resolved_tool_denylist=set(denylist or set()),
         interrupt_on=None,
         runtime_middleware=[],

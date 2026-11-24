@@ -53,6 +53,7 @@ from app.agents.tool_identity import ToolDefinitionLike, tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
+from app.domain.context_compaction import CompactionPolicy
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
@@ -148,6 +149,8 @@ def build_deep_agent_middleware(
     tool_middleware: tuple[SourceOwnedTodoListMiddleware, FilesystemMiddleware],
     resolved_skills: PublishedSkillCatalog | None,
     compaction_preflight: CompactionPreflightPort,
+    compaction_policy: CompactionPolicy,
+    automatic_compaction_enabled: bool,
     context_source_manager: ContextSourceManager | None = None,
     source_registry: WorkspaceFileResourceRegistry | None = None,
     context_source_reactor: ContextSourceReactor | None = None,
@@ -191,6 +194,7 @@ def build_deep_agent_middleware(
 
     summarization = create_cache_preserving_summarization_middleware(
         model, backend, compaction_preflight=compaction_preflight,
+        policy=compaction_policy, automatic_enabled=automatic_compaction_enabled,
     )
     middleware_stack.extend([
         summarization,
