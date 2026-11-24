@@ -61,6 +61,7 @@ def test_schema_accepts_chat_completions_model_info_and_reasoning_content(
                     "supports_audio_input": True,
                     "supports_reasoning": True,
                     "max_input_tokens": 400000,
+                    "context_window": 128000,
                 },
                 "supports_reasoning": {"reasoning_content": True},
             }

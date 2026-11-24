@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from app.runtime.provider_model import provider_model_capacity
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config.llm_resolution import LlmResolution
 
@@ -52,7 +53,8 @@ def known_model_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.runtime import model_metadata
     monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: {"gpt-6-luna": {
         "litellm_provider": "openai", "mode": "chat", "supports_vision": True,
-        "supports_function_calling": True, "supports_reasoning": True, "max_input_tokens": 922000,
+        "supports_function_calling": True, "supports_reasoning": True,
+        "max_input_tokens": 922000, "context_window": 1000000,
     }})
 
 
@@ -67,7 +69,7 @@ def test_catalog_capabilities_are_defaults_for_real_model_reference(model_config
     resolved = resolver.get_model(REF)
     assert resolved["api_mode"]["model_info"] == {
         "supports_vision": True, "supports_function_calling": True,
-        "supports_reasoning": True, "max_input_tokens": 922000,
+        "supports_reasoning": True, "max_input_tokens": 922000, "context_window": 1000000,
     }
     assert resolved["api_mode"]["supports_reasoning"]["reasoning_items"]["encrypted_content"] is True
     assert "request_options" not in resolved
@@ -97,6 +99,74 @@ def test_explicit_capabilities_override_catalog_and_unknown_model_stays_usable(m
     local.pop("api_mode")
     resolver, _ = resolver_factory(model_config)
     assert resolver.get_model(REF)["api_mode"]["model_info"] == {"supports_vision": False, "max_input_tokens": 64000}
+
+
+def test_same_name_providers_keep_distinct_capacity_and_actual_output_aliases(
+    model_config, resolver_factory, known_model_catalog, monkeypatch,
+):
+    """真实节点解析同时保留稳定身份、端点边界与跨层 null／别名。"""
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider",
+                        lambda *_args, **_kwargs: pytest.fail("只读容量不得构造模型"))
+    monkeypatch.setattr("app.runtime.litellm_runtime._import_litellm",
+                        lambda: pytest.fail("只读容量不得加载 SDK"))
+    profiles = model_config["profiles"]
+    options = profiles["provider"]["settings"]["model_options"]
+    options["api_mode"] = {"protocol": "responses", "model_info": {
+        "max_input_tokens": 500000, "context_window": 600000,
+    }}
+    options["request_options"]["parameters"] = {"max_tokens": 16000}
+    profiles["model"]["settings"]["model_options"]["request_options"]["parameters"] = {
+        "max_output_tokens": None,
+    }
+    profiles["smaller-provider"] = deepcopy(profiles["provider"])
+    smaller = profiles["smaller-provider"]["settings"]["model_options"]
+    smaller["endpoint"] = "https://smaller.example/v1"
+    smaller["api_mode"]["model_info"] = {"max_input_tokens": 200000, "context_window": 128000}
+    profiles["smaller-model"] = {"extends": "context:provider/smaller", "settings": {
+        "model_options": {"request_options": {"parameters": {"max_output_tokens": 8000}}},
+    }}
+    providers = model_config["settings"]["workspace"]["llm"]["providers"]
+    providers["team"]["models"]["general"]["model"] = "gpt-6-luna"
+    providers["smaller"] = {"config_ref": "#/profiles/smaller-provider", "models": {"general": {
+        "model": "gpt-6-luna", "config_ref": "#/profiles/smaller-model",
+    }}}
+    resolver, graph = resolver_factory(model_config)
+    large = resolver.resolve_model_reference(graph, REF, expand_credentials=False)
+    small = resolver.resolve_model_reference(
+        graph, ModelReferenceDTO(provider_id="smaller", model_id="general"), expand_credentials=False,
+    )
+    assert large["model"] == small["model"]
+    assert (large["provider_id"], small["provider_id"]) == ("team", "smaller")
+    assert large["endpoint"] != small["endpoint"]
+    assert large["api_key"] == small["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
+    assert large["request_options"]["parameters"] == {"max_output_tokens": None}
+    assert small["request_options"]["parameters"] == {"max_output_tokens": 8000}
+    large_capacity, small_capacity = provider_model_capacity(large), provider_model_capacity(small)
+    assert large_capacity.input_budget_tokens == 500000
+    assert not large_capacity.output_reservation_known
+    assert small_capacity.input_budget_tokens == 120000
+    assert small_capacity.output_reservation_tokens == 8000
+
+
+def test_resolved_capacity_evidence_keeps_original_metadata_when_catalog_changes(
+    model_config, resolver_factory, known_model_catalog, monkeypatch,
+):
+    from app.runtime import model_metadata
+
+    options = model_config["profiles"]["provider"]["settings"]["model_options"]
+    options["api_mode"] = {"protocol": "responses"}
+    options["request_options"]["parameters"] = {}
+    model_config["profiles"]["model"]["settings"] = {}
+    model_config["settings"]["workspace"]["llm"]["providers"]["team"]["models"]["general"]["model"] = "gpt-6-luna"
+    resolver, graph = resolver_factory(model_config)
+    frozen_model = resolver.resolve_model_reference(graph, REF, expand_credentials=False)
+    before = provider_model_capacity(frozen_model)
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_: {})
+    assert provider_model_capacity(frozen_model) == before
+    assert before.input_budget_tokens == 922000
+    unknown = resolver.resolve_model_reference(graph, REF, expand_credentials=False)
+    assert not provider_model_capacity(unknown).capacity_known
+    assert provider_model_capacity(unknown).input_budget_tokens is None
 
 
 def test_child_values_survive_parent_changes_and_object_parameters_replace(model_config, resolver_factory):

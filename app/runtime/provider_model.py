@@ -21,6 +21,7 @@ from app.core.failures import (
 )
 from app.core.path_utils import get_workspace_id
 from app.core.trace_middleware import get_current_gateway_id
+from app.domain.context_compaction import ModelCapacity
 from app.domain.itemized.identity.model_source import ModelSource
 
 if TYPE_CHECKING:
@@ -28,6 +29,30 @@ if TYPE_CHECKING:
 
 
 PROVIDER_REQUEST_OPTION_KEYS = {"parameters", "default_headers"}
+
+
+def provider_model_capacity(
+    provider: dict[str, Any], *, request_parameters: Mapping[str, object] | None = None,
+) -> ModelCapacity:
+    """只读已解析模型；传入最终参数时，R 完全以该次覆盖后的参数为准。"""
+    mode = parse_provider_api_mode(provider)
+    parameters = (
+        _get_provider_request_options(provider, api_mode=mode)["parameters"]
+        if request_parameters is None
+        else normalize_request_parameters(request_parameters, protocol=mode.protocol)
+    )
+    output_fields = (
+        ("max_output_tokens",) if mode.protocol == "responses"
+        else ("max_tokens", "max_completion_tokens")
+    )
+    configured = [parameters[field] for field in output_fields if parameters.get(field) is not None]
+    if len(configured) > 1:
+        raise ValueError("输出预留存在多个非空长度参数，不能确定本次真实输出预算")
+    return ModelCapacity(
+        max_input_tokens=mode.model_info.max_input_tokens,
+        context_window=mode.model_info.context_window,
+        output_reservation_tokens=configured[0] if configured else None,
+    )
 
 
 def validate_provider_configuration(
@@ -126,11 +151,17 @@ def build_model_from_provider(
                 protocol=api_mode.protocol, endpoint=str(endpoint).rstrip("/"),
                 model=provider["model"], authentication=authentication,
             )
-    if api_mode.model_info.max_input_tokens is not None:
+    capacity_profile = {
+        name: capacity for name, capacity in (
+            ("max_input_tokens", api_mode.model_info.max_input_tokens),
+            ("context_window", api_mode.model_info.context_window),
+        ) if capacity is not None
+    }
+    if capacity_profile:
         # 容量属于模型元数据，不向上游发送，也不据此设置输出上限。
         model.profile = {
             **(model.profile or {}),
-            "max_input_tokens": api_mode.model_info.max_input_tokens,
+            **capacity_profile,
         }
     return model
 

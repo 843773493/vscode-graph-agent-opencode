@@ -24,9 +24,10 @@ def model_metadata(provider: str, model: str, *, owner_key: str | None = None) -
         if entry.get("mode") not in {"chat", "responses"}:
             continue
         info = {name: entry[name] for name in _CAPABILITIES if isinstance(entry.get(name), bool)}
-        capacity = entry.get("max_input_tokens")
-        if isinstance(capacity, int) and not isinstance(capacity, bool) and capacity > 0:
-            info["max_input_tokens"] = capacity
+        for field_name in ("max_input_tokens", "context_window"):
+            capacity = entry.get(field_name)
+            if isinstance(capacity, int) and not isinstance(capacity, bool) and capacity > 0:
+                info[field_name] = capacity
         return info
     return None
 

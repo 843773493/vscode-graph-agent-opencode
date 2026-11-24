@@ -22,6 +22,8 @@ from app.agents.providers.openai_responses import (
 )
 from app.agents.providers.wire_finalize import (
     chat_send_params,
+    chat_wire_params,
+    responses_wire_params,
     wire_request_params,
 )
 from app.agents.upstream_request_trace import (
@@ -37,7 +39,10 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.runtime.agent_runtime import prepare_agent_model
 from app.runtime.chatgpt_auth import ChatGPTCredential
 from app.runtime.network_proxy import ProxyRoutes
-from app.runtime.provider_model import build_model_from_provider
+from app.runtime.provider_model import (
+    build_model_from_provider,
+    provider_model_capacity,
+)
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.orchestration.event_stream.model_events import (
     is_chat_model_run_name,
@@ -107,10 +112,11 @@ def test_input_context_capacity_sets_profile_without_changing_wire(direct_proxy_
             },
         }
     baseline = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
-    provider["api_mode"]["model_info"]["max_input_tokens"] = 400000
+    provider["api_mode"]["model_info"].update(max_input_tokens=400000, context_window=128000)
     model = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
 
     assert model.profile["max_input_tokens"] == 400000
+    assert model.profile["context_window"] == 128000
     if protocol == "responses":
         baseline_body = baseline._responses_payload([HumanMessage("hello")], None, {})
         body = model._responses_payload([HumanMessage("hello")], None, {})
@@ -119,7 +125,35 @@ def test_input_context_capacity_sets_profile_without_changing_wire(direct_proxy_
         body = chat_send_params(model, stream=True)
     body = wire_request_params(model, body)
     assert body == wire_request_params(baseline, baseline_body)
-    assert {"max_input_tokens", "profile", "max_tokens", "max_output_tokens"}.isdisjoint(body)
+    assert {"max_input_tokens", "context_window", "profile", "max_tokens", "max_output_tokens"}.isdisjoint(body)
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize("call_parameters,expected_output", [
+    ({}, 200), ({"max_tokens": None}, None), ({"max_output_tokens": 300}, 300),
+])
+async def test_capacity_uses_final_wire_output_after_existing_overrides(
+    direct_proxy_routes, protocol, call_parameters, expected_output,
+):
+    provider = _provider(protocol, direct_proxy_routes)
+    provider["api_mode"]["model_info"].update(max_input_tokens=900, context_window=1000)
+    provider["request_options"] = {"parameters": {"max_tokens": 100}}
+    model = build_model_from_provider(provider, {"max_output_tokens": 200}, invocation_purpose="tool_test")
+    try:
+        parameters = (
+            responses_wire_params(model, kwargs=call_parameters) if protocol == "responses"
+            else chat_wire_params(model, kwargs=call_parameters)
+        )
+        capacity = provider_model_capacity(provider, request_parameters=parameters)
+        output_field = "max_output_tokens" if protocol == "responses" else "max_tokens"
+        assert parameters.get(output_field) == expected_output
+        assert (output_field in parameters) is (expected_output is not None)
+        assert capacity.output_reservation_tokens == expected_output
+        assert capacity.input_budget_tokens == (900 if expected_output is None else 1000 - expected_output)
+        assert provider_model_capacity(provider).output_reservation_tokens == 100
+        assert {"max_input_tokens", "context_window", "profile"}.isdisjoint(parameters)
+    finally:
+        await model.aclose()
 
 
 def test_litellm_output_projection_preserves_reasoning_and_provider_summary():

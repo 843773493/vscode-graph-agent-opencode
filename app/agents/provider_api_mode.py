@@ -37,6 +37,7 @@ class ProviderModelInfo:
     supports_function_calling: bool = False
     supports_reasoning: bool = False
     max_input_tokens: int | None = None
+    context_window: int | None = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,7 @@ def _reject_unknown_fields(
 def _parse_model_info(raw: object) -> ProviderModelInfo:
     value = _require_object(raw, "provider.api_mode.model_info")
     _reject_unknown_fields(
-        value, _MODEL_INFO_FIELDS | {"max_input_tokens"}, "provider.api_mode.model_info"
+        value, _MODEL_INFO_FIELDS | {"max_input_tokens", "context_window"}, "provider.api_mode.model_info"
     )
     defaults = {
         field_name: False
@@ -118,16 +119,19 @@ def _parse_model_info(raw: object) -> ProviderModelInfo:
         )
         for field_name, default in defaults.items()
     }
-    max_input_tokens = None
-    if "max_input_tokens" in value:
-        max_input_tokens = value["max_input_tokens"]
+    capacities: dict[str, int] = {}
+    for field_name in ("max_input_tokens", "context_window"):
+        if field_name not in value:
+            continue
+        capacity = value[field_name]
         if (
-            isinstance(max_input_tokens, bool)
-            or not isinstance(max_input_tokens, int)
-            or max_input_tokens <= 0
+            isinstance(capacity, bool)
+            or not isinstance(capacity, int)
+            or capacity <= 0
         ):
-            raise ValueError("provider.api_mode.model_info.max_input_tokens 必须是正整数")
-    return ProviderModelInfo(**parsed, max_input_tokens=max_input_tokens)
+            raise ValueError(f"provider.api_mode.model_info.{field_name} 必须是正整数")
+        capacities[field_name] = capacity
+    return ProviderModelInfo(**parsed, **capacities)
 
 
 def _parse_reasoning_support(
