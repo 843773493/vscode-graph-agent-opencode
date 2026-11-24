@@ -20,6 +20,7 @@ import commentjson
 import httpx
 import psutil
 import pytest
+from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
 from app.gateway.federation.ports import principal_ref_for_gateway
 from tests.harness.python.run_context import TestRunContext
@@ -164,6 +165,17 @@ def _write_package(path: Path, version: str) -> None:
         "    import time\n"
         "    time.sleep(2.0)",
     )
+    # 日志专项由真实插件输出固定字节；关闭访问噪声，保证用户显式续查期间原文件不变。
+    entry = entry.replace(
+        "    if resource == 'failure':",
+        "    if resource.startswith('LOG_COORD_'):\n"
+        "        os.write(sys.stdout.fileno(), ('🧭前缀 ' + resource + ' / 🧪 ' + resource + '\\r\\n').encode())\n"
+        "    elif resource.startswith('LOG_PAGE_'):\n"
+        "        os.write(sys.stdout.fileno(), ('padding\\n' * 600 + resource + ' first\\n' + resource + ' second\\n' + 'padding\\n' * 600).encode())\n"
+        "    elif resource.startswith('LOG_NAV_'):\n"
+        "        os.write(sys.stdout.fileno(), (resource + '\\n').encode())\n"
+        "    if resource == 'failure':",
+    ).replace("log_config=None)", "log_config=None, access_log=False)")
     with ZipFile(path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
         archive.writestr("entry.py", entry)
@@ -239,14 +251,24 @@ def test_workbench_logs_open_read_locate_and_keep_original_gateway(
              for client, gateway_id in zip(network.clients, network.gateway_ids, strict=True)]
     result_path = context.artifacts_dir / "log-navigation-ui.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
+    node = shutil.which("node")
+    assert node, "Playwright 日志驱动需要 Node"
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180",
-        "--", "bun", "tests/integration/clients/web/service_plugin_log_navigation.mjs"]
+        "--", node, "tests/integration/clients/web/service_plugin_log_navigation.mjs"]
+    log_contract = load_runtime_log_contract()
+    remote_log_path = log_contract.path_for(
+        log_contract.root_for(network.gateway_homes[1]), "service-plugin", slots[1]["instance"]["instance_id"],
+    )
+    assert remote_log_path.is_file()
     assets = Path(os.environ["BOXTEAM_WEB_ASSETS"])
     environment = os.environ | {
         "BOXTEAM_PLUGIN_LOG_UI_FIXTURE": json.dumps({
             "baseUrl": str(client_a.base_url), "gatewayA": gateway_a, "gatewayB": gateway_b,
             "workspaceId": network.workspace_id, "remoteName": "日志目标 Gateway B",
             "connectionId": connection["gateway_connection_id"], "packageId": _PACKAGE_ID, "pluginId": _PLUGIN_ID,
+            "remoteLogPath": str(remote_log_path),
+            "remoteRegistration": {"host": "127.0.0.1", "port": 22, "username": "log-ui-second",
+                "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3]},
             "slots": slots, "resultPath": str(result_path), "artifacts": str(context.artifacts_dir),
         }),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
@@ -271,6 +293,19 @@ def test_workbench_logs_open_read_locate_and_keep_original_gateway(
     assert result["location"]["copied_selection"] == result["location"]["query"]
     assert result["lateLocation"]["old_operation"]["ok"] is False
     assert result["lateLocation"]["visible_gateway_id"] == gateway_a
+    assert result["coordinates"]["physical_crlf"] is True
+    assert result["coordinates"]["copied_second_match"] == result["coordinates"]["query"]
+    assert result["pagedCandidates"]["pages"] >= 2
+    assert result["pagedCandidates"]["selected_second"] is True
+    assert {item["case"] for item in result["staleReferences"]} == {"truncate", "replace", "delete"}
+    assert result["bodyAndStatus"] == {"truncated": True, "empty": True, "refresh_kept_body": True}
+    connections = result["connections"]
+    assert connections["first"] == connection["gateway_connection_id"]
+    assert connections["second"] != connections["first"]
+    assert connections["deleted_connection_rejected"] is True
+    assert result["replacement"]["original_log_id"] != result["replacement"]["replacement"]["log_id"]
+    assert result["replacement"]["historic_reference"] == result["coordinates"]["reference"]
+    assert result["localWindow"] == {"channel": "窗口", "gateway_reads": 0}
 
 
 @pytest.fixture

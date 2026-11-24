@@ -1,6 +1,7 @@
 // Integration：真实插件和 Gateway 日志；只为缺失声明入口替换一次库存展示，不替换日志响应。
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, rename, truncate, unlink, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { selectPluginScope } from './service_plugin_controls.mjs';
@@ -10,6 +11,7 @@ assert(input.artifacts && input.resultPath, '必须显式设置正式测试产�
 const result = { phase: 'initialization', navigationOnly: process.env.BOXTEAM_PLUGIN_LOG_UI_NAVIGATION_ONLY === '1',
   pageErrors: [], externalRequests: [], requests: [],
   boundaries: ['SSH 执行与隧道使用原 loopback 装具', '管理视图缺失声明场景只删除真实库存响应的 packages；日志与实例保持真实'] };
+result.boundaries.push('仅对本场景隔离 Home 的明确日志文件注入截断、替换和删除；diagnostics/query/locate 不使用响应替身');
 let browser, page, releaseLocate;
 let hideInventory = false, holdLocate = false;
 let locateSeen;
@@ -46,18 +48,18 @@ try {
     result.heldLocationDelivered = true;
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.monaco-workbench')).toBeVisible();
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
-  const api = (path, options = {}, target) => page.evaluate(async ({ path, options, target }) => {
+  const api = (path, options = {}, target, expectedStatus = 200) => page.evaluate(async ({ path, options, target, expectedStatus }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
       'Content-Type': 'application/json', ...(target ? { 'X-BoxTeam-Target-Gateway-Id': target } : {}) },
       body: options.body && JSON.stringify(options.body) });
     const body = await response.json();
-    if (!response.ok || response.headers.get('X-Request-ID') !== body.request_id) throw new Error(`${path}: ${response.status} ${JSON.stringify(body)}`);
+    if (response.status !== expectedStatus || response.headers.get('X-Request-ID') !== body.request_id) throw new Error(`${path}: ${response.status} ${JSON.stringify(body)}`);
     return body;
-  }, { path, options, target });
+  }, { path, options, target, expectedStatus });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces'), workspace = await api('/api/v1/workspace');
   assert.equal(health.data.gateway_id, input.gatewayA);
   assert.equal(workspaces.data.active_workspace.gateway_id, input.gatewayA);
@@ -216,6 +218,218 @@ try {
   await expect.poll(() => outputChannel.inputValue()).toBe(result.localLog.label);
   await expect.poll(() => output.locator('.view-lines').innerText()).not.toContain(marker);
   result.lateLocation = { old_operation: oldOperation, visible_gateway_id: input.gatewayA };
+
+  result.phase = 'non-bmp-crlf-repeated-match';
+  const coordinateQuery = `LOG_COORD_${input.slots[1].instance.instance_id}`;
+  const coordinatePrefix = `🧭前缀 ${coordinateQuery} / 🧪 `;
+  const coordinateText = coordinatePrefix + coordinateQuery;
+  const echo = resource => api(`/api/gateway/service-plugins/${input.packageId}/${input.pluginId}/instances/${input.slots[1].instance.instance_id}/services/echo/${resource}?package_version=1.0.0`, {}, input.gatewayB);
+  await echo(coordinateQuery);
+  const coordinatePage = await api(`/api/gateway/diagnostics/query?gateway_connection_id=${input.connectionId}`,
+    { method: 'POST', body: { scope, query: coordinateQuery, limit: 50 } }, input.gatewayB);
+  const logBytes = await readFile(input.remoteLogPath);
+  const coordinateMatches = coordinatePage.data.items.filter(item => item.reference.log_id === targetB.log_id
+    && logBytes.subarray(item.reference.line_start, item.reference.line_end).toString('utf8') === `${coordinateText}\r\n`);
+  assert.equal(coordinateMatches.length, 2);
+  const second = coordinateMatches[1].reference;
+  assert.equal(second.start_codepoint, Array.from(coordinatePrefix).length);
+  assert.equal(second.end_codepoint, Array.from(coordinateText).length);
+  assert.notEqual(second.start_codepoint, coordinatePrefix.length, '非 BMP 必须使码点与 UTF-16 列不同');
+  assert.equal(second.content_version, createHash('sha256').update(logBytes.subarray(second.line_start, second.line_end)).digest('hex'));
+  const coordinateLocation = { scope, reference: second };
+  await command('boxteam.output.openLog', { ...targetB, location: coordinateLocation });
+  await expect(output.locator('.view-lines')).toContainText(coordinateText);
+  const copySelection = async expected => {
+    await command('boxteam.output.focus');
+    await page.keyboard.press('ControlOrMeta+c');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    return expected;
+  };
+  await copySelection(coordinateQuery);
+  // 通过真实方向键展开到行首，区分同一行的两个相同命中并验证 UTF-16 选区。
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Shift+Home');
+  await copySelection(coordinatePrefix);
+  result.coordinates = { query: coordinateQuery, reference: second, physical_crlf: true,
+    query_request_id: coordinatePage.request_id, copied_second_match: coordinateQuery, copied_prefix: coordinatePrefix };
+
+  result.phase = 'bounded-query-and-explicit-candidate';
+  const pageQuery = `LOG_PAGE_${input.slots[1].instance.instance_id}`;
+  await echo(pageQuery);
+  const quick = page.locator('.quick-input-widget');
+  const queryResponse = () => page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/diagnostics/query'
+    && response.request().postDataJSON()?.query === pageQuery);
+  const firstPage = queryResponse();
+  await page.evaluate(target => {
+    globalThis.pagedLogNavigation = globalThis.workbench.commands.executeCommand('boxteam.output.openLog', target)
+      .then(() => ({ ok: true }), error => ({ ok: false, message: error.message }));
+  }, { ...targetB, request_id: pageQuery });
+  let response = await firstPage, pages = 0, candidates = [];
+  result.queryPages = [];
+  while (true) {
+    const body = await response.json();
+    assert.equal(response.status(), 200);
+    assert.equal(response.headers()['x-request-id'], body.request_id);
+    assert.equal(new URL(response.url()).searchParams.get('gateway_connection_id'), input.connectionId);
+    candidates = body.data.items.filter(item => item.reference.log_id === targetB.log_id);
+    result.queryPages.push({ request_id: body.request_id, complete: body.data.complete, reason: body.data.limited_reason,
+      scanned_lines: body.data.scanned_lines, candidates: candidates.map(item => item.reference) });
+    pages++;
+    await expect(quick).toBeVisible();
+    if (candidates.length) break;
+    assert(pages < 5 && !body.data.complete && body.data.cursor, '空页仍须提供有界续点');
+    await expect(page.locator('[id="boxteam.output.status"]')).toContainText('查询尚未完成');
+    const count = result.requests.filter(item => item.path === '/api/gateway/diagnostics/query').length;
+    await page.waitForTimeout(250);
+    assert.equal(result.requests.filter(item => item.path === '/api/gateway/diagnostics/query').length, count, '没有用户选择不能自动续查');
+    const next = queryResponse();
+    await quick.locator('.monaco-list-row').filter({ hasText: '继续有界查询' }).click();
+    response = await next;
+  }
+  assert.equal(candidates.length, 2);
+  const chosen = candidates[1].reference;
+  await quick.locator('.monaco-list-row').filter({ hasText: `UTF-8 ${chosen.line_start} · ${chosen.start_codepoint}` }).click();
+  assert.deepEqual(await page.evaluate(() => globalThis.pagedLogNavigation), { ok: true });
+  await expect(output.locator('.view-lines')).toContainText(`${pageQuery} second`);
+  await copySelection(pageQuery);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Shift+End');
+  await copySelection(' second');
+  result.pagedCandidates = { pages, selected_second: true, reference: chosen };
+
+  result.phase = 'log-body-and-status';
+  const savedBytes = await readFile(input.remoteLogPath);
+  const status = page.locator('[id="boxteam.output.status"]');
+  await command('boxteam.output.openLog', targetB);
+  await expect(status).toContainText('仅显示最新尾部');
+  await expect(output.locator('.view-lines')).not.toContainText('仅显示最新尾部');
+  try {
+    await truncate(input.remoteLogPath, 0);
+    await command('boxteam.output.openLog', targetB);
+    await expect(status).toContainText('日志文件为空');
+    await expect.poll(async () => (await output.locator('.view-lines').innerText()).trim()).toBe('');
+  } finally { await writeFile(input.remoteLogPath, savedBytes); }
+  await command('boxteam.output.openLog', targetB);
+  const snapshotText = await output.locator('.view-lines').innerText();
+  const movedPath = `${input.remoteLogPath}.navigation-rotation`;
+  try {
+    await rename(input.remoteLogPath, movedPath);
+    await expect(status).toContainText('刷新失败，仍展示上次成功读取的数据', { timeout: 10_000 });
+    assert.equal(await output.locator('.view-lines').innerText(), snapshotText);
+    await expect(output.locator('.view-lines')).not.toContainText('刷新失败');
+  } finally { await rename(movedPath, input.remoteLogPath); }
+  result.bodyAndStatus = { truncated: true, empty: true, refresh_kept_body: true };
+
+  result.phase = 'stale-reference-no-tail-fallback';
+  result.staleReferences = [];
+  const rejectedNavigation = target => page.evaluate(target => globalThis.workbench.commands.executeCommand('boxteam.output.openLog', target)
+    .then(() => ({ ok: true }), error => ({ ok: false, message: error.message })), target);
+  const checkStale = async (testCase, reason) => {
+    const denied = await api(`/api/gateway/diagnostics/locate?gateway_connection_id=${input.connectionId}`,
+      { method: 'POST', body: coordinateLocation }, input.gatewayB, 409);
+    assert.equal(denied.detail.owner, 'runtime_log');
+    assert.equal(denied.detail.code, 'stale_runtime_log_reference');
+    assert.equal(denied.detail.reason, reason);
+    const requestStart = result.requests.length;
+    const operation = await rejectedNavigation({ ...targetB, location: coordinateLocation });
+    assert.equal(operation.ok, false);
+    if (testCase === 'replace') await page.waitForTimeout(3400);
+    assert(!result.requests.slice(requestStart).some(item => item.path === '/api/gateway/diagnostics' && item.include_tail !== 'false'), '旧引用失败不能转为尾读');
+    await expect(output.locator('.view-lines')).not.toContainText('REPLACEMENT_ONLY');
+    result.staleReferences.push({ case: testCase, reason, request_id: denied.request_id, operation });
+  };
+  try {
+    await truncate(input.remoteLogPath, 0);
+    await checkStale('truncate', 'record_changed');
+  } finally { await writeFile(input.remoteLogPath, savedBytes); }
+  try {
+    await rename(input.remoteLogPath, movedPath);
+    await writeFile(input.remoteLogPath, 'REPLACEMENT_ONLY\n');
+    await checkStale('replace', 'file_replaced');
+    await unlink(input.remoteLogPath);
+    await checkStale('delete', 'source_unavailable');
+  } finally {
+    await unlink(input.remoteLogPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await rename(movedPath, input.remoteLogPath);
+  }
+
+  result.phase = 'exact-multiple-connections';
+  const queryBody = { method: 'POST', body: { scope, query: coordinateQuery, limit: 50 } };
+  const locateBody = { method: 'POST', body: coordinateLocation };
+  await api('/api/gateway/diagnostics/query', queryBody, input.gatewayB);
+  await api('/api/gateway/diagnostics/locate', locateBody, input.gatewayB);
+  const registered = await api('/api/gateway/remote-gateways', { method: 'POST',
+    body: { ...input.remoteRegistration, name: '日志目标 Gateway B 第二连接' } });
+  const owner = registered.data.items.find(item => item.gateway_id === input.gatewayB);
+  assert.equal(owner.remote_gateways.length, 2);
+  const secondConnection = owner.remote_gateways.find(item => item.gateway_connection_id !== input.connectionId).gateway_connection_id;
+  result.connections = { first: input.connectionId, second: secondConnection, rejected_request_ids: [] };
+  for (const [path, body] of [['query', queryBody], ['locate', locateBody]]) {
+    const ambiguous = await api(`/api/gateway/diagnostics/${path}`, body, input.gatewayB, 404);
+    const wrongOwner = await api(`/api/gateway/diagnostics/${path}?gateway_connection_id=${input.connectionId}`,
+      path === 'query' ? body : { method: 'POST', body: { scope, reference: { ...second, gateway_id: input.gatewayA } } }, input.gatewayA, 404);
+    result.connections.rejected_request_ids.push(ambiguous.request_id, wrongOwner.request_id);
+    for (const connectionId of [input.connectionId, secondConnection]) {
+      const exact = await api(`/api/gateway/diagnostics/${path}?gateway_connection_id=${connectionId}`, body, input.gatewayB);
+      if (path === 'locate') assert.deepEqual(exact.data.reference, second);
+      else assert.equal(exact.data.gateway_id, input.gatewayB);
+    }
+  }
+  const unboundNavigation = await rejectedNavigation({ gateway_id: input.gatewayB, log_id: targetB.log_id, location: coordinateLocation });
+  assert.equal(unboundNavigation.ok, false, 'UI 不能自动选择同 Gateway 的任一连接');
+  await api(`/api/gateway/remote-gateways/${input.connectionId}/reconnect`, { method: 'POST' });
+  const resumed = await api(`/api/gateway/diagnostics/locate?gateway_connection_id=${input.connectionId}`, locateBody, input.gatewayB);
+  assert.deepEqual(resumed.data.reference, second);
+  await api(`/api/gateway/remote-gateways/${input.connectionId}`, { method: 'DELETE' });
+  for (const [path, body] of [['query', queryBody], ['locate', locateBody]]) {
+    const deleted = await api(`/api/gateway/diagnostics/${path}?gateway_connection_id=${input.connectionId}`, body, input.gatewayB, 404);
+    result.connections.rejected_request_ids.push(deleted.request_id);
+    await api(`/api/gateway/diagnostics/${path}`, body, input.gatewayB);
+  }
+  assert.equal((await rejectedNavigation({ ...targetB, location: coordinateLocation })).ok, false);
+  await command('boxteam.output.openLog', { ...targetB, gateway_connection_id: secondConnection, location: coordinateLocation });
+  await copySelection(coordinateQuery);
+  result.connections.deleted_connection_rejected = true;
+
+  result.phase = 'real-plugin-instance-replacement';
+  const originalDescriptor = (await api(`/api/gateway/diagnostics?gateway_connection_id=${secondConnection}&log_id=${encodeURIComponent(targetB.log_id)}&include_tail=false`, {}, input.gatewayB))
+    .data.logs.find(item => item.log_id === targetB.log_id);
+  const runtime = await api('/api/gateway/service-plugins/status', { method: 'POST',
+    body: { gateway_id: input.gatewayB, gateway_connection_id: secondConnection } });
+  const slot = runtime.data.plugins.find(item => item.binding.package_id === input.packageId && item.binding.plugin_id === input.pluginId);
+  assert.equal(slot.instance.instance_id, input.slots[1].instance.instance_id);
+  const replacementStart = result.requests.length;
+  const restarted = await api('/api/gateway/service-plugins/restart', { method: 'POST', body: {
+    gateway_id: input.gatewayB, gateway_connection_id: secondConnection, package_id: input.packageId,
+    package_version: '1.0.0', plugin_id: input.pluginId, revision: slot.revision,
+  } });
+  const replacement = restarted.data;
+  assert(replacement.log_id && replacement.log_id !== targetB.log_id);
+  assert.notEqual(replacement.instance.instance_id, slot.instance.instance_id);
+  const replacementDescriptor = (await api(`/api/gateway/diagnostics?gateway_connection_id=${secondConnection}&log_id=${encodeURIComponent(replacement.log_id)}&include_tail=false`, {}, input.gatewayB))
+    .data.logs.find(item => item.log_id === replacement.log_id);
+  await expect(outputChannel.locator('option').filter({ hasText: originalDescriptor.label })).toHaveCount(0);
+  await expect(outputChannel.locator('option').filter({ hasText: replacementDescriptor.label })).toHaveCount(1);
+  assert(!result.requests.slice(replacementStart).some(item => item.log_id === replacement.log_id && item.include_tail !== 'false'), '实例替换不能自动尾读同名新实例');
+  const historic = await api(`/api/gateway/diagnostics/locate?gateway_connection_id=${secondConnection}`, locateBody, input.gatewayB);
+  assert.deepEqual(historic.data.reference, second);
+  assert.equal(historic.data.source.log_id, targetB.log_id);
+  const replacementTarget = { ...targetB, gateway_connection_id: secondConnection, log_id: replacement.log_id };
+  const replacementRead = readResponse(replacementTarget);
+  const [replacementResponse] = await Promise.all([replacementRead, command('boxteam.output.openLog', replacementTarget)]);
+  result.replacement = { original_log_id: targetB.log_id, replacement: await verifyRead(replacementResponse, replacementTarget),
+    restart_request_id: restarted.request_id, historic_request_id: historic.request_id, historic_reference: historic.data.reference };
+
+  result.phase = 'local-window-log';
+  await outputChannel.selectOption({ label: '窗口' });
+  await expect(outputChannel).toHaveValue('窗口');
+  await expect.poll(() => output.locator('.view-lines').innerText()).toMatch(/\S/);
+  await expect(panel.locator(':scope > .title .boxteam-panel-scope:visible')).toHaveCount(0);
+  const windowReads = result.requests.length;
+  await page.waitForTimeout(3400);
+  assert.equal(result.requests.length, windowReads, '本地窗口日志不能借用远端 Gateway 诊断读取');
+  result.localWindow = { channel: '窗口', gateway_reads: 0 };
+
   const active = (await api('/api/gateway/workspaces')).data.active_workspace;
   assert.deepEqual(active, workspaces.data.active_workspace);
   result.activeWorkspaceUnchanged = true;

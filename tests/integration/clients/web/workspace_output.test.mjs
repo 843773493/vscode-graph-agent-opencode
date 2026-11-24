@@ -122,6 +122,8 @@ scenario('失效原行不回读尾部，保留原失败和诊断请求关联', a
   try { const error = await f.view.openLog({ gateway_id: 'gateway-original', location: location() }).catch(error => error);
     expect(error.message).toBe('原行已轮转'); expect(error.requestId).toBe('req_stale');
     expect(requests).toHaveLength(2); expect(f.text).toBe(''); expect(f.errors).toEqual([]);
+    await f.view.readSelected();
+    expect(requests).toHaveLength(2);
   } finally { f.close(); }
 });
 

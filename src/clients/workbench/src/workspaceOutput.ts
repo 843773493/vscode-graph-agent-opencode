@@ -38,7 +38,7 @@ interface LogSource {
   read: (signal: AbortSignal) => Promise<GatewayDiagnosticLog>;
   text?: string;
   status?: string;
-  located?: boolean;
+  followTail?: boolean;
   plugin?: boolean;
   workspaceScoped?: boolean;
 }
@@ -264,7 +264,7 @@ class WorkspaceOutput extends Disposable {
     const scope = this.scope;
     const source = this.sources.get(this.output.getActiveChannel()?.id ?? '');
     this.workspaceScopedContext.set(source?.workspaceScoped === true); this.showStatus(source);
-    if (!scope || scope.abort.signal.aborted || !source || source.located || !this.views.isViewVisible(OUTPUT_VIEW_ID)) return;
+    if (!scope || scope.abort.signal.aborted || !source || source.followTail === false || !this.views.isViewVisible(OUTPUT_VIEW_ID)) return;
     const reading = new AbortController(); this.reading = reading;
     const cancel = () => reading.abort();
     const navigation = this.navigation;
@@ -317,7 +317,7 @@ class WorkspaceOutput extends Disposable {
       await this.output.showChannel(source.id, true); check();
       if (request.location) await this.locate(source, request.location, navigation.abort.signal);
       else {
-        source.located = false;
+        source.followTail = true;
         await this.readSelected(false); check(); this.refresh.cancel();
         if (request.request_id) await this.findRequest(source, request.request_id, navigation.abort.signal);
       }
@@ -331,13 +331,14 @@ class WorkspaceOutput extends Disposable {
   private async locate(source: LogSource & { resource: URI }, location: GatewayDiagnosticLogLocateRequest, signal: AbortSignal): Promise<void> {
     if (!source.queryScope || !location.scope || !location.reference || location.scope.source !== source.descriptor.source
       || source.descriptor.source === 'workspace' && !location.scope.workspace_ids.includes(source.target.workspace_id!)) throw new Error(t('plugins.logOwnerMismatch'));
+    // 精确记录请求一旦开始就停止尾读；引用失效不能由下一轮刷新改看替换文件。
+    source.followTail = false; this.refresh.cancel();
     const result = await locateGatewayDiagnosticLog(0, location, { gatewayConnectionId: source.target.gateway_connection_id, signal });
     signal.throwIfAborted();
     if (!result.reference || !result.source || (Object.keys(location.reference) as (keyof typeof location.reference)[])
       .some(key => result.reference![key] !== location.reference![key])
       || result.source.log_id !== source.descriptor.log_id || result.source.source !== source.descriptor.source) throw new Error(t('plugins.logOwnerMismatch'));
     const selection = diagnosticLogSelection(result.text, result.reference.start_codepoint, result.reference.end_codepoint);
-    source.located = true; this.refresh.cancel();
     await this.writeText(source, result.text, signal);
     await this.reveal(source, selection, signal);
     source.status = t('bottom.gatewayLog.located'); this.showStatus(source);
@@ -373,7 +374,7 @@ class WorkspaceOutput extends Disposable {
         const chosen = await this.quickInput.pick(picks, { title: t('bottom.gatewayLog.candidates'), matchOnDescription: true }, token.token);
         signal.throwIfAborted();
         if (chosen) {
-          source.located = true;
+          source.followTail = false;
           await this.reveal(source, { startLineNumber: chosen.line, startColumn: chosen.column,
             endLineNumber: chosen.line, endColumn: chosen.column + query.length }, signal);
           source.status = t('bottom.gatewayLog.located'); this.showStatus(source);
