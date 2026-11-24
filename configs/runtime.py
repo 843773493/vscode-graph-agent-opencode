@@ -84,7 +84,12 @@ def validate_config_payload(
     except (TypeError, ValueError) as error:
         raise ValueError(f"配置策略验证失败: domain={schema_domain}") from error
     try:
-        jsonschema.validate(config, schema)
+        # 源文档信封与既有业务 API 投影分别校验；调用方明确选择，不猜测输入格式。
+        payload_schema = (
+            {"$ref": "#/$defs/gatewayPayload", "$defs": schema["$defs"]}
+            if schema_domain == "gateway" else schema
+        )
+        jsonschema.validate(config, payload_schema)
     except Unresolvable as error:
         # 引用可能是含原生路径或凭据的 URI，不复制到普通配置状态。
         raise ValueError("配置验证失败: stage=schema_reference") from error

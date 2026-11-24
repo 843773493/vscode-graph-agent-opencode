@@ -161,7 +161,7 @@ def _install_and_enable(
     if not isinstance(document, dict):
         raise TypeError("Gateway 来源文档 data 无效")
     config = commentjson.loads(str(document["jsonc"]))
-    config.setdefault("plugins", {})["runtime"] = {"entries": [{
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": [{
         "package_id": "launcher.lifecycle",
         "plugin_id": "probe",
         "package_version": "1.0.0",
@@ -400,7 +400,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             document = _json_request(client, "GET", source_path)["data"]
             assert isinstance(document, dict)
             config = commentjson.loads(str(document["jsonc"]))
-            config.setdefault("plugins", {})["sources"] = {"entries": [{
+            config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["sources"] = {"entries": [{
                 "source_id": "proof", "protocol_version": 1, "base_url": plugin_source["base_url"], "enabled": True,
             }]}
             source_saved = _json_request(client, "PUT", source_path, {
@@ -424,8 +424,8 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             document = _json_request(client, "GET", source_path)["data"]
             assert isinstance(document, dict)
             config = commentjson.loads(str(document["jsonc"]))
-            config["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] += 0.25
-            config["logging"]["runtime"] = {"level": "warning", "pretty": False}
+            config["settings"]["gateway"]["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] += 0.25
+            config["settings"]["gateway"].setdefault("logging", {})["runtime"] = {"level": "warning", "pretty": False}
             pending_save = _json_request(client, "PUT", source_path, {
                 "gateway_id": gateway_id,
                 "source_key": "gateway_mutable_override",

@@ -45,6 +45,24 @@ FROM config_source_journal
 
 
 class GatewayConfigSourceMixin:
+    @staticmethod
+    def _assert_config_source_baseline(
+        connection: sqlite3.Connection, baseline: dict[str, object],
+    ) -> None:
+        """只校验实际依赖；已退出父链的历史物化来源不参与本次提交。"""
+        for key, detail in baseline.items():
+            if not isinstance(detail, dict) or detail.get("layer_revision") is None:
+                continue
+            row = connection.execute(
+                "SELECT uri, presence, layer_revision, layer_digest, source_generation "
+                "FROM config_source_layers WHERE config_key=?", (key,),
+            ).fetchone()
+            expected = tuple(detail.get(field) for field in (
+                "uri", "presence", "layer_revision", "layer_digest", "source_generation",
+            ))
+            if row is None or tuple(row) != expected:
+                raise ConfigConflictError(f"Gateway source layer 完整基线 CAS 冲突: key={key}")
+
     def get_source_layer(self, config_key: str) -> ConfigSourceLayerRecord | None:
         connection = self._database.connection()
         try:

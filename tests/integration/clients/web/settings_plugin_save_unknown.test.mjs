@@ -34,7 +34,9 @@ const saveCode = declaration(sourcePath, source, 'saveSourceEdit');
 const sourceOwnerFactory = localizedFunction('gateway',
   `${sourceOwnerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus };`);
 const saveSourceEdit = localizedFunction(`${saveCode}\nreturn saveSourceEdit;`)();
-const privateParameterStatus = localizedFunction('parse', `${declaration(sourcePath, source, 'privateParameterStatus')}\nreturn privateParameterStatus;`)(JSON.parse);
+const sourceDocumentPath = new Function(`${declaration(sourceOwnerPath, sourceOwnerSource, 'sourceDocumentPath')}\nreturn sourceDocumentPath;`)();
+const privateParameterStatus = localizedFunction('parse', 'sourceDocumentPath',
+  `${declaration(sourcePath, source, 'privateParameterStatus')}\nreturn privateParameterStatus;`)(JSON.parse, sourceDocumentPath);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), `${JSON.stringify(fingerprints, null, 2)}\n`));
 
 function fixture({ read, saveError = new HttpRequestError(403, 'Forbidden', 'permission denied after commit', '/config/sources', 'request-save') }) {

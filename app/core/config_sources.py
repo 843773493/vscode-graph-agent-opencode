@@ -24,6 +24,7 @@ ConfigSourceLayer = Literal[
     "user_local",
     "workspace",
     "runtime_override",
+    "source",
 ]
 # 配置来源的存在性闭集：present 表示来源实际存在，absent 表示已探测但不含内容。
 ConfigSourcePresence = Literal["present", "absent"]

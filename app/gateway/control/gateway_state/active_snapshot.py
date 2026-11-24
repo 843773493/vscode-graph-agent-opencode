@@ -492,33 +492,57 @@ class ConfigActiveSnapshotMixin:
             candidates.append(candidate)
         return tuple(candidates)
 
-    def complete_unchanged_config_candidate(self, *, config_domain: str, candidate_id: str) -> None:
-        """仅完成来源幂等记录；有效配置未变时不提升 active、不产生配置事件。"""
+    def refresh_active_config_sources(
+        self, *, config_domain: str, expected_active_revision: int,
+        effective_digest: str, source_baseline: dict[str, object],
+        expected_source_baseline: dict[str, object],
+        source_generation: int, layer_revisions: dict[str, int],
+        layer_digests: dict[str, str | None], candidate_id: str | None = None,
+    ) -> None:
+        """有效业务不变时，在原 active 行更新来源，不分配业务 revision 或发事件。"""
         connection = cast("GatewayStateStore", self)._database.connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT candidate_digest, base_active_revision, source_edit_json FROM config_pending_candidate "
-                "WHERE config_domain=? AND candidate_id=? AND state='candidate_validated'",
-                (config_domain, candidate_id),
-            ).fetchone()
+            if connection.execute("SELECT 1 FROM config_apply_claim WHERE config_domain=?", (config_domain,)).fetchone():
+                raise ConfigConflictError("配置来源更新时仍有 apply claim")
             active = connection.execute(
-                "SELECT effective_digest, active_revision FROM config_active_snapshot WHERE config_domain=?",
+                "SELECT active_revision, effective_digest, source_baseline_json "
+                "FROM config_active_snapshot WHERE config_domain=? AND state='active'",
                 (config_domain,),
             ).fetchone()
-            if row is None or row[2] is None or active is None or (row[0], row[1]) != (active[0], active[1]):
-                raise ConfigConflictError("无有效变化的来源候选与当前 active 不一致")
-            intent = load_json_object(str(row[2]), field="source edit intent")
-            source = connection.execute("SELECT layer_digest FROM config_source_layers WHERE config_key=?", (intent["source_key"],)).fetchone()
-            if source is None or source[0] != intent["file_digest"]:
-                raise ConfigConflictError("无有效变化的来源候选与当前 layer 不一致")
-            # 原状态机的两个转换在同一事务完成；这里没有待执行的运行资源副作用。
-            transitions: tuple[tuple[ConfigLifecycleState, ConfigLifecycleState], ...] = (("candidate_validated", "applying"), ("applying", "active"))
-            for previous, state in transitions:
-                validate_state_transition(previous, state)
-                connection.execute("UPDATE config_pending_candidate SET state=? WHERE config_domain=? AND candidate_id=? AND state=?",
-                                   (state, config_domain, candidate_id, previous))
+            if active is None or tuple(active) != (
+                expected_active_revision, effective_digest, dump_json(expected_source_baseline),
+            ):
+                raise ConfigConflictError("配置来源更新的 active CAS 冲突")
+            self._assert_config_source_baseline(connection, source_baseline)
+            if candidate_id is not None:
+                row = connection.execute(
+                    "SELECT candidate_digest, base_active_revision, source_edit_json, source_baseline_json "
+                    "FROM config_pending_candidate WHERE config_domain=? AND candidate_id=? AND state='candidate_validated'",
+                    (config_domain, candidate_id),
+                ).fetchone()
+                if (row is None or row[2] is None or tuple(row[:2]) != (effective_digest, expected_active_revision)
+                        or str(row[3]) != dump_json(source_baseline)):
+                    raise ConfigConflictError("无有效变化的来源候选与当前 active 不一致")
+                # 无运行资源副作用；原状态机的两个转换在同一事务完成。
+                transitions: tuple[tuple[ConfigLifecycleState, ConfigLifecycleState], ...] = (
+                    ("candidate_validated", "applying"), ("applying", "active"),
+                )
+                for previous, state in transitions:
+                    validate_state_transition(previous, state)
+                    connection.execute(
+                        "UPDATE config_pending_candidate SET state=? WHERE config_domain=? AND candidate_id=? AND state=?",
+                        (state, config_domain, candidate_id, previous),
+                    )
+            connection.execute(
+                "UPDATE config_active_snapshot SET source_baseline_json=?, source_generation=?, "
+                "layer_revisions_json=?, layer_digests_json=? WHERE config_domain=?",
+                (dump_json(source_baseline), source_generation, dump_json(layer_revisions), dump_json(layer_digests), config_domain),
+            )
             connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 

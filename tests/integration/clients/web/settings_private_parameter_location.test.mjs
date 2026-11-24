@@ -15,23 +15,32 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/set
 const path = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
 const source = await readFile(path, 'utf8');
 const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+const ownerPath = 'src/clients/workbench/src/settings/sourceOwner.ts';
+const ownerSource = await readFile(ownerPath, 'utf8');
+const ownerParsed = ts.createSourceFile(ownerPath, ownerSource, ts.ScriptTarget.Latest, true);
+const sourceDocumentPathNode = ownerParsed.statements.find(item => item.name?.text === 'sourceDocumentPath');
+if (!sourceDocumentPathNode) throw new Error('实际源码缺少 sourceDocumentPath');
+const sourceDocumentPathCode = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, sourceDocumentPathNode, ownerParsed).replace(/^export /gm, ''),
+  { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+const sourceDocumentPath = new Function(`${sourceDocumentPathCode}\nreturn sourceDocumentPath;`)();
 const names = ['privateParameterLocation', 'updateJsonc', 'containsWriteOnly', 'writeOnlyFields', 'sourceBindings', 'bindingsAt', 'bindingJsonc'];
 const code = names.map(name => {
   const node = parsed.statements.find(item => item.name?.text === name);
   if (!node) throw new Error(`实际源码缺少 ${name}`);
   return ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
 }).join('\n');
-const factory = localizedFunction('parse', 'parseTree', 'applyEdits', 'setProperty', 'sameBinding',
+const factory = localizedFunction('parse', 'parseTree', 'applyEdits', 'setProperty', 'sameBinding', 'sourceDocumentPath',
   `${ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })}\nreturn { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc };`);
 const { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc } = factory(parse, parseTree, applyEdits, setProperty,
-  (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id);
-afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), JSON.stringify({ path,
-  sha256: createHash('sha256').update(source).digest('hex'),
-}, null, 2) + '\n'));
+  (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, sourceDocumentPath);
+afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), JSON.stringify({ files: [
+  { path, sha256: createHash('sha256').update(source).digest('hex') },
+  { path: ownerPath, sha256: createHash('sha256').update(ownerSource).digest('hex') },
+] }, null, 2) + '\n'));
 
 const binding = { package_id: 'probe.package', plugin_id: 'probe', package_version: '1.0.0' };
 const wrap = value => ({ plugins: { configuration: { values: { [binding.package_id]: { [binding.plugin_id]: value } } } } });
-const document = value => ({ jsonc: JSON.stringify(wrap(value)), source_effective: wrap(value) });
+const document = value => ({ gateway_id: 'gateway-a', workspace_id: 'workspace-a', jsonc: JSON.stringify(wrap(value)), source_effective: wrap(value) });
 
 test('数组秘密引用按原 JSONC 数字索引保存和清除，保留兄弟及转义字段名', () => {
   const doc = document({ entries: [{ 'a/b~c': 'old-reference', label: 'first' }, { label: 'sibling' }] });
@@ -47,6 +56,62 @@ test('数组秘密引用按原 JSONC 数字索引保存和清除，保留兄弟�
     .toEqual([{ label: 'first' }, { label: 'sibling' }]);
 });
 
+test('Gateway v6 插件绑定和秘密路径写入信封，Workspace v3 继续写根路径', () => {
+  const current = { ...binding, enabled: true };
+  const payload = { plugins: { runtime: { entries: [current] }, configuration: { values: {
+    [binding.package_id]: { [binding.plugin_id]: { token: 'old', sibling: true } },
+  } } } };
+  const doc = { gateway_id: 'gateway-a', jsonc: JSON.stringify({ config_version: 6, extends: 'base',
+    settings: { gateway: payload }, profiles: { base: { settings: { network: {} } } } }), source_effective: payload };
+  const saved = parse(bindingJsonc(doc, ['plugins', 'runtime', 'entries'], { ...binding, enabled: false }, false));
+  expect(saved.settings.gateway.plugins.runtime.entries).toEqual([{ ...binding, enabled: false }]);
+  expect(saved.extends).toBe('base');
+  expect(saved.profiles).toEqual({ base: { settings: { network: {} } } });
+  const secret = privateParameterLocation(doc, binding, '/token');
+  expect(secret.path).toEqual(['settings', 'gateway', 'plugins', 'configuration', 'values', binding.package_id, binding.plugin_id, 'token']);
+  expect(secret.current).toBe('old');
+  const updated = parse(updateJsonc(doc.jsonc, secret.path, 'new'));
+  expect(updated.settings.gateway.plugins.configuration.values[binding.package_id][binding.plugin_id]).toEqual({ token: 'new', sibling: true });
+  expect(updated.plugins).toBeUndefined();
+  expect(privateParameterLocation({ gateway_id: 'gateway-a', workspace_id: 'workspace-a', jsonc: JSON.stringify(payload), source_effective: payload },
+    binding, '/token').path[0]).toBe('plugins');
+});
+
+test('Gateway 插件参数入口向原来源提交 v6 信封，保留父来源和网络配置', async () => {
+  const node = parsed.statements.find(item => item.name?.text === 'manageConfig');
+  const manageCode = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, ''),
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const original = { config_version: 6, extends: 'parent', settings: { gateway: { plugins: { configuration: { values: {
+    [binding.package_id]: { [binding.plugin_id]: { mode: 'old' } },
+  } } } }, network: { proxy: { mode: 'direct' } } }, profiles: { parent: { settings: { network: {} } } } };
+  const doc = { gateway_id: 'gateway-a', source_key: 'gateway_user', writable: true, jsonc: JSON.stringify(original),
+    source_effective: { plugins: { runtime: { entries: [{ ...binding, enabled: true }] } } } };
+  let submitted;
+  const owner = { async list() { return { sources: [] }; }, async read() { return doc; },
+    intent(_key, jsonc) { return { jsonc }; }, async preflight() { return { changed_paths: ['/plugins/configuration/values'] }; } };
+  const manage = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse',
+    'sourceDocumentPath', 'updateJsonc', 'sourceBaseline', 'saveSourceEdit',
+    `${manageCode}\nreturn manageConfig;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'gateway_user' }),
+    (value, keys) => keys.reduce((current, key) => current?.[key], value),
+    (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, parse,
+    sourceDocumentPath, updateJsonc, () => ({}), async (_owner, intent) => {
+      submitted = parse(intent.jsonc);
+      return { document: { ...doc, edit: { source_saved: true, state: 'candidate_validated' } } };
+    });
+  let picks = 0;
+  await manage('gateway', { gateway_id: 'gateway-a' }, undefined, {
+    async pick() { return ++picks === 1 ? { remove: false } : { save: true }; },
+    async input() { return '{"mode":"updated"}'; },
+  }, { info() {}, error(message) { throw new Error(message); } }, binding, true, true, undefined,
+  () => {}, {}, new AbortController().signal);
+  expect(picks).toBe(2);
+  expect(submitted).toMatchObject({ config_version: 6, extends: 'parent', profiles: original.profiles,
+    settings: { gateway: { plugins: { configuration: { values: { [binding.package_id]: {
+      [binding.plugin_id]: { mode: 'updated' },
+    } } } } }, network: { proxy: { mode: 'direct' } } } });
+  expect(submitted.plugins).toBeUndefined();
+});
+
 test('对象的数字键仍是字符串，数组只接受已有的规范索引', () => {
   expect(privateParameterLocation(document({ entries: { '01': {} } }), binding, '/entries/01/token').path.slice(-2))
     .toEqual(['01', 'token']);
@@ -60,12 +125,12 @@ test('对象的数字键仍是字符串，数组只接受已有的规范索引',
 });
 
 test('下层数组必须由用户明确整体覆盖，不能误建对象并丢失兄弟项', () => {
-  const doc = { jsonc: JSON.stringify(wrap({})), source_effective: wrap({ entries: [{ label: 'lower' }] }) };
+  const doc = { workspace_id: 'workspace-a', jsonc: JSON.stringify(wrap({})), source_effective: wrap({ entries: [{ label: 'lower' }] }) };
   expect(() => privateParameterLocation(doc, binding, '/entries/0/token')).toThrow('完整数组');
 });
 
 test('pending 数组结构沿来源合并解析，不借 active 的旧类型决定编辑路径', () => {
-  const doc = { jsonc: JSON.stringify(wrap({})),
+  const doc = { workspace_id: 'workspace-a', jsonc: JSON.stringify(wrap({})),
     source_effective: wrap({ entries: [{}] }), effective: wrap({ entries: {} }) };
   expect(() => privateParameterLocation(doc, binding, '/entries/0/token')).toThrow('完整数组');
   const objectSource = { ...doc, source_effective: wrap({ entries: {} }), effective: wrap({ entries: [{}] }) };
@@ -82,10 +147,10 @@ test('参数入口按来源期望版本校验，pending 换版与解绑不受旧
     effective: payload([{ ...binding, enabled: true }]), jsonc: '{}' };
   let parameterPrompts = 0;
   const owner = { async list() { return { sources: [] }; }, async read() { return doc; } };
-  const manage = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse',
+  const manage = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse', 'sourceDocumentPath',
     `${manageCode}\nreturn manageConfig;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'workspace' }),
     (value, keys) => keys.reduce((current, key) => current[key], value),
-    (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, parse);
+    (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, parse, sourceDocumentPath);
   const edit = version => manage('workspace', { gateway_id: 'gateway-a' }, { gateway_id: 'gateway-a', workspace_id: 'workspace-a' },
     { async pick() { parameterPrompts++; return undefined; } }, {}, { ...binding, package_version: version },
     null, true, undefined, () => {}, {}, new AbortController().signal);
@@ -111,7 +176,7 @@ test('显式切版只修改所选来源，保留本层开关及兄弟，不物�
     for (const enabled of [false, true]) {
       const sibling = { ...binding, plugin_id: 'sibling', package_version: '4.0.0', enabled: true };
       const payload = entries => ({ plugins: { [path[1]]: { entries } } });
-      const doc = { jsonc: JSON.stringify(payload([{ ...binding, package_version: '1.0.0', enabled }, sibling])),
+      const doc = { workspace_id: 'workspace-a', jsonc: JSON.stringify(payload([{ ...binding, package_version: '1.0.0', enabled }, sibling])),
         source_effective: payload([{ ...binding, package_version: '9.0.0', enabled: !enabled }]) };
       const value = parse(bindingJsonc(doc, path, { ...binding, package_version: '2.0.0', enabled: true }, 'preserve'));
       expect(value.plugins[path[1]].entries).toEqual([{ ...binding, package_version: '2.0.0', enabled }, sibling]);
@@ -119,7 +184,7 @@ test('显式切版只修改所选来源，保留本层开关及兄弟，不物�
         .toThrow('所选来源没有此插件绑定');
     }
   }
-  expect(() => bindingJsonc({ jsonc: '{}', source_effective: {} }, ['plugins', 'runtime', 'entries'], binding, 'preserve'))
+  expect(() => bindingJsonc({ workspace_id: 'workspace-a', jsonc: '{}', source_effective: {} }, ['plugins', 'runtime', 'entries'], binding, 'preserve'))
     .toThrow('所选来源没有此插件绑定');
 });
 
@@ -127,7 +192,7 @@ test('单插件开关和解绑不能覆盖选择来源期间已经切换的版�
   for (const path of [['plugins', 'runtime', 'entries'], ['plugins', 'workspace_defaults', 'entries']]) {
     const changed = { ...binding, package_version: '3.0.0', enabled: true };
     const payload = { plugins: { [path[1]]: { entries: [changed] } } };
-    const doc = { jsonc: JSON.stringify(payload), source_effective: payload };
+    const doc = { workspace_id: 'workspace-a', jsonc: JSON.stringify(payload), source_effective: payload };
     for (const enabled of [true, false, null]) {
       expect(() => bindingJsonc(doc, path, binding, enabled)).toThrow('插件绑定版本已变化');
     }
@@ -170,7 +235,8 @@ test('批量开关读取来源后拒绝已换版项，继续提交未变化的�
     const changed = { ...binding, package_version: '3.0.0', enabled: true };
     const sibling = { ...binding, plugin_id: 'sibling', package_version: '2.0.0', enabled: true };
     const payload = { plugins: { [path[1]]: { entries: [changed, sibling] } } };
-    const document = { writable: true, jsonc: JSON.stringify(payload), source_effective: payload };
+    const document = { writable: true, ...(scope === 'workspace' ? { workspace_id: 'workspace-a' } : {}),
+      jsonc: JSON.stringify(scope === 'workspace' ? payload : { config_version: 6, settings: { gateway: payload } }), source_effective: payload };
     const submitted = [], preflights = [];
     const owner = { async list() { return { sources: [] }; }, async read() { return document; },
       intent(_key, jsonc) { return { jsonc }; }, async preflight(intent) { preflights.push(intent); } };
@@ -185,6 +251,7 @@ test('批量开关读取来源后拒绝已换版项，继续提交未变化的�
     expect(results[0].configuration).toContain('版本已变化');
     expect(results[1].configuration).toBe('active');
     expect(preflights).toHaveLength(1); expect(submitted).toHaveLength(1);
-    expect(submitted[0].plugins[path[1]].entries).toEqual([changed, { ...sibling, enabled: false }]);
+    const submittedPayload = scope === 'workspace' ? submitted[0] : submitted[0].settings.gateway;
+    expect(submittedPayload.plugins[path[1]].entries).toEqual([changed, { ...sibling, enabled: false }]);
   }
 });

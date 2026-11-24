@@ -15,7 +15,7 @@ class ConfigFileWatcher:
         candidate_paths: Iterable[Path],
         on_change: Callable[[], Awaitable[None]],
     ) -> None:
-        self._directories = tuple(dict.fromkeys(path.resolve() for path in directories))
+        self._directories = self._watch_roots(directories)
         self._candidate_paths = frozenset(path.resolve() for path in candidate_paths)
         self._on_change = on_change
         self._task: asyncio.Task[None] | None = None
@@ -24,11 +24,24 @@ class ConfigFileWatcher:
 
     def replace_candidates(self, *, directories: Iterable[Path], candidate_paths: Iterable[Path]) -> None:
         """同一监听器切换依赖集合；重绑后主动对账，覆盖换订阅窗口。"""
-        roots = tuple(sorted({path.resolve() for path in directories}))
+        roots = self._watch_roots(directories)
         candidates = frozenset(path.resolve() for path in candidate_paths)
         if set(roots) != set(self._directories) or candidates != self._candidate_paths:
             self._directories, self._candidate_paths = roots, candidates
             self._rebind.set()
+
+    @staticmethod
+    def _watch_roots(directories: Iterable[Path]) -> tuple[Path, ...]:
+        roots = set()
+        for directory in directories:
+            root = directory.resolve()
+            # 缺父目录也必须能观察其创建，不为监听创建配置目录。
+            while not root.is_dir():
+                if root == root.parent:
+                    raise FileNotFoundError(f"配置监听目录没有现存祖先: {directory}")
+                root = root.parent
+            roots.add(root)
+        return tuple(sorted(roots))
 
     async def start(self) -> None:
         if self._task is not None:
@@ -84,6 +97,6 @@ class ConfigFileWatcher:
         changes: set[tuple[Change, str]],
     ) -> bool:
         return any(
-            Path(changed_path).resolve() in self._candidate_paths
+            any(candidate.is_relative_to(Path(changed_path).resolve()) for candidate in self._candidate_paths)
             for _, changed_path in changes
         )

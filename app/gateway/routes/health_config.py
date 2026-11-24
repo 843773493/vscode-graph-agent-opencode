@@ -359,6 +359,7 @@ async def gateway_config_sources(
             load_gateway_config(
                 state_store=gateway_state,
                 persist_migrations=False,
+                gateway_id=getattr(request.app.state, "gateway_id", None),
             )
             if isinstance(gateway_state, GatewayStateStore)
             else load_gateway_config()
@@ -417,7 +418,7 @@ async def gateway_config_source_document(
     require_federation_capability(request, auth, "configuration_read")
     try:
         result = service.get_source_document(source_key=source_key, idempotency_key=idempotency_key)
-    except ConfigConflictError as error:
+    except (ConfigConflictError, FileNotFoundError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -452,7 +453,7 @@ async def preflight_gateway_config_source(
             request.app.state.service_plugins.validate(result.candidate)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     require_federation_capability(request, auth, "configuration_read")
     return APIResponse(data=result, request_id=request_id)

@@ -31,7 +31,7 @@ try {
   });
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
   // 首次加载正式静态包单列，不把上游 expect 的默认5秒当作普通业务交互预算。
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 30000 });
   result.initialization = await page.evaluate(async owner => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const results = [];
@@ -424,7 +424,7 @@ try {
   const sourcePath = '/api/gateway/config/sources/gateway_mutable_override';
   const originalSource = await api(sourcePath);
   const entries = [{ source_id: 'management-disabled', protocol_version: 1, enabled: false }];
-  const changedJsonc = applyEdits(originalSource.jsonc, modify(originalSource.jsonc, ['plugins', 'sources', 'entries'], entries,
+  const changedJsonc = applyEdits(originalSource.jsonc, modify(originalSource.jsonc, ['settings', 'gateway', 'plugins', 'sources', 'entries'], entries,
     { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('settings.switchToJSON'));
   const text = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
@@ -439,7 +439,7 @@ try {
   await dialog.getByRole('button', { name: '保存来源', exact: true }).click();
   await saving;
   const savedSource = await api(sourcePath);
-  assert.deepEqual(parse(savedSource.jsonc).plugins.sources.entries, entries);
+  assert.deepEqual(parse(savedSource.jsonc).settings.gateway.plugins.sources.entries, entries);
   assert.deepEqual(savedSource.source_effective.plugins.sources.entries, entries);
   const sourceWrite = result.writes.at(-1);
   assert.equal(result.writes.length, 3);

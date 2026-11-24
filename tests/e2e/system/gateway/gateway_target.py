@@ -214,6 +214,7 @@ def _windows_gateway_start_command(
             "}",
             "New-Item -ItemType Directory -Force -Path @($ConfigRoot, $LogsRoot, $WorkspaceRoot, (Split-Path -Parent $RuntimeManifest)) | Out-Null",
             "Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'configs/gateway_inline.jsonc') -Destination (Join-Path $ConfigRoot 'gateway.jsonc') -Force",
+            "[System.IO.File]::WriteAllText((Join-Path $ConfigRoot 'gateway_local.jsonc'), '{\"config_version\":6,\"extends\":\"user:gateway\",\"settings\":{}}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))",
             "Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'configs/gateway_schema.jsonc') -Destination (Join-Path $ConfigRoot 'gateway_schema.jsonc') -Force",
             "Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'configs/workspace_inline.jsonc') -Destination (Join-Path $ConfigRoot 'workspace.jsonc') -Force",
             "Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'configs/workspace_schema.jsonc') -Destination (Join-Path $ConfigRoot 'workspace_schema.jsonc') -Force",
@@ -311,6 +312,9 @@ def _posix_gateway_start_command(
             f"{shlex.quote(_remote_join(target, remote_config_root, destination))};"
             for source, destination in config_files
         ),
+        "printf '%s\\n' "
+        + shlex.quote(json.dumps({"config_version": 6, "extends": "user:gateway", "settings": {}}))
+        + f" > {shlex.quote(_remote_join(target, remote_config_root, 'gateway_local.jsonc'))};",
         f"cd {shlex.quote(target.repository_path)};",
         _posix_runtime_manifest_command(target, runtime_manifest_path) + ";",
         *runtime_preparation,

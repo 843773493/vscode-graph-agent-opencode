@@ -11,6 +11,12 @@ export type SourceDocument = GatewayConfigSourceDocumentDTO | ConfigSourceDocume
 export type SourceIntent = GatewayConfigSourceEditRequest | ConfigSourceEditRequest;
 export type SourceBaseline = Pick<SourceIntent, 'base_file_digest' | 'base_layer_revision' | 'base_layer_digest' | 'expected_active_revision' | 'expected_active_digest'>;
 
+/** 业务投影保持平铺；原文档路径由明确的 Gateway／Workspace 目标决定。 */
+export function sourceDocumentPath(target: Pick<GatewayRequestTarget, 'gateway_id' | 'workspace_id'>, path: readonly (string | number)[]): (string | number)[] {
+  if (target.workspace_id) return [...path];
+  return path[0] === 'network' ? ['settings', 'network', ...path.slice(1)] : ['settings', 'gateway', ...path];
+}
+
 export function sourceBaseline(document: SourceDocument): SourceBaseline {
   return { base_file_digest: document.file_digest, base_layer_revision: document.layer_revision, base_layer_digest: document.layer_digest,
     expected_active_revision: document.active_revision, expected_active_digest: document.active_digest };

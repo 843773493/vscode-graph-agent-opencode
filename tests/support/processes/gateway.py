@@ -242,7 +242,7 @@ def write_gateway_remote_gateway_config(
     if not config_path.is_file():
         raise FileNotFoundError(f"Gateway 测试工作区配置不存在: {config_path}")
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    payload["workspaces"] = [
+    payload.setdefault("settings", {}).setdefault("gateway", {})["workspaces"] = [
         {
             "kind": "remote_gateway",
             "name": "remote docker gateway",

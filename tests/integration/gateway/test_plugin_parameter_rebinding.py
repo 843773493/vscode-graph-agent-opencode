@@ -42,7 +42,7 @@ def test_reinstalled_version_validates_retained_parameters_before_binding(source
     def save(version: str | None, value: str | int, *, enabled: bool = True, expected: int = 200) -> None:
         document = exchange("GET", source_path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source["plugins"] = {"runtime": {"entries": [] if version is None else [{
+        source.setdefault("settings", {}).setdefault("gateway", {})["plugins"] = {"runtime": {"entries": [] if version is None else [{
             "package_id": package_id, "plugin_id": plugin_id, "package_version": version, "enabled": enabled}]},
             "configuration": {"values": {package_id: {plugin_id: {"value": value}}}}}
         response = exchange("PUT", source_path, {**target, "source_key": "gateway_mutable_override",

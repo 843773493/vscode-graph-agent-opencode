@@ -46,14 +46,23 @@ def _write_gateway_config(
         json.dumps(
             {
                 "$schema": "./gateway_schema.jsonc",
-                "config_version": 4,
-                "workspaces": workspaces,
+                "config_version": 6,
+                "extends": "builtin:gateway",
+                "settings": {"gateway": {"workspaces": workspaces}},
             }
         ),
         encoding="utf-8",
     )
     schema_path.write_bytes(Path("configs/gateway_schema.jsonc").read_bytes())
     return config_path, schema_path
+
+
+def _replace_gateway_settings(config_path: Path, settings: dict[str, object]) -> None:
+    config_path.write_text(json.dumps({
+        "config_version": 6,
+        "extends": "builtin:gateway",
+        "settings": {"gateway": settings},
+    }), encoding="utf-8")
 
 
 def _gateway_consumer_health_digests(value: str = "a") -> dict[str, str]:
@@ -69,12 +78,12 @@ def test_gateway_local_skill_update_policy_uses_final_config_and_schema(
 ) -> None:
     path, schema = _write_gateway_config(tmp_path, [])
     payload = json.loads(path.read_text())
-    payload["resources"] = {"skill_sources": {"local_updates": {"mode": mode, "poll_interval": interval}}}
+    payload["settings"]["gateway"]["resources"] = {"skill_sources": {"local_updates": {"mode": mode, "poll_interval": interval}}}
     path.write_text(json.dumps(payload))
     config = load_gateway_config(config_path=path, schema_path=schema)
     assert config.local_skill_updates.mode == mode
     assert config.local_skill_updates.poll_seconds == seconds
-    assert config.payload["config_version"] == 4  # 新增可选配置无需伪造迁移。
+    assert config.payload["config_version"] == 6
 
 
 @pytest.mark.parametrize("policy", [
@@ -86,9 +95,9 @@ def test_gateway_local_skill_update_policy_uses_final_config_and_schema(
 def test_gateway_local_skill_update_policy_rejects_invalid_combinations(tmp_path: Path, policy: dict[str, object]) -> None:
     path, schema = _write_gateway_config(tmp_path, [])
     payload = json.loads(path.read_text())
-    payload["resources"] = {"skill_sources": {"local_updates": policy}}
+    payload["settings"]["gateway"]["resources"] = {"skill_sources": {"local_updates": policy}}
     path.write_text(json.dumps(payload))
-    with pytest.raises(ValueError, match="配置验证失败") as failure:
+    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
         load_gateway_config(config_path=path, schema_path=schema)
     assert isinstance(failure.value.__cause__, ValidationError)
 
@@ -430,15 +439,14 @@ def test_load_gateway_config_rejects_schema_violation(
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [workspace])
 
-    with pytest.raises(ValueError, match="配置验证失败") as failure:
+    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
         load_gateway_config(config_path=config_path, schema_path=schema_path)
     cause = failure.value.__cause__
     assert isinstance(cause, ValidationError)
-    assert list(cause.absolute_path) == path
+    assert list(cause.absolute_path) == ["gateway", *path]
     assert cause.validator == rule
-    assert "stage=config" in str(failure.value)
     assert f"rule={rule}" in str(failure.value)
-    assert "location=<root>.property[" in str(failure.value)
+    assert "node=<root>" in str(failure.value)
     assert str(config_path) not in str(failure.value)
     assert str(schema_path) not in str(failure.value)
 
@@ -473,9 +481,9 @@ def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
         json.dumps(
             {
                 "$schema": "./gateway_schema.jsonc",
-                "config_version": 4,
-                "workspaces": [],
-                "features": {
+                "config_version": 6,
+                "extends": "builtin:gateway",
+                "settings": {"gateway": {"features": {
                     "session_history": {
                         "loading": {
                             "progressive": {
@@ -495,7 +503,7 @@ def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
                             }
                         }
                     }
-                },
+                }}},
             }
         ),
         encoding="utf-8",
@@ -528,7 +536,7 @@ def test_gateway_history_loading_defaults_use_five_initial_and_three_sided_turns
     assert "metadata" in result.history_loading.anchor_include
 
 
-def test_load_gateway_config_merges_local_override_and_records_sources(
+def test_load_gateway_config_follows_explicit_local_entry_and_records_sources(
     tmp_path: Path,
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [])
@@ -536,7 +544,9 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
     local_config_path.write_text(
         json.dumps(
             {
-                "logging":{"runtime":{"level":"warning"},"retention":{"inactive_max_bytes":1234}},
+                "config_version": 6,
+                "extends": "user:gateway",
+                "settings": {"gateway": {"logging":{"runtime":{"level":"warning"},"retention":{"inactive_max_bytes":1234}}}},
             }
         ),
         encoding="utf-8",
@@ -544,6 +554,7 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
 
     result = load_gateway_config(
         config_path=config_path,
+        entry_path=local_config_path,
         schema_path=schema_path,
     )
 
@@ -571,10 +582,10 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
+        json.dumps({"config_version": 6, "extends": "user:gateway", "settings": {"gateway": {"logging": {"runtime": {"level": "debug"}}}}}),
         encoding="utf-8",
     )
-    config = load_gateway_config(config_path=config_path, schema_path=schema_path)
+    config = load_gateway_config(config_path=config_path, entry_path=local_config_path, schema_path=schema_path)
     monkeypatch.setattr(
         "app.gateway.routes.health_config.load_gateway_config", lambda: config
     )
@@ -606,8 +617,8 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     assert response.data.policy_manifest
     assert response.data.sources[0].uri.startswith("boxteam://inline/")
     assert response.data.sources[0].uri.endswith("/resources/config/gateway_inline")
-    assert response.data.sources[1].uri is None
-    assert response.data.sources[2].uri is None
+    assert response.data.sources[1].uri.endswith("/resources/config/gateway_mutable_override")
+    assert response.data.sources[2].uri.endswith("/resources/config/gateway_local_mutable_override")
     assert response.data.sources[0].layer == "inline"
     assert response.data.sources[0].precedence == 0
     assert response.data.sources[0].source_key == "inline:0"
@@ -694,11 +705,11 @@ def test_resolve_gateway_relative_path_uses_installed_config_directory(
     )
 
 
-def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -> None:
+def test_gateway_config_registers_reachable_json_sources_in_sqlite(tmp_path: Path) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
+        json.dumps({"config_version": 6, "extends": "user:gateway", "settings": {"gateway": {"logging": {"runtime": {"level": "debug"}}}}}),
         encoding="utf-8",
     )
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
@@ -707,6 +718,7 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
             config_path=config_path,
             schema_path=schema_path,
             local_config_path=local_config_path,
+            entry_path=local_config_path,
             state_store=state,
         )
         assert config.payload["logging"]["runtime"]["level"] == "debug"
@@ -716,8 +728,8 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
         assert state.get_source_layer("gateway_local_mutable_override") is not None
         assert state.get_config("gateway_mutable_override") is None
         assert state.get_config("gateway_local_mutable_override") is None
-        assert config_path.with_name("gateway.jsonc.migrated.bak").is_file()
-        assert local_config_path.with_name("gateway_local.jsonc.migrated.bak").is_file()
+        assert not config_path.with_name("gateway.jsonc.migrated.bak").exists()
+        assert not local_config_path.with_name("gateway_local.jsonc.migrated.bak").exists()
     finally:
         state.close()
 
@@ -732,7 +744,7 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
+        json.dumps({"config_version": 6, "extends": "user:gateway", "settings": {"gateway": {"logging": {"runtime": {"level": "debug"}}}}}),
         encoding="utf-8",
     )
 
@@ -747,6 +759,7 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
         config_path=config_path,
         schema_path=schema_path,
         local_config_path=local_config_path,
+        entry_path=local_config_path,
     )
     without_map = {
         source.layer: source.precedence for source in without_store.source_details
@@ -761,6 +774,7 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
             config_path=config_path,
             schema_path=schema_path,
             local_config_path=local_config_path,
+            entry_path=local_config_path,
             state_store=state,
         )
     finally:
@@ -775,10 +789,10 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
     "source_key",
     ("active_snapshot", "pending_snapshot", "sqlite:1"),
 )
-def test_gateway_persisted_source_details_reject_snapshot_and_carrier_keys(
+def test_gateway_persisted_source_details_reject_non_source_layers(
     source_key: str,
 ) -> None:
-    with pytest.raises(ValueError, match="未登记的持久化键"):
+    with pytest.raises(ValueError, match="baseline layer 无效"):
         _gateway_persisted_source_details(
             {
                 source_key: {
@@ -792,26 +806,35 @@ def test_gateway_persisted_source_details_reject_snapshot_and_carrier_keys(
         )
 
 
-def test_gateway_persisted_source_details_restores_absence_and_precedence() -> None:
+def test_gateway_persisted_source_details_restores_actual_chain_precedence() -> None:
     details = _gateway_persisted_source_details(
         {
             "gateway_local_mutable_override": {
-                "uri": None,
-                "presence": "absent",
+                "uri": "boxteam://user/local/resources/config/gateway_local_mutable_override",
+                "presence": "present",
+                "layer": "user_local",
+                "precedence": 2,
+                "document": {"config_version": 6, "extends": "user:gateway", "settings": {}},
                 "layer_revision": 3,
-                "layer_digest": None,
+                "layer_digest": "digest-local",
                 "source_generation": 4,
             },
             "inline:0": {
                 "uri": "boxteam://inline/distribution/resources/config/gateway_inline",
                 "presence": "present",
+                "layer": "inline",
+                "precedence": 0,
+                "document": {"config_version": 6, "settings": {"gateway": {}}},
                 "layer_revision": None,
                 "layer_digest": None,
                 "source_generation": None,
             },
             "gateway_mutable_override": {
-                "uri": None,
+                "uri": "boxteam://user/local/resources/config/gateway_mutable_override",
                 "presence": "present",
+                "layer": "user",
+                "precedence": 1,
+                "document": {"config_version": 6, "extends": "builtin:gateway", "settings": {}},
                 "layer_revision": 2,
                 "layer_digest": "digest-user",
                 "source_generation": 4,
@@ -824,12 +847,8 @@ def test_gateway_persisted_source_details_restores_absence_and_precedence() -> N
         ("user", 1),
         ("user_local", 2),
     ]
-    assert [source.presence for source in details] == [
-        "present",
-        "present",
-        "absent",
-    ]
-    assert [source.loaded for source in details] == [True, True, False]
+    assert [source.presence for source in details] == ["present", "present", "present"]
+    assert [source.loaded for source in details] == [True, True, True]
     assert details[2].layer_revision == 3
     assert details[2].source_generation == 4
 
@@ -839,7 +858,8 @@ def test_gateway_persisted_source_details_rejects_empty_baseline() -> None:
         _gateway_persisted_source_details({})
 
 
-def test_legacy_gateway_connection_id_requires_explicit_migration(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [1, 4])
+def test_old_gateway_versions_require_explicit_migration(tmp_path: Path, version: int) -> None:
     config_path, schema_path = _write_gateway_config(
         tmp_path,
         [{
@@ -850,12 +870,12 @@ def test_legacy_gateway_connection_id_requires_explicit_migration(tmp_path: Path
         }],
     )
     payload = json.loads(config_path.read_text(encoding="utf-8"))
-    payload["config_version"] = 1
+    payload["config_version"] = version
     config_path.write_text(json.dumps(payload), encoding="utf-8")
     original = config_path.read_bytes()
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        with pytest.raises(ValueError, match="普通配置加载不会自动迁移"):
+        with pytest.raises(ValueError, match="rule=const"):
             load_gateway_config(
                 config_path=config_path,
                 schema_path=schema_path,
@@ -915,6 +935,7 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -925,33 +946,21 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
             gateway_id="gateway-test",
         )
         service.initialize_active_snapshot()
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "logging":{"runtime":{"level":"debug"}},
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {"logging": {"runtime": {"level": "debug"}}})
         monkeypatch.delenv("BOXTEAM_CONFIG_CANDIDATE_REF", raising=False)
         restored = load_gateway_config(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
             startup=True,
+            gateway_id="gateway-test",
         )
         assert restored.revision == initial.revision
         assert restored.payload["logging"]["runtime"]["level"] == initial.payload["logging"]["runtime"]["level"]
         assert [
             (source.layer, source.precedence) for source in restored.source_details
-        ] == [("inline", 0), ("user", 1), ("user_local", 2)]
-        assert [source.presence for source in restored.source_details] == [
-            "present",
-            "present",
-            "absent",
-        ]
+        ] == [("inline", 0), ("user", 1)]
+        assert [source.presence for source in restored.source_details] == ["present", "present"]
         active = state.get_active_config_snapshot("gateway")
         assert active is not None
         for source in restored.source_details:
@@ -982,6 +991,7 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1006,18 +1016,9 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
             listener_state="serving",
             state="active",
         )
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "runtime": {
-                        "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {
+            "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}},
+        })
         await service.reload()
         pending_status = service.status()
         assert pending_status.candidate_ref is not None
@@ -1033,6 +1034,7 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
             schema_path=schema_path,
             state_store=state,
             startup=True,
+            gateway_id="gateway-test",
         )
         assert crash_recovered.revision == initial.revision
         assert (
@@ -1047,17 +1049,14 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
             schema_path=schema_path,
             state_store=state,
             startup=True,
+            gateway_id="gateway-test",
         )
         assert restored.revision != initial.revision
         assert restored.payload["runtime"] != initial.payload.get("runtime")
         assert [
             (source.layer, source.precedence) for source in restored.source_details
-        ] == [("inline", 0), ("user", 1), ("user_local", 2)]
-        assert [source.presence for source in restored.source_details] == [
-            "present",
-            "present",
-            "absent",
-        ]
+        ] == [("inline", 0), ("user", 1)]
+        assert [source.presence for source in restored.source_details] == ["present", "present"]
         pending = state.get_pending_config_candidate(config_domain="gateway")
         assert pending is not None
         for source in restored.source_details:
@@ -1183,6 +1182,7 @@ async def test_gateway_config_reload_promotes_ui_candidate_and_emits_event(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1190,6 +1190,7 @@ async def test_gateway_config_reload_promotes_ui_candidate_and_emits_event(
             config_path=config_path,
             local_config_path=tmp_path / "gateway_local.jsonc",
             schema_path=schema_path,
+            gateway_id="gateway-test",
         )
         service.initialize_active_snapshot()
         claims_during_cleanup = []
@@ -1198,16 +1199,7 @@ async def test_gateway_config_reload_promotes_ui_candidate_and_emits_event(
             claims_during_cleanup.append(state.get_config_apply_claim(config_domain="gateway"))
 
         service._remove_released_plugin_private_inputs = observe_claim_during_cleanup
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "logging":{"runtime":{"level":"debug"}},
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {"logging": {"runtime": {"level": "debug"}}})
         await service.reload()
         assert len(claims_during_cleanup) == 1
         assert claims_during_cleanup[0] is not None
@@ -1251,6 +1243,7 @@ async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conf
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1258,19 +1251,11 @@ async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conf
             config_path=config_path,
             local_config_path=tmp_path / "gateway_local.jsonc",
             schema_path=schema_path,
+            gateway_id="gateway-test",
             on_runtime_config=on_runtime_config,
         )
         service.initialize_active_snapshot()
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "logging":{"runtime":{"level":"debug"}},
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {"logging": {"runtime": {"level": "debug"}}})
 
         def reject_promotion(*args, **kwargs):
             raise ConfigConflictError("模拟 promotion CAS 冲突")
@@ -1316,6 +1301,7 @@ async def test_gateway_config_reload_keeps_old_active_for_runtime_pending(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1326,18 +1312,9 @@ async def test_gateway_config_reload_keeps_old_active_for_runtime_pending(
             gateway_id="gateway-test",
         )
         service.initialize_active_snapshot()
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "runtime": {
-                        "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {
+            "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}},
+        })
         await service.reload()
         status = service.status()
         assert status.state == "pending_restart"
@@ -1402,6 +1379,7 @@ async def test_gateway_pending_restart_failure_rejects_stale_startup_contract(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1412,18 +1390,9 @@ async def test_gateway_pending_restart_failure_rejects_stale_startup_contract(
             gateway_id="gateway-test",
         )
         service.initialize_active_snapshot()
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "runtime": {
-                        "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {
+            "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}},
+        })
         await service.reload()
         candidate_ref = service.status().candidate_ref
         assert candidate_ref is not None
@@ -1485,6 +1454,7 @@ async def test_gateway_recovery_pending_requires_matching_proof_before_resolve(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1509,18 +1479,9 @@ async def test_gateway_recovery_pending_requires_matching_proof_before_resolve(
             listener_state="serving",
             state="active",
         )
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "runtime": {
-                        "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {
+            "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}},
+        })
         await service.reload()
         pending = state.get_pending_config_candidate(config_domain="gateway")
         assert pending is not None
@@ -1610,6 +1571,7 @@ async def test_gateway_pending_discard_requires_safe_active_baseline(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
+            gateway_id="gateway-test",
         )
         service = GatewayConfigReloadService(
             state_store=state,
@@ -1617,20 +1579,12 @@ async def test_gateway_pending_discard_requires_safe_active_baseline(
             config_path=config_path,
             local_config_path=tmp_path / "gateway_local.jsonc",
             schema_path=schema_path,
+            gateway_id="gateway-test",
         )
         service.initialize_active_snapshot()
-        config_path.write_text(
-            json.dumps(
-                {
-                    "config_version": 4,
-                    "workspaces": [],
-                    "runtime": {
-                        "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        _replace_gateway_settings(config_path, {
+            "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1}}}},
+        })
         await service.reload()
         pending = state.get_pending_config_candidate(config_domain="gateway")
         active = state.get_active_config_snapshot("gateway")

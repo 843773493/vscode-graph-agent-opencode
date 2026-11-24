@@ -25,6 +25,7 @@ from configs.maintenance.runtime_logging_migration import (
     read_connection_identity,
     without_retired_defaults,
 )
+from configs.migrations.gateway.v5_jsonc_to_v6_jsonc import migrate_v5_jsonc_to_v6_jsonc
 from configs.migrations.workspace_models import migrate_workspace_models
 from configs.runtime import merge_json_objects
 
@@ -37,7 +38,26 @@ MUTABLE_TABLES = (
 def migrated_payload(
     payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
     connection_entries: list[dict[str, object]] | None = None,
+    *, source_key: str | None = None,
 ) -> dict[str, object]:
+    if domain == "gateway" and payload.get("config_version") == 6:
+        result = dict(payload)
+        if plan.settings is not None:
+            settings = result.get("settings")
+            if not isinstance(settings, dict):
+                raise TypeError("Gateway v6 settings 必须是对象")
+            settings = dict(settings)
+            gateway = settings.get("gateway", {})
+            if not isinstance(gateway, dict):
+                raise TypeError("Gateway v6 settings.gateway 必须是对象")
+            gateway = dict(gateway)
+            logging = gateway.get("logging", {})
+            if not isinstance(logging, dict):
+                raise TypeError("Gateway v6 logging 必须是对象")
+            gateway["logging"] = {**logging, "runtime": dict(plan.settings)}
+            settings["gateway"] = gateway
+            result["settings"] = settings
+        return result
     result = without_retired_defaults(payload, domain, source=f"{domain} configuration")
     if domain == "workspace":
         result.pop("logger", None)
@@ -60,7 +80,17 @@ def migrated_payload(
             runtime = logging.get("runtime")
             if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
                 runtime["level"] = runtime["level"].strip().lower()
-    result["config_version"] = TARGET_CONFIG_VERSIONS[domain]
+    result["config_version"] = 5 if domain == "gateway" else TARGET_CONFIG_VERSIONS[domain]
+    if domain == "gateway":
+        if source_key is None:
+            raise ValueError("Gateway 平面来源缺少明确层身份，保留原件")
+        user_layer_present = plan.settings is not None or any(
+            item.domain == "gateway" and item.kind == "file" and item.key == "gateway.jsonc"
+            and item.payload is not None for item in plan.inputs
+        )
+        return migrate_v5_jsonc_to_v6_jsonc(
+            result, source_key=source_key, user_layer_present=user_layer_present,
+        )
     return result
 
 
@@ -69,18 +99,13 @@ def migrated_active_payload(
     inline_config: dict[str, object], connection_entries: list[dict[str, object]] | None = None,
     *, schema: Mapping[str, object],
 ) -> dict[str, object]:
-    changed = merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries), schema=schema)
-    if domain == "workspace":
-        return changed
-    logging = changed.setdefault("logging", {})
-    if not isinstance(logging, dict):
-        raise TypeError("Gateway logging 必须是对象")
-    runtime = logging.setdefault("runtime", {})
-    if not isinstance(runtime, dict):
-        raise TypeError("Gateway logging.runtime 必须是对象")
-    runtime.setdefault("level", plan.contract.default_level)
-    runtime.setdefault("pretty", plan.contract.default_pretty)
-    return changed
+    if domain == "gateway":
+        if payload.get("config_version") != 6:
+            raise ValueError("Gateway 旧 active/pending 快照缺少可恢复的逐层来源文档，保留原件并阻断升级")
+        if plan.settings is not None:
+            raise ValueError("Gateway v6 active/pending 已冻结；日志取舍需重新生成来源快照，保留原件")
+        return payload
+    return merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries), schema=schema)
 
 
 def configuration_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
@@ -124,7 +149,7 @@ def migrate_database(
         if key not in selected:
             continue
         payload = json.loads(str(old["payload_json"])) if old["payload_json"] is not None else None
-        changed = migrated_payload(payload, domain, plan, connection_entries) if payload is not None else None
+        changed = migrated_payload(payload, domain, plan, connection_entries, source_key=key) if payload is not None else None
         version = TARGET_CONFIG_VERSIONS[domain]
         if changed == payload and old["config_version"] == version:
             continue

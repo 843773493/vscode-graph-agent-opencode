@@ -60,6 +60,8 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     original_client = httpx.AsyncClient
 
     def client_factory(**kwargs: object) -> httpx.AsyncClient:
+        if "transport" in kwargs or "mounts" in kwargs:
+            return original_client(**kwargs)
         transport = _TrackedTransport(events, len(clients))
         client = original_client(transport=transport, **kwargs)
         clients.append(client)
@@ -84,7 +86,8 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     config = GatewayConfig(
         payload={"logging": {"runtime": {"level": "info", "pretty": True}, "retention": {"inactive_max_bytes": 0}}, "plugins": {},
             "telemetry": {"runtime": {"enabled": False, "sample_ratio": 1, "sample_buffer_limit": 256}},
-            "statistics": {"runtime": {"enabled": False, "collection_interval_ms": 5000}}},
+            "statistics": {"runtime": {"enabled": False, "collection_interval_ms": 5000}},
+            "network": {"proxy": {"mode": "direct"}}},
         revision="pool-lifecycle-config", default_workspace_skill_groups=[],
         gateway_process_health_poll_interval_seconds=1,
         gateway_process_health_request_timeout_seconds=1,
@@ -171,6 +174,7 @@ async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: 
     async with gateway_lifespan.lifespan(lifespan_case.app) as state:
         assert lifespan_case.app.state.http_client is lifespan_case.clients[0]
         assert lifespan_case.app.state.federation_rpc_service.session_main._http_client is lifespan_case.clients[0]
+        assert not lifespan_case.app.state.external_http_client.is_closed
         after_http_startup = state["after_http_startup"]
         assert after_http_startup is not None
         await after_http_startup()
@@ -179,6 +183,7 @@ async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: 
                 await asyncio.sleep(0.01)
         assert not lifespan_case.clients[0].is_closed
     assert all(client.is_closed for client in lifespan_case.clients)
+    assert lifespan_case.app.state.external_http_client.is_closed
     assert all(transport.close_calls == 1 for transport in lifespan_case.transports)
     assert lifespan_case.events[-1] == "pool-close-0"
     assert lifespan_case.events.count("pool-close-0") == 1

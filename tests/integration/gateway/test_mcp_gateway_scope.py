@@ -55,7 +55,7 @@ async def bind_gateway_mcp(case: McpPluginCase, *, enabled: bool = True) -> dict
     document = (await case.client.get(path)).raise_for_status().json()["data"]
     source = commentjson.loads(document["jsonc"])
     artifacts = case.context.artifacts_dir
-    source.setdefault("plugins", {}).update({
+    source.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {}).update({
         # 此隔离装具只安装 MCP 测试包，不继承产品默认的开发工具包绑定。
         "workspace_defaults": {"entries": []},
         "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.1",

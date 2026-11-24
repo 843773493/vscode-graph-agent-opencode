@@ -36,6 +36,14 @@ GATEWAY = "gateway_" + "b" * 32
 PEER = "gateway_" + "a" * 32
 
 
+def _source_document(settings: dict[str, object], *, parent: str = "builtin:gateway") -> dict[str, object]:
+    return {"config_version": 6, "extends": parent, "settings": {"gateway": settings}}
+
+
+def _source_text(settings: dict[str, object], *, parent: str = "builtin:gateway") -> str:
+    return json.dumps(_source_document(settings, parent=parent))
+
+
 @dataclass
 class SourceOwner:
     path: Path
@@ -72,12 +80,20 @@ class SourceOwner:
     def rebuild(self) -> GatewayConfigReloadService:
         config = load_gateway_config(
             config_path=self.path, local_config_path=self.local, state_store=self.store,
-            schema_path=self.service.config.schema_path, startup=True, gateway_id=GATEWAY,
+            schema_path=self.service.config.schema_path, entry_path=self.local,
+            startup=True, gateway_id=GATEWAY,
         )
+        self.app.state.gateway_config = config
+
+        def on_source_config(candidate: GatewayConfig, previous: GatewayConfig) -> None:
+            assert self.app.state.gateway_config is previous
+            self.app.state.gateway_config = candidate
+
         self.service = GatewayConfigReloadService(
             state_store=self.store, config=config, config_path=self.path,
             local_config_path=self.local, schema_path=config.schema_path,
             gateway_id=GATEWAY, on_runtime_config=self.apply,
+            on_source_config=on_source_config,
         )
         self.app.state.gateway_config_reload = self.service
         return self.service
@@ -92,6 +108,7 @@ class SourceOwner:
         if self.blocked:
             await self.release.wait()
         assert_claim()
+        self.app.state.gateway_config = candidate
         return GatewayRuntimeConsumerApplyResult(stages=(), proofs=())
 
 
@@ -100,16 +117,24 @@ def source_owner(tmp_path: Path) -> Iterator[SourceOwner]:
     config_root = tmp_path / "config"
     config_root.mkdir()
     path, local = config_root / "gateway.jsonc", config_root / "gateway_local.jsonc"
-    path.write_text('{"config_version":5,"logging":{"runtime":{"level":"info"}}}\n')
+    path.write_text(_source_text({"logging": {"runtime": {"level": "info"}}}) + "\n")
+    local.write_text(_source_text({}, parent="user:gateway") + "\n")
     schema = Path.cwd() / "configs/gateway_schema.jsonc"
     with GatewayStateStore(path=tmp_path / "gateway.sqlite") as store:
-        config = load_gateway_config(config_path=path, local_config_path=local, schema_path=schema, state_store=store)
+        config = load_gateway_config(config_path=path, local_config_path=local, entry_path=local,
+                                     schema_path=schema, state_store=store, gateway_id=GATEWAY)
+        app = FastAPI()
+        app.state.gateway_config = config
+
+        def on_source_config(candidate: GatewayConfig, previous: GatewayConfig) -> None:
+            assert app.state.gateway_config is previous
+            app.state.gateway_config = candidate
+
         service = GatewayConfigReloadService(
             state_store=store, config=config, config_path=path, local_config_path=local,
-            schema_path=schema, gateway_id=GATEWAY,
+            schema_path=schema, gateway_id=GATEWAY, on_source_config=on_source_config,
         )
         service.initialize_active_snapshot()
-        app = FastAPI()
         app.add_middleware(TraceMiddleware)
         app.include_router(router)
         policy = FederationPolicyStore()
@@ -124,7 +149,7 @@ def source_owner(tmp_path: Path) -> Iterator[SourceOwner]:
 
 def test_get_and_preflight_are_pure_even_for_already_imported_digest(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{ // 保留注释\n "config_version":5,"logging":{"runtime":{"level":"debug"}}}\n')
+    request = case.request('{ // 保留注释\n "config_version":6,"extends":"builtin:gateway","settings":{"gateway":{"logging":{"runtime":{"level":"debug"}}}}}\n')
     before = case.snapshot()
     preview = case.service.preflight_source_edit(source_key=SOURCE, request=request)
     assert preview.changed_paths == ["/logging/runtime/level"]
@@ -144,7 +169,7 @@ async def test_each_target_and_cas_conflict_writes_nothing(
     source_owner: SourceOwner, field_name: str, value: object,
 ) -> None:
     case = source_owner
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     request = GatewayConfigSourceEditRequest.model_validate({**request.model_dump(), field_name: value})
     before = case.snapshot()
     with pytest.raises(ConfigConflictError):
@@ -170,18 +195,18 @@ async def test_inline_is_readonly_and_unknown_source_is_rejected(source_owner: S
 
 async def test_user_and_local_share_writer_and_removing_local_reveals_user(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{"logging":{"runtime":{"level":"warning"}}}', source=LOCAL, key="local")
+    request = case.request(_source_text({"logging": {"runtime": {"level": "warning"}}}, parent="user:gateway"), source=LOCAL, key="local")
     local = await case.service.save_source_edit(source_key=LOCAL, request=request)
     assert local.edit is not None and local.edit.state == "active"
     assert local.layer == "user_local" and local.file_presence == "present"
     before_active, before_calls = local.active_revision, len(case.calls)
-    request = case.request('{ // 被 local 遮蔽\n"logging":{"runtime":{"level":"debug"}}}\n', key="shadowed")
+    request = case.request('{ // 被 local 遮蔽\n"config_version":6,"extends":"builtin:gateway","settings":{"gateway":{"logging":{"runtime":{"level":"debug"}}}}}\n', key="shadowed")
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert saved.edit is not None and saved.edit.state == "active" and saved.edit.layer_imported
     assert saved.active_revision == before_active and len(case.calls) == before_calls
     origin = next(item for item in saved.origins if item.path == "/logging/runtime/level")
     assert origin.source_key == LOCAL and SOURCE in origin.shadowed_sources
-    request = case.request("{}\n", source=LOCAL, key="remove-local")
+    request = case.request(_source_text({}, parent="user:gateway") + "\n", source=LOCAL, key="remove-local")
     cleared = await case.service.save_source_edit(source_key=LOCAL, request=request)
     assert cleared.effective["logging"]["runtime"]["level"] == "debug"
     assert len(case.calls) == before_calls + 1
@@ -190,14 +215,19 @@ async def test_user_and_local_share_writer_and_removing_local_reveals_user(sourc
 
 async def test_comment_only_save_preserves_bytes_and_does_not_promote(source_owner: SourceOwner) -> None:
     case = source_owner
-    text = '{ // 只修改注释、空白与尾逗号\n "config_version":5,"logging":{"runtime":{"level":"info"}},\n}\n'
+    text = '{ // 只修改注释、空白与尾逗号\n "config_version":6,"extends":"builtin:gateway","settings":{"gateway":{"logging":{"runtime":{"level":"info"}}}},\n}\n'
     request = case.request(text)
     active = case.store.get_active_config_snapshot("gateway")
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert saved.edit is not None and saved.edit.state == "active"
     assert saved.edit.source_saved and saved.edit.layer_imported
     assert case.path.read_text() == text
-    assert case.store.get_active_config_snapshot("gateway") == active
+    updated = case.store.get_active_config_snapshot("gateway")
+    assert updated is not None and active is not None
+    assert updated.active_revision == active.active_revision
+    assert updated.effective_digest == active.effective_digest
+    assert updated.payload == active.payload
+    assert updated.source_baseline != active.source_baseline
     assert not case.calls and not case.service.list_events()
     assert await case.service.save_source_edit(source_key=SOURCE, request=request) == saved
 
@@ -209,16 +239,17 @@ def _connection(host: str = "known.test", *, explicit: bool = True) -> dict[str,
     return value
 
 
-async def test_v4_existing_missing_id_reads_and_saves_from_original_identity_owner(source_owner: SourceOwner) -> None:
+async def test_v6_existing_missing_id_reads_and_saves_from_original_identity_owner(source_owner: SourceOwner) -> None:
     case = source_owner
-    case.path.write_text(json.dumps({"config_version": 4, "workspaces": [_connection()]}))
+    case.path.write_text(_source_text({"workspaces": [_connection()]}))
     # 仅让原 loader 建立原 identity owner，不借 source writer 派生新映射。
-    load_gateway_config(config_path=case.path, local_config_path=case.local, schema_path=case.service.config.schema_path, state_store=case.store)
-    case.path.write_text(json.dumps({"config_version": 4, "workspaces": [_connection(explicit=False)]}))
+    load_gateway_config(config_path=case.path, local_config_path=case.local, entry_path=case.local,
+                        schema_path=case.service.config.schema_path, state_store=case.store, gateway_id=GATEWAY)
+    case.path.write_text(_source_text({"workspaces": [_connection(explicit=False)]}))
     case.rebuild()
     before = case.snapshot()
     document = case.service.get_source_document(source_key=SOURCE)
-    assert document.source_effective["workspaces"] == [_connection()]
+    assert document.source_effective["workspaces"] == [_connection(explicit=False)]
     request = case.request(case.path.read_text() + "\n// 原正文不插入 ID\n")
     preview = case.service.preflight_source_edit(source_key=SOURCE, request=request)
     assert preview.candidate["workspaces"] == [_connection()]
@@ -234,9 +265,10 @@ async def test_v4_existing_missing_id_reads_and_saves_from_original_identity_own
 async def test_new_missing_id_never_borrows_previous_position(source_owner: SourceOwner, same_position: bool) -> None:
     case = source_owner
     if same_position:
-        case.path.write_text(json.dumps({"config_version": 4, "workspaces": [_connection()]}))
-        load_gateway_config(config_path=case.path, local_config_path=case.local, schema_path=case.service.config.schema_path, state_store=case.store)
-    text = json.dumps({"config_version": 4, "workspaces": [_connection("different.test", explicit=False)]})
+        case.path.write_text(_source_text({"workspaces": [_connection()]}))
+        load_gateway_config(config_path=case.path, local_config_path=case.local, entry_path=case.local,
+                            schema_path=case.service.config.schema_path, state_store=case.store, gateway_id=GATEWAY)
+    text = _source_text({"workspaces": [_connection("different.test", explicit=False)]})
     request = case.request(text)
     before = case.snapshot()
     with pytest.raises(ConfigConflictError, match=r"workspaces\[0\].connection_id"):
@@ -246,37 +278,41 @@ async def test_new_missing_id_never_borrows_previous_position(source_owner: Sour
     assert case.snapshot() == before
     with_id = _connection("different.test")
     with_id["connection_id"] = "connection_new"
-    request = case.request(json.dumps({"config_version": 4, "workspaces": [with_id]}))
+    request = case.request(_source_text({"workspaces": [with_id]}))
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert saved.edit is not None and saved.edit.state == "pending_restart"
 
 
 async def test_legacy_connection_source_requires_explicit_migration_without_writes(source_owner: SourceOwner) -> None:
     case = source_owner
-    case.path.write_text(json.dumps({"config_version": 4, "workspaces": [_connection()]}))
-    load_gateway_config(config_path=case.path, local_config_path=case.local, schema_path=case.service.config.schema_path, state_store=case.store)
-    text = json.dumps({"config_version": 1, "workspaces": [_connection(explicit=False)]})
+    case.path.write_text(_source_text({"workspaces": [_connection()]}))
+    load_gateway_config(config_path=case.path, local_config_path=case.local, entry_path=case.local,
+                        schema_path=case.service.config.schema_path, state_store=case.store, gateway_id=GATEWAY)
+    old_source = _source_document({"workspaces": [_connection(explicit=False)]})
+    old_source["config_version"] = 1
+    text = json.dumps(old_source)
     request = case.request(text + "\n// v1\n")
     before = case.snapshot()
-    with pytest.raises(ValueError, match="migrate-runtime-config"):
+    with pytest.raises(ValueError, match="rule=const"):
         case.service.preflight_source_edit(source_key=SOURCE, request=request)
-    with pytest.raises(ValueError, match="migrate-runtime-config"):
+    with pytest.raises(ValueError, match="rule=const"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert case.snapshot() == before
-    request = case.request(json.dumps({"config_version": 1, "workspaces": [_connection()]}))
-    saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
-    assert saved.edit is not None and saved.edit.state == "pending_restart"
-    assert case.path.read_text() == request.jsonc
+    old_source["settings"]["gateway"]["workspaces"] = [_connection()]
+    request = case.request(json.dumps(old_source))
+    with pytest.raises(ValueError, match="rule=const"):
+        await case.service.save_source_edit(source_key=SOURCE, request=request)
+    assert case.snapshot() == before
     case.path.write_text(text)
     before = case.snapshot()
-    with pytest.raises(ValueError, match="migrate-runtime-config"):
+    with pytest.raises(ValueError, match="rule=const"):
         case.service.get_source_document(source_key=SOURCE)
     assert case.snapshot() == before
 
 
 async def test_same_key_concurrency_and_watcher_apply_once(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     case.blocked = True
     first = asyncio.create_task(case.service.save_source_edit(source_key=SOURCE, request=request))
     await asyncio.wait_for(case.entered.wait(), 2)
@@ -308,9 +344,9 @@ async def test_rebuilt_owner_real_watcher_start_recovers_original_source_candida
     from app.gateway.config import source_edit
 
     case = source_owner
-    text = {"hot": '{"logging":{"runtime":{"level":"debug"}}}',
+    text = {"hot": _source_text({"logging": {"runtime": {"level": "debug"}}}),
             "unchanged": case.path.read_text() + "// 仅注释\n",
-            "restart": '{"runtime":{"gateway":{"process":{"health":{"request_timeout_seconds":3}}}}}'}[change]
+            "restart": _source_text({"runtime": {"gateway": {"process": {"health": {"request_timeout_seconds": 3}}}}})}[change]
     request = case.request(text)
     original = source_edit.atomic_write_bytes
 
@@ -352,7 +388,7 @@ async def test_unsaved_intent_does_not_block_unrelated_external_source(source_ow
     from app.gateway.config import source_edit
 
     case = source_owner
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
 
     def fail(_path: Path, _data: bytes) -> None:
         raise RuntimeError("模拟未落盘")
@@ -361,7 +397,7 @@ async def test_unsaved_intent_does_not_block_unrelated_external_source(source_ow
         patch.setattr(source_edit, "atomic_write_bytes", fail)
         with pytest.raises(RuntimeError, match="未落盘"):
             await case.service.save_source_edit(source_key=SOURCE, request=request)
-    case.path.write_text('{"config_version":5,"logging":{"runtime":{"level":"debug"}}}')
+    case.path.write_text(_source_text({"logging": {"runtime": {"level": "warning"}}}))
     await case.service.reload()
     assert len(case.calls) == 1
     event, = case.service.list_events()
@@ -374,7 +410,7 @@ async def test_source_mutations_require_both_permissions_before_owner(
 ) -> None:
     case = source_owner
     case.allow(*capabilities)
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     before = case.snapshot()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         for method, suffix in (("POST", "/preflight"), ("PUT", "")):
@@ -386,7 +422,7 @@ async def test_source_mutations_require_both_permissions_before_owner(
 async def test_permissions_rechecked_after_waiting_for_reload_lock(source_owner: SourceOwner) -> None:
     case = source_owner
     case.allow("configuration_read", "configuration_write")
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     before = case.snapshot()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         async with case.service._reload_lock:
@@ -403,7 +439,7 @@ async def test_read_revocation_during_apply_prevents_response_disclosure(source_
     case = source_owner
     case.allow("configuration_read", "configuration_write")
     case.blocked = True
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         writing = asyncio.create_task(client.put("/api/gateway/config/sources/" + SOURCE, json=request.model_dump()))
         await asyncio.wait_for(case.entered.wait(), 2)
@@ -423,12 +459,17 @@ async def test_start_and_noop_keep_real_runtime_snapshot_identity_before_hot_sav
     initial = case.service.config
     await case.service.start()
     try:
+        assert case.app.state.gateway_config is initial and case.service.config is initial
         comment = case.request(case.path.read_text() + "// runtime 身份不因来源注释改变\n", key="comment-runtime")
         saved = await case.service.save_source_edit(source_key=SOURCE, request=comment)
         assert saved.edit is not None and saved.edit.state == "active"
-        assert case.app.state.gateway_config is initial and case.service.config is initial
+        assert case.app.state.gateway_config is case.service.config
+        assert case.service.config is not initial
+        assert case.service.config.revision == initial.revision
+        assert case.service.config.payload == initial.payload
+        assert case.service.config.source_details != initial.source_details
         assert not case.service.list_events()
-        request = case.request('{"permissions":{"federation":{"default_effect":"deny"}}}', source=LOCAL, key="hot-runtime")
+        request = case.request(_source_text({"permissions": {"federation": {"default_effect": "deny"}}}, parent="user:gateway"), source=LOCAL, key="hot-runtime")
         applied = await case.service.save_source_edit(source_key=LOCAL, request=request)
         assert applied.edit is not None and applied.edit.state == "active"
         assert case.app.state.gateway_config is case.service.config
@@ -450,7 +491,7 @@ async def test_recovery_required_source_is_observed_without_reapplying(source_ow
         raise RuntimeError("模拟外部副作用未完成，必须由原恢复入口处理")
 
     case.service._on_runtime_config = fail
-    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
+    request = case.request(_source_text({"logging": {"runtime": {"level": "debug"}}}))
     with pytest.raises(RuntimeError, match="runtime_apply"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     pending = case.store.get_pending_config_candidate(config_domain="gateway", idempotency_key=request.idempotency_key)
@@ -471,11 +512,11 @@ async def test_recovery_required_source_is_observed_without_reapplying(source_ow
 async def test_plugin_parameters_require_runtime_permission_only_when_bound(source_owner: SourceOwner, bound: bool) -> None:
     case = source_owner
     binding = {"package_id": "proof", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}
-    source = {"config_version": case.service.config.payload["config_version"], "plugins": {"runtime": {"entries": [binding] if bound else []},
-        "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}}
+    source = _source_document({"plugins": {"runtime": {"entries": [binding] if bound else []},
+        "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}})
     await case.service.save_source_edit(source_key=SOURCE, request=case.request(json.dumps(source), key="setup"))
     case.allow("configuration_read", "configuration_write")
-    source["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
+    source["settings"]["gateway"]["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
     request = case.request(json.dumps(source), key="parameters")
     before = case.path.read_bytes()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://gateway") as client:

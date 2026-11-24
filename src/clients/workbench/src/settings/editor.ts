@@ -25,13 +25,13 @@ import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/proto
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { configSourceFiles, configSourceEditorUri } from './sourceEditor.js';
-import { ConfigurationSourceOwner, type SourceDocument } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceDocumentPath, type SourceDocument } from './sourceOwner.js';
 import { ITargetSettingsContext, type TargetSettingsLocation } from './scope.js';
 
 type Schema = Record<string, unknown>;
 interface SourceSetting { path: string[]; schema: Schema }
 function object(value: unknown): Schema { return value && typeof value === 'object' && !Array.isArray(value) ? value as Schema : {}; }
-function at(value: unknown, path: readonly string[]): unknown {
+function at(value: unknown, path: readonly (string | number)[]): unknown {
   for (const key of path) { if (!value || typeof value !== 'object') return undefined; value = (value as Schema)[key]; }
   return value;
 }
@@ -162,7 +162,7 @@ export class SourceSettings extends Disposable {
     const text = this.model.textEditorModel;
     const field = this.fields.get(key);
     if (!text || !field) return undefined;
-    const value = findNodeAtLocation(parseTree(text.getValue()), field.path);
+    const value = findNodeAtLocation(parseTree(text.getValue()), sourceDocumentPath(this.location, field.path));
     if (!value) return undefined;
     const node = edit ? value : value.parent?.children?.[0] ?? value;
     const start = text.getPositionAt(node.offset), end = text.getPositionAt(node.offset + node.length);
@@ -179,7 +179,7 @@ export class SourceSettings extends Disposable {
     const errors: ParseError[] = [];
     const payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
     if (errors.length) return undefined;
-    const values = object(at(payload, ['plugins', 'configuration', 'values']));
+    const values = object(at(payload, sourceDocumentPath(this.location, ['plugins', 'configuration', 'values'])));
     const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
     const bound = new Set(Array.isArray(bindings) ? bindings.flatMap(binding => {
       const entry = object(binding);
@@ -204,11 +204,18 @@ export class SourceSettings extends Disposable {
     if (!field || language) return {};
     const errors: ParseError[] = [], payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
     if (errors.length) throw new Error(t('settings.editor.invalidDraftForForm'));
-    const local = at(payload, field.path), effective = at(this.document.source_effective, field.path);
-    const selected = this.document.layers.find(layer => layer.source_key === this.location.source_key);
+    const document = this.document;
+    const local = at(payload, sourceDocumentPath(this.location, field.path)), effective = at(document.source_effective, field.path);
     let inherited = field.schema.default;
-    for (const layer of this.document.layers.filter(layer => selected && layer.precedence < selected.precedence).sort((a, b) => a.precedence - b.precedence)) {
-      const value = at(layer.payload, field.path);
+    if ('workspace_id' in document) {
+      const selected = document.layers.find(layer => layer.source_key === this.location.source_key);
+      for (const layer of document.layers.filter(layer => selected && layer.precedence < selected.precedence).sort((a, b) => a.precedence - b.precedence)) {
+        const value = at(layer.payload, field.path);
+        if (value !== undefined) inherited = value;
+      }
+    } else {
+      if (!document.source_inherited) throw new Error(t('settings.editor.inheritedMissing'));
+      const value = at(document.source_inherited, field.path);
       if (value !== undefined) inherited = value;
     }
     return { defaultValue: inherited, userRemoteValue: local, userRemote: { value: local },
@@ -232,14 +239,17 @@ export class SourceSettings extends Disposable {
     if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
     this.readDraft();
     const text = this.model.textEditorModel!, source = text.getValue();
-    const edits = setProperty(source, path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
+    const edits = setProperty(source, sourceDocumentPath(this.location, path), value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
     text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
   }
   private buildFields(): void {
     this.fields.clear();
     this.groups.length = 0;
-    const root = this.document.json_schema;
-    if (!root) throw new Error(t('settings.editor.schemaMissing'));
+    const schema = this.document.json_schema;
+    if (!schema) throw new Error(t('settings.editor.schemaMissing'));
+    const businessSchema = this.location.workspace_id ? schema : at(schema, ['$defs', 'gatewayPayload']);
+    if (!businessSchema) throw new Error(t('settings.editor.schemaMissing'));
+    const root = object(businessSchema);
     const visit = (schema: Schema, path: string[], fields: ISetting[], schemaRoot: Schema) => {
       if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/')) schema = object(at(schemaRoot, schema.$ref.slice(2).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))));
       const properties = object(schema.properties);
@@ -259,7 +269,7 @@ export class SourceSettings extends Disposable {
     };
     for (const [name, candidate] of Object.entries(object(root.properties))) {
       if (['$schema', 'config_version'].includes(name)) continue;
-      const settings: ISetting[] = []; visit(object(candidate), [name], settings, root);
+      const settings: ISetting[] = []; visit(object(candidate), [name], settings, schema);
       if (settings.length) this.groups.push({ id: name,
         title: settingsGroupLabel(name),
         sections: [{ settings }], range: nullRange, titleRange: nullRange });

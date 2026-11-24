@@ -62,11 +62,12 @@ class ConfiguredSkillGeneration:
 class ConfiguredSkillSources:
     """每个实际配置 owner 持有唯一接受链路；候选代次只暂存事务所需的值。"""
 
-    def __init__(self, *, scope: Literal["gateway", "workspace"], scope_id: str, channel: ResourceObservationChannel) -> None:
+    def __init__(self, *, scope: Literal["gateway", "workspace"], scope_id: str, channel: ResourceObservationChannel,
+                 runtimes: Mapping[str, SkillFetchRuntime] | None = None) -> None:
         self._scope: Literal["gateway", "workspace"] = scope
         self.owner_id, self._channel = scope_id, channel
         self.directory_id = "skill-directory:" + hashlib.sha256(f"skill-http-sources:{scope}:{scope_id}".encode()).hexdigest()
-        self._runtimes: dict[str, SkillFetchRuntime] = {}
+        self._runtimes: dict[str, SkillFetchRuntime] = dict(runtimes or {})
         self._generations: set[ConfiguredSkillGeneration] = set()
         self.current: ConfiguredSkillGeneration | None = None
 
@@ -78,7 +79,8 @@ class ConfiguredSkillSources:
             layer="network", priority=config.priority,
         )
 
-    async def prepare(self, configs: tuple[SkillSourceConfig, ...]) -> ConfiguredSkillGeneration:
+    async def prepare(self, configs: tuple[SkillSourceConfig, ...], *,
+                      initial_runtimes: Mapping[str, SkillFetchRuntime] | None = None) -> ConfiguredSkillGeneration:
         states = {}
         for config in configs:
             previous = self.current.sources.get(config.id) if self.current is not None else None
@@ -101,7 +103,7 @@ class ConfiguredSkillSources:
                     subscriptions[key] = subscription
                     generation.scope.register(subscription.close, label=f"skill-source-events:{key}")
             # 先订阅再取得初始快照；激活前到达的变化保持在原订阅中。
-            await self._reconcile(generation, strict=True)
+            await self._reconcile(generation, strict=True, runtimes=initial_runtimes)
             for key, state in states.items():
                 interval = state.config.updates.poll_seconds
                 if not state.config.updates.automatic:
@@ -223,8 +225,8 @@ class ConfiguredSkillSources:
             raise RuntimeError("配置 Skill source owner 尚未就绪")
         await self._reconcile(self.current)
 
-    async def _fetch(self, state: _ConfiguredSourceState) -> tuple[GatewaySkillSourceEntryDTO, Mapping[str, str]]:
-        result = await self._runtime(state.config.fetch.protocol).fetch(state.config.fetch,
+    async def _fetch(self, state: _ConfiguredSourceState, runtime: SkillFetchRuntime) -> tuple[GatewaySkillSourceEntryDTO, Mapping[str, str]]:
+        result = await runtime.fetch(state.config.fetch,
             validators=state.validators, has_snapshot=state.entry.revision is not None, max_bytes=MAX_STABLE_READ_BYTES)
         update: dict[str, object] = {"available": True, "error_code": None}
         if result.body is None:
@@ -237,7 +239,8 @@ class ConfiguredSkillSources:
                           revision="sha256:" + hashlib.sha256(result.body).hexdigest())
         return state.entry.model_copy(update=update), MappingProxyType(dict(result.validators))
 
-    async def _reconcile(self, generation: ConfiguredSkillGeneration, *, source_ids: tuple[str, ...] | None = None, strict: bool = False) -> None:
+    async def _reconcile(self, generation: ConfiguredSkillGeneration, *, source_ids: tuple[str, ...] | None = None,
+                         strict: bool = False, runtimes: Mapping[str, SkillFetchRuntime] | None = None) -> None:
         async def update(key: str) -> None:
             state = generation.sources[key]
             sequence = state.sequence
@@ -245,7 +248,8 @@ class ConfiguredSkillSources:
                 if sequence != state.sequence:
                     return
                 try:
-                    entry, validators = await self._fetch(state)
+                    runtime = runtimes.get(state.config.fetch.protocol) if runtimes is not None else None
+                    entry, validators = await self._fetch(state, runtime if runtime is not None else self._runtime(state.config.fetch.protocol))
                 except (SkillFetchError, OSError, ValueError, TimeoutError) as error:
                     logger.error("配置 Skill 来源获取失败: scope=%s scope_id=%s source_id=%s error_type=%s", self._scope, self.owner_id, key, type(error).__name__, exc_info=error)
                     if strict:

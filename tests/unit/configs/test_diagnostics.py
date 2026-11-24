@@ -17,8 +17,8 @@ import pytest
 from app.core.distribution_identity import load_distribution_id
 from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.config import loader as gateway_loader
 from app.gateway.control.gateway_state import GatewayStateStore
-from configs import diagnostics
 from configs.cli import main as config_cli_main
 
 
@@ -34,6 +34,19 @@ def _strings(value: object) -> list[str]:
     if isinstance(value, list):
         return [text for child in value for text in _strings(child)]
     return []
+
+
+def _write_gateway_sources(config_root: Path) -> tuple[Path, Path]:
+    config_root.mkdir(parents=True, exist_ok=True)
+    user = config_root / "gateway.jsonc"
+    local = config_root / "gateway_local.jsonc"
+    user.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway", "settings": {},
+    }), encoding="utf-8")
+    local.write_text(json.dumps({
+        "config_version": 6, "extends": "user:gateway", "settings": {},
+    }), encoding="utf-8")
+    return user, local
 
 
 @pytest.fixture
@@ -82,8 +95,12 @@ def test_cli_diagnostic_reports_actual_files_and_uris_read_only(
     for domain in ("gateway", "workspace"):
         for suffix in ("", "_schema"):
             source = Path("configs") / f"{domain}{suffix or '_inline'}.jsonc"
-            shutil.copyfile(source, config_root / f"{domain}{suffix}.jsonc")
-        (config_root / f"{domain}_local.jsonc").write_text("{}", encoding="utf-8")
+            if domain != "gateway" or suffix:
+                shutil.copyfile(source, config_root / f"{domain}{suffix}.jsonc")
+        if domain == "gateway":
+            _write_gateway_sources(config_root)
+        else:
+            (config_root / f"{domain}_local.jsonc").write_text("{}", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace_id = load_or_create_workspace_id(workspace)
     (workspace / ".boxteam" / "workspace.jsonc").write_text("{}", encoding="utf-8")
@@ -123,8 +140,8 @@ def test_cli_diagnostic_reports_actual_files_and_uris_read_only(
         assert jsonc["schema_address_error"] is None
         expected = [
             ("inline", load_distribution_id(), f"{domain}_inline"),
-            ("user", "local", domain),
-            ("user", "local", f"{domain}_local"),
+            ("user", "local", "gateway_mutable_override" if domain == "gateway" else domain),
+            ("user", "local", "gateway_local_mutable_override" if domain == "gateway" else f"{domain}_local"),
         ]
         if domain == "workspace":
             expected.append(("workspace", workspace_id, "workspace"))
@@ -144,7 +161,9 @@ def test_cli_diagnostic_reports_actual_files_and_uris_read_only(
             expected_path = (
                 Path.cwd() / "configs" / f"{domain}_inline.jsonc" if scope == "inline"
                 else workspace / ".boxteam" / "workspace.jsonc" if scope == "workspace"
-                else config_root / f"{name}.jsonc"
+                else config_root / ("gateway.jsonc" if name == "gateway_mutable_override"
+                                    else "gateway_local.jsonc" if name == "gateway_local_mutable_override"
+                                    else f"{name}.jsonc")
             )
             assert source["path"] == str(expected_path.resolve())
         assert jsonc["schema_path"] == str((config_root / f"{domain}_schema.jsonc").resolve())
@@ -197,9 +216,14 @@ def test_cli_diagnostic_reports_unavailable_identity_without_creating_or_replaci
     output, stderr = invoke_diagnostic("doctor")
     for domain in ("gateway", "workspace"):
         jsonc = output[domain]["jsonc"]
-        assert jsonc["sources"][0]["uri"] is None
-        assert "stage=identity" in jsonc["sources"][0]["address_error"]
-        assert jsonc["effective"]["valid"] is True
+        if domain == "gateway":
+            assert jsonc["sources"] == []
+            assert jsonc["effective"]["valid"] is False
+            assert "stage=resolve_gateway" in jsonc["effective"]["error"]
+        else:
+            assert jsonc["sources"][0]["uri"] is None
+            assert "stage=identity" in jsonc["sources"][0]["address_error"]
+            assert jsonc["effective"]["valid"] is True
         assert output[domain]["sqlite"]["available"] is False
     assert output["workspace"]["jsonc"]["sources"][-1]["uri"] is None
     assert (
@@ -208,8 +232,8 @@ def test_cli_diagnostic_reports_unavailable_identity_without_creating_or_replaci
     assert not diagnostic_home.exists()
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
     assert output["workspace"]["jsonc"]["sources"][-1]["path"] == str((workspace / ".boxteam/workspace.jsonc").resolve())
-    assert "stage=diagnostic_log" in stderr
-    assert ("error=FileNotFoundError" if missing else "error=ValueError") in stderr
+    assert "logger=app.core.failures" in stderr
+    assert "详情见诊断 JSON" in stderr
 
 
 @pytest.mark.parametrize(
@@ -228,7 +252,7 @@ def test_cli_diagnostic_failures_do_not_echo_native_input_and_can_retry(
     failure: str,
 ) -> None:
     config_root = diagnostic_home / "config"
-    config_root.mkdir(parents=True)
+    _write_gateway_sources(config_root)
     path = config_root / "gateway.jsonc"
     if failure == "jsonc":
         path.write_text('{"config_version": ' + location, encoding="utf-8")
@@ -257,7 +281,7 @@ def test_cli_diagnostic_failures_do_not_echo_native_input_and_can_retry(
     elif failure == "schema":
         shutil.copyfile(Path("configs/gateway_schema.jsonc"), path)
     else:
-        path.write_text("{}", encoding="utf-8")
+        _write_gateway_sources(config_root)
     retried, _ = invoke_diagnostic("diagnose")
     assert retried["gateway"]["jsonc"]["effective"]["valid"] is True
     assert "error" not in retried["gateway"]["sqlite"]
@@ -296,11 +320,18 @@ def test_real_cli_process_reports_actual_locations_without_initializing_target(
     assert completed.returncode == 0, completed.stderr
     report = json.loads(completed.stdout)
     assert report["read_only"] is True
-    assert report["gateway"]["jsonc"]["effective"]["valid"] is True
-    assert report["gateway"]["jsonc"]["sources"][0]["path"] == str((Path.cwd() / "configs/gateway_inline.jsonc").resolve())
+    assert report["gateway"]["jsonc"]["effective"]["valid"] is False
+    sources = report["gateway"]["jsonc"]["sources"]
+    if initialized:
+        assert len(sources) == 1
+        assert sources[0]["layer"] == "user_local" and sources[0]["presence"] == "absent"
+        assert sources[0]["path"] == str((diagnostic_home / "config/gateway_local.jsonc").absolute())
+    else:
+        assert sources == []
+    assert "stage=resolve_gateway" in report["gateway"]["jsonc"]["effective"]["error"]
     assert report["workspace"]["jsonc"]["sources"][-1]["path"] == str((tmp_path / "workspace/.boxteam/workspace.jsonc").resolve())
     assert completed.stderr == (
-        "" if initialized else "ERROR: logger=app.core.failures, stage=diagnostic_log, error=FileNotFoundError, errno=2\n"
+        "" if initialized else "ERROR: logger=app.core.failures, 详情见诊断 JSON\n"
     )
     assert not diagnostic_home.exists()
 
@@ -312,9 +343,9 @@ def test_diagnostic_source_metadata_and_effective_state_share_one_snapshot(
 ) -> None:
     config_root = diagnostic_home / "config"
     config_root.mkdir(parents=True)
-    source = config_root / "gateway.jsonc"
-    source.write_text("{}", encoding="utf-8")
-    original_read = diagnostics.read_stable_config_file
+    source, _ = _write_gateway_sources(config_root)
+    original = source.read_bytes()
+    original_read = gateway_loader.read_stable_config_file
     snapshots = []
 
     def read_once(path: Path):
@@ -326,12 +357,13 @@ def test_diagnostic_source_metadata_and_effective_state_share_one_snapshot(
             )
         return snapshot
 
-    monkeypatch.setattr(diagnostics, "read_stable_config_file", read_once)
+    monkeypatch.setattr(gateway_loader, "read_stable_config_file", read_once)
     output, _ = invoke_diagnostic("doctor")
     assert len(snapshots) == 1
     jsonc = output["gateway"]["jsonc"]
-    assert jsonc["sources"][1]["digest"] == hashlib.sha256(b"{}").hexdigest()
-    assert jsonc["effective"]["valid"] is True
+    assert jsonc["sources"][1]["digest"] == hashlib.sha256(original).hexdigest()
+    assert jsonc["effective"]["valid"] is False
+    assert "stage=resolve_gateway, error=RuntimeError" in jsonc["effective"]["error"]
     retried, _ = invoke_diagnostic("doctor")
     assert retried["gateway"]["jsonc"]["effective"]["valid"] is False
 
@@ -340,8 +372,7 @@ def test_diagnostic_native_read_failure_keeps_errno_and_does_not_report_absence(
     diagnostic_home: Path, invoke_diagnostic: Callable, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = diagnostic_home / "config" / "gateway.jsonc"
-    source.parent.mkdir(parents=True)
-    source.write_text("{}", encoding="utf-8")
+    _write_gateway_sources(source.parent)
     original_read = Path.read_bytes
 
     def rejected_read(path: Path) -> bytes:
@@ -350,13 +381,13 @@ def test_diagnostic_native_read_failure_keeps_errno_and_does_not_report_absence(
         return original_read(path)
 
     monkeypatch.setattr(Path, "read_bytes", rejected_read)
-    output, stderr = invoke_diagnostic("doctor")
-    failed = output["gateway"]["jsonc"]["sources"][1]
-    assert failed["presence"] is None
-    assert "stage=read, error=PermissionError, errno=13" in failed["parse_error"]
-    assert failed["path"] == str(source.resolve())
-    assert str(source) not in stderr
-    assert original_read(source) == b"{}"
+    output, _ = invoke_diagnostic("doctor")
+    failed = output["gateway"]["jsonc"]
+    assert failed["effective"]["valid"] is False
+    assert "stage=resolve_gateway, error=PermissionError, errno=13" in failed["effective"]["error"]
+    assert original_read(source) == json.dumps({
+        "config_version": 6, "extends": "builtin:gateway", "settings": {},
+    }).encode()
     monkeypatch.setattr(Path, "read_bytes", original_read)
     retried, _ = invoke_diagnostic("doctor")
     assert retried["gateway"]["jsonc"]["effective"]["valid"] is True
@@ -440,19 +471,23 @@ def test_real_cli_preserves_rejection_of_unrelated_migration_options(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="本例验证 POSIX 符号链接环")
-def test_diagnostic_reports_source_path_even_when_symlink_target_cannot_resolve(
+def test_diagnostic_rejects_symlink_loop_and_recovers_after_repair(
     diagnostic_home: Path, invoke_diagnostic: Callable,
 ) -> None:
     source = diagnostic_home / "config/gateway.jsonc"
-    source.parent.mkdir(parents=True)
+    _write_gateway_sources(source.parent)
+    source.unlink()
     source.symlink_to(source.name)
     output, _ = invoke_diagnostic("doctor")
-    failed = output["gateway"]["jsonc"]["sources"][1]
-    assert failed["path"] == str(source.absolute())
-    assert failed["parse_error"] == "stage=read, error=RuntimeError"
+    failed = output["gateway"]["jsonc"]
+    assert failed["sources"] == []
+    assert failed["effective"]["valid"] is False
+    assert "stage=resolve_gateway, error=RuntimeError" in failed["effective"]["error"]
     assert source.is_symlink() and source.readlink() == Path(source.name)
     source.unlink()
-    source.write_text("{}", encoding="utf-8")
+    source.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway", "settings": {},
+    }), encoding="utf-8")
     retried, _ = invoke_diagnostic("doctor")
     assert retried["gateway"]["jsonc"]["effective"]["valid"] is True
-    assert retried["gateway"]["jsonc"]["sources"][1]["path"] == failed["path"]
+    assert retried["gateway"]["jsonc"]["sources"][1]["path"] == str(source.absolute())

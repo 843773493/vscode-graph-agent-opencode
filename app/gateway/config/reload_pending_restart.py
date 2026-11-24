@@ -269,6 +269,16 @@ class ReloadPendingRestartMixin:
             if old_generation_id is not None
             else intent.old_generation
         )
+        # 固定来源定义用于恢复；发布仍核验真实文件，不能拿历史定义充当磁盘 CAS。
+        candidate = self._source_config()
+        current_baseline, _, _, _ = self._source_baseline(candidate)
+        prepared = self._state_store.get_pending_config_candidate(
+            config_domain=self._CONFIG_DOMAIN, candidate_id=intent.candidate_id,
+        )
+        if prepared is None:
+            raise ConfigConflictError("Gateway pending candidate 已消失")
+        if candidate.revision != prepared.effective_digest or current_baseline != prepared.source_baseline:
+            raise ConfigConflictError("Gateway pending 的父依赖已改变，禁止发布旧候选")
         pending = self.begin_pending_restart(candidate_ref=candidate_ref)
         claim = self._state_store.get_config_apply_claim(
             config_domain=self._CONFIG_DOMAIN
@@ -301,6 +311,7 @@ class ReloadPendingRestartMixin:
             if active is not None
             else ()
         )
+        self._verify_source_dependencies(candidate)
         promoted = self._state_store.promote_active_config_snapshot(
             config_domain=self._CONFIG_DOMAIN,
             candidate_id=pending.candidate_id,
@@ -310,7 +321,7 @@ class ReloadPendingRestartMixin:
             layer_revisions=layer_revisions,
             layer_digests=layer_digests,
             effective_digest=pending.effective_digest,
-            schema_version=3,
+            schema_version=int(pending.payload["config_version"]),
             expected_active_revision=(
                 active.active_revision if active is not None else None
             ),

@@ -73,7 +73,7 @@ try {
   });
 
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   const api = (path, options = {}, targetGatewayId, expectedStatus = 200, raw = false) => page.evaluate(async ({ path, options, targetGatewayId, expectedStatus, raw }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: {
@@ -239,11 +239,11 @@ try {
 
   const savedB = await api('/api/gateway/config/sources/gateway_mutable_override', {}, input.gatewayB);
   const savedConfig = parseJsonc(savedB.jsonc);
-  const bMarker = savedConfig.plugins.configuration.values[input.packageId][input.pluginId].marker;
+  const bMarker = savedConfig.settings.gateway.plugins.configuration.values[input.packageId][input.pluginId].marker;
   assert.equal(bMarker, 'B-from-Workbench');
   const savedA = await api('/api/gateway/config/sources/gateway_mutable_override', {}, input.gatewayA);
   const aConfig = parseJsonc(savedA.jsonc);
-  const aMarker = aConfig.plugins.configuration.values[input.packageId][input.pluginId].marker;
+  const aMarker = aConfig.settings.gateway.plugins.configuration.values[input.packageId][input.pluginId].marker;
   assert.equal(aMarker, 'A-unchanged');
 
   await chooseTarget('本地');

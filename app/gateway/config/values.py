@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
-from app.core.config_sources import ConfigSource, ConfigSourceLayer
+from app.core.config_sources import ConfigSource
 from app.core.history_loading import (
     DEFAULT_ANCHOR_AFTER_TURNS,
     DEFAULT_ANCHOR_BEFORE_TURNS,
@@ -22,21 +22,9 @@ from app.services.infrastructure.resource_platform.observation.source_update_pol
 from app.services.infrastructure.resource_platform.sources.skill_source_config import (
     SkillSourceConfig,
 )
+from configs.inheritance import ConfigGraph
 
-# Gateway 来源权威表：每个来源键的逻辑来源层与 precedence 只在本文件登记一次；`inline:0`
-# 是 writer 为无 source_key 的 inline 记录生成的 canonical baseline key。
-# `_gateway_source_detail`、inline 构造、无 store 分支及 baseline 恢复都只查它。Gateway 控制面库
-# 与工作区库是两个独立持久化 owner（owner 裁定 B2「不合并」），故本表是 Gateway 侧
-# 自有权威表，MUST NOT 从 workspace 侧 import 共享；但取值语义与 workspace 侧一致。
-# `inline:0`→`inline`、`gateway_mutable_override`→`user` 与
-# `gateway_local_mutable_override`→`user_local` 与无 store 分支逐字一致；有 store 时
-# 共享 `gateway.sqlite` 只是**承载事实**，MUST NOT 有损改写成 carrier 名对外暴露；
-# 不可寻址性一律以 `uri=None` 表达。
-_GATEWAY_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
-    "inline:0": ("inline", 0),
-    "gateway_mutable_override": ("user", 1),
-    "gateway_local_mutable_override": ("user_local", 2),
-}
+
 @dataclass(frozen=True, slots=True)
 class ConfiguredRemoteGateway:
     host: str
@@ -82,6 +70,9 @@ class GatewayConfig:
     source_paths: tuple[Path, ...] = ()
     source_details: tuple[ConfigSource, ...] = ()
     payload: dict[str, object] = field(default_factory=dict)
+    graph: ConfigGraph | None = field(default=None, repr=False, compare=False)
+    inline_path: Path | None = None
+    entry_path: Path | None = None
 GatewayConfigRuntimeApplier = Callable[
     [GatewayConfig, GatewayConfig, str, Callable[[], None]],
     Awaitable[GatewayRuntimeConsumerApplyResult],

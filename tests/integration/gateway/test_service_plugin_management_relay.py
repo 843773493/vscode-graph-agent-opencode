@@ -234,7 +234,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         ]
 
         def update(document: dict[str, object]) -> None:
-            permissions = document.setdefault("permissions", {})
+            permissions = document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})
             assert isinstance(permissions, dict)
             permissions["federation"] = {"default_effect": "deny", "rules": rules}
 
@@ -287,7 +287,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         initial = client_b.get(source_path).raise_for_status().json()["data"]
         initial_document = commentjson.loads(initial["jsonc"])
-        initial_document.setdefault("plugins", {})["sources"] = {"entries": [{
+        initial_document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["sources"] = {"entries": [{
             "source_id": "relay-proof", "protocol_version": 1,
             "base_url": f"http://127.0.0.1:{source_server.server_port}", "enabled": True,
         }]}
@@ -344,7 +344,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert isinstance(marker, dict) and marker["type"] == "string"
 
         def bind(document: dict[str, object], version: str = "1.0.0", *, enabled: bool = True) -> None:
-            plugins = document.setdefault("plugins", {})
+            plugins = document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})
             assert isinstance(plugins, dict)
             plugins["runtime"] = {"entries": [{
                 "package_id": "relay.management.probe", "plugin_id": "streams",
@@ -567,7 +567,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert "configuration:streams" in json.dumps(evidence[-1]["body"])
 
         def unbind(document: dict[str, object]) -> None:
-            plugins = document["plugins"]
+            plugins = document["settings"]["gateway"]["plugins"]
             assert isinstance(plugins, dict)
             plugins["runtime"] = {"entries": []}
 

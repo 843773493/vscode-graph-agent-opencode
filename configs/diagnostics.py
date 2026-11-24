@@ -10,7 +10,11 @@ from typing import Final, NamedTuple
 
 import jsonschema
 
-from app.core.config_sources import parse_stable_config_file, read_stable_config_file
+from app.core.config_sources import (
+    StableConfigFile,
+    parse_stable_config_file,
+    read_stable_config_file,
+)
 from app.core.distribution_identity import load_distribution_id
 from app.core.user_identity import user_scope_id
 from app.core.workspace_identity import read_workspace_id
@@ -186,6 +190,50 @@ def _jsonc_domain_diagnostic(
         "sources": sources,
         "effective": effective_result,
     }
+    if domain == "gateway":
+        from app.gateway.config import load_gateway_config
+
+        inline, user, local = (source.path for source in layers)
+        dependencies: dict[Path, StableConfigFile] = {}
+        try:
+            config = load_gateway_config(
+                config_path=user, entry_path=local, local_config_path=local,
+                inline_config_path=inline, schema_path=schema_path, persist_migrations=False,
+                dependencies=dependencies,
+            )
+            if config.graph is None:
+                raise RuntimeError("Gateway 诊断缺少配置父链")
+            for detail in config.source_details:
+                path = config.graph.source_locations[detail.uri]
+                sources.append({
+                    "uri": detail.uri, "address_error": None, "path": str(path),
+                    "layer": detail.layer, "precedence": detail.precedence,
+                    "source_key": detail.source_key, "presence": detail.presence,
+                    "digest": detail.layer_digest, "config_version": 6, "parse_error": None,
+                })
+            effective_result.update(valid=True, digest=config.revision)
+        except (OSError, RuntimeError, TypeError, ValueError, jsonschema.SchemaError, jsonschema.ValidationError) as error:
+            effective_result["error"] = diagnostic_error(error, stage="resolve_gateway")
+            # 这里可能正处理符号链接环；诊断归类只用声明路径，不再次解析失败来源。
+            known = {source.path.absolute(): source for source in layers}
+            # 失败仍报告这次实际读取的依赖；使用原稳定字节，不重读改变中的文件。
+            for path, snapshot in reversed(dependencies.items()):
+                source = known.get(path)
+                parse_error = None
+                version = None
+                try:
+                    document = parse_stable_config_file(snapshot)
+                    raw_version = document.get("config_version") if document is not None else None
+                    version = raw_version if type(raw_version) is int else None
+                except (TypeError, ValueError) as parse_failure:
+                    parse_error = diagnostic_error(parse_failure, stage="parse")
+                address = (_file_address(scope=source.scope, logical_name=source.logical_name, identities=identities)
+                           if source is not None else {"uri": None, "address_error": "候选来源解析未完成"})
+                sources.append({**address, "path": str(path), "layer": source.layer if source else "source",
+                                "source_key": source.source_key if source else None, "precedence": len(sources),
+                                "presence": snapshot.presence, "digest": snapshot.digest,
+                                "config_version": version, "parse_error": parse_error})
+        return result
     for path, scope, logical_name, layer, precedence, source_key in layers:
         source, payload = _inspect_jsonc_source(
             path=path,

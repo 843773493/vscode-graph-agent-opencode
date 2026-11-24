@@ -189,6 +189,7 @@ class GatewayConfigSourceDocumentDTO(BaseModel):
     json_schema: dict[str, object]
     effective: dict[str, object]
     source_effective: dict[str, object]
+    source_inherited: dict[str, object]
     layers: list[GatewayConfigSourceLayerViewDTO]
     origins: list[GatewayConfigSourceOriginDTO]
     status: GatewayConfigReloadStatusDTO

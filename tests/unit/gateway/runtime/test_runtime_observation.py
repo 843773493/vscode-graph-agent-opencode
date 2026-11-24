@@ -143,10 +143,16 @@ async def test_trace_reports_http_errors_without_collecting_business_input(
 
 def test_gateway_observation_uses_original_config_layers(tmp_path: Path) -> None:
     user, local = tmp_path / "gateway.jsonc", tmp_path / "gateway_local.jsonc"
-    user.write_text(json.dumps({"telemetry": {"runtime": {"enabled": True, "sample_buffer_limit": 8}}}))
-    local.write_text(json.dumps({"telemetry": {"runtime": {"sample_ratio": 0.25}},
-                                 "statistics": {"runtime": {"enabled": True}}}))
-    config = load_gateway_config(config_path=user, local_config_path=local,
+    user.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway",
+        "settings": {"gateway": {"telemetry": {"runtime": {"enabled": True, "sample_buffer_limit": 8}}}},
+    }))
+    local.write_text(json.dumps({
+        "config_version": 6, "extends": "user:gateway",
+        "settings": {"gateway": {"telemetry": {"runtime": {"sample_ratio": 0.25}},
+                                  "statistics": {"runtime": {"enabled": True}}}},
+    }))
+    config = load_gateway_config(config_path=user, local_config_path=local, entry_path=local,
                                  schema_path=Path.cwd() / "configs/gateway_schema.jsonc")
     settings = RuntimeObservationSettings.from_gateway_config(config.payload)
     assert settings.telemetry.model_dump() == {"enabled": True, "sample_ratio": 0.25, "sample_buffer_limit": 8}
@@ -160,7 +166,7 @@ def test_gateway_observation_uses_original_config_layers(tmp_path: Path) -> None
 ])
 def test_observation_schema_rejects_out_of_bounds_settings(domain: str, field: str, value: float) -> None:
     payload = read_jsonc_object(Path.cwd() / "configs/gateway_inline.jsonc")
-    payload[domain]["runtime"][field] = value
+    payload["settings"]["gateway"][domain]["runtime"][field] = value
     with pytest.raises(ValueError):
         validate_config(payload, schema_path=Path.cwd() / "configs/gateway_schema.jsonc")
 

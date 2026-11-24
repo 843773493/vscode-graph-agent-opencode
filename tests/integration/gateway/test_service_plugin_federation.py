@@ -78,7 +78,7 @@ def test_federated_services_use_native_instance_and_revoke_idle_streams(
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         source = native.get(source_path).raise_for_status().json()["data"]
         document = commentjson.loads(source["jsonc"])
-        document.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [{
+        document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [{
             "capability": "read", "effect": "deny", "principal_ref": principal_ref_for_gateway(gateway_a)}]}
         updated = native.put(source_path, json={"gateway_id": gateway_b, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(document), "base_file_digest": source["file_digest"],

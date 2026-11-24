@@ -116,7 +116,7 @@ setting_dev_local.jsonc   # 本地开发覆盖，仅供当前机器使用
 gateway_inline.jsonc      # Gateway 发行包内置默认配置
 gateway.jsonc             # Gateway 用户级覆盖
 gateway_schema.jsonc      # Gateway 最终结构 schema
-gateway_dev.jsonc         # Gateway 源码开发完整配置模板
+gateway_dev.jsonc         # Gateway 源码开发节点模板，仅声明开发差异
 gateway_local.jsonc       # Gateway 用户级机器私有覆盖，不纳入 Git
 workspace_inline.jsonc    # Workspace 发行包内置默认配置
 workspace.jsonc           # Workspace 用户级覆盖
@@ -127,11 +127,11 @@ workspace_local.jsonc     # Workspace 用户级机器私有覆盖，不纳入 Gi
 
 合并规则必须按加载边界解释，而不是把所有 JSONC 文件自动叠加：
 
-1. `gateway_inline.jsonc` 与 `workspace_inline.jsonc` 是发行包随代码分发的完整内置默认配置；`.env` 仍由环境/安装流程单独管理。`*_dev.jsonc` 是完整开发模板，不是运行时自动参与合并的覆盖片段。
-2. Gateway 的有效配置按“`gateway_inline.jsonc` → 用户级 `gateway.jsonc` → 用户级 `gateway_local.jsonc`”生成，并读取 `gateway_schema.jsonc` 校验；不读取工作区 `.boxteam/` 中的 Workspace 配置。
+1. `gateway_inline.jsonc` 与 `workspace_inline.jsonc` 是发行包随代码分发的完整内置默认配置；`.env` 仍由环境/安装流程单独管理。`*_dev.jsonc` 是安装器选择的开发模板，不因文件名自动参与运行时加载。Gateway 开发模板只声明开发差异，Workspace 当前 v3 仍使用完整模板。
+2. Gateway v6 文件使用 `config_version`、`extends`、`settings`、`profiles` 节点信封，业务设置分别放在 `settings.gateway` 和 `settings.network`。加载只沿明确入口的单父链解析；安装器生成 inline → user → local 默认链，local 入口必须存在，自定义父链可绕过原来源，不按固定层序补齐。使用 `gateway_schema.jsonc` 校验节点和最终设置，再向既有业务 API 投影，不读取工作区 `.boxteam/`。
 3. Workspace 的有效配置按“`workspace_inline.jsonc` → 用户级 `workspace.jsonc` → 用户级 `workspace_local.jsonc` → 工作区 `${workspace}/.boxteam/workspace.jsonc`”生成；高优先级配置覆盖同名值。对象递归合并，标量直接覆盖，数组整体替换，不能对数组隐式去重或拼接。
 4. schema 校验对象是合并后的最终 Workspace 配置，不是工作区覆盖片段单独的完整配置。覆盖片段可以只声明需要覆盖的字段，但不得包含 Gateway 字段。
-5. `_local` 文件是可选的用户级机器私有覆盖；当前项目的 `gateway_local.jsonc` 和 `workspace_local.jsonc` 会被显式加载，分别位于对应用户级配置目录。它们必须被 Git 忽略，且来源必须出现在配置诊断接口中。
+5. `_local` 文件属于用户级机器私有配置，必须被 Git 忽略。Gateway 默认明确以 `gateway_local.jsonc` 为入口，缺失即报错，不自动回退到 user／inline；Workspace 当前 v3 的 `workspace_local.jsonc` 仍是可选覆盖。配置诊断必须反映实际依赖，不按历史固定层表伪造来源。
 6. 所有合并失败、schema 错误、未知字段和版本不匹配都必须直接报告，不得返回部分合并结果或静默忽略。
 
 ## 变更工作流

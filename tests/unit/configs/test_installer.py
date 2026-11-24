@@ -32,6 +32,22 @@ def _load_jsonc_object(path: Path) -> dict[str, object]:
     return payload
 
 
+def _legacy_aggregate_config() -> dict[str, object]:
+    return {
+        "config_version": 4,
+        "gateway": {"workspaces": []},
+        "llm": {"providers": {"primary": {
+            "defaults": {"endpoint": "https://example.invalid/v1", "custom_llm_provider": "openai", "api_key": ""},
+            "models": {"default": {"model": "example-model"}},
+        }}},
+        "default_agent": "default",
+        "agents": {"default": {
+            "name": "Default", "instructions": {"system_prompt": "Test agent."},
+            "model": {"primary": {"provider_id": "primary", "model_id": "default"}},
+        }},
+    }
+
+
 def test_bundled_plugin_install_is_idempotent_and_does_not_change_switches(tmp_path: Path) -> None:
     archive = tmp_path / "builtin.zip"
     manifest = {"manifest_version": 1, "package_id": "example.builtin", "version": "1.0.0",
@@ -47,7 +63,7 @@ def test_bundled_plugin_install_is_idempotent_and_does_not_change_switches(tmp_p
     assert install_bundled_plugins(boxteam_home=home, packages=entries) == ["example.builtin@1.0.0"]
     config = home / "config/gateway.jsonc"
     config.parent.mkdir()
-    switches = '{"plugins":{"workspace_defaults":{"entries":[]}}}\n'
+    switches = '{"config_version":6,"extends":"builtin:gateway","settings":{"gateway":{"plugins":{"workspace_defaults":{"entries":[]}}}}}\n'
     config.write_text(switches)
     # 重复核实同一来源仍幂等，也不把空模板重新变成启用。
     assert install_bundled_plugins(boxteam_home=home, packages=entries) == []
@@ -62,7 +78,7 @@ def test_development_restart_preserves_plugin_choices_and_environment(tmp_path: 
     config_root = tmp_path / "home/config"
     install_source_development_configuration(project_root=project, config_root=config_root)
     document = _load_jsonc_object(config_root / "gateway.jsonc")
-    document["plugins"]["workspace_defaults"]["entries"] = []
+    document["settings"].setdefault("gateway", {}).setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
     saved = json.dumps(document)
     (config_root / "gateway.jsonc").write_text(saved)
     (config_root / ".env").write_text("USER_VALUE=2\n")
@@ -76,7 +92,7 @@ def test_first_install_uses_bundled_version_without_rewriting_existing_defaults(
     bundled = [{"package_id": "boxteam.developer-tools", "package_version": "0.1.0-dev.actual-content"}]
     install_user_configuration(config_root=config_root, profile="default", bundled_packages=bundled)
     document = _load_jsonc_object(config_root / "gateway.jsonc")
-    entries = document["plugins"]["workspace_defaults"]["entries"]
+    entries = document["settings"]["gateway"]["plugins"]["workspace_defaults"]["entries"]
     assert entries and all(entry["package_version"] == bundled[0]["package_version"] for entry in entries)
     entries[0]["enabled"] = False
     saved = json.dumps(document)
@@ -145,6 +161,8 @@ def test_development_templates_enable_development_capabilities_and_docker_gatewa
     gateway_dev = _load_jsonc_object(Path("configs/gateway_dev.jsonc"))
     workspace = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
     workspace_dev = _load_jsonc_object(Path("configs/workspace_dev.jsonc"))
+    gateway = gateway["settings"]["gateway"]
+    gateway_dev = gateway_dev["settings"]["gateway"]
 
     assert gateway["workspaces"] == []
     assert gateway_dev["workspaces"][0]["enabled"] is True  # type: ignore[index]
@@ -194,7 +212,9 @@ def test_initialize_user_configuration_only_creates_missing_configs(
     )
 
     assert existing.read_text(encoding="utf-8") == '{"owned_by_user": true}\n'
-    assert result.created_config_paths == (config_root / "workspace.jsonc",)
+    assert result.created_config_paths == (
+        config_root / "gateway_local.jsonc", config_root / "workspace.jsonc",
+    )
     assert (config_root / "gateway_schema.jsonc").is_file()
     assert (config_root / "workspace_schema.jsonc").is_file()
 
@@ -214,6 +234,7 @@ def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
 
     assert set(result.created_config_paths) == {
         config_root / "gateway.jsonc",
+        config_root / "gateway_local.jsonc",
         config_root / "workspace.jsonc",
     }
     assert "stale" not in _load_jsonc_object(config_root / "gateway.jsonc")
@@ -250,7 +271,9 @@ def test_changed_schema_is_validated_before_replacing_installed_resources(
     sources = project / "configs"
     sources.mkdir(parents=True)
     for domain in ("gateway", "workspace"):
-        (sources / f"{domain}_inline.jsonc").write_text('{"enabled": true}')
+        source = ('{"config_version": 6, "settings": {}}'
+                  if domain == "gateway" else '{"enabled": true}')
+        (sources / f"{domain}_inline.jsonc").write_text(source)
         (sources / f"{domain}_schema.jsonc").write_text('{"type": "object"}')
     config_root = tmp_path / "config"
     install_user_configuration(config_root=config_root, profile="default", project_root=project)
@@ -295,7 +318,7 @@ def test_source_development_install_uses_dev_profiles_and_source_env(
 
     assert result.env_path is not None
     assert result.env_path.read_text(encoding="utf-8") == "BOXTEAM_TEST=source\n"
-    assert _load_jsonc_object(config_root / "gateway.jsonc")["workspaces"][0]["enabled"] is True  # type: ignore[index]
+    assert _load_jsonc_object(config_root / "gateway.jsonc")["settings"]["gateway"]["workspaces"][0]["enabled"] is True  # type: ignore[index]
     assert _load_jsonc_object(config_root / "workspace.jsonc")["development"] == {"test_tools": True}
 
 
@@ -326,7 +349,7 @@ def test_generator_main_installs_both_domains(
     main()
 
     output = json.loads(capsys.readouterr().out)
-    assert len(output["config_paths"]) == 2
+    assert len(output["config_paths"]) == 3
     assert (boxteam_home / "config" / "gateway.jsonc").is_file()
     assert (boxteam_home / "config" / "workspace.jsonc").is_file()
 
@@ -339,10 +362,7 @@ def test_cli_migrate_splits_legacy_user_configuration(
     boxteam_home = tmp_path / "boxteam-home"
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
-    legacy = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
-    legacy.pop("$schema")
-    legacy["config_version"] = 4
-    legacy["gateway"] = {"workspaces": []}
+    legacy = _legacy_aggregate_config()
     (config_root / "boxteam.jsonc").write_text(
         json.dumps(legacy, ensure_ascii=False),
         encoding="utf-8",
@@ -380,9 +400,7 @@ def test_cli_initialize_automatically_migrates_supported_legacy_layout(
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
     legacy_path = config_root / "boxteam.jsonc"
-    legacy = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
-    legacy["config_version"] = 4
-    legacy["gateway"] = {"workspaces": []}
+    legacy = _legacy_aggregate_config()
     original = json.dumps(legacy).encode()
     legacy_path.write_bytes(original)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
@@ -404,7 +422,7 @@ def test_cli_initialize_automatically_migrates_supported_legacy_layout(
 
     assert not legacy_path.exists()
     assert (config_root / "boxteam.jsonc.migrated.bak").read_bytes() == original
-    assert _load_jsonc_object(config_root / "gateway.jsonc")["config_version"] == 5
+    assert _load_jsonc_object(config_root / "gateway.jsonc")["config_version"] == 6
     assert _load_jsonc_object(config_root / "workspace.jsonc")["config_version"] == 3
 
 

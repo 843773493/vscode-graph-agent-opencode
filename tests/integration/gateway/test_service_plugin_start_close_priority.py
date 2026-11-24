@@ -98,7 +98,7 @@ def test_gateway_commits_close_after_start_and_never_leaves_late_ready_plugin(
              before_submit: Event | None = None) -> dict[str, object]:
         document = client.get(source_path).raise_for_status().json()["data"]
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {
             "entries": [{**binding, "enabled": enabled}],
         }
         payload = {

@@ -406,7 +406,7 @@ class GatewayConfigSourceEditDTO(_message.Message):
     def __init__(self, idempotency_key: _Optional[str] = ..., candidate_id: _Optional[str] = ..., state: _Optional[str] = ..., file_digest: _Optional[str] = ..., source_saved: _Optional[bool] = ..., layer_imported: _Optional[bool] = ...) -> None: ...
 
 class GatewayConfigSourceDocumentDTO(_message.Message):
-    __slots__ = ("gateway_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit")
+    __slots__ = ("gateway_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit", "source_inherited")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
     LAYER_FIELD_NUMBER: _ClassVar[int]
@@ -426,6 +426,7 @@ class GatewayConfigSourceDocumentDTO(_message.Message):
     ORIGINS_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     EDIT_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_INHERITED_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     source_key: str
     layer: str
@@ -445,7 +446,8 @@ class GatewayConfigSourceDocumentDTO(_message.Message):
     origins: _containers.RepeatedCompositeFieldContainer[GatewayConfigSourceOriginDTO]
     status: GatewayConfigReloadStatusDTO
     edit: GatewayConfigSourceEditDTO
-    def __init__(self, gateway_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[GatewayConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[GatewayConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[GatewayConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[GatewayConfigSourceEditDTO, _Mapping]] = ...) -> None: ...
+    source_inherited: _struct_pb2.Struct
+    def __init__(self, gateway_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[GatewayConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[GatewayConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[GatewayConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[GatewayConfigSourceEditDTO, _Mapping]] = ..., source_inherited: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class GatewayConfigSourcePreflightDTO(_message.Message):
     __slots__ = ("document", "candidate", "candidate_digest", "changed_paths")

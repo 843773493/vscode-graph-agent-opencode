@@ -77,7 +77,7 @@ def test_supported_configuration_upgrade_starts_and_restarts_original_workspace(
     backups = {path: path.read_bytes() for path in Path(migration["backup_root"]).rglob("*") if path.is_file()}
     assert all(original in backups.values() for original in originals.values())
     gateway_config = json.loads((home / "config/gateway.jsonc").read_text(encoding="utf-8"))
-    assert gateway_config["config_version"] == 5 and "ui" not in gateway_config
+    assert gateway_config["config_version"] == 6 and "ui" not in gateway_config["settings"]["gateway"]
     assert json.loads((home / "config/workspace.jsonc").read_text(encoding="utf-8")) == {"config_version": 3}
     port = integration_ports_for_file(context.test_file).port(0)
     owners = []

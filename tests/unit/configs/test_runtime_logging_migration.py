@@ -81,28 +81,20 @@ def _cli(monkeypatch: pytest.MonkeyPatch, *args: str) -> None:
     main()
 
 
-def test_default_legacy_appearance_is_retired_from_files_and_active_with_original_backup(
-    migration_home: Path, gateway_store: GatewayStateStore,
+def test_default_legacy_appearance_is_retired_from_file_with_original_backup(
+    migration_home: Path,
 ) -> None:
     path = migration_home / "config/gateway.jsonc"
-    legacy = read_jsonc_object(Path.cwd() / "configs/gateway_inline.jsonc")
-    legacy["config_version"] = 4
+    legacy = {"config_version": 4, "workspaces": []}
     legacy["ui"] = {"theme": {"default_theme_id": "warm", "custom_themes": []}}
     _write(path, legacy)
     original = path.read_bytes()
-    _active(gateway_store, "gateway", legacy)
-    before_database = _database_dump(gateway_store.path)
-    gateway_store.close()
     result = commit_runtime_logging_migration(boxteam_home=migration_home)
-    assert "ui" not in read_jsonc_object(path)
-    assert read_jsonc_object(path)["config_version"] == 5
+    document = read_jsonc_object(path)
+    assert "ui" not in document["settings"]["gateway"]
+    assert document["config_version"] == 6
     backup = Path(result["backup_root"])
     assert original in [file.read_bytes() for file in backup.glob("file-*.before")]
-    assert before_database in [_database_dump(file) for file in backup.glob("db-*.before.sqlite")]
-    with GatewayStateStore(path=gateway_store.path) as store:
-        active = store.get_active_config_snapshot("gateway")
-        assert active is not None and "ui" not in active.payload
-        assert active.payload["config_version"] == 5
 
 
 @pytest.mark.parametrize("theme", [
@@ -128,7 +120,7 @@ def test_startup_preflight_rejects_invalid_target_before_stop_or_backup(
     _write(path, {"config_version": 4, "unknown_business_option": True})
     before = {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()}
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
-    with pytest.raises(ValueError, match="配置验证失败"):
+    with pytest.raises(ValueError, match="配置验证失败: stage=config.*additionalProperties"):
         main()
     assert {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()} == before
 
@@ -173,7 +165,7 @@ def test_cli_preview_empty_home_does_not_install_or_create_databases(
     report = json.loads(capsys.readouterr().out)
     assert report["action"] == "migrate-runtime-config"
     assert report["validation_stage"] == "logging_preflight"
-    assert report["target_config_versions"] == {"gateway": 5, "workspace": 3}
+    assert report["target_config_versions"] == {"gateway": 6, "workspace": 3}
     assert report["settings"] is None
     assert report["conflicts"] == report["unsettled"] == []
     assert all(source["presence"] == "absent" for source in report["sources"])
@@ -368,7 +360,7 @@ def test_cli_migrates_and_backs_up_original_bytes(
     assert report["state"] == "completed"
     assert "logger" not in json.loads(path.read_text())
     assert any(item.read_bytes() == original for item in Path(report["backup_root"]).glob("file-*.before"))
-    assert json.loads((migration_home / "config/gateway.jsonc").read_text())["logging"]["runtime"] == {"level": "debug", "pretty": True}
+    assert json.loads((migration_home / "config/gateway.jsonc").read_text())["settings"]["gateway"]["logging"]["runtime"] == {"level": "debug", "pretty": True}
     assert not (migration_home / "state/gateway/gateway.sqlite").exists()
 
 
@@ -602,7 +594,7 @@ def test_interrupted_migration_blocks_runtime_and_can_resume_or_restore(
         assert not (migration_home / "config/gateway.jsonc").exists()
     else:
         assert json.loads(path.read_text()) == {"config_version": 3}
-        assert read_jsonc_object(migration_home / "config/gateway.jsonc")["logging"] == {"runtime": {"level": "debug", "pretty": True}}
+        assert read_jsonc_object(migration_home / "config/gateway.jsonc")["settings"]["gateway"]["logging"] == {"runtime": {"level": "debug", "pretty": True}}
 
 
 def test_live_owner_blocks_migration_before_publishing_any_configuration(
@@ -678,13 +670,13 @@ def test_gateway_connection_ids_are_frozen_once_and_reuse_existing_identity(
     gateway_store.close()
     commit_runtime_logging_migration(boxteam_home=migration_home)
     migrated = json.loads(path.read_text())
-    identity = migrated["workspaces"][0]["connection_id"]
+    identity = migrated["settings"]["gateway"]["workspaces"][0]["connection_id"]
     assert identity
     if registered:
         assert identity == "connection_original"
-    assert migrated["config_version"] == 5
+    assert migrated["config_version"] == 6
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
-    assert json.loads(path.read_text())["workspaces"][0]["connection_id"] == identity
+    assert json.loads(path.read_text())["settings"]["gateway"]["workspaces"][0]["connection_id"] == identity
 
 
 def test_shared_source_pending_fanout_blocks_explicit_migration(migration_home: Path) -> None:
@@ -716,7 +708,6 @@ def test_cli_upgrades_v3_connection_ledger_and_restores_exact_original(
     gateway_store.set_config(config_key="unrelated_setting", config_version=17, payload={"preserve": True})
     gateway_store.sync_config_source(config_key="gateway_mutable_override", uri=None, config_version=1,
         presence="present", payload=payload, layer_digest=hashlib.sha256(raw).hexdigest())
-    _active(gateway_store, "gateway", {**read_jsonc_object(Path.cwd() / "configs/gateway_inline.jsonc"), **payload})
     before = _database_dump(gateway_store.path)
     gateway_store.close()
 
@@ -733,11 +724,9 @@ def test_cli_upgrades_v3_connection_ledger_and_restores_exact_original(
         ledger = store.get_config("gateway_connection_ids")
         assert ledger is not None and ledger.config_version == 4 and ledger.payload == {"entries": entries}
         assert store.get_config("unrelated_setting").payload == {"preserve": True}
-        active = store.get_active_config_snapshot("gateway")
-        assert active is not None and active.schema_version == 5
-        assert active.payload["workspaces"] == json.loads(path.read_text())["workspaces"]
+        assert store.get_active_config_snapshot("gateway") is None
         if registered:
-            assert active.payload["workspaces"][0]["connection_id"] == "connection_original"
+            assert json.loads(path.read_text())["settings"]["gateway"]["workspaces"][0]["connection_id"] == "connection_original"
     after = _database_dump(gateway_store.path)
     _cli(monkeypatch)
     assert json.loads(capsys.readouterr().out)["state"] == "unchanged"
@@ -840,12 +829,12 @@ def test_gateway_v3_migration_retires_generator_config_with_backup(migration_hom
                   "logging": {"runtime": {"level": "debug", "pretty": False}}})
     original = path.read_bytes()
     preview = preview_runtime_logging_migration(boxteam_home=migration_home).report()
-    assert preview["target_config_versions"]["gateway"] == 5
+    assert preview["target_config_versions"]["gateway"] == 6
     assert path.read_bytes() == original
     result = commit_runtime_logging_migration(boxteam_home=migration_home)
     migrated = json.loads(path.read_text())
-    assert migrated["config_version"] == 5 and "session_generators" not in migrated["features"]
-    assert migrated["logging"]["runtime"] == {"level": "debug", "pretty": False}
+    assert migrated["config_version"] == 6 and "session_generators" not in migrated["settings"]["gateway"]["features"]
+    assert migrated["settings"]["gateway"]["logging"]["runtime"] == {"level": "debug", "pretty": False}
     assert result["state"] == "completed"
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
 

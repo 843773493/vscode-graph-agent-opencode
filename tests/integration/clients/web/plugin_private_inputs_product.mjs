@@ -36,7 +36,7 @@ try {
     }
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   const api = (path, options = {}, expectedStatus = 200) => page.evaluate(async ({ path, options, expectedStatus }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
@@ -275,9 +275,9 @@ try {
   assert.equal((await call(gatewayRestart)).credential_digest, digest(gatewaySecret));
   const inheritedDocument = await api(`/api/gateway/config/sources/${localSource}`);
   const lowerDocument = await api(`/api/gateway/config/sources/${sourceGateway}`);
-  assert.equal(parseJsonc(inheritedDocument.jsonc).plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, undefined);
+  assert.equal(parseJsonc(inheritedDocument.jsonc).settings.gateway.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, undefined);
   assert.deepEqual(inheritedDocument.effective.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, gatewayReference);
-  assert.deepEqual(parseJsonc(lowerDocument.jsonc).plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, gatewayReference);
+  assert.deepEqual(parseJsonc(lowerDocument.jsonc).settings.gateway.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, gatewayReference);
   result.cleared_overlay = { lower: gatewayReference, upper: localReference };
   result.private_source_inheritance = true;
 
@@ -343,7 +343,7 @@ try {
     assert.equal(configWriteCount - writeCount, 0);
     const plaintext = `plaintext-${scope}-private-sentinel`;
     const invalid = parseJsonc(after.jsonc);
-    invalid.plugins.configuration.values['product.private-inputs'][plugin].credential = plaintext;
+    (scope === 'gateway' ? invalid.settings.gateway : invalid).plugins.configuration.values['product.private-inputs'][plugin].credential = plaintext;
     const refusal = await api(`${sourcePath}/preflight`, { method: 'POST', headers,
       body: sourceIntent(after, JSON.stringify(invalid)) }, scope === 'gateway' ? 422 : 409);
     assert.match(refusal.detail, /writeOnly/);

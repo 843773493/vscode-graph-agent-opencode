@@ -48,22 +48,32 @@ def _validate_candidate(
 ) -> None:
     try:
         schema = _load_schema(schema_path)
-        # 布局拆分的历史产物仍是 v1；下一步日志迁移负责跨域选择和版本推进。
-        # 这里仅还原该历史输入的校验合同，运行时不加载旧 logger。
-        properties = cast(dict[str, object], schema["properties"])
-        properties["config_version"] = {"const": 1}
-        if schema.get("x-boxteam-config-domain") == "workspace":
+        is_workspace = schema.get("x-boxteam-config-domain") == "workspace"
+        # 布局拆分产物仍是 v1；下一步日志迁移负责跨域选择和版本推进。
+        if is_workspace:
+            properties = cast(dict[str, object], schema["properties"])
+            properties["config_version"] = {"const": 1}
             contract = load_runtime_log_contract()
             properties["logger"] = {
                 "type": "object", "additionalProperties": False,
                 "properties": {"level": {"enum": list(contract.levels)}, "pretty": {"type": "boolean"}},
             }
         else:
-            schema["required"] = [key for key in cast(list[str], schema["required"]) if key != "logging"]
-        jsonschema.validate(without_retired_defaults(
-            payload, "workspace" if schema.get("x-boxteam-config-domain") == "workspace" else "gateway",
+            # Gateway v6 schema 的根是信封；旧布局产物仍是平面业务字段。
+            schema = {"$ref": "#/$defs/gatewaySettings", "$defs": schema["$defs"]}
+            gateway_settings = cast(dict[str, object], cast(dict[str, object], schema["$defs"])["gatewaySettings"])
+            gateway_settings["required"] = ["workspaces"]
+        candidate = without_retired_defaults(
+            payload, "workspace" if is_workspace else "gateway",
             source=str(source_path),
-        ), schema)
+        )
+        if "$ref" in schema:
+            candidate.pop("$schema", None)
+            candidate.pop("config_version", None)
+            features = candidate.get("features")
+            if isinstance(features, dict):
+                features.pop("session_generators", None)
+        jsonschema.validate(candidate, schema)
     except jsonschema.ValidationError as error:
         location = ".".join(str(item) for item in error.absolute_path) or "<root>"
         raise ValueError(

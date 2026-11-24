@@ -99,7 +99,7 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     install_user_configuration(config_root=config_root, profile="default", project_root=Path.cwd())
     gateway_config_path = config_root / "gateway.jsonc"
     gateway_config = commentjson.loads(gateway_config_path.read_text(encoding="utf-8"))
-    gateway_config["plugins"]["workspace_defaults"]["entries"] = []
+    gateway_config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
     gateway_config_path.write_text(json.dumps(gateway_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=unused_tcp_port,
         boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir)
@@ -361,9 +361,10 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         document = client.get(source_path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [{**item, "enabled": enabled} for item in bindings]}
+        plugins = source.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})
+        plugins["runtime"] = {"entries": [] if enabled is None else [{**item, "enabled": enabled} for item in bindings]}
         if parameters is not None:
-            source["plugins"]["configuration"] = {"values": {"proof.commands": parameters}}
+            plugins["configuration"] = {"values": {"proof.commands": parameters}}
         intent = {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
@@ -493,7 +494,7 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
     document = client.get(source_path).raise_for_status().json()["data"]
     source = commentjson.loads(document["jsonc"])
-    source["logging"] = {"runtime": {"level": "warning", "pretty": False}}
+    source.setdefault("settings", {}).setdefault("gateway", {})["logging"] = {"runtime": {"level": "warning", "pretty": False}}
     saved = client.put(source_path, json={"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
         "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
         "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],

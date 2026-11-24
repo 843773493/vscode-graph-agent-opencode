@@ -7,8 +7,8 @@
 app/gateway/config/
 ├── __init__.py                 facade：组装 ReloadService，并维护原公开导入出口
 ├── values.py                   配置值对象与无副作用的值解析
-├── loader.py                   合并来源、校验配置、生成 GatewayConfig
-├── sources.py                  来源层读取、迁移、来源明细及启动失败记录
+├── loader.py                   沿显式父链解析、校验配置、生成 GatewayConfig
+├── sources.py                  固定来源明细恢复及启动失败记录
 ├── connection_ids.py           connection_id 规范化与当前配置新连接登记
 ├── reload_lifecycle.py         ReloadLifecycleMixin：watcher、事件游标与 reload
 ├── source_edit.py              GatewaySourceEditMixin：来源正文、纯预检与原 pending 保存
@@ -32,13 +32,13 @@ app/gateway/config/
 
 - 不得回退 `load_gateway_config` 的 schema 解析与校验逻辑（含 `schema_path` 兜底）。
 - 不得改变 `load_gateway_config`、`GatewayConfig` 等对外配置契约；旧 connection_id 自动迁移与回滚入口已由显式配置维护命令统一取代。
-- 不得把 `_GATEWAY_SOURCE_LAYER_AUTHORITY` 改为从 workspace 侧 import 共享表。
+- 来源类别只描述归属，优先级来自实际父链，不恢复固定来源权威表。
 - 不得引入 `__file__`/`parents` 向上推导仓库根的路径解析；路径一律基于显式传入的
   绝对路径或 `get_user_config_root()` 等既有解析器。
 
 # 规范
 
-- 拆分为纯搬迁：函数体逐字保留，不做语义改写。
+- v6 仅接受节点信封；源文档编辑沿原 writer，active／pending 固定当时定义，实际磁盘 CAS 单独核验。不在普通 loader 迁移旧格式或按缺文件回退。
 - 新增模块必须保持每文件 ≤800 行。
 - 失败直接抛出明确错误，不得静默降级；不得返回虚假默认值。
 - watcher 的单次 reload 失败须保留原失败状态并记录异常，继续观察后续文件修复；显式 reload 仍抛错，取消继续向上传播，不增加第二套重试链。

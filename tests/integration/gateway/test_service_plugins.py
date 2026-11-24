@@ -101,7 +101,7 @@ def _prepare_probe_home(home: Path) -> None:
     config_path = home / "config/gateway.jsonc"
     config = commentjson.loads(config_path.read_text())
     # 本装具只安装受控测试包，不继承未安装的产品默认插件。
-    config.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
     config_path.write_text(json.dumps(config))
 
 
@@ -174,9 +174,10 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        plugins = source.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})
+        plugins["runtime"] = {"entries": entries}
         if parameters is not None:
-            source["plugins"]["configuration"] = {"values": {"probe.tools": {"python": parameters}}}
+            plugins["configuration"] = {"values": {"probe.tools": {"python": parameters}}}
         reply = exchange("PUT", path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
@@ -350,7 +351,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         original_document = exchange("GET", source_path).raise_for_status().json()["data"]
         original_source = commentjson.loads(original_document["jsonc"])
-        selected_entries = json.loads(json.dumps(original_source["plugins"]["runtime"]["entries"]))
+        selected_entries = json.loads(json.dumps(original_source["settings"]["gateway"]["plugins"]["runtime"]["entries"]))
         for entry in selected_entries:
             if entry["plugin_id"] == "python":
                 entry["package_version"] = "3.0.0"
@@ -360,7 +361,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert selected_update["node"]["instance"] == disabled["node"]["instance"], "未选绑定不能重启或换版"
         updated_source = commentjson.loads(exchange("GET", source_path).raise_for_status().json()["data"]["jsonc"])
         expected_source = json.loads(json.dumps(original_source))
-        expected_source["plugins"]["runtime"]["entries"] = selected_entries
+        expected_source["settings"]["gateway"]["plugins"]["runtime"]["entries"] = selected_entries
         assert updated_source == expected_source, "所选版本更新必须保留参数、作用域及新工作区默认项"
         stale = exchange("PUT", source_path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": original_document["jsonc"], "base_file_digest": original_document["file_digest"],
@@ -480,7 +481,7 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
     def save(client: httpx.Client, document: dict, enabled: bool | None, *, preflight: bool = False,
              node_version: str = "1.0.0") -> httpx.Response:
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [
             {**binding, "enabled": enabled if binding["plugin_id"] == "node" else True,
              "package_version": node_version if binding["plugin_id"] == "node" else binding["package_version"]}
             for binding in bindings]}

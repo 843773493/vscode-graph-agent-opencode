@@ -23,12 +23,12 @@
 - 新增迁移和兼容代码前，先核实根 `AGENTS.md` 定义的 `R_previous`、`R_current` 两个已验收 release 提交；准备下一版时比较 `R_current` 与明确候选 SHA。根/dev/实验 Home 的临时配置与半成品库不构成旧版契约，不自动为它们实现迁移、修复或旧字段回退。
 - 数据不匹配时明确报告并优先使用新的隔离 Home/工作区；未确认可丢弃的数据不得覆盖或清理。缺少 release 基线不等于可删除既有迁移，移除前核对全部调用方与支持链。
 - JSONC 结构迁移放在 `migrations/`，跨文件/数据库的预检、提交与恢复放在 `maintenance/`；SQLite 迁移放在各自数据库 owner 的 `migrations/` 子目录。实际写入仍归原 owner，执行顺序由代码显式维护；详见 [worktree 与发布迁移约定](../docs/architecture/worktree-and-release-policy.md)。不要按日期新增迁移目录或扫描目录猜顺序。
-- 内置默认配置为仓库/发行包中的 `gateway_inline.jsonc` 与 `workspace_inline.jsonc`；用户级覆盖仍输出到 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc` 与 `workspace.jsonc`，各自 schema 与配置文件放在同一目录；同目录的 `gateway_local.jsonc` 与 `workspace_local.jsonc` 是可选的机器私有覆盖，必须被 Git 忽略。
+- 内置默认配置为仓库/发行包中的 `gateway_inline.jsonc` 与 `workspace_inline.jsonc`；用户级来源仍输出到 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc` 与 `workspace.jsonc`，各自 schema 与配置文件放在同一目录；同目录的 `gateway_local.jsonc` 是默认必需入口，`workspace_local.jsonc` 当前仍是可选覆盖，两者均为机器私有文件，必须被 Git 忽略。
 - 工作区级配置固定为 `${workspace_abs_path}/.boxteam/workspace.jsonc`，并覆盖用户级 Workspace 配置同名项；Gateway 不读取工作区配置。
-- Gateway 配置合并顺序为 `gateway_inline.jsonc` → 用户级 `gateway.jsonc` → 用户级 `gateway_local.jsonc`；Workspace 配置合并顺序为 `workspace_inline.jsonc` → 用户级 `workspace.jsonc` → 用户级 `workspace_local.jsonc` → 工作区 `.boxteam/workspace.jsonc`；对象递归合并，标量和数组由高优先级层整体覆盖。
+- Gateway v6 来源使用 `settings.gateway`／`settings.network` 节点信封，仅沿明确入口的 `extends` 父链解析。安装器生成 inline → user → local 默认链，默认入口 local 必须存在，不根据缺文件改投其它来源；自定义父链可以跳过原来源。Workspace 当前 v3 仍按 inline → user → user_local → workspace 合并，待其独立切片迁齐。对象递归合并，标量和数组替换，schema 标记的原子块整体替换。
 - 配置来源必须记录实际加载的文件、层级、优先级和是否存在，并通过配置诊断接口暴露；不得只返回最终合并后的值。
 - `logging.retention.inactive_max_bytes` 是 Gateway 旧实例日志预算的可选覆盖，缺省值来自共享日志合同；允许用户层覆盖，当前配置在下一轮后台维护生效。新增配置路径须同时维护 schema 与 `gateway_config_policy()` 策略清单。
-- `gateway_inline.jsonc` 的 `runtime.workspace.default_skill_groups` 只声明发行包内置 Skill 组 ID；Skill 源码统一维护在 `resources/skills/`，不要把说明正文嵌入 Gateway 配置。
+- `gateway_inline.jsonc` 的 `settings.gateway.runtime.workspace.default_skill_groups` 只声明发行包内置 Skill 组 ID；Skill 源码统一维护在 `resources/skills/`，不要把说明正文嵌入 Gateway 配置。
 - 使用 `uv run python -m configs.boxteam` 调用配置安装器，不从源码文件位置向上推导项目根目录。
 - 默认生成最小模型配置；只有用户明确要求或官方接口验证为必需时才添加请求参数覆盖。
 - 布局迁移必须在启动服务前完成；配置安装属于显式的整文件重建，必须使用原子替换并在失败时给出明确的源、目标和处理建议。

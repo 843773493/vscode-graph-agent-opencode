@@ -59,6 +59,8 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    # 该场景验收安装器生成的默认父链，不沿用共享 fixture 的独立完整根节点。
+    (gateway_home / "config/gateway.jsonc").unlink()
     copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=ports.port(20), boxteam_home=gateway_home,
@@ -95,7 +97,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["grid_kept_shared_dirty_source"]
         assert result["resource_browse_only"] and result["resource_open_and_save"] and result["resource_readonly"]
         assert result["configuration_uri_opened"]
-        assert len(result["configurationReferences"]) == 2
+        assert len(result["configurationReferences"]) == 3
         assert result["logicalConfigurationReferenceRejected"] is True
     finally:
         close_gateway_process(gateway)

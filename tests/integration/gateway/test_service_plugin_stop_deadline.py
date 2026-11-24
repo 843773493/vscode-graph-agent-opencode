@@ -60,7 +60,7 @@ def test_slow_shutdown_body_cannot_extend_stop_deadline(
         path = "/api/gateway/config/sources/gateway_mutable_override"
         before = client.get(path).raise_for_status().json()["data"]
         config = commentjson.loads(before["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": entries}
         request_id = f"shutdown-deadline-{len(evidence)}"
         response = client.put(path, json={**target, "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
             "base_file_digest": before["file_digest"], "base_layer_revision": before["layer_revision"],

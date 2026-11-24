@@ -87,7 +87,7 @@ export class SettingsContextHeader extends Disposable {
   update(): void {
     const source = this.context.target;
     if (!source) return;
-    const labels: Record<string, string> = { inline: t('workbench.settings.builtInSource'),
+    const labels: Record<string, string> = { inline: t('workbench.settings.builtInSource'), source: t('workbench.settings.layer.source'),
       user: t(source.location.workspace_id ? 'workbench.settings.backendSettings' : 'workbench.settings.gatewaySettings'),
       user_local: t('workbench.settings.localSource'), workspace: t('workbench.settings.workspaceSettings'),
       runtime_override: t('workbench.settings.runtimeSource') };

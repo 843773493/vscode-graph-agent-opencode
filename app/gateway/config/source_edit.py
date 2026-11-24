@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -35,7 +35,6 @@ from app.services.infrastructure.config.source_document import (
     redact_source_payload,
     redact_source_text,
     restore_source_text,
-    source_origins,
 )
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -43,11 +42,11 @@ from app.services.infrastructure.config.state import (
     changed_json_paths,
     prepare_config_for_persistence,
 )
-from configs.plugin_parameters import plugin_parameters
-from configs.runtime import merge_json_objects, read_jsonc_object
+from configs.inheritance.values import ConfigValue, json_pointer, thaw
+from configs.runtime import read_jsonc_object
 
 from .loader import load_gateway_config
-from .values import _GATEWAY_SOURCE_LAYER_AUTHORITY, GatewayConfig
+from .values import GatewayConfig
 
 if TYPE_CHECKING:
     from . import GatewayConfigReloadService
@@ -59,13 +58,20 @@ class GatewaySourceEditMixin:
         if service._gateway_id is None:
             raise ConfigConflictError("Gateway 来源编辑需要已绑定原生 Gateway 身份的 owner")
         paths = {
-            "inline:0": service.config.source_paths[0],
+            "inline:0": service.config.inline_path,
             "gateway_mutable_override": service._config_path,
             "gateway_local_mutable_override": service._local_config_path,
         }
+        if service.config.graph is not None:
+            paths.update({source.source_key: service.config.graph.source_locations[source.uri]
+                          for source in service.config.source_details
+                          if source.source_key is not None and source.uri in service.config.graph.source_locations})
         if source_key not in paths:
             raise ValueError("未知 Gateway 配置来源")
-        return paths[source_key]
+        path = paths[source_key]
+        if path is None:
+            raise RuntimeError("Gateway 来源缺少实际文件定位")
+        return path
 
     def _source_config(
         self, *, overrides: dict[str, dict[str, object]] | None = None,
@@ -74,7 +80,8 @@ class GatewaySourceEditMixin:
         service = cast("GatewayConfigReloadService", self)
         return load_gateway_config(
             config_path=service._config_path, local_config_path=service._local_config_path,
-            inline_config_path=service.config.source_paths[0], schema_path=service._schema_path or service.config.schema_path,
+            inline_config_path=service.config.inline_path, schema_path=service._schema_path or service.config.schema_path,
+            entry_path=service.config.entry_path, gateway_id=service._gateway_id,
             state_store=service._state_store, persist_migrations=False,
             source_overrides=overrides, source_payloads=payloads, allow_new_connection_ids=False,
         )
@@ -94,15 +101,25 @@ class GatewaySourceEditMixin:
         if source_config.schema_path is None or service._gateway_id is None:
             raise RuntimeError("Gateway 来源 owner 缺少 schema 或目标身份")
         schema = read_jsonc_object(source_config.schema_path)
-        source_payload: dict[str, object] = {}
-        for payload in payloads.values():
-            source_payload = merge_json_objects(source_payload, payload, schema=schema)
-        parameters = plugin_parameters(source_payload)
-        source_payload = source_config.payload
-        if parameters:
-            source_payload = merge_json_objects(source_payload, {
-                "plugins": {"configuration": {"values": parameters}},
-            }, schema=schema)
+        payloads = {key: {**cast(dict[str, object], payload["settings"]).get("gateway", {}),
+                          **({"network": payload["settings"]["network"]} if "network" in payload["settings"] else {})}
+                    for key, payload in payloads.items()}
+        if source_config.graph is None:
+            raise RuntimeError("Gateway 来源缺少已解析节点")
+        settings = cast(dict[str, object], thaw(source_config.graph.resolve_scope().settings))
+        source_payload = {**cast(dict[str, object], settings["gateway"]),
+                          "network": settings["network"], "config_version": 6}
+        details = {source.source_key: source for source in source_config.source_details}
+        if source_key not in details:
+            raise ValueError("Gateway 配置来源不在当前入口的父链中")
+        selected = next((node for node in source_config.graph.resolve_scope().chain
+                         if node.location.path == file.path and not node.location.pointer), None)
+        if selected is None:
+            # TODO: 节点 inspection 接入 profile 原文定位后，按明确 pointer 编辑其实际定义。
+            raise ValueError("Gateway 来源仅通过 profile 参与继承，请编辑实际引用的节点")
+        inherited = cast(dict[str, object], thaw(selected.parent.settings)) if selected.parent is not None else {}
+        inherited_payload = {**cast(dict[str, object], inherited.get("gateway", {})),
+                             **({"network": inherited["network"]} if "network" in inherited else {})}
         verify_stable_config_file(file)
         store = service._state_store
         record = store.get_source_layer(source_key)
@@ -121,7 +138,7 @@ class GatewaySourceEditMixin:
                     layer_imported=intent.get("stage") == "imported" or (record is not None and record.layer_digest == intent["file_digest"]),
                 )
         return GatewayConfigSourceDocumentDTO(
-            gateway_id=service._gateway_id, source_key=source_key, layer=_GATEWAY_SOURCE_LAYER_AUTHORITY[source_key][0],
+            gateway_id=service._gateway_id, source_key=source_key, layer=details[source_key].layer,
             writable=source_key != "inline:0", jsonc=redact_source_text(text), file_presence=file.presence, file_digest=file.digest,
             layer_revision=record.layer_revision if record else None, layer_digest=record.layer_digest if record else None,
             source_generation=record.source_generation if record else None,
@@ -129,13 +146,47 @@ class GatewaySourceEditMixin:
             json_schema=schema,
             effective=cast(dict[str, object], redact_source_payload(service.config.payload)),
             source_effective=cast(dict[str, object], redact_source_payload(source_payload)),
+            source_inherited=cast(dict[str, object], redact_source_payload(inherited_payload)),
             layers=[GatewayConfigSourceLayerViewDTO(
-                source_key=key, layer=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][0], precedence=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][1],
+                source_key=key, layer=details[key].layer, precedence=details[key].precedence,
                 writable=key != "inline:0", payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in payloads.items()],
-            origins=[GatewayConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(payloads, source_payload, schema=schema)],
+            origins=self._source_origins(source_config),
             status=self.get_reload_status_dto(), edit=edit,
         )
+
+    @staticmethod
+    def _source_origins(config: GatewayConfig) -> list[GatewayConfigSourceOriginDTO]:
+        """直接投影解析器的真实定义来源，不再次合并配置。"""
+        if config.graph is None:
+            raise RuntimeError("Gateway 来源缺少已解析节点")
+        scope = config.graph.resolve_scope()
+        keys = {detail.uri: detail.source_key for detail in config.source_details}
+        result = []
+
+        def visit(value: ConfigValue, path: tuple[str, ...]) -> None:
+            if isinstance(value, Mapping) and value:
+                for key, child in value.items():
+                    visit(child, (*path, key))
+                return
+            origin = scope.origins.locate(path)
+            source_key = keys[origin.source_uri]
+            sources = []
+            for node in scope.chain:
+                try:
+                    key = keys[node.origins.locate(path).source_uri]
+                except KeyError:
+                    continue
+                if key != source_key and key not in sources:
+                    sources.append(key)
+            result.append(GatewayConfigSourceOriginDTO(
+                path=json_pointer(path[1:] if path[0] == "gateway" else path),
+                source_key=source_key, shadowed_sources=sources,
+            ))
+
+        for key, value in scope.settings.items():
+            visit(value, (key,))
+        return result
 
     def _check_source_edit(
         self, source_key: str, request: GatewayConfigSourceEditRequest, accepted: ConfigPendingCandidateRecord | None = None,
@@ -146,6 +197,8 @@ class GatewaySourceEditMixin:
             raise ValueError("Gateway inline 来源只读")
         if (request.gateway_id, request.source_key) != (service._gateway_id, source_key):
             raise ConfigConflictError("编辑目标与原生 Gateway／来源不一致")
+        if not any(source.source_key == source_key for source in service.config.source_details):
+            raise ConfigConflictError("Gateway 配置来源已不在当前入口的父链中，请重新读取原目标")
         file = read_stable_config_file(path)
         source = service._state_store.get_source_layer(source_key)
         active = service._state_store.get_active_config_snapshot(service._CONFIG_DOMAIN)
@@ -173,8 +226,21 @@ class GatewaySourceEditMixin:
         original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
         text = restore_source_text(request.jsonc, original)
         candidate = self._source_config(overrides={source_key: parse_source_text(text)})
+        if not any(source.source_key == source_key for source in candidate.source_details):
+            raise ConfigConflictError("Gateway 配置来源已不在候选入口的父链中，请重新读取原目标")
         verify_stable_config_file(file)
+        self._verify_source_dependencies(candidate)
         return text, candidate
+
+    @staticmethod
+    def _verify_source_dependencies(candidate: GatewayConfig) -> None:
+        if candidate.graph is None:
+            raise RuntimeError("Gateway 来源候选缺少父依赖")
+        try:
+            for dependency in candidate.graph.dependencies.values():
+                verify_stable_config_file(dependency)
+        except RuntimeError as error:
+            raise ConfigConflictError("Gateway 来源候选的父依赖已改变") from error
 
     def preflight_source_edit(self, *, source_key: str, request: GatewayConfigSourceEditRequest) -> GatewayConfigSourcePreflightDTO:
         service = cast("GatewayConfigReloadService", self)
@@ -290,6 +356,7 @@ class GatewaySourceEditMixin:
                 elif claim is not None:
                     raise ConfigConflictError("已有 Gateway apply claim，禁止接纳另一来源意图")
                 file = self._check_source_edit(source_key, request, accepted)
+                self._verify_source_dependencies(candidate)
                 # 已持有原 reload 准入；包卸载不能插入候选校验与提交之间。
                 if authorize_candidate is not None:
                     authorize_candidate(candidate)
@@ -299,6 +366,7 @@ class GatewaySourceEditMixin:
                 if file.digest != intent["file_digest"]:
                     if before_write is not None:
                         before_write()
+                    self._verify_source_dependencies(candidate)
                     atomic_write_bytes(file.path, text.encode())
                 if has_private_inputs and remove_released_inputs is not None:
                     remove_released_inputs(previous_source)
@@ -306,3 +374,33 @@ class GatewaySourceEditMixin:
 
         await service.reload(before_build=save, idempotency_key=request.idempotency_key, source_edit=intent)
         return self.get_source_document(source_key=source_key, idempotency_key=request.idempotency_key)
+
+    def _source_baseline(
+        self,
+        config: GatewayConfig,
+    ) -> tuple[dict[str, object], int, dict[str, int], dict[str, str | None]]:
+        baseline: dict[str, object] = {}
+        revisions: dict[str, int] = {}
+        digests: dict[str, str | None] = {}
+        source_generation = 0
+        for source in config.source_details:
+            key = source.source_key or f"{source.layer}:{source.precedence}"
+            baseline[key] = {
+                "uri": source.uri,
+                "presence": source.presence,
+                "layer_revision": source.layer_revision,
+                "layer_digest": source.layer_digest,
+                "source_generation": source.source_generation,
+                "layer": source.layer,
+                "precedence": source.precedence,
+                "document": (
+                    thaw(config.graph.source_documents[source.uri])
+                    if config.graph is not None and source.uri in config.graph.source_documents else None
+                ),
+            }
+            if source.layer_revision is not None:
+                revisions[key] = source.layer_revision
+            digests[key] = source.layer_digest
+            if source.source_generation is not None:
+                source_generation = max(source_generation, source.source_generation)
+        return baseline, source_generation, revisions, digests

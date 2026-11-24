@@ -61,7 +61,7 @@ def test_gateway_skill_metadata_native_and_relay_use_exact_owner(
         document = commentjson.loads(initial["jsonc"])
         rules = ([{"capability": "read", "effect": "allow",
                    "principal_ref": principal_ref_for_gateway(gateway_a)}] if enabled else [])
-        document.setdefault("permissions", {})["federation"] = {"default_effect": "deny", "rules": rules}
+        document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"default_effect": "deny", "rules": rules}
         edited = client_b.put(source_path, json={
             "gateway_id": gateway_b, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(document, ensure_ascii=False),

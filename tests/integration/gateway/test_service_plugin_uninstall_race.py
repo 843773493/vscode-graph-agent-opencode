@@ -277,7 +277,7 @@ def test_uninstall_waits_for_real_skill_read_after_version_switch(
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
+        source.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
             "package_id": package_id, "package_version": version, "plugin_id": "guide", "enabled": True,
         }]}
         saved = exchange("PUT", path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",

@@ -23,7 +23,7 @@ try {
       if (request.url().includes('/service-plugins/')) receipt.requests.push({ url: request.url(), method: request.method(), body: request.postData() });
     });
     await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+    await expect(page.locator('.monaco-workbench')).toBeVisible();
   };
   await openWindow();
   receipt.clientPlatform = 'Windows 浏览器 User-Agent 模拟；Gateway 仍运行在 Linux';
@@ -61,8 +61,8 @@ try {
     const path = '/api/gateway/config/sources/gateway_mutable_override', document = await api(path);
     const config = parseJsonc(document.jsonc);
     // 复用既有 Trace 日志关联软件内总耗时，不为量测新增生产观测机制。
-    config.logging = { runtime: { level: 'debug', pretty: true } };
-    config.plugins = { ...config.plugins, runtime: { entries: enabled === null ? [] : [{ package_id: 'proof.command-ui', plugin_id: 'commands', package_version: version, enabled }] },
+    config.settings.gateway.logging = { runtime: { level: 'debug', pretty: true } };
+    config.settings.gateway.plugins = { ...config.settings.gateway.plugins, runtime: { entries: enabled === null ? [] : [{ package_id: 'proof.command-ui', plugin_id: 'commands', package_version: version, enabled }] },
       configuration: { values: { 'proof.command-ui': { commands: { output: input.output } } } } };
     const saved = await api(path, { method: 'PUT', body: { gateway_id: gatewayId, source_key: 'gateway_mutable_override', jsonc: JSON.stringify(config),
       base_file_digest: document.file_digest, base_layer_revision: document.layer_revision, base_layer_digest: document.layer_digest,
@@ -276,7 +276,7 @@ try {
     receipt.uninstalledVersions.push(version);
   }
   const source = await api('/api/gateway/config/sources/gateway_mutable_override');
-  assert.equal(parseJsonc(source.jsonc).plugins.configuration.values['proof.command-ui'].commands.output, input.output);
+  assert.equal(parseJsonc(source.jsonc).settings.gateway.plugins.configuration.values['proof.command-ui'].commands.output, input.output);
   assert.equal((await publications()).length, 0);
   // 每个窗口用一个工作区完整快照投影 Gateway 和 workspace 命令；普通命令没有额外发现。
   const commandEventRequests = receipt.requests.filter(request => request.url.endsWith('/commands/events'));

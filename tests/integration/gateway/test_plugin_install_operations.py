@@ -144,11 +144,12 @@ def test_pending_binding_blocks_uninstall_across_restart_until_explicit_discard(
         def save(entries: list[dict], key: str, *, restore_active: bool = False) -> dict:
             document = exchange("GET", source_path).raise_for_status().json()["data"]
             source = commentjson.loads(baseline["jsonc"] if restore_active else document["jsonc"])
-            source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+            settings = source.setdefault("settings", {}).setdefault("gateway", {})
+            settings.setdefault("plugins", {})["runtime"] = {"entries": entries}
             if restore_active:
-                source.setdefault("logging", {}).setdefault("runtime", {})["level"] = "debug"
+                settings.setdefault("logging", {}).setdefault("runtime", {})["level"] = "debug"
             else:
-                source.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})["request_timeout_seconds"] = 3
+                settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})["request_timeout_seconds"] = 3
             return exchange("PUT", source_path, {**target, "source_key": "gateway_mutable_override",
                 "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
                 "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
@@ -225,7 +226,7 @@ def test_source_install_is_queryable_cancellable_and_never_replayed(source_gatew
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange(path, method="GET")
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("plugins", {})["sources"] = {"entries": [{"source_id": "proof", "protocol_version": 1,
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["sources"] = {"entries": [{"source_id": "proof", "protocol_version": 1,
             "base_url": plugin_source["base_url"], "enabled": enabled}]}
         result = exchange(path, {**target, "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
             "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],

@@ -38,6 +38,18 @@ const ownerCode = await declarations('src/clients/workbench/src/settings/sourceO
 const filesCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation', 'ConfigurationSourceFiles']);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), JSON.stringify(fingerprints, null, 2) + '\n'));
 
+const sourceUriCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation']);
+const { configSourceEditorUri, sourceLocation } = localizedFunction('URI', `${sourceUriCode}\nreturn { configSourceEditorUri, sourceLocation };`)(URI);
+
+test('来源编辑器只编码一次 URI，Tab 路径保留真实来源键', () => {
+  const target = { gateway_id: 'gateway-a' };
+  for (const sourceKey of ['inline:0', 'literal%2Fkey']) {
+    const resource = configSourceEditorUri(target, sourceKey);
+    expect(resource.path.split('/').at(-1)).toBe(sourceKey + '.jsonc');
+    expect(sourceLocation(URI.parse(resource.toString()))).toEqual({ target, sourceKey });
+  }
+});
+
 function fixture({ confirm, respond } = { confirm: async () => ({ confirmed: true }) }) {
   const calls = [], sourceKey = 'gateway_mutable_override';
   const document = { gateway_id: 'gateway-a', source_key: sourceKey, writable: true, jsonc: '{}\n',

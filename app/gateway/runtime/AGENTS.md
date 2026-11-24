@@ -21,6 +21,7 @@ runtime/
 ├── ssh_process.py         SSH 隧道进程
 ├── port_forwarding/       独立 Host 间 TCP 与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议
+├── external_http.py       Gateway 外部 HTTP 代理代次、密钥轮换与响应排空
 ├── logging_control.py     唯一受管进程发现、受认证日志状态与应用确认
 ├── logging_consumer.py    冻结进程集合、逐进程应用与补偿结算
 ├── development_restart.py 开发运行时重启协调
@@ -52,6 +53,7 @@ runtime/
 - `connection_drain_timeout_seconds` 只约束HTTP连接排空和相应路由等待；进程退出沿 `ManagedBackendOwner.close()` 的既有8秒期限核验，包含lifespan、解释器收尾与已确认后代，不能以HTTP排空期限缩短它。超时仍明确失败并保留原句柄，不把ACK或lifespan完成当作进程已退出。
 - 向 Workspace 提交配置重启失败时传递原异常到 controller 的 HTTP 发送边界，复用配置失败事实出口；不得预拼原生异常正文进入业务记录，原异常留诊断。
 - 日志消费者从 prepare 到最终配置结算持有原 registry 的拓扑锁；共享 Backend 按实际实例确认，不按挂载工作区重复应用。逐进程发送前先登记副作用，超时后查询实际状态再补偿，不能把结果未知当作未生效。
+- 外部 HTTP 策略归 Gateway 原配置 owner；代理切换复用 consumer 事务，旧响应关闭及事务结算后释放退役池。内部控制客户端保持直连，不按目标是否为 localhost 猜测内外部，也不在代理失败时回退直连。
 - 新受管进程通过 `BOXTEAM_RUNTIME_LOGGING` 接收已验证的 revision、level 与 pretty；该值在生命周期锁内从当前 Gateway 配置 owner 读取，不能缓存等待启动前的旧候选。它只交付启动设置，不构成第二个运行期配置来源。
 - 子进程日志在打开／轮转前核对同路径的写入归属；交付中断不能当作空闲。detach 只关闭当前 Gateway 的描述符，存活进程组继续保留归属。完整关闭后才释放；接管通过受认证的进程状态核对实际描述符和文件身份，不重开日志。
 - 旧实例回收只处理共享合同定义的实例日志及其归档；未超预算不核进程。超预算后沿原 owner guard 核实退出，按整组最后修改时间从旧到新删除；删除前复核归属和文件快照，保留活动、锁忙及发生变化的组。归属不明须报告错误，不删除稳定的 guard inode，不将固定日志或无关文件纳入回收。

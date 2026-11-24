@@ -126,18 +126,37 @@ def install_user_configuration(
         schema_paths.append(schema_target)
         if force or not config_target.exists():
             content = config_source.read_bytes()
+            if config_target.name == "gateway.jsonc" and profile == "default":
+                config = _read_jsonc_object(config_source)
+                content = (json.dumps({
+                    "$schema": "./gateway_schema.jsonc", "config_version": config["config_version"],
+                    "extends": "builtin:gateway", "settings": {},
+                }, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             if config_target.name == "gateway.jsonc" and bundled_packages:
                 # 只初始化新来源；已有绑定和新工作区默认项不随普通启动更新。
                 versions = {entry["package_id"]: entry["package_version"] for entry in bundled_packages}
-                config = _read_jsonc_object(config_source)
-                for entry in config.get("plugins", {}).get("workspace_defaults", {}).get("entries", []):
+                config = commentjson.loads(content.decode())
+                builtin = _read_jsonc_object(resolve_config_resource_source(
+                    "gateway_inline.jsonc", project_root=project_root,
+                ))["settings"]["gateway"]
+                entries = builtin.get("plugins", {}).get("workspace_defaults", {}).get("entries", [])
+                for entry in entries:
                     if entry["package_id"] in versions:
                         entry["package_version"] = versions[entry["package_id"]]
+                config["settings"].setdefault("gateway", {}).setdefault("plugins", {})["workspace_defaults"] = {"entries": entries}
                 content = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             atomic_write(config_target, content, 0o600)
             created_config_paths.append(config_target)
         if schema_content is not None:
             atomic_write(schema_target, schema_content, 0o600)
+        if config_target.name == "gateway.jsonc":
+            local_target = resolved_root / "gateway_local.jsonc"
+            config_paths.append(local_target)
+            if force or not local_target.exists():
+                local = {"$schema": "./gateway_schema.jsonc", "config_version": 6,
+                         "extends": "user:gateway", "settings": {}}
+                atomic_write(local_target, (json.dumps(local, ensure_ascii=False, indent=2) + "\n").encode(), 0o600)
+                created_config_paths.append(local_target)
 
     return ConfigurationInstallation(
         config_paths=tuple(config_paths),

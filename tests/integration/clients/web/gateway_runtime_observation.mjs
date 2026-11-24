@@ -41,7 +41,7 @@ try {
     await expect(panel.getByRole('button', { name: '复制诊断摘要', exact: true })).toBeEnabled();
   };
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 30000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
   for (const url of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) result.initialization.push(await api(url));
   assert.equal(result.initialization[0].data.gateway_id, fixture.gatewayId);
@@ -61,7 +61,7 @@ try {
   for (const title of ['产品日志与保留', 'Gateway 遥测', 'Gateway 运行统计']) await expect(categories).toContainText(title);
   const source = (await api(sourceUrl)).data;
   let jsonc = source.jsonc;
-  for (const field of ['telemetry', 'statistics']) jsonc = applyEdits(jsonc, modify(jsonc, [field, 'runtime', 'enabled'], true,
+  for (const field of ['telemetry', 'statistics']) jsonc = applyEdits(jsonc, modify(jsonc, ['settings', 'gateway', field, 'runtime', 'enabled'], true,
     { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
   await command('boxteam.settings.openSource', { location: { version: 2, gateway_id: fixture.gatewayId, source_key: sourceKey, name: 'Gateway' } });
   const lines = page.locator('.editor-group-container.active .editor-instance:visible .monaco-editor .view-lines').last();

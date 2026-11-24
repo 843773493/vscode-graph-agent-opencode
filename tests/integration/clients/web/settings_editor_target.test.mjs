@@ -98,11 +98,13 @@ const modelEnvironment = { EditorModel, SettingMatchType: {}, Emitter, Event, Di
   IConfigurationService, Extensions: { Configuration: 'configuration' }, Registry };
 const { Settings2EditorModel, DefaultSettings } = evaluate(modelParsed,
   ['AbstractSettingsModel', 'Settings2EditorModel', 'DefaultSettings'], modelEnvironment);
+const { sourceDocumentPath } = evaluate(await source('src/settings/sourceOwner.ts', true), ['sourceDocumentPath'], {});
 const { settingsEditorIdentity, settingsHistoryLocation, parseSettingsLocation, SourceSettings } =
   evaluate(await source('src/settings/editor.ts', true),
     ['object', 'at', 'settingsEditorIdentity', 'settingsHistoryLocation', 'parseSettingsLocation', 'SourceDefaults', 'SourceSettings'], {
       Disposable, Emitter, URI, settingsGroupLabel, ConfigurationScope, ConfigurationTarget: { USER_LOCAL: 3, USER_REMOTE: 4, DEFAULT: 7 }, IConfigurationService,
       DefaultSettings, Settings2EditorModel, nullRange, parse, parseTree, findNodeAtLocation, setProperty, applyEdits, configSourceEditorUri,
+      sourceDocumentPath,
       configSourceFiles: files => files.getProvider(),
     });
 class HeaderElement {
@@ -463,16 +465,28 @@ function makeTextFileModel(initial, notifyReverted) {
 }
 
 function makeSource(locationValue) {
-  const jsonc = `// 保留来源注释\n{\n  "config_version": 2,\n  "untouched": { "value": 9 }\n}\n`;
+  const gateway = !locationValue.workspace_id;
+  const jsonc = gateway
+    ? `// 保留来源注释\n{\n  "config_version": 6,\n  "extends": "base",\n  "settings": { "gateway": {}, "network": {} },\n  "profiles": { "base": { "settings": { "network": {} } } }\n}\n`
+    : `// 保留来源注释\n{\n  "config_version": 2,\n  "untouched": { "value": 9 }\n}\n`;
+  const properties = {
+    logging: { type: 'object', properties: { runtime: { type: 'object', properties: { level: { type: 'string', default: 'info' } } } } },
+    'a.b': { type: 'object', properties: { c: { type: 'string' } } },
+    a: { type: 'object', properties: { 'b.c': { type: 'string' } } },
+  };
   const document = {
-    gateway_id: locationValue.gateway_id, workspace_id: locationValue.workspace_id, source_key: locationValue.source_key,
+    gateway_id: locationValue.gateway_id, ...(gateway ? {} : { workspace_id: locationValue.workspace_id }), source_key: locationValue.source_key,
     jsonc, writable: true,
-    json_schema: { type: 'object', properties: {
-      logging: { type: 'object', properties: { runtime: { type: 'object', properties: { level: { type: 'string', default: 'info' } } } } },
-      'a.b': { type: 'object', properties: { c: { type: 'string' } } },
-      a: { type: 'object', properties: { 'b.c': { type: 'string' } } },
-    } },
+    json_schema: gateway ? { type: 'object', properties: { config_version: { type: 'integer' }, settings: { '$ref': '#/$defs/scopeSettings' } },
+      $defs: { scopeSettings: { type: 'object', properties: { gateway: { type: 'object' } } },
+        gatewaySettings: { type: 'object', properties }, gatewayPayload: { type: 'object', properties: {
+          logging: { '$ref': '#/$defs/gatewaySettings/properties/logging' },
+          'a.b': { '$ref': '#/$defs/gatewaySettings/properties/a.b' },
+          a: { '$ref': '#/$defs/gatewaySettings/properties/a' },
+          network: { type: 'object', properties: { proxy: { type: 'object', properties: { mode: { type: 'string' } } } } },
+        } } } } : { type: 'object', properties },
     source_effective: { logging: { runtime: { level: 'effective' } } },
+    ...(gateway ? { source_inherited: { logging: { runtime: { level: 'inherited' } } } } : {}),
     layers: [
       { source_key: 'gateway_inline', precedence: 1, payload: { logging: { runtime: { level: 'inherited' } } } },
       { source_key: locationValue.source_key, precedence: 10, payload: {} },
@@ -971,6 +985,38 @@ scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编�
     expect(targetSettings.settingSelection('unknown.field', true)).toBeUndefined();
     model.dispose();
   } finally { targetSettings.dispose(); }
+});
+
+scenario('Gateway v6 信封编辑业务与网络字段，保留 extends、profiles、注释和后端平铺投影', async () => {
+  const target = location({ workspace_id: undefined, source_key: 'gateway_user' }), f = makeSource(target);
+  try {
+    f.document.layers[0].payload.logging.runtime.level = '物理层值不可代替 graph 继承';
+    const keys = f.source.groups.flatMap(group => group.sections.flatMap(section => section.settings.map(setting => setting.key)));
+    expect(keys).toContain('logging.runtime.level');
+    expect(keys).toContain('network.proxy.mode');
+    expect(keys).not.toContain('settings');
+    expect(f.source.inspect('logging.runtime.level')).toMatchObject({ defaultValue: 'inherited', value: 'effective' });
+    f.source.edit('logging.runtime.level', 'debug');
+    f.source.edit('network.proxy.mode', 'direct');
+    const draft = f.model.textEditorModel.getValue(), parsed = parse(draft);
+    expect(draft).toContain('// 保留来源注释');
+    expect(parsed).toMatchObject({ config_version: 6, extends: 'base', profiles: { base: { settings: { network: {} } } },
+      settings: { gateway: { logging: { runtime: { level: 'debug' } } }, network: { proxy: { mode: 'direct' } } } });
+    expect(f.source.inspect('logging.runtime.level')).toMatchObject({ userRemoteValue: 'debug', value: 'debug' });
+    expect(f.source.settingSelection('logging.runtime.level', true)).toBeDefined();
+    expect(parsed.logging).toBeUndefined();
+    expect(parsed.network).toBeUndefined();
+    f.document.source_effective = { plugins: { runtime: { entries: [
+      { package_id: 'sample.package', plugin_id: 'sample', package_version: '1.0.0', enabled: true },
+    ] } } };
+    f.source.replaceSchemas({ plugins: [{ package_id: 'sample.package', plugin_id: 'sample', package_version: '1.0.0',
+      name: 'Sample', configuration_schema: { type: 'object', properties: { mode: { type: 'string' } } } }] });
+    f.source.edit('plugins.configuration.values.sample%2Epackage.sample.mode', 'safe');
+    f.source.editPath(['plugins', 'configuration', 'values', 'unused.package', 'unused', 'mode'], 'waiting');
+    const pluginDraft = parse(f.model.textEditorModel.getValue());
+    expect(pluginDraft.settings.gateway.plugins.configuration.values['sample.package'].sample.mode).toBe('safe');
+    expect(f.source.unboundPluginParameters()).toEqual([{ packageId: 'unused.package', pluginId: 'unused', installation: 'unavailable' }]);
+  } finally { f.source.dispose(); }
 });
 
 scenario('设置行内 JSON 入口保留精确字段定位和发起组，不受等待期间焦点或来源切换影响', async () => {

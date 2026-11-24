@@ -128,7 +128,7 @@ def test_logging_faults_settle_real_processes_and_sqlite(
         active = _active(database)
         config_path = case.home / "config/gateway.jsonc"
         document = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        document["logging"] = {"runtime": {"level": "debug", "pretty": False}}
+        document.setdefault("settings", {}).setdefault("gateway", {})["logging"] = {"runtime": {"level": "debug", "pretty": False}}
         config_path.write_text(json.dumps(document) + "\n", encoding="utf-8")
         expected = "conflict" if failure == "cas" else "recovery_required" if failure == "rollback" else "rejected"
         status = _wait_status(case.client, {expected})
@@ -171,7 +171,7 @@ def test_warning_keeps_real_terminal_tool_bytes_and_workspace_records(logging_ca
     case = logging_case
     config_path = case.home / "config/gateway.jsonc"
     document = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    document["logging"] = {"runtime": {"level": "warning", "pretty": False}}
+    document.setdefault("settings", {}).setdefault("gateway", {})["logging"] = {"runtime": {"level": "warning", "pretty": False}}
     config_path.write_text(json.dumps(document) + "\n", encoding="utf-8")
     deadline = time.monotonic() + 20
     settings: dict[str, dict] = {}

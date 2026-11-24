@@ -65,14 +65,14 @@ async def http_case(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HttpCase]:
     owner = ConfiguredSkillSources(scope="gateway", scope_id="gateway_0123456789abcdef0123456789abcdef", channel=ResourceObservationChannel())
     case = HttpCase(owner)
     capability = skill_source_config.skill_fetch_capability("http")
-    monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
-        "http": SkillFetchCapability(config_type=capability.config_type,
-            create=lambda: HttpSkillFetch(httpx.AsyncClient(transport=httpx.MockTransport(case.respond)))),
-    })
-    try:
-        yield case
-    finally:
-        await owner.close()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(case.respond)) as client:
+        monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
+            "http": SkillFetchCapability(config_type=capability.config_type, create=lambda: HttpSkillFetch(client)),
+        })
+        try:
+            yield case
+        finally:
+            await owner.close()
 
 
 async def _start(case: HttpCase, config: SkillSourceConfig) -> None:

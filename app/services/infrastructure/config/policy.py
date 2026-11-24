@@ -293,6 +293,8 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
         domain="gateway",
         default_policy="restart_gateway",
         rules=(
+            ConfigPolicyRule("/network", "immediate_read", "current"),
+            ConfigPolicyRule("/network/**", "immediate_read", "current"),
             ConfigPolicyRule("/resources", "immediate_read", "current"),
             ConfigPolicyRule("/resources/skill_sources", "immediate_read", "current"),
             ConfigPolicyRule("/resources/skill_sources/local_updates", "immediate_read", "current"),

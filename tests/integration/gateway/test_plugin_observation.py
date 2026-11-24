@@ -71,9 +71,10 @@ def test_plugin_actual_diagnostics_partial_failure_and_restart_inheritance(
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path)
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {"entries": bindings}
-        config["telemetry"] = {"runtime": {"enabled": enabled, "sample_ratio": 1, "sample_buffer_limit": limit}}
-        config["statistics"] = {"runtime": {"enabled": enabled, "collection_interval_ms": 1000}}
+        settings = config.setdefault("settings", {}).setdefault("gateway", {})
+        settings.setdefault("plugins", {})["runtime"] = {"entries": bindings}
+        settings["telemetry"] = {"runtime": {"enabled": enabled, "sample_ratio": 1, "sample_buffer_limit": limit}}
+        settings["statistics"] = {"runtime": {"enabled": enabled, "collection_interval_ms": 1000}}
         result = exchange("PUT", path, json={"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(config), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],

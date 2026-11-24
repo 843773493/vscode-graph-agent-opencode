@@ -18,6 +18,7 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.secrets import router
+from app.gateway.runtime.external_http import GatewayExternalHTTPTransport
 from app.gateway.secrets.vault import SecretConflictError, SecretVault
 from app.protocol.codecs.http_validation import request_validation_error_response
 
@@ -41,6 +42,7 @@ def gateway_app(vault: SecretVault, tmp_path: Path, monkeypatch: pytest.MonkeyPa
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_response)
     app.state.secret_vault = vault
+    app.state.external_http_transport = GatewayExternalHTTPTransport(vault)
     app.state.gateway_id = GATEWAY_ID
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=GATEWAY_ID)
     app.state.registry = registry

@@ -7,6 +7,7 @@ import io
 import json
 import logging
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,10 @@ from tests.support.gateway_managed_backends import ProcessProbe
 GATEWAY_ID = "gateway_00000000000040008000000000000001"
 
 
+def _gateway_source(settings: dict[str, object] | None = None) -> dict[str, object]:
+    return {"config_version": 6, "extends": "builtin:gateway", "settings": {"gateway": settings or {}}}
+
+
 @dataclass
 class SkillApplicationCase:
     config: ConfigApplicationCase
@@ -68,10 +73,9 @@ class SkillApplicationCase:
     skill: Path
 
     async def policy(self, mode: str, interval: str | None = None) -> None:
-        self.config.path.write_text(json.dumps({
-            "config_version": 3,
+        self.config.path.write_text(json.dumps(_gateway_source({
             "resources": {"skill_sources": {"local_updates": {"mode": mode, "poll_interval": interval}}},
-        }))
+        })))
         await self.config.service.reload()
 
 
@@ -142,44 +146,50 @@ async def test_http_skill_config_switch_is_atomic_and_drains_old_generation(
     async def respond(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(status, content=b"accepted body", headers={"ETag": '"accepted"'})
 
-    capability = skill_source_config.skill_fetch_capability("http")
-    monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
-        "http": SkillFetchCapability(config_type=capability.config_type,
-            create=lambda: HttpSkillFetch(httpx.AsyncClient(transport=httpx.MockTransport(respond)))),
-    })
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as source_client:
+        @asynccontextmanager
+        async def candidate_client(_network: dict[str, object]) -> AsyncIterator[httpx.AsyncClient]:
+            yield source_client
 
-    async def configure(priority: int) -> None:
-        case.config.path.write_text(json.dumps({"config_version": 3, "resources": {"skill_sources": {"sources": [{
-            "id": "shared", "name": "demo", "priority": priority,
-            "fetch": {"protocol": "http", "url": "https://source.example.test/private"},
-            "updates": {"mode": "manual"},
-        }]}}}))
-        await case.config.service.reload()
+        case.config.app.state.external_http_transport = SimpleNamespace(candidate_client=candidate_client)
+        capability = skill_source_config.skill_fetch_capability("http")
+        monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
+            "http": SkillFetchCapability(config_type=capability.config_type,
+                create=lambda: HttpSkillFetch(source_client)),
+        })
 
-    empty = case.owner.configured_sources.current
-    await configure(0)
-    previous = case.owner.configured_sources.current
-    assert previous is not empty and len(case.owner.configured_sources._generations) == 1
-    accepted = case.owner.snapshot(workspace_id="workspace")
-    assert any(entry.layer == "network" and entry.priority == 0 for entry in accepted.entries)
-    if failure == "prepare":
-        status = 503
-    elif failure == "promotion":
-        def reject_promotion(**kwargs: object) -> None:
-            raise ConfigConflictError("HTTP source 最终 CAS 冲突")
-        monkeypatch.setattr(case.config.store, "promote_active_config_snapshot", reject_promotion)
-    if failure is not None:
-        expected = ConfigConflictError if failure == "promotion" else RuntimeError
-        with pytest.raises(expected, match="stage=promotion|stage=runtime_apply"):
+        async def configure(priority: int) -> None:
+            case.config.path.write_text(json.dumps(_gateway_source({"resources": {"skill_sources": {"sources": [{
+                "id": "shared", "name": "demo", "priority": priority,
+                "fetch": {"protocol": "http", "url": "https://source.example.test/private"},
+                "updates": {"mode": "manual"},
+            }]}}})))
+            await case.config.service.reload()
+
+        empty = case.owner.configured_sources.current
+        await configure(0)
+        previous = case.owner.configured_sources.current
+        assert previous is not empty and len(case.owner.configured_sources._generations) == 1
+        accepted = case.owner.snapshot(workspace_id="workspace")
+        assert any(entry.layer == "network" and entry.priority == 0 for entry in accepted.entries)
+        if failure == "prepare":
+            status = 503
+        elif failure == "promotion":
+            def reject_promotion(**kwargs: object) -> None:
+                raise ConfigConflictError("HTTP source 最终 CAS 冲突")
+            monkeypatch.setattr(case.config.store, "promote_active_config_snapshot", reject_promotion)
+        if failure is not None:
+            expected = ConfigConflictError if failure == "promotion" else RuntimeError
+            with pytest.raises(expected, match="stage=promotion|stage=runtime_apply"):
+                await configure(2)
+            assert case.owner.configured_sources.current is previous
+            assert case.owner.snapshot(workspace_id="workspace") == accepted
+        else:
             await configure(2)
-        assert case.owner.configured_sources.current is previous
-        assert case.owner.snapshot(workspace_id="workspace") == accepted
-    else:
-        await configure(2)
-        assert case.owner.configured_sources.current is not previous
-        assert any(entry.layer == "network" and entry.priority == 2 for entry in case.owner.snapshot(workspace_id="workspace").entries)
-        assert not case.config.service.status().restart_required
-    assert len(case.owner.configured_sources._generations) == 1
+            assert case.owner.configured_sources.current is not previous
+            assert any(entry.layer == "network" and entry.priority == 2 for entry in case.owner.snapshot(workspace_id="workspace").entries)
+            assert not case.config.service.status().restart_required
+        assert len(case.owner.configured_sources._generations) == 1
 
 
 @pytest.mark.parametrize("mode", ["poll", "event_poll"])
@@ -268,7 +278,7 @@ def config_application(request: pytest.FixtureRequest) -> Iterator[ConfigApplica
     root = context.boxteam_home_for_node(request.node.nodeid)
     root.mkdir(parents=True, exist_ok=True)
     path = root / "gateway.jsonc"
-    path.write_text(json.dumps({"config_version": 3}), encoding="utf-8")
+    path.write_text(json.dumps(_gateway_source()), encoding="utf-8")
     with GatewayStateStore(path=root / "gateway.sqlite") as store:
         schema = context.project_root / "configs/gateway_schema.jsonc"
         config = load_gateway_config(config_path=path, local_config_path=root / "gateway_local.jsonc", schema_path=schema, state_store=store)
@@ -295,9 +305,9 @@ async def test_reload_persists_real_proofs_and_compensates_the_frozen_consumers(
     initial = case.service.config
     baseline = case.store.get_active_config_snapshot("gateway")
     replacement = FederationPolicyStore(initial={"default_effect": "deny"})
-    case.path.write_text(json.dumps({
-        "config_version": 3, "permissions": {"federation": {"default_effect": "deny"}},
-    }), encoding="utf-8")
+    case.path.write_text(json.dumps(_gateway_source({
+        "permissions": {"federation": {"default_effect": "deny"}},
+    })), encoding="utf-8")
 
     def reject_promotion(**kwargs):
         assert case.policy.snapshot.default_effect == "deny"
@@ -486,7 +496,7 @@ async def test_logging_reload_confirms_shared_processes_and_settles_actual_failu
             raise OSError("产品诊断 sink 无法写入")
 
         monkeypatch.setattr("app.core.failures.logger.error", fail_diagnostic)
-    config.path.write_text(json.dumps({"config_version": 3, "logging": {"runtime": {"level": "debug", "pretty": False}}}))
+    config.path.write_text(json.dumps(_gateway_source({"logging": {"runtime": {"level": "debug", "pretty": False}}})))
 
     def reject_promotion(**_kwargs):
         assert case.registry.backend_topology_lock.locked()
@@ -542,10 +552,10 @@ async def test_logging_reload_confirms_shared_processes_and_settles_actual_failu
 async def test_mixed_restart_candidate_does_not_apply_logging_early(logging_application: LoggingApplicationCase) -> None:
     case = logging_application
     before = dict(case.states)
-    case.config.path.write_text(json.dumps({
-        "config_version": 3, "logging": {"runtime": {"level": "warning"}},
+    case.config.path.write_text(json.dumps(_gateway_source({
+        "logging": {"runtime": {"level": "warning"}},
         "runtime": {"gateway": {"process": {"health": {"poll_interval_seconds": 1.5}}}},
-    }))
+    })))
     await case.config.service.reload()
     assert case.config.service.status().state == "pending_restart"
     assert case.states == before and case.calls == []

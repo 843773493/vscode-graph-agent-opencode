@@ -58,7 +58,7 @@ try {
     if (request.method() === 'PUT' && url.pathname.includes('/config/sources/')) sourceWriteRequestCount++;
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   const pluginStatusStreamTerminations = [];
   for (const event of ['requestfailed', 'requestfinished']) {
     page.on(event, request => {
@@ -701,7 +701,7 @@ try {
   const setGatewayPluginEnabled = async enabled => {
     const document = await gatewaySource();
     const source = parseJsonc(document.jsonc);
-    const binding = source.plugins.runtime.entries.find(item =>
+    const binding = source.settings.gateway.plugins.runtime.entries.find(item =>
       item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
     assert(binding);
     binding.enabled = enabled;
@@ -863,18 +863,18 @@ try {
   const gatewayPendingReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayPendingReady);
   const originalGatewaySource = await gatewaySource();
   const pendingGateway = parseJsonc(originalGatewaySource.jsonc);
-  const pendingGatewayBinding = pendingGateway.plugins.runtime.entries.find(binding =>
+  const pendingGatewayBinding = pendingGateway.settings.gateway.plugins.runtime.entries.find(binding =>
     binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'gateway-preference');
   assert(pendingGatewayBinding?.enabled);
   pendingGatewayBinding.enabled = false;
   const healthTimeoutBefore = originalGatewaySource.effective.runtime.gateway.process.health.request_timeout_seconds;
   assert.equal(typeof healthTimeoutBefore, 'number');
   // Gateway schema 将此健康策略路径声明为 restart_gateway；候选仍由原 source writer 接纳。
-  pendingGateway.runtime ??= {};
-  pendingGateway.runtime.gateway ??= {};
-  pendingGateway.runtime.gateway.process ??= {};
-  pendingGateway.runtime.gateway.process.health ??= {};
-  pendingGateway.runtime.gateway.process.health.request_timeout_seconds = healthTimeoutBefore + 1;
+  pendingGateway.settings.gateway.runtime ??= {};
+  pendingGateway.settings.gateway.runtime.gateway ??= {};
+  pendingGateway.settings.gateway.runtime.gateway.process ??= {};
+  pendingGateway.settings.gateway.runtime.gateway.process.health ??= {};
+  pendingGateway.settings.gateway.runtime.gateway.process.health.request_timeout_seconds = healthTimeoutBefore + 1;
   const saveGatewaySource = (document, jsonc, suffix) => api('/api/gateway/config/sources/gateway_mutable_override', {
     method: 'PUT', body: { gateway_id: active.gateway_id, source_key: 'gateway_mutable_override', jsonc,
       base_file_digest: document.file_digest, base_layer_revision: document.layer_revision,
@@ -927,7 +927,7 @@ try {
   let gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
   assert.notEqual(gatewayReady.instance.process_id, workspaceReady.instance.process_id);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayReady.instance.instance_id);
   assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
@@ -1069,7 +1069,7 @@ try {
     '/api/gateway/service-plugins/configuration-schemas', '/api/gateway/service-plugins/configuration-schemas',
   ]);
   const stoppedSettings = await api('/api/gateway/config/sources/gateway_mutable_override');
-  assert.equal(parseJsonc(stoppedSettings.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
+  assert.equal(parseJsonc(stoppedSettings.jsonc).settings.gateway.plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
   assert(!stoppedSettings.effective.plugins.configuration);
   result.stoppedSettingsWithoutRuntimeRequests = true;
   result.phase = 'uninstall';
@@ -1094,7 +1094,7 @@ try {
   result.actualRuntimeLoop = true;
   result.uninstalled = true;
   const residual = await api('/api/gateway/config/sources/gateway_mutable_override');
-  assert.equal(parseJsonc(residual.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
+  assert.equal(parseJsonc(residual.jsonc).settings.gateway.plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
   assert(!residual.effective.plugins.configuration);
   result.phase = 'mcp-search-entry';
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.search', '@mcp'));

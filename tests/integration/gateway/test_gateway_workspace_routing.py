@@ -280,6 +280,12 @@ async def _wait_for_gateway_pending_restart(
     )
 
 
+def _set_gateway_poll_interval(document: dict[str, object], seconds: float) -> None:
+    document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("runtime", {}).setdefault(
+        "gateway", {},
+    ).setdefault("process", {}).setdefault("health", {})["poll_interval_seconds"] = seconds
+
+
 class _UnexpectedLocalQueryService:
     def __init__(self, workspace_id: str) -> None:
         self.workspace_id = workspace_id
@@ -939,11 +945,9 @@ async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
             timeout=60,
         ) as client:
             document = gateway_config_path.read_text(encoding="utf-8")
-            changed_document = document.replace(
-                '"poll_interval_seconds": 0.5',
-                '"poll_interval_seconds": 0.75',
-                1,
-            )
+            config = commentjson.loads(document)
+            _set_gateway_poll_interval(config, 0.75)
+            changed_document = json.dumps(config, ensure_ascii=False, indent=2)
             assert changed_document != document
             gateway_config_path.write_text(changed_document, encoding="utf-8")
             pending_status = await _wait_for_gateway_pending_restart(client)
@@ -1059,15 +1063,9 @@ async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
             timeout=60,
         ) as client:
             document = gateway_config_path.read_text(encoding="utf-8")
-            changed_document = document
-            for old_value in (0.5, 0.75, 0.8):
-                changed_document = document.replace(
-                    f'"poll_interval_seconds": {old_value}',
-                    '"poll_interval_seconds": 0.85',
-                    1,
-                )
-                if changed_document != document:
-                    break
+            config = commentjson.loads(document)
+            _set_gateway_poll_interval(config, 0.85)
+            changed_document = json.dumps(config, ensure_ascii=False, indent=2)
             assert changed_document != document
             gateway_config_path.write_text(changed_document, encoding="utf-8")
             pending_status = await _wait_for_gateway_pending_restart(client)
@@ -1177,11 +1175,9 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
             timeout=60,
         ) as client:
             document = gateway_config_path.read_text(encoding="utf-8")
-            changed_document = document.replace(
-                '"poll_interval_seconds": 0.5',
-                '"poll_interval_seconds": 0.9',
-                1,
-            )
+            config = commentjson.loads(document)
+            _set_gateway_poll_interval(config, 0.9)
+            changed_document = json.dumps(config, ensure_ascii=False, indent=2)
             assert changed_document != document
             gateway_config_path.write_text(changed_document, encoding="utf-8")
             pending_status = await _wait_for_gateway_pending_restart(client)
@@ -1353,11 +1349,9 @@ async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
             timeout=60,
         ) as client:
             document = gateway_config_path.read_text(encoding="utf-8")
-            changed_document = document.replace(
-                '"poll_interval_seconds": 0.5',
-                '"poll_interval_seconds": 0.95',
-                1,
-            )
+            config = commentjson.loads(document)
+            _set_gateway_poll_interval(config, 0.95)
+            changed_document = json.dumps(config, ensure_ascii=False, indent=2)
             assert changed_document != document
             gateway_config_path.write_text(changed_document, encoding="utf-8")
             pending_status = await _wait_for_gateway_pending_restart(client)
@@ -1521,16 +1515,13 @@ async def test_gateway_federation_reconciles_pending_restart_offline_and_cursor_
         )
         document = remote_config_path.read_text(encoding="utf-8")
         remote_config = commentjson.loads(document)
-        remote_config.setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
+        remote_config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
             "capability": "managed_workspace_admin",
             "effect": "allow",
             "principal_ref": principal_ref_for_gateway(credential.peer_gateway_id),
         })
-        changed_document = json.dumps(remote_config, ensure_ascii=False, indent=2).replace(
-            '"poll_interval_seconds": 0.5',
-            '"poll_interval_seconds": 0.75',
-            1,
-        )
+        _set_gateway_poll_interval(remote_config, 0.75)
+        changed_document = json.dumps(remote_config, ensure_ascii=False, indent=2)
         assert changed_document != document
         remote_config_path.write_text(changed_document, encoding="utf-8")
         async with httpx.AsyncClient(

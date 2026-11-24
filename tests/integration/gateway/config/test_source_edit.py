@@ -88,10 +88,10 @@ def test_source_writer_and_watcher_share_active_events_and_native_files(source_g
     case = source_gateway
     before = case.document(SOURCE)
     assert case.document("inline:0")["writable"] is False
-    local, _ = case.edit(LOCAL, '{"logging":{"runtime":{"level":"warning"}}}', "local-green")
+    local, _ = case.edit(LOCAL, '{"config_version":6,"extends":"user:gateway","settings":{"gateway":{"logging":{"runtime":{"level":"warning"}}}}}', "local-green")
     # 原修订序列由 pending 与 active 共用，接纳和 promotion 各分配一次。
     assert local["edit"]["state"] == "active" and local["active_revision"] == before["active_revision"] + 2
-    source_text = '{ // 用户来源被 local 遮蔽\n "logging":{"runtime":{"level":"debug"}},\n}\n'
+    source_text = '{ // 用户来源被 local 遮蔽\n "config_version":6,"extends":"builtin:gateway",\n "settings":{"gateway":{"logging":{"runtime":{"level":"debug"}}}},\n}\n'
     shadowed, original = case.edit(SOURCE, source_text, "shadowed-user")
     assert shadowed["edit"]["state"] == "active"
     assert shadowed["active_revision"] == local["active_revision"]
@@ -101,18 +101,36 @@ def test_source_writer_and_watcher_share_active_events_and_native_files(source_g
     assert replay["edit"] == shadowed["edit"]
     changed = {**original, "jsonc": "{}"}
     assert case.client.put("/api/gateway/config/sources/" + SOURCE, json=changed).status_code == 409
-    # 原生删除由既有 watcher 导入，与 source writer 使用同一来源链。
+    # local 是明确入口；原生删除必须暴露失败并保留旧 active，不得自动回退到 user。
     (case.config_root / "gateway_local.jsonc").unlink()
     deadline = time.monotonic() + 10
     observations = []
     while time.monotonic() < deadline:
-        document = case.document(LOCAL)
-        observations.append(document)
-        if document["file_presence"] == "absent" and document["layer_digest"] is None and document["effective"]["logging"]["runtime"]["level"] == "debug":
+        response = case.client.get("/api/gateway/config/reload-status").raise_for_status()
+        status = response.json()["data"]
+        observations.append(status)
+        if status["healthy"] is False:
             break
         time.sleep(0.05)
     else:
-        pytest.fail("原生删除 local 来源后，watcher 未恢复用户来源的有效值")
+        pytest.fail("原生删除必需 local 来源后，watcher 未报告失败")
+    assert status["reason"] == "invalid_config"
+    assert status["active_revision"] == local["active_revision"]
+    assert status["revision"] == local["status"]["revision"]
+    assert status["last_error"]
+    assert case.client.get("/api/gateway/config/sources/" + LOCAL).status_code == 409
+    (case.config_root / "gateway_local.jsonc").write_text(
+        '{"config_version":6,"extends":"user:gateway","settings":{}}\n', encoding="utf-8",
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        document = case.document(LOCAL)
+        observations.append(document)
+        if document["file_presence"] == "present" and document["effective"]["logging"]["runtime"]["level"] == "debug":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("恢复明确 local 父链后，watcher 未接纳用户来源的有效值")
     (case.artifacts / "native-delete-observations.json").write_text(json.dumps(observations, ensure_ascii=False, indent=2) + "\n")
     # 遮蔽提交占一条 pending 修订；随后原生修改再分配 pending 和 active。
     assert document["active_revision"] == local["active_revision"] + 3
@@ -128,7 +146,7 @@ def test_source_writer_and_watcher_share_active_events_and_native_files(source_g
 def test_restart_source_replay_keeps_original_candidate_and_active(source_gateway: SourceGateway) -> None:
     case = source_gateway
     before = case.document(SOURCE)
-    saved, request = case.edit(SOURCE, '{"runtime":{"gateway":{"process":{"health":{"request_timeout_seconds":3}}}}}', "restart-source")
+    saved, request = case.edit(SOURCE, '{"config_version":6,"extends":"builtin:gateway","settings":{"gateway":{"runtime":{"gateway":{"process":{"health":{"request_timeout_seconds":3}}}}}}}', "restart-source")
     assert saved["edit"]["state"] == "pending_restart"
     assert saved["status"]["candidate_id"] == saved["edit"]["candidate_id"]
     assert saved["status"]["restart_required"] is True

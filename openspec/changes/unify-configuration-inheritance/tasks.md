@@ -13,9 +13,11 @@
 
 ## 3. Gateway 配置纵向切片
 
-- [ ] 3.1 迁齐 Gateway schema／模板／安装器／启动入口到显式父链，更新 loader、source owner、inspection 和原 JSONC writer；runtime 不再按固定层序合并，不接受旧格式 fallback。
-- [ ] 3.2 将 Gateway 父依赖及候选依赖集合接入原 watcher、source CAS、prepare／apply／promotion、失败／重启状态；验证父指针切换、失败候选修复和 apply 期间父变更，保留 registry／连接身份／租约合同。
-- [ ] 3.3 增加代理互斥 schema、环境捕获及密钥准备；将插件目录／包下载和外部 MCP 真正出网路径接入 Gateway 策略，将内部 HTTP／受管远端控制路径明确保持直连；真实捕获验证，不能共享同一隐式环境客户端。
+- [x] 3.1 迁齐 Gateway schema／模板／安装器／启动入口到显式父链，更新 loader、source owner、inspection 和原 JSONC writer；runtime 不再按固定层序合并，不接受旧格式 fallback。
+- [x] 3.2 将 Gateway 父依赖及候选依赖集合接入原 watcher、source CAS、prepare／apply／promotion、失败／重启状态；验证父指针切换、失败候选修复和 apply 期间父变更，保留 registry／连接身份／租约合同。
+- [x] 3.3 增加代理互斥 schema、环境捕获及密钥准备；将插件目录／包下载和外部 MCP 真正出网路径接入 Gateway 策略，将内部 HTTP／受管远端控制路径明确保持直连；真实捕获验证，不能共享同一隐式环境客户端。
+
+Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来源保存／watcher 3项通过；正式 Workbench 浏览器1项通过（默认 inline→user→local、表单／JSONC、CAS 与来源 URI），页面错误为空。外部 HTTP／Skill 真实 socket 4项通过，覆盖候选代理与来源同事务切换、认证轮换、旧流引用结清与后续刷新；相关单测及真实前端类型检查、构建通过。原件分别位于 `out/tests/temp/2026/11/24/{configuration_inheritance,gateway_http_skill,gateway_v6_acceptance}/artifacts/`。完整 Launcher handoff、SSH 与 Windows／Docker 本切片未重跑；profile 节点原文定位与完整 Settings 链树仍由第6组继续实施，不能据此视为整个变更完成。
 
 ## 4. Workspace 和模型配置纵向切片
 

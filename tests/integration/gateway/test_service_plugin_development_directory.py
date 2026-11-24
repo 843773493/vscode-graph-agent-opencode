@@ -62,10 +62,11 @@ def test_development_directory_update_requires_immutable_publication_and_explici
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = client.get(path).raise_for_status().json()["data"]
         configuration = commentjson.loads(document["jsonc"])
+        plugins = configuration.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})
         if version == "1.0.0":
             # 此隔离 Home 只安装探针包，不使用未安装的内置工作区模板。
-            configuration.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
-        configuration.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [
+            plugins["workspace_defaults"] = {"entries": []}
+        plugins["runtime"] = {"entries": [] if version is None else [
             {"package_id": "development.probe", "package_version": version, "plugin_id": "node", "enabled": enabled},
             {"package_id": "development.probe", "package_version": "1.0.0", "plugin_id": "unselected", "enabled": False},
         ]}
@@ -133,8 +134,10 @@ def test_development_directory_update_requires_immutable_publication_and_explici
         assert disabled.binding.package_version == "3.0.0" and disabled.instance is None
         document = client.get(source_path).raise_for_status().json()["data"]
         after = commentjson.loads(document["jsonc"])
-        assert after["plugins"]["runtime"]["entries"][1] == before["plugins"]["runtime"]["entries"][1]
-        assert after["plugins"].get("workspace_defaults") == before["plugins"].get("workspace_defaults")
+        after_plugins = after["settings"]["gateway"]["plugins"]
+        before_plugins = before["settings"]["gateway"]["plugins"]
+        assert after_plugins["runtime"]["entries"][1] == before_plugins["runtime"]["entries"][1]
+        assert after_plugins.get("workspace_defaults") == before_plugins.get("workspace_defaults")
         assert document["effective"]["plugins"]["workspace_defaults"] == before_document["effective"]["plugins"]["workspace_defaults"]
         rejected = client.put(source_path, json={**stale, "idempotency_key": "stale-development-binding"})
         assert rejected.status_code == 409, rejected.text

@@ -276,6 +276,7 @@ async function main() {
 
   for (const name of [
     "gateway.jsonc",
+    "gateway_local.jsonc",
     "gateway_schema.jsonc",
     "workspace.jsonc",
     "workspace_schema.jsonc",

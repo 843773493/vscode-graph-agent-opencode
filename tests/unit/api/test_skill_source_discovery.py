@@ -62,22 +62,23 @@ async def discovery_case(
             case.requests.append(request)
             return httpx.Response(case.status, content="# 私有 accepted 正文 Ω\n".encode(), headers={"ETag": '"private-validator"'})
 
-        capability = skill_source_config.skill_fetch_capability("http")
-        monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
-            **skill_source_config.SKILL_FETCH_CAPABILITIES,
-            "http": SkillFetchCapability(config_type=capability.config_type,
-                create=lambda: HttpSkillFetch(httpx.AsyncClient(transport=httpx.MockTransport(respond)))),
-        })
-        configs = tuple(SkillSourceConfig.model_validate({
-            "id": source_id, "name": "same-skill", "priority": priority,
-            "fetch": {"protocol": "http", "url": f"https://private-user:private-secret@skills.example.test/{source_id}?key=private-key"},
-            "updates": {"mode": "manual"},
-        }) for source_id, priority in (("first", 0), ("higher", 2**40)))
-        owner.activate(await owner.prepare(configs))
-        try:
-            yield case
-        finally:
-            await owner.close()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as source_client:
+            capability = skill_source_config.skill_fetch_capability("http")
+            monkeypatch.setattr(skill_source_config, "SKILL_FETCH_CAPABILITIES", {
+                **skill_source_config.SKILL_FETCH_CAPABILITIES,
+                "http": SkillFetchCapability(config_type=capability.config_type,
+                    create=lambda: HttpSkillFetch(source_client)),
+            })
+            configs = tuple(SkillSourceConfig.model_validate({
+                "id": source_id, "name": "same-skill", "priority": priority,
+                "fetch": {"protocol": "http", "url": f"https://private-user:private-secret@skills.example.test/{source_id}?key=private-key"},
+                "updates": {"mode": "manual"},
+            }) for source_id, priority in (("first", 0), ("higher", 2**40)))
+            owner.activate(await owner.prepare(configs))
+            try:
+                yield case
+            finally:
+                await owner.close()
 
 
 async def test_discovery_preserves_each_accepted_source_without_fetch_or_private_payload(discovery_case: DiscoveryCase) -> None:

@@ -25,7 +25,7 @@ async def mcp_gateway_config() -> AsyncIterator[Mock]:
     gateway.add_middleware(TraceMiddleware)
     gateway.include_router(router)
     async with httpx.AsyncClient(trust_env=False, timeout=None) as upstream:
-        gateway.state.http_client = upstream
+        gateway.state.external_http_client = upstream
         async with serve_http_app(gateway) as url:
             config = Mock()
             config.get_gateway_connection_url.return_value = url

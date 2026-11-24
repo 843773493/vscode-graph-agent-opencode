@@ -71,9 +71,10 @@ def test_gateway_collection_hot_switches_through_original_source_writer(
         path = f"/api/gateway/config/sources/{source_key}"
         document = exchange("GET", path)
         config = commentjson.loads(document["jsonc"])
-        config["telemetry"] = {"runtime": {"enabled": enabled, "sample_ratio": 1, "sample_buffer_limit": 2}}
-        config["statistics"] = {"runtime": {"enabled": enabled, "collection_interval_ms": 1000}}
-        config.setdefault("plugins", {})["runtime"] = {"entries": [binding]}
+        settings = config.setdefault("settings", {}).setdefault("gateway", {})
+        settings["telemetry"] = {"runtime": {"enabled": enabled, "sample_ratio": 1, "sample_buffer_limit": 2}}
+        settings["statistics"] = {"runtime": {"enabled": enabled, "collection_interval_ms": 1000}}
+        settings.setdefault("plugins", {})["runtime"] = {"entries": [binding]}
         result = exchange("PUT", path, json={
             "gateway_id": document["gateway_id"], "source_key": source_key,
             "jsonc": json.dumps(config), "base_file_digest": document["file_digest"],

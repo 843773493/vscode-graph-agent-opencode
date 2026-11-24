@@ -9,7 +9,7 @@ from typing import Literal, cast
 from urllib.parse import unquote, urlsplit
 
 from jsonpointer import resolve_pointer
-from jsonschema import Draft202012Validator, ValidationError, validators
+from jsonschema import Draft202012Validator, SchemaError, ValidationError, validators
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 
@@ -47,6 +47,7 @@ class ConfigGraph:
         registered_uris: Mapping[str, Path] | None = None,
         read_source: Callable[[Path], StableConfigFile] = read_stable_config_file,
         source_documents: Mapping[str, Mapping[str, ConfigValue]] | None = None,
+        document_overrides: Mapping[str, Mapping[str, ConfigValue]] | None = None,
     ) -> None:
         self.domain, self.version, self.owner_id = domain, version, owner_id
         self.entry = NodeLocation(entry.expanduser().resolve())
@@ -60,6 +61,7 @@ class ConfigGraph:
         self._source_uri_provider, self._authorize_source, self._read_source = source_uri, authorize_source, read_source
         # active/pending 的固定来源由原快照 owner 提供；禁止读取当前文件补齐历史定义。
         self._source_documents = source_documents
+        self._document_overrides = document_overrides or {}
         self._documents: dict[Path, Mapping[str, ConfigValue]] = {}
         self._source_locations: dict[str, Path] = {}
         self._dependencies: dict[Path, StableConfigFile] = {}
@@ -68,10 +70,13 @@ class ConfigGraph:
         self._validated_options: set[NodeLocation] = set()
         self._resolving: list[NodeLocation] = []
         self._merger = SettingsMerger(settings_schema)
-        _Validator.check_schema(settings_schema)
+        try:
+            _Validator.check_schema(settings_schema)
+            # Workspace 共同选项可不完整；消费者最终选项使用 owner 提供的完整 schema。
+            _Validator.check_schema(options_schema)
+        except SchemaError as error:
+            raise ValueError("配置 schema 校验失败: stage=schema") from error
         self._settings_validator = _Validator(settings_schema, registry=Registry())
-        # Workspace 共同选项可不完整；消费者最终选项使用 owner 提供的完整 schema。
-        _Validator.check_schema(options_schema)
         self._options_validator = _Validator(options_schema, registry=Registry())
         self._document_validator = _Validator(
             config_document_schema(domain=domain, version=version), registry=Registry(),
@@ -182,7 +187,8 @@ class ConfigGraph:
         else:
             snapshot = self._read_source(path)
             self._dependencies[path] = snapshot
-            document = parse_stable_config_file(snapshot)
+            document = (self._document_overrides[uri] if uri in self._document_overrides
+                        else parse_stable_config_file(snapshot))
             if document is None:
                 raise FileNotFoundError("声明的配置来源不存在")
         self._validate(self._document_validator, document, NodeLocation(path))

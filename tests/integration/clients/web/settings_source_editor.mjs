@@ -40,7 +40,7 @@ try {
     return envelope.data;
   }, { path, options });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
   const health = await api('/api/gateway/health');
   const workspaces = await api('/api/gateway/workspaces');
@@ -84,6 +84,18 @@ try {
   const update = (jsonc, path, value) => applyEdits(jsonc, modify(jsonc, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
   const resourceSource = (source, gatewayScope) => quick.locator('.monaco-list-row').filter({ hasText: source + '.jsonc' })
     .filter({ hasText: gatewayScope ? '配置来源 · Gateway ·' : `配置来源 · ${workspace.name} ·` });
+  const chooseSource = async (source, gatewayScope = false, modifiers = []) => {
+    const item = resourceSource(source, gatewayScope), input = quick.locator('input').first();
+    await input.focus();
+    // 其他资源来源会异步插入错误行；确认原版键盘焦点，避免鼠标坐标随行位移选错对象。
+    const count = await quick.locator('.monaco-list-row').count();
+    for (let index = 0; index <= count; index++) {
+      if (await item.evaluate(row => row.classList.contains('focused'))) break;
+      await input.press('ArrowDown');
+    }
+    await expect(item).toHaveClass(/\bfocused\b/);
+    await input.press([...modifiers, 'Enter'].join('+'));
+  };
   const showSources = async (source = 'workspace_root_mutable_override', gatewayScope = false) => {
     await page.mouse.move(5, 5);
     await command('boxteam.quickAccess.resources', result.owner);
@@ -106,17 +118,17 @@ try {
   assert.equal(result.sourceReads.length, readsBeforeDiscovery);
   result.resource_browse_only = true;
   result.phase = 'gateway-save';
-  await showSources('gateway_mutable_override', true); await resourceSource('gateway_mutable_override', true).getByText('gateway_mutable_override.jsonc', { exact: true }).click();
+  await showSources('gateway_mutable_override', true); await chooseSource('gateway_mutable_override', true);
   await expect(tab).toContainText('gateway_mutable_override.jsonc');
   let gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
-  const gatewayDraft = '// Gateway 来源注释\n' + update(gatewayDocument.jsonc, ['logging', 'runtime', 'level'], 'debug');
+  const gatewayDraft = '// Gateway 来源注释\n' + update(gatewayDocument.jsonc, ['settings', 'gateway', 'logging', 'runtime', 'level'], 'debug');
   await replace(gatewayDraft);
   // 保留 Web 默认 autoSave；来源编辑必须自行只允许显式保存。
   await page.waitForTimeout(1500);
   assert.equal(result.writes.length, 0);
   await save();
   gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
-  assert.equal(parse(gatewayDocument.jsonc).logging.runtime.level, 'debug');
+  assert.equal(parse(gatewayDocument.jsonc).settings.gateway.logging.runtime.level, 'debug');
   assert(gatewayDocument.jsonc.includes('// Gateway 来源注释'));
   assert(gatewayDocument.edit === null || gatewayDocument.edit === undefined);
   result.gateway_saved = true;
@@ -126,7 +138,7 @@ try {
   const sharedBefore = await api(sharedPath, { headers: workspaceHeaders });
   assert.equal(sharedBefore.writable, true);
   await showSources('workspace_mutable_override');
-  await resourceSource('workspace_mutable_override', false).click();
+  await chooseSource('workspace_mutable_override');
   await expect(tab).toContainText('workspace_mutable_override.jsonc');
   await replace(sharedBefore.jsonc + '\n// 共享用户来源经正式编辑器保存\n');
   const sharedSaved = command('workbench.action.files.save');
@@ -147,7 +159,7 @@ try {
     fanout_id: sharedAfter.fanout.fanout_id, result: sharedResult.result, preview_scope_shown: true };
 
   result.phase = 'workspace-save-with-frozen-owner';
-  await showSources(); await resourceSource('workspace_root_mutable_override', false).click({ modifiers: ['Alt'] });
+  await showSources(); await chooseSource('workspace_root_mutable_override', false, ['Alt']);
   await expect(page.locator('.editor-group-container')).toHaveCount(2);
   await expect(tab).toContainText('workspace_root_mutable_override.jsonc');
   result.resource_open_and_save = true;
@@ -178,7 +190,7 @@ try {
   // 原热退出备份须带上编辑时的 CAS；刷新不能把旧草稿换成最新来源基线。
   page.once('dialog', dialog => dialog.accept());
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await expect(page.locator('.monaco-workbench')).toBeVisible();
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
   await expect(text).toContainText('冲突时必须保留的草稿');
   await expect(tab).toHaveClass(/\bdirty\b/);
@@ -226,7 +238,7 @@ try {
   const beforeBinding = await api(gatewayPath, { headers: gatewayHeaders });
   const binding = { package_id: 'source.settings-probe', package_version: '1.0.0', plugin_id: 'preference', enabled: false };
   const bindingIntent = { gateway_id: health.gateway_id, source_key: beforeBinding.source_key,
-    jsonc: update(beforeBinding.jsonc, ['plugins', 'runtime', 'entries'], [binding]), base_file_digest: beforeBinding.file_digest,
+    jsonc: update(beforeBinding.jsonc, ['settings', 'gateway', 'plugins', 'runtime', 'entries'], [binding]), base_file_digest: beforeBinding.file_digest,
     base_layer_revision: beforeBinding.layer_revision, base_layer_digest: beforeBinding.layer_digest,
     expected_active_revision: beforeBinding.active_revision, expected_active_digest: beforeBinding.active_digest, idempotency_key: randomUUID() };
   await api(gatewayPath + '/preflight', { method: 'POST', headers: gatewayHeaders, body: bindingIntent });
@@ -248,7 +260,7 @@ try {
   await page.keyboard.insertText('@id:logging.runtime.pretty');
   const pretty = settings.locator('[data-key="logging.runtime.pretty"]');
   await expect(pretty).toBeVisible();
-  const expectedPretty = !parse((await api(gatewayPath, { headers: gatewayHeaders })).jsonc).logging.runtime.pretty;
+  const expectedPretty = !(await api(gatewayPath, { headers: gatewayHeaders })).source_effective.logging.runtime.pretty;
   const beforeFormWrite = result.writes.length;
   await pretty.getByRole('checkbox').click();
   await expect(tab).toHaveClass(/\bdirty\b/);
@@ -258,7 +270,7 @@ try {
   await expect(tab).toHaveClass(/\bdirty\b/);
   await text.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Control+C');
   const sharedDraft = await page.evaluate(() => navigator.clipboard.readText());
-  assert.equal(parse(sharedDraft).logging.runtime.pretty, expectedPretty);
+  assert.equal(parse(sharedDraft).settings.gateway.logging.runtime.pretty, expectedPretty);
   const returningForm = command('boxteam.settings.openTarget');
   await pick('Gateway 配置'); await pick('gateway_mutable_override'); await returningForm;
   await expect(settings).toBeVisible();
@@ -278,7 +290,7 @@ try {
   await expect(modal).toContainText('保存目标配置来源');
   await modal.getByRole('button', { name: '保存来源', exact: true }).click();
   await formSaved;
-  await expect.poll(async () => parse((await api(gatewayPath, { headers: gatewayHeaders })).jsonc).logging.runtime.pretty).toBe(expectedPretty);
+  await expect.poll(async () => parse((await api(gatewayPath, { headers: gatewayHeaders })).jsonc).settings.gateway.logging.runtime.pretty).toBe(expectedPretty);
   await command('settings.action.search');
   await page.keyboard.press('Control+A'); await page.keyboard.insertText('@modified @id:logging.runtime.pretty');
   await expect(pretty).toBeVisible();
@@ -292,7 +304,7 @@ try {
   await expect(modal).toContainText('保存目标配置来源');
   await modal.getByRole('button', { name: '保存来源', exact: true }).click(); await parameterSaved;
   const pluginDocument = await api(gatewayPath, { headers: gatewayHeaders });
-  assert.equal(parse(pluginDocument.jsonc).plugins.configuration.values['source.settings-probe'].preference.visible, true);
+  assert.equal(parse(pluginDocument.jsonc).settings.gateway.plugins.configuration.values['source.settings-probe'].preference.visible, true);
   const runtime = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: health.gateway_id } });
   assert(runtime.plugins.filter(plugin => plugin.binding.package_id === binding.package_id).every(plugin => !plugin.instance));
   result.plugin_schema_saved_without_runtime = true;
@@ -313,7 +325,7 @@ try {
   await expect(tab).not.toHaveClass(/\bdirty\b/);
   assert.equal(result.writes.length, readonlyBefore);
   await expect(text).not.toContainText('不得写入');
-  await showSources('inline'); await resourceSource('inline', false).click();
+  await showSources('inline'); await chooseSource('inline');
   await expect(tab).toContainText('inline.jsonc');
   await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// 工作区内置来源不得写入\n');
   await expect(tab).not.toHaveClass(/\bdirty\b/);
@@ -338,6 +350,9 @@ try {
   const workspaceSources = await api('/api/v1/config/sources', { headers: workspaceHeaders });
   const workspaceInline = workspaceSources.sources.find(source => source.layer === 'inline' && source.source_key && source.uri);
   assert(workspaceInline, 'Workspace inline 来源必须由原 owner 提供 URI');
+  const gatewayUser = sources.sources.find(source => source.source_key === 'gateway_mutable_override');
+  assert(gatewayUser?.uri, 'Gateway 文件来源必须由原 owner 提供 URI');
+  result.sourceCatalogs = { gateway: sources, workspace: workspaceSources };
   await openConfigurationUri(workspaceInline.uri, workspaceInline.source_key, ['Alt']);
   await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// URI 打开仍只读\n');
   await expect(tab).not.toHaveClass(/\bdirty\b/);
@@ -346,7 +361,7 @@ try {
   result.configuration_uri_opened = true;
   result.phase = 'configuration-resource-reference';
   result.configurationReferences = [];
-  for (const [source, gatewayScope] of [[inline, true], [workspaceInline, false]]) {
+  for (const [source, gatewayScope] of [[inline, true], [gatewayUser, true], [workspaceInline, false]]) {
     const parsed = await api('/api/gateway/resource-addresses/parse', { method: 'POST',
       body: { uri: source.uri, local_gateway_id: health.gateway_id, resource_gateway_id: health.gateway_id } });
     await showSources(source.source_key, gatewayScope);
@@ -368,10 +383,12 @@ try {
     assert.equal(result.sourceDiscoveries.length, openedDiscoveries + 1);
     result.configurationReferences.push({ sourceKey: source.source_key, gatewayScope, uri: parsed.reference_uri });
   }
-  await showSources('gateway_mutable_override', true);
-  assert.equal(await resourceSource('gateway_mutable_override', true).getByRole('button', { name: '复制资源 URI', exact: true }).count(), 0);
-  await resourceSource('gateway_mutable_override', true).getByText('gateway_mutable_override.jsonc', { exact: true }).click();
-  await expect(tab).toContainText('gateway_mutable_override.jsonc');
+  const workspaceLogical = workspaceSources.sources.find(source => source.source_key === 'workspace_root_mutable_override');
+  assert(workspaceLogical && !workspaceLogical.uri, 'Workspace 逻辑来源不能伪造文件 URI');
+  await showSources(workspaceLogical.source_key);
+  assert.equal(await resourceSource(workspaceLogical.source_key, false).getByRole('button', { name: '复制资源 URI', exact: true }).count(), 0);
+  await chooseSource(workspaceLogical.source_key);
+  await expect(tab).toContainText(workspaceLogical.source_key + '.jsonc');
   await expect(text).toBeVisible();
   const logicalCopy = await page.evaluate(async () => {
     try { await globalThis.workbench.commands.executeCommand('boxteam.resource.copyUri'); return { copied: true }; }

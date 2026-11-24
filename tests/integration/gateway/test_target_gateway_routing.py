@@ -537,7 +537,7 @@ def test_real_gateways_authorize_source_edits_at_native_owner(
         config_path = network.gateway_config_paths[1]
         before = exchange(native, "GET", "/api/gateway/config/reload-status", f"{label}-before").json()["data"]
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": rules}
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": rules}
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         deadline = time.monotonic() + 15
         for attempt in range(76):
@@ -704,7 +704,7 @@ def test_real_gateways_recover_original_owner_after_connection_update_and_offlin
         before = exchange(local, "GET", "/api/gateway/config/reload-status", f"{label}-before").json()["data"]
         config_path = network.gateway_config_paths[0]
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config["workspaces"] = [{
+        config.setdefault("settings", {}).setdefault("gateway", {})["workspaces"] = [{
             "kind": "remote_gateway", "connection_id": connection_id, "name": "恢复目标 B",
             "host": "127.0.0.1", "port": 22, "username": "identity-recovery",
             "private_key_path": topology["private_key"], "remote_gateway_port": port,

@@ -22,7 +22,7 @@ from app.services.infrastructure.config.recovery import plan_stopped_config_reco
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 5, "workspace": 3}
+TARGET_CONFIG_VERSIONS = {"gateway": 6, "workspace": 3}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (
@@ -65,7 +65,16 @@ class LoggingMigrationInput:
                 raise ValueError(f"Workspace 不能包含 Gateway logging 配置: {self.identity}")
             value = payload.get("logger", {})
         else:
-            logging = payload.get("logging", {})
+            if self.config_version == 6 and self.kind in {"file", "source_layer"}:
+                node = payload.get("settings", {})
+                if not isinstance(node, dict):
+                    raise TypeError(f"Gateway settings 必须是对象: {self.identity}")
+                gateway = node.get("gateway", {})
+                if not isinstance(gateway, dict):
+                    raise TypeError(f"Gateway settings.gateway 必须是对象: {self.identity}")
+                logging = gateway.get("logging", {})
+            else:
+                logging = payload.get("logging", {})
             if not isinstance(logging, dict):
                 raise TypeError(f"logging 必须是对象: {self.identity}")
             value = logging.get("runtime", {})
@@ -76,7 +85,7 @@ class LoggingMigrationInput:
 
 def validate_retired_defaults(payload: dict[str, object], domain: ConfigDomain, *, source: str) -> None:
     if domain == "gateway" and "ui" in payload:
-        if payload.get("config_version", 1) == TARGET_CONFIG_VERSIONS["gateway"]:
+        if payload.get("config_version", 1) >= 5:
             raise ValueError(f"当前 Gateway 配置不支持 ui；保留原件: {source}")
         if payload["ui"] != {"theme": {"default_theme_id": "warm", "custom_themes": []}}:
             raise ValueError(f"旧 Gateway 外观包含自定义值，需要用户决定；保留原件: {source}")
@@ -341,7 +350,10 @@ def preview_runtime_logging_migration(
     unsettled.extend(_read_shared_source_owner(home / "config/workspace-source.sqlite"))
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
-        versions = [item.config_version] if item.payload is not None else []
+        if item.domain == "gateway" and item.kind in {"file", "source_layer"} and item.payload is not None \
+                and item.config_version == 6 and not isinstance(item.payload.get("settings"), dict):
+            raise ValueError(f"Gateway v6 来源缺少 settings 信封，保留原件: {item.identity}")
+        versions = [item.config_version] if item.payload is not None or item.kind == "source_layer" else []
         if item.payload is not None and "config_version" in item.payload:
             versions.append(item.payload["config_version"])
         for version in versions:

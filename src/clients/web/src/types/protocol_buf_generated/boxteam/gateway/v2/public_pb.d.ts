@@ -1103,6 +1103,11 @@ export declare type GatewayConfigSourceDocumentDTO = Message<"boxteam.gateway.v2
    * @generated from field: optional boxteam.gateway.v2.GatewayConfigSourceEditDTO edit = 19;
    */
   edit?: GatewayConfigSourceEditDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct source_inherited = 20;
+   */
+  sourceInherited?: JsonObject | undefined;
 };
 
 /**

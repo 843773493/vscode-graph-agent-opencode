@@ -147,7 +147,7 @@ def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, a
 
         try:
             for level, pretty in (("debug", False), ("warning", True)):
-                document["logging"] = {"runtime": {"level": level, "pretty": pretty}}
+                document.setdefault("settings", {}).setdefault("gateway", {})["logging"] = {"runtime": {"level": level, "pretty": pretty}}
                 path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 wait_for_settings(level, pretty)
         finally:

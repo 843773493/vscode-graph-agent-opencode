@@ -93,7 +93,7 @@ def test_gateway_observes_repair_after_rejected_file(watched_gateway: WatchedGat
         assert "配置 JSONC 解析失败" in str(failed["last_error"])
         assert str(case.config_path) not in str(failed["last_error"])
 
-        original["logging"]["runtime"]["level"] = "debug"
+        original.setdefault("settings", {}).setdefault("gateway", {}).setdefault("logging", {}).setdefault("runtime", {})["level"] = "debug"
         case.config_path.write_text(json.dumps(original), encoding="utf-8")
         recovered = wait_for(healthy=True)
         assert recovered["state"] == "active" and recovered["last_error"] is None

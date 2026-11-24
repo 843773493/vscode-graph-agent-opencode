@@ -206,48 +206,7 @@ class ConfigApplyPromotionMixin:
                             f"Gateway source layer digest CAS 冲突: {source_key}"
                         )
             if expected_source_baseline is not None:
-                expected_sources = {
-                    str(key): detail
-                    for key, detail in expected_source_baseline.items()
-                    if isinstance(detail, dict)
-                    and detail.get("layer_revision") is not None
-                }
-                current_rows = connection.execute(
-                    """
-                    SELECT config_key, uri, presence, layer_revision,
-                           layer_digest, source_generation
-                    FROM config_source_layers
-                    """
-                ).fetchall()
-                current_keys = {str(row[0]) for row in current_rows}
-                if current_keys != set(expected_sources):
-                    raise ConfigConflictError(
-                        "Gateway source layer 集合 CAS 冲突: "
-                        f"current={sorted(current_keys)}, expected={sorted(expected_sources)}"
-                    )
-                for row in current_rows:
-                    detail = expected_sources[str(row[0])]
-                    actual_uri = str(row[1]) if row[1] is not None else None
-                    expected_uri = (
-                        str(detail.get("uri"))
-                        if detail.get("uri") is not None
-                        else None
-                    )
-                    if (
-                        expected_uri != actual_uri
-                        or str(detail.get("presence")) != str(row[2])
-                        or int(detail["layer_revision"]) != int(row[3])
-                        or (
-                            str(detail.get("layer_digest"))
-                            if detail.get("layer_digest") is not None
-                            else None
-                        )
-                        != (str(row[4]) if row[4] is not None else None)
-                        or int(detail.get("source_generation", 0)) != int(row[5])
-                    ):
-                        raise ConfigConflictError(
-                            f"Gateway source layer 完整基线 CAS 冲突: key={row[0]}"
-                        )
+                self._assert_config_source_baseline(connection, expected_source_baseline)
             for source_key, expected_revision in (
                 expected_layer_revisions or {}
             ).items():

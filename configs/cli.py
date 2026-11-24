@@ -183,6 +183,7 @@ def _validate_installed_configuration(
 
     gateway = load_gateway_config(
         config_path=config_root / "gateway.jsonc",
+        entry_path=config_root / "gateway_local.jsonc",
         schema_path=config_root / "gateway_schema.jsonc",
     )
     service = ConfigService(

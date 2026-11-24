@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 from uuid import uuid4
 
+import jsonschema
 import portalocker
 import psutil
 
@@ -35,7 +36,12 @@ from configs.maintenance.runtime_logging_storage import (
     migrated_payload,
     replace_configuration_rows,
 )
-from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
+from configs.runtime import (
+    merge_json_objects,
+    read_jsonc_object,
+    validate_config,
+    validate_config_payload,
+)
 
 
 class MigrationAsset(TypedDict):
@@ -116,18 +122,68 @@ def validate_runtime_logging_plan(
     }
     connection_entries = list(next((cast(list[dict[str, object]], item.payload["entries"])
                                     for item in plan.inputs if item.kind == "connection_identity" and item.payload), []))
-    files = {item.path: migrated_payload(item.payload or {}, item.domain, plan, connection_entries)
+    files = {item.path: migrated_payload(item.payload or {}, item.domain, plan, connection_entries, source_key=item.key)
              for item in plan.inputs if item.kind == "file" and (
                  item.payload is not None or item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None
              )}
     schemas = {domain: read_jsonc_object(resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root))
                for domain in ("gateway", "workspace")}
-    effective = dict(inline)
+    gateway_snapshots = [item for item in plan.inputs if item.domain == "gateway"
+                         and item.kind in {"active", "pending"} and item.payload is not None]
+    gateway_layers_change = any(item.domain == "gateway" and item.kind in {"file", "source_layer"}
+                                and item.config_version != 6 and
+                                (item.payload is not None or item.kind == "source_layer") for item in plan.inputs)
+    # TODO: 取得旧快照逐层冻结来源的可核验原件后，才能重建 v6 baseline 并放行其升级。
+    if gateway_snapshots and (gateway_layers_change or plan.settings is not None):
+        raise ValueError("Gateway active/pending 快照缺少可核验的逐层来源文档，保留原件并阻断升级")
+    for item in gateway_snapshots:
+        if item.config_version != 6:
+            raise ValueError("Gateway 旧 active/pending 快照缺少可恢复的逐层来源文档，保留原件并阻断升级")
     for item in plan.inputs:
-        if item.kind == "file" and item.path in files and item.path.parent.name != ".boxteam":
+        if item.domain == "gateway" and item.kind == "source_layer" and item.payload is not None:
+            candidate = migrated_payload(item.payload, "gateway", plan, connection_entries, source_key=item.key)
+            try:
+                jsonschema.validate(candidate, schemas["gateway"])
+            except jsonschema.ValidationError as error:
+                raise ValueError(f"配置验证失败: Gateway 来源层={item.identity}") from error
+    for path, payload in files.items():
+        if path.name.startswith("gateway"):
+            try:
+                jsonschema.validate(payload, schemas["gateway"])
+            except jsonschema.ValidationError as error:
+                raise ValueError(f"配置验证失败: Gateway 来源文件={path}") from error
+    for item in plan.inputs:
+        if item.kind != "file" or item.domain != "gateway" or item.payload is None or item.config_version == 6:
+            continue
+        # 旧层即使被当前显式父链绕过，也必须先证明转换后的业务字段有效。
+        candidate = merge_json_objects(inline["gateway"], files[item.path], schema=schemas["gateway"])
+        settings = cast(dict[str, object], candidate["settings"])
+        validate_config_payload({
+            **cast(dict[str, object], settings["gateway"]),
+            "network": settings["network"], "config_version": 6,
+        }, schema=schemas["gateway"])
+    gateway_files = {item.key: item.path for item in plan.inputs if item.kind == "file" and item.domain == "gateway"}
+    user = gateway_files["gateway.jsonc"]
+    local = gateway_files["gateway_local.jsonc"]
+    if user in files or local in files:
+        from app.gateway.config.loader import load_gateway_config
+
+        load_gateway_config(
+            config_path=user, local_config_path=local,
+            entry_path=local if local in files else user,
+            inline_config_path=resolve_config_resource_source("gateway_inline.jsonc", project_root=project_root),
+            schema_path=resolve_config_resource_source("gateway_schema.jsonc", project_root=project_root),
+            source_overrides={
+                **({"gateway_mutable_override": files[user]} if user in files else {}),
+                **({"gateway_local_mutable_override": files[local]} if local in files else {}),
+            },
+            persist_migrations=False,
+        )
+    effective = {"workspace": inline["workspace"]}
+    for item in plan.inputs:
+        if item.kind == "file" and item.domain == "workspace" and item.path in files and item.path.parent.name != ".boxteam":
             effective[item.domain] = merge_json_objects(effective[item.domain], files[item.path], schema=schemas[item.domain])
-    for domain in ("gateway", "workspace"):
-        validate_config(effective[domain], schema_path=resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root))
+    validate_config(effective["workspace"], schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
     for path, payload in files.items():
         if path.name == "workspace.jsonc" and path.parent.name == ".boxteam":
             validate_config(merge_json_objects(effective["workspace"], payload, schema=schemas["workspace"]), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
@@ -136,7 +192,9 @@ def validate_runtime_logging_plan(
             candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries, schema=schemas[item.domain])
             if item.domain == "workspace":
                 candidate = cast(dict[str, object], restore_environment_secret_references(candidate))
-            validate_config(candidate, schema_path=resolve_config_resource_source(f"{item.domain}_schema.jsonc", project_root=project_root))
+                validate_config(candidate, schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
+            else:
+                validate_config_payload(candidate, schema=schemas["gateway"])
 
 
 def _prepare(
@@ -158,9 +216,9 @@ def _prepare(
         original = read_stable_config_file(item.path)
         if original.digest != item.digest:
             raise RuntimeError(f"迁移预览后配置文件已变化: {item.path}")
-        payload = migrated_payload(item.payload or {}, item.domain, plan, connection_entries)
         if item.payload is None and not (item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None):
             continue
+        payload = migrated_payload(item.payload or {}, item.domain, plan, connection_entries, source_key=item.key)
         content = _json_bytes(payload) if payload != item.payload else original.raw_bytes
         assert content is not None
         before = migration_root / f"file-{index}.before"

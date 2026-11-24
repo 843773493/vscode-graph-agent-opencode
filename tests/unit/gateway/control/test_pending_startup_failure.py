@@ -31,21 +31,30 @@ async def pending_gateway(tmp_path: Path) -> AsyncIterator[PendingGateway]:
     config = tmp_path / "config"
     config.mkdir()
     path = config / "gateway.jsonc"
-    path.write_text('{"config_version":1,"workspaces":[]}', encoding="utf-8")
+    path.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway",
+        "settings": {"gateway": {"workspaces": []}},
+    }), encoding="utf-8")
     schema = config / "gateway_schema.jsonc"
     schema.write_bytes(Path("configs/gateway_schema.jsonc").read_bytes())
     state = GatewayStateStore(path=tmp_path / "state" / "gateway" / "gateway.sqlite")
     try:
-        initial = load_gateway_config(config_path=path, schema_path=schema, state_store=state)
+        initial = load_gateway_config(
+            config_path=path, schema_path=schema, state_store=state,
+            gateway_id="gateway_startup_test",
+        )
         service = GatewayConfigReloadService(
             state_store=state, config=initial, config_path=path,
             local_config_path=config / "gateway_local.jsonc", schema_path=schema,
             gateway_id="gateway_startup_test",
         )
         service.initialize_active_snapshot()
-        path.write_text(json.dumps({"config_version": 1, "workspaces": [], "runtime": {
-            "gateway": {"process": {"health": {"poll_interval_seconds": 1}}},
-        }}), encoding="utf-8")
+        path.write_text(json.dumps({
+            "config_version": 6, "extends": "builtin:gateway",
+            "settings": {"gateway": {"workspaces": [], "runtime": {
+                "gateway": {"process": {"health": {"poll_interval_seconds": 1}}},
+            }}},
+        }), encoding="utf-8")
         await service.reload()
         candidate_ref = service.status().candidate_ref
         assert candidate_ref is not None
@@ -204,7 +213,7 @@ async def test_watcher_preserves_owned_restart_candidate_on_ordinary_recovery(
 
     config = load_gateway_config(
         config_path=case.config_path, schema_path=case.schema_path,
-        state_store=case.state, startup=True,
+        state_store=case.state, startup=True, gateway_id=intent.gateway_id,
     )
     assert config.revision == active.effective_digest
     recovered = GatewayConfigReloadService(
@@ -242,7 +251,7 @@ async def test_changed_source_can_publish_new_candidate_after_restart_failure(
     failed = case.state.get_pending_config_candidate(config_domain="gateway", candidate_id=intent.candidate_id)
     failed_intent = case.state.get_gateway_restart_intent(candidate_ref=case.candidate_ref)
     document = json.loads(case.config_path.read_text(encoding="utf-8"))
-    document["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] = 2
+    document["settings"]["gateway"]["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] = 2
     case.config_path.write_text(json.dumps(document), encoding="utf-8")
     await case.service.reload()
     status = case.service.status()

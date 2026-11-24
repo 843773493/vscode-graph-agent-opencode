@@ -12,7 +12,7 @@ import type { GatewayRequestTarget, GatewayWorkspaceRequestTarget } from '../../
 import { gateway } from '../agentApi.js';
 import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceDocumentPath, sourceStatus, type SourceDocument } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
 export interface PluginConfigurationTarget extends PluginTarget {
@@ -39,7 +39,7 @@ function updateJsonc(text: string, path: (string | number)[], value: unknown): s
 }
 
 function sourceBindings(document: ConfigDocument, path: string[]): PluginBinding[] {
-  return bindingsAt(parse(document.jsonc), path);
+  return bindingsAt(parse(document.jsonc), sourceDocumentPath(document, path));
 }
 
 function bindingJsonc(document: ConfigDocument, path: string[], binding: ConfigurationBinding, enabled: boolean | null | 'preserve'): string {
@@ -58,10 +58,10 @@ function bindingJsonc(document: ConfigDocument, path: string[], binding: Configu
   if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
   else if (index < 0) updated.push({ ...binding, enabled });
   else updated[index] = { ...binding, enabled };
-  return updateJsonc(document.jsonc, path, updated);
+  return updateJsonc(document.jsonc, sourceDocumentPath(document, path), updated);
 }
 
-function bindingsAt(value: unknown, path: string[]): PluginBinding[] {
+function bindingsAt(value: unknown, path: readonly (string | number)[]): PluginBinding[] {
   let current: unknown = value;
   for (const key of path) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
   if (current === undefined) return [];
@@ -71,11 +71,12 @@ function bindingsAt(value: unknown, path: string[]): PluginBinding[] {
 
 function privateParameterLocation(document: ConfigDocument, binding: ConfigurationBinding, pointer: string): { path: (string | number)[]; current: unknown } {
   if (!/^(?:\/(?:[^~\/]|~[01])*)+$/.test(pointer)) throw new Error(t('plugins.invalidPointer'));
-  const parts = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
-    ...pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
-  const path: (string | number)[] = [];
+  const base = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id];
+  const path = sourceDocumentPath(document, base);
   let current: unknown = parse(document.jsonc), effective: unknown = document.source_effective;
-  for (const part of parts) {
+  for (const part of path) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined;
+  for (const part of base) effective = effective && typeof effective === 'object' ? (effective as Record<string, unknown>)[part] : undefined;
+  for (const part of pointer.split('/').slice(1).map(item => item.replace(/~1/g, '/').replace(/~0/g, '~'))) {
     if (Array.isArray(current) || Array.isArray(effective)) {
       if (!Array.isArray(current)) throw new Error(t('plugins.arrayFromLowerSource'));
       if (!/^(0|[1-9][0-9]*)$/.test(part) || Number(part) >= current.length) throw new Error(t('plugins.invalidSecretIndex'));
@@ -93,7 +94,7 @@ function privateParameterLocation(document: ConfigDocument, binding: Configurati
 function privateParameterStatus(document: ConfigDocument, binding: ConfigurationBinding, pointer: string): string {
   const parts = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
     ...pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
-  const at = (root: unknown): unknown => parts.reduce<unknown>((value, part) =>
+  const at = (root: unknown, path: readonly (string | number)[] = parts): unknown => path.reduce<unknown>((value, part) =>
     value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined, root);
   const state = (value: unknown): string => {
     if (value === undefined) return t('plugins.notConfigured');
@@ -105,7 +106,7 @@ function privateParameterStatus(document: ConfigDocument, binding: Configuration
   // 归属由原 owner 的 origins 提供；引用对象逐叶标注，数组则整体归属，不能在客户端重新合并来源。
   const sources = [...new Set(document.origins.filter(origin => origin.path === path
     || origin.path.startsWith(path + '/') || path.startsWith(origin.path + '/')).map(origin => origin.source_key))];
-  return t('plugins.privateSourceStatus', document.source_key, state(at(parse(document.jsonc))), state(at(document.source_effective)))
+  return t('plugins.privateSourceStatus', document.source_key, state(at(parse(document.jsonc), sourceDocumentPath(document, parts))), state(at(document.source_effective)))
     + t('plugins.activeValueStatus', sources.length ? t('plugins.sourcesSuffix', sources.join(t('plugins.listSeparator'))) : '', state(at(document.effective)))
     + t('plugins.privateRevisionsStatus', document.active_revision ?? t('plugins.none'), document.status?.pending_revision ?? t('plugins.none'));
 }
@@ -291,7 +292,7 @@ export async function manageConfig(scope: Scope, gatewayTarget: PluginTarget, wo
     jsonc = updateJsonc(document.jsonc, parameterPath, action.clear ? undefined : storedValue);
   } else if (editParameters) {
     if (scope === 'defaults') throw new Error(t('plugins.defaultsBindingOnly'));
-    const parameterPath = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id];
+    const parameterPath = sourceDocumentPath(document, ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id]);
     let current: unknown = parse(document.jsonc);
     for (const key of parameterPath) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
     const operation = await quickInput.pick([{ label: t('plugins.editSourceParameters'), remove: false }, { label: t('plugins.deleteParameterOverride'), remove: true }],

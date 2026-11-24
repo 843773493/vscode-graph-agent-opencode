@@ -208,10 +208,10 @@ scenario('原 Widget dispose 后迟到的前置保存不能改目标或发布目
 
 scenario('SourceSettings.inspect 驱动来源树，不读取窗口配置服务', () => {
   const source = Object.create(SourceSettings.prototype);
-  source.location = { source_key: 'mutable_override' };
+  source.location = { gateway_id: 'gateway-a', workspace_id: 'workspace-a', source_key: 'mutable_override' };
   source.fields = new Map([['agents.runtime.model', { path: ['agents', 'runtime', 'model'], schema: { default: 'schema-default' } }]]);
   source.model = { textEditorModel: { getValue: () => '{"agents":{"runtime":{"model":"draft-value"}}}' } };
-  Object.defineProperty(source, 'document', { value: { writable: true,
+  Object.defineProperty(source, 'document', { value: { gateway_id: 'gateway-a', workspace_id: 'workspace-a', writable: true,
     source_effective: { agents: { runtime: { model: 'effective-value' } } },
     layers: [{ source_key: 'inline', precedence: 0, payload: { agents: { runtime: { model: 'inline-default' } } } },
       { source_key: 'mutable_override', precedence: 1, payload: { agents: { runtime: { model: 'stored-value' } } } }] } });
@@ -250,10 +250,10 @@ scenario('inspectSetting 的语言 override 保留同一 folder resource，区�
 
 scenario('来源设置 inspect 只读取当前来源层正文，不读取语言覆盖', () => {
   const source = Object.create(SourceSettings.prototype);
-  source.location = { source_key: 'mutable_override' };
+  source.location = { gateway_id: 'gateway-a', workspace_id: 'workspace-a', source_key: 'mutable_override' };
   source.fields = new Map([['agents.runtime.model', { path: ['agents', 'runtime', 'model'], schema: { default: 'schema-default' } }]]);
   source.model = { textEditorModel: { getValue: () => '{"agents":{"runtime":{"model":"draft-value"}}}' } };
-  Object.defineProperty(source, 'document', { value: { source_effective: { agents: { runtime: { model: 'effective-value' } } },
+  Object.defineProperty(source, 'document', { value: { gateway_id: 'gateway-a', workspace_id: 'workspace-a', source_effective: { agents: { runtime: { model: 'effective-value' } } },
     layers: [{ source_key: 'inline', precedence: 0, payload: { agents: { runtime: { model: 'inline-default' } } } },
       { source_key: 'mutable_override', precedence: 1, payload: { agents: { runtime: { model: 'stored-value' } } } }] } });
   expect(source.inspect('agents.runtime.model')).toEqual({ defaultValue: 'inline-default', userRemoteValue: 'draft-value',

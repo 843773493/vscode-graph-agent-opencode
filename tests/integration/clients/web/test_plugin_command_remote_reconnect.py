@@ -137,7 +137,8 @@ asyncio.run(server.serve())
         return saved
 
     def bind_plugin(document: dict[str, object]) -> None:
-        plugins = document.setdefault("plugins", {})
+        gateway_settings = document.setdefault("settings", {}).setdefault("gateway", {})
+        plugins = gateway_settings.setdefault("plugins", {})
         assert isinstance(plugins, dict)
         plugins["runtime"] = {"entries": [{
             "package_id": "proof.remote-command-ui", "plugin_id": "commands",
@@ -147,7 +148,7 @@ asyncio.run(server.serve())
             "commands": {"output": str(output.resolve())},
         }}}
         principal_ref = principal_ref_for_gateway(gateway_a)
-        document["permissions"] = {"federation": {"default_effect": "deny", "rules": [
+        gateway_settings["permissions"] = {"federation": {"default_effect": "deny", "rules": [
             {"capability": capability, "effect": "allow", "principal_ref": principal_ref}
             for capability in ("read", "send")
         ]}}

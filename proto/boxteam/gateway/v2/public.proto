@@ -259,6 +259,7 @@ message GatewayConfigSourceDocumentDTO {
   repeated GatewayConfigSourceOriginDTO origins = 17;
   GatewayConfigReloadStatusDTO status = 18;
   optional GatewayConfigSourceEditDTO edit = 19;
+  google.protobuf.Struct source_inherited = 20;
 }
 
 message GatewayConfigSourcePreflightDTO {

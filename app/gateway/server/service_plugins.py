@@ -469,7 +469,7 @@ async def source_catalog(payload: PluginSourceCatalogRequest, request: Request,
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
         source = enabled_source(request.app.state.gateway_config_reload.config.payload, payload.source_id)
-        catalog = await read_catalog(request.app.state.plugin_download_client,
+        catalog = await read_catalog(request.app.state.external_http_client,
             gateway_id=request.app.state.registry.gateway_id, source=source, request=payload)
         if enabled_source(request.app.state.gateway_config_reload.config.payload, payload.source_id) != source:
             raise HTTPException(409, "插件来源已变化，请重新查询目录")

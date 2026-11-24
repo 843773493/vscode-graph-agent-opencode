@@ -75,6 +75,7 @@ from app.gateway.runtime.consumer_protocol import (
     runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.external_http import GatewayExternalHTTPTransport
 from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
@@ -189,6 +190,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         await app.state.runtime_observation.apply(RuntimeObservationSettings.from_gateway_config(config.payload), config.revision)
         await app.state.service_plugins.apply(config.payload, config.revision)
 
+    def apply_source_config(candidate: GatewayConfig, previous: GatewayConfig) -> None:
+        if app.state.gateway_config is not previous:
+            raise RuntimeError("Gateway 运行快照已变化，拒绝覆盖来源定义")
+        app.state.gateway_config = candidate
+
     gateway_config_reload = GatewayConfigReloadService(
         state_store=gateway_state,
         config=gateway_config,
@@ -205,6 +211,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         ),
         gateway_id=gateway_id,
         on_committed_config=apply_committed_config,
+        on_source_config=apply_source_config,
     )
     from app.services.infrastructure.config.plugin_private_inputs import (
         private_input_references,
@@ -271,13 +278,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 yield "plugin", slot.process.pid
 
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
+    external_http = GatewayExternalHTTPTransport(app.state.secret_vault)
+    await external_http.start(gateway_config.payload["network"])
     async with (
         httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
-        httpx.AsyncClient(timeout=60, trust_env=True) as plugin_download_client,
+        httpx.AsyncClient(timeout=60, trust_env=False,
+                          transport=external_http) as external_http_client,
         GatewaySkillSourceOwner(
             gateway_id=gateway_id, skills_root=get_boxteam_home() / "skills",
             update_policy=gateway_config.local_skill_updates,
             sources=gateway_config.skill_sources,
+            external_http_client=external_http_client,
         ).lifespan() as skill_source_owner,
         plugin_runtime_lifespan(
             home=get_boxteam_home(), gateway_id=gateway_id,
@@ -295,13 +306,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         ) as runtime_observation,
     ):
         app.state.runtime_observation = runtime_observation
+        app.state.external_http_transport = external_http
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
         app.state.service_plugins = service_plugins
         plugin_installations = PluginInstallations(gateway_id, service_plugins.packages, gateway_state,
-            plugin_download_client, configuration=lambda: gateway_config_reload.config.payload)
+            external_http_client, configuration=lambda: gateway_config_reload.config.payload)
         app.state.plugin_installations = plugin_installations
-        app.state.plugin_download_client = plugin_download_client
+        app.state.external_http_client = external_http_client
         workspace_plugin_bindings = WorkspacePluginBindings(registry, service_plugins)
         app.state.workspace_plugin_bindings = workspace_plugin_bindings
         app.state.workspace_navigation_store = WorkspaceNavigationStore(

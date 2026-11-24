@@ -28,11 +28,11 @@ export const configSourceScheme = 'boxteam-config-source';
 /** 编辑器身份，不是业务资源 grammar；规范来源 URI 仍只取 owner 的 sources 回执。 */
 export function configSourceEditorUri(target: GatewayRequestTarget, sourceKey: string): URI {
   return URI.from({ scheme: configSourceScheme, authority: target.gateway_id,
-    path: '/' + [target.workspace_id ? 'workspace' : 'gateway', target.workspace_id ?? '-', sourceKey + '.jsonc'].map(encodeURIComponent).join('/') });
+    path: '/' + [target.workspace_id ? 'workspace' : 'gateway', target.workspace_id ?? '-', sourceKey + '.jsonc'].join('/') });
 }
 
 export function sourceLocation(resource: URI): { target: GatewayRequestTarget; sourceKey: string } {
-  const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
+  const parts = resource.path.slice(1).split('/');
   if (resource.scheme !== configSourceScheme || !resource.authority || resource.query || resource.fragment || parts.length !== 3
     || !['gateway', 'workspace'].includes(parts[0]) || !parts[1] || !parts[2].endsWith('.jsonc') || parts[2] === '.jsonc'
     || parts[0] === 'gateway' && parts[1] !== '-') throw new Error(t('settings.editor.editorIdentityMissing'));

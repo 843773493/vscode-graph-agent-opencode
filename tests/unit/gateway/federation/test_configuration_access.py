@@ -82,7 +82,10 @@ async def configuration_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     ).token
     config_path = home / "config/gateway.jsonc"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(json.dumps({"config_version": 4, "workspaces": []}))
+    config_path.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway",
+        "settings": {"gateway": {"workspaces": []}},
+    }))
     schema_path = Path.cwd() / "configs/gateway_schema.jsonc"
     state = GatewayStateStore(path=root / "gateway.sqlite")
     config = load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)

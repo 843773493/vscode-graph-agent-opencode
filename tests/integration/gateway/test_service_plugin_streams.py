@@ -125,7 +125,7 @@ def install_stream_plugin(client: httpx.Client, context: TestRunContext) -> Plug
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
     source = client.get(source_path).raise_for_status().json()["data"]
     document = commentjson.loads(source["jsonc"])
-    document.setdefault("plugins", {})["runtime"] = {"entries": [{"package_id": "stream.probe",
+    document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": [{"package_id": "stream.probe",
         "plugin_id": "streams", "package_version": "1.0.0", "enabled": True}]}
     client.put(source_path, json={"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
         "jsonc": json.dumps(document), "base_file_digest": source["file_digest"],

@@ -267,6 +267,7 @@ export interface GatewayConfigSourceDocumentDTO {
   origins: GatewayConfigSourceOriginDTO[];
   status: GatewayConfigReloadStatusDTO | undefined;
   edit?: GatewayConfigSourceEditDTO | undefined;
+  source_inherited: { [key: string]: any } | undefined;
 }
 
 export interface GatewayConfigSourcePreflightDTO {
@@ -2613,6 +2614,7 @@ function createBaseGatewayConfigSourceDocumentDTO(): GatewayConfigSourceDocument
     origins: [],
     status: undefined,
     edit: undefined,
+    source_inherited: undefined,
   };
 }
 
@@ -2642,6 +2644,7 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
         : [],
       status: isSet(object.status) ? GatewayConfigReloadStatusDTO.fromJSON(object.status) : undefined,
       edit: isSet(object.edit) ? GatewayConfigSourceEditDTO.fromJSON(object.edit) : undefined,
+      source_inherited: isObject(object.source_inherited) ? object.source_inherited : undefined,
     };
   },
 
@@ -2704,6 +2707,9 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
     if (message.edit !== undefined) {
       obj.edit = GatewayConfigSourceEditDTO.toJSON(message.edit);
     }
+    if (message.source_inherited !== undefined) {
+      obj.source_inherited = message.source_inherited;
+    }
     return obj;
   },
 
@@ -2737,6 +2743,7 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
     message.edit = (object.edit !== undefined && object.edit !== null)
       ? GatewayConfigSourceEditDTO.fromPartial(object.edit)
       : undefined;
+    message.source_inherited = object.source_inherited ?? undefined;
     return message;
   },
 };

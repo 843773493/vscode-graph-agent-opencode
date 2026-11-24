@@ -9,6 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from app.core.config_sources import (
+    StableConfigFile,
+    read_stable_config_file,
+    verify_stable_config_file,
+)
 from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -57,6 +62,7 @@ class ReloadLifecycleMixin:
         schema_path: Path | None = None,
         on_runtime_config: GatewayConfigRuntimeApplier | None = None,
         on_committed_config: Callable[[GatewayConfig], Awaitable[None]] | None = None,
+        on_source_config: Callable[[GatewayConfig, GatewayConfig], None] | None = None,
         gateway_id: str | None = None,
     ) -> None:
         self._state_store = state_store
@@ -66,6 +72,7 @@ class ReloadLifecycleMixin:
         self._schema_path = schema_path.expanduser().resolve() if schema_path else None
         self._on_runtime_config = on_runtime_config
         self._on_committed_config = on_committed_config
+        self._on_source_config = on_source_config
         self._remove_released_plugin_private_inputs: Callable[[object], None] | None = None
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
@@ -267,7 +274,7 @@ class ReloadLifecycleMixin:
             layer_revisions=revisions,
             layer_digests=digests,
             effective_digest=self._config.revision,
-            schema_version=3,
+            schema_version=int(self._config.payload["config_version"]),
             promoted_generation="gateway-bootstrap",
             secret_bindings=build_secret_binding_summary(self._config.payload),
         )
@@ -288,8 +295,8 @@ class ReloadLifecycleMixin:
             raise RuntimeError("Gateway 配置监听器不允许重复启动")
         self.initialize_active_snapshot()
         watcher = ConfigFileWatcher(
-            directories={self._config_path.parent, self._local_config_path.parent},
-            candidate_paths={self._config_path, self._local_config_path},
+            directories={path.parent for path in self._config.source_paths},
+            candidate_paths=self._config.source_paths,
             on_change=self._reload_from_watcher,
         )
         await watcher.start()
@@ -350,13 +357,29 @@ class ReloadLifecycleMixin:
         reported_error: Exception | None = None
         error_detail: str | None = None
         try:
-            candidate = load_gateway_config(
-                config_path=self._config_path,
-                local_config_path=self._local_config_path,
-                inline_config_path=self._config.source_paths[0],
-                schema_path=self._schema_path,
-                state_store=self._state_store,
-            )
+            dependencies = {path: read_stable_config_file(path) for path in self._config.source_paths}
+            candidate_dependencies: dict[Path, StableConfigFile] = {}
+            try:
+                candidate = load_gateway_config(
+                    config_path=self._config_path, local_config_path=self._local_config_path,
+                    inline_config_path=self._config.inline_path, entry_path=self._config.entry_path,
+                    gateway_id=self._gateway_id, schema_path=self._schema_path,
+                    state_store=self._state_store, dependencies=candidate_dependencies,
+                )
+            finally:
+                if self._watcher is not None:
+                    paths = set(self._config.source_paths) | candidate_dependencies.keys()
+                    self._watcher.replace_candidates(directories={path.parent for path in paths}, candidate_paths=paths)
+            dependencies.update(candidate_dependencies)
+
+            def assert_dependencies() -> None:
+                try:
+                    for file in dependencies.values():
+                        verify_stable_config_file(file)
+                except RuntimeError as error:
+                    raise ConfigConflictError("Gateway 配置父依赖在候选构建后发生变化") from error
+
+            assert_dependencies()
             if source_edit is None:
                 saved = service._saved_source_edit_candidate(candidate)
                 if saved is not None:
@@ -365,19 +388,30 @@ class ReloadLifecycleMixin:
                         return
                     idempotency_key, source_edit = saved.idempotency_key, saved.source_edit
             if candidate.revision == self._config.revision:
-                if source_edit is not None:
-                    pending = service._prepare_candidate(candidate, idempotency_key=idempotency_key, source_edit=source_edit)
-                    self._state_store.complete_unchanged_config_candidate(
-                        config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id,
+                baseline, generation, revisions, digests = self._source_baseline(candidate)
+                active = self._state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
+                if active is None:
+                    raise ConfigConflictError("Gateway 来源更新缺少 active snapshot")
+                pending = (service._prepare_candidate(candidate, idempotency_key=idempotency_key, source_edit=source_edit)
+                           if source_edit is not None else None)
+                assert_dependencies()
+                if baseline != active.source_baseline or pending is not None:
+                    self._state_store.refresh_active_config_sources(
+                        config_domain=self._CONFIG_DOMAIN, expected_active_revision=active.active_revision,
+                        effective_digest=candidate.revision, source_baseline=baseline, source_generation=generation,
+                        expected_source_baseline=active.source_baseline,
+                        layer_revisions=revisions, layer_digests=digests,
+                        candidate_id=pending.candidate_id if pending is not None else None,
                     )
+                if candidate.source_details != self._config.source_details:
+                    if self._on_source_config is not None:
+                        self._on_source_config(candidate, self._config)
+                    self._config = candidate
                 self._status = replace(
-                    self._status,
-                    healthy=True,
-                    last_attempt_at=now,
-                    state="active",
-                    reason=None,
-                    last_error=None,
+                    self._status, healthy=True, last_attempt_at=now, state="active", reason=None, last_error=None,
                 )
+                if self._watcher is not None:
+                    self._watcher.replace_candidates(directories={path.parent for path in candidate.source_paths}, candidate_paths=candidate.source_paths)
                 return
             changed_paths = changed_json_paths(
                 self._config.payload,
@@ -404,6 +438,7 @@ class ReloadLifecycleMixin:
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")
             registry_revision = self._state_store.get_registry_revision()
+            assert_dependencies()
             claim = self._state_store.begin_config_apply(
                 config_domain=self._CONFIG_DOMAIN,
                 candidate_id=pending.candidate_id,
@@ -423,6 +458,7 @@ class ReloadLifecycleMixin:
                 self._renew_apply_claim(claim.apply_id, claim.fencing_token)
             )
             def assert_apply_claim() -> None:
+                assert_dependencies()
                 self._state_store.assert_config_apply_claim(
                     config_domain=self._CONFIG_DOMAIN,
                     apply_id=claim.apply_id,
@@ -560,6 +596,7 @@ class ReloadLifecycleMixin:
                     if isinstance(detail, dict)
                     and detail.get("layer_revision") is not None
                 }
+                assert_dependencies()
                 self._state_store.promote_active_config_snapshot(
                     config_domain=self._CONFIG_DOMAIN,
                     candidate_id=candidate_id,
@@ -569,7 +606,7 @@ class ReloadLifecycleMixin:
                     layer_revisions=revisions,
                     layer_digests=digests,
                     effective_digest=candidate.revision,
-                    schema_version=3,
+                    schema_version=int(candidate.payload["config_version"]),
                     expected_active_revision=active.active_revision,
                     expected_pending_revision=pending.pending_revision,
                     expected_source_baseline=pending.source_baseline,
@@ -660,6 +697,8 @@ class ReloadLifecycleMixin:
                     finally:
                         if promoted:
                             self._config = candidate
+                            if self._watcher is not None:
+                                self._watcher.replace_candidates(directories={path.parent for path in candidate.source_paths}, candidate_paths=candidate.source_paths)
                             self._status = replace(
                                 self._status,
                                 healthy=True,
@@ -782,26 +821,3 @@ class ReloadLifecycleMixin:
             },
         )
         return False, None
-    def _source_baseline(
-        self,
-        config: GatewayConfig,
-    ) -> tuple[dict[str, object], int, dict[str, int], dict[str, str | None]]:
-        baseline: dict[str, object] = {}
-        revisions: dict[str, int] = {}
-        digests: dict[str, str | None] = {}
-        source_generation = 0
-        for source in config.source_details:
-            key = source.source_key or f"{source.layer}:{source.precedence}"
-            baseline[key] = {
-                "uri": source.uri,
-                "presence": source.presence,
-                "layer_revision": source.layer_revision,
-                "layer_digest": source.layer_digest,
-                "source_generation": source.source_generation,
-            }
-            if source.layer_revision is not None:
-                revisions[key] = source.layer_revision
-            digests[key] = source.layer_digest
-            if source.source_generation is not None:
-                source_generation = max(source_generation, source.source_generation)
-        return baseline, source_generation, revisions, digests

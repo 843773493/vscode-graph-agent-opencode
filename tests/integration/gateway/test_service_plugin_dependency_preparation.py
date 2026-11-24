@@ -256,7 +256,7 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         path = "/api/gateway/config/sources/gateway_mutable_override"
         source = exchange("GET", path).raise_for_status().json()["data"]
         payload = commentjson.loads(source["jsonc"])
-        payload.setdefault("plugins", {})["runtime"] = {"entries": [{
+        payload.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["runtime"] = {"entries": [{
             "package_id": "dependency.probe",
             "package_version": "1.0.0",
             "plugin_id": "probe",
@@ -321,7 +321,7 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         source = exchange("GET", source_path).raise_for_status().json()["data"]
         candidate = commentjson.loads(source["jsonc"])
-        candidate["plugins"]["runtime"]["entries"][0]["package_version"] = "99.0.0"
+        candidate["settings"]["gateway"]["plugins"]["runtime"]["entries"][0]["package_version"] = "99.0.0"
         missing_version = exchange("PUT", source_path, {
             "gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(candidate), "base_file_digest": source["file_digest"],

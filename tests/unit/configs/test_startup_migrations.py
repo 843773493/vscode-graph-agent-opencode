@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 
 from app.core.sqlite_state import SQLiteProcessOwnership
-from app.gateway.control.gateway_state import _GATEWAY_MIGRATIONS
+from app.gateway.control.gateway_state import (
+    _GATEWAY_MIGRATIONS,
+    GatewayStateStore,
+)
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.cli import main
 from configs.maintenance import runtime_logging_commit as publisher
 from configs.runtime import read_jsonc_object
@@ -47,9 +51,7 @@ def test_initialize_current_workspace_reenters_without_rewriting_it(
     original = workspace.read_bytes()
     if upgrade_gateway:
         gateway = config / "gateway.jsonc"
-        payload = read_jsonc_object(gateway)
-        payload["config_version"] = 4
-        gateway.write_text(json.dumps(payload), encoding="utf-8")
+        gateway.write_text(json.dumps({"config_version": 4}), encoding="utf-8")
 
     main()
     upgrades = json.loads(capsys.readouterr().out)["upgrades"]
@@ -62,6 +64,48 @@ def test_initialize_current_workspace_reenters_without_rewriting_it(
     main()
     assert json.loads(capsys.readouterr().out)["upgrades"] == {}
     assert {path: path.read_bytes() for path in config.rglob("*") if path.is_file()} == after
+
+
+@pytest.mark.parametrize("domain,current_version", [("gateway", 6), ("workspace", 3)])
+@pytest.mark.parametrize("old_version", [False, True])
+def test_initialize_absent_source_upgrades_only_its_old_version(
+    startup_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    domain: str, current_version: int, old_version: bool,
+) -> None:
+    workspace = startup_home / "workspace"
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("sys.argv", [
+        "boxteam", "initialize", "--project-root", str(Path.cwd()), "--workspace", str(workspace),
+    ])
+    main()
+    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
+    database = startup_home / "state/gateway/gateway.sqlite"
+    key = f"{domain}_mutable_override"
+    with (GatewayStateStore(path=database) if domain == "gateway"
+          else WorkspaceStateStore(workspace_root=workspace)) as store:
+        source = store.sync_config_source(
+            config_key=key, uri=None, config_version=1 if old_version else current_version,
+            presence="absent", payload=None, layer_digest=None,
+        )
+
+    for attempt in range(2):
+        main()
+        upgrades = json.loads(capsys.readouterr().out)["upgrades"]
+        if old_version and attempt == 0:
+            assert upgrades["configuration"]["state"] == "completed"
+        else:
+            assert upgrades == {}
+        with (GatewayStateStore(path=database) if domain == "gateway"
+              else WorkspaceStateStore(workspace_root=workspace)) as store:
+            current = store.get_source_layer(key)
+        assert current is not None
+        assert current.config_version == current_version
+        assert current.presence == "absent" and current.payload is None and current.layer_digest is None
+        if old_version and attempt == 0:
+            assert current.layer_revision == source.layer_revision + 1
+        else:
+            assert current == source
+        source = current
 
 
 @pytest.mark.parametrize("preview", [False, True])
@@ -150,7 +194,7 @@ def test_initialize_upgrades_old_config_with_exact_backups_and_reenters_without_
     assert migration["state"] == "completed"
     assert original in [file.read_bytes() for file in Path(migration["backup_root"]).glob("file-*.before")]
     assert read_jsonc_object(path) == {"config_version": 3}
-    assert read_jsonc_object(config / "gateway.jsonc")["logging"]["runtime"]["level"] == "debug"
+    assert read_jsonc_object(config / "gateway.jsonc")["settings"]["gateway"]["logging"]["runtime"]["level"] == "debug"
     after = {file: file.read_bytes() for file in config.rglob("*") if file.is_file()}
     main()
     assert json.loads(capsys.readouterr().out)["upgrades"] == {}

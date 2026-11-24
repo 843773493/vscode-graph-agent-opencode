@@ -109,7 +109,7 @@ async def mcp_plugin_case(
     gateway_config_path = home / "config/gateway.jsonc"
     gateway_config = commentjson.loads(gateway_config_path.read_text())
     # 此装具仅安装 MCP 包，默认开发工具包不属于本次前置条件。
-    gateway_config.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
+    gateway_config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
     gateway_config_path.write_text(json.dumps(gateway_config))
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),

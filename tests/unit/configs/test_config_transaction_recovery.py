@@ -48,6 +48,9 @@ def recovery_case(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: p
     store = (GatewayStateStore(path=home / "state/gateway/gateway.sqlite") if domain == "gateway"
              else WorkspaceStateStore(workspace_root=workspace))
     payload = read_jsonc_object(Path.cwd() / f"configs/{domain}_inline.jsonc")
+    if domain == "gateway":
+        payload = {"config_version": payload["config_version"], **payload["settings"]["gateway"],
+                   "network": payload["settings"]["network"]}
     store.ensure_active_config_snapshot(
         config_domain=domain, payload=payload, source_baseline={}, source_generation=0,
         layer_revisions={}, layer_digests={}, effective_digest=config_revision(payload), secret_bindings={},
@@ -97,7 +100,7 @@ def _dump(path: Path) -> str:
         return "\n".join(connection.iterdump())
 
 
-def test_pending_configuration_upgrades_without_applying_or_losing_identity(recovery_case: RecoveryCase) -> None:
+def test_pending_configuration_preserves_identity_and_requires_frozen_sources(recovery_case: RecoveryCase) -> None:
     case = recovery_case
     candidate_id = _candidate(case, legacy=True)
     case.store.update_pending_config_candidate_state(
@@ -108,6 +111,14 @@ def test_pending_configuration_upgrades_without_applying_or_losing_identity(reco
     assert preview.unsettled == ()
     assert _dump(case.store.path) == before
     case.store.close()
+    if case.domain == "gateway":
+        originals = {path: path.read_bytes() for root in (case.home, case.workspace)
+                     for path in root.rglob("*") if path.is_file() and not path.name.endswith(("-wal", "-shm"))}
+        with pytest.raises(ValueError, match="Gateway 旧 active/pending 快照缺少可恢复的逐层来源文档"):
+            case.startup()
+        assert {path: path.read_bytes() for root in (case.home, case.workspace)
+                for path in root.rglob("*") if path.is_file() and not path.name.endswith(("-wal", "-shm"))} == originals
+        return
     report = case.startup()
     assert report["configuration"]["state"] == "completed"
     with closing(sqlite3.connect(case.store.path)) as connection:

@@ -191,7 +191,7 @@ async def test_production_session_sends_private_header_through_gateway_without_l
         gateway_app = FastAPI()
         gateway_app.add_middleware(TraceMiddleware)
         gateway_app.include_router(mcp_upstream_proxy.router)
-        gateway_app.state.http_client = upstream_client
+        gateway_app.state.external_http_client = upstream_client
 
         async def authenticate_gateway_request(request: Request) -> str:
             assert request.headers["x-local-token"] == local_token

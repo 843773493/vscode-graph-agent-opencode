@@ -1,264 +1,198 @@
+// Gateway v6：本地节点信封；effectiveSettings 校验完整节点，gatewayPayload 复用业务字段定义。
 {
-  // BoxTeam Gateway 控制面配置模式定义。
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://boxteam.dev/schemas/gateway-config-v5.json",
-  "x-boxteam-config-domain": "gateway",
-  "x-boxteam-policy-manifest": [
-    { "pattern": "/resources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/local_updates", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/local_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/logging/retention/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/telemetry/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/statistics/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/permissions/federation/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/features/session_catalog/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
-    { "pattern": "/runtime/gateway/process/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
-    { "pattern": "/workspaces", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": null },
-    { "pattern": "/workspaces/**", "policy": "restart_gateway", "activation_scope": "restart_gateway", "identity_key": "connection_id" }
-  ],
-  "title": "BoxTeam Gateway Config Schema",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "config_version",
-    "workspaces",
-    "logging"
-  ],
-  "properties": {
-    "$schema": {
-      "type": "string"
-    },
-    "config_version": {
-      "type": "integer",
-      "enum": [1, 2, 3, 4, 5],
-      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-config 推进到 v4，移除迁至工作区的生成器轮询设置。Gateway workspaces 变化属于 restart_gateway。 v5 外观配置统一使用 Workbench settings.json，Gateway 不再接受 ui.theme。"
-    },
-    "plugins": {
-      "type": "object", "additionalProperties": false,
-      "properties": {
-        "configuration": {
-          "type": "object", "additionalProperties": false,
-          "properties": {
-            "values": {
-              "type": "object", "default": {},
-              "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-              "additionalProperties": {
-                "type": "object",
-                "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-                "additionalProperties": {"type": "object"}
-              },
-              "description": "按包 ID／插件 ID 保存参数。未绑定参数仅保留原来源，不生效；绑定时按确切版本 schema 校验。"
-            }
-          }
-        },
-        "sources": {
-          "type": "object", "additionalProperties": false,
-          "properties": {"entries": {"type": "array", "default": [],
-            "description": "自有插件来源，数组整体替换；默认不配置、不查询任何在线目录。",
-            "items": {
-              "type": "object", "additionalProperties": false, "required": ["source_id"],
-              "properties": {
-                "source_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-                "protocol_version": {"type": "integer", "const": 1, "default": 1},
-                "base_url": {"type": ["string", "null"], "format": "uri"},
-                "enabled": {"type": "boolean", "default": false}
-              },
-              "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
-              "then": {"required": ["base_url"], "properties": {"base_url": {"type": "string", "minLength": 1}}}
-            }
-          }}
-        },
-        "runtime": {
-          "type": "object", "additionalProperties": false,
-          "properties": {"entries": {"type": "array", "default": [], "items": {"$ref": "#/$defs/pluginBinding"}}}
-        },
-        "workspace_defaults": {
-          "type": "object", "additionalProperties": false,
-          "properties": {"entries": {"type": "array", "default": [], "items": {"$ref": "#/$defs/pluginBinding"},
-            "description": "仅用于新建工作区的冻结插件默认值；数组整体替换，已有工作区不追随修改。"}}
-        }
-      }
-    },
-    "logging": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["runtime"],
-      "properties": {
-        "retention": {
-          "type": "object", "additionalProperties": false,
-          "properties": {"inactive_max_bytes": {
-            "type": "integer", "minimum": 0,
-            "description": "已停止实例日志及归档的字节总预算，缺省采用共享日志合同，超出时先删除最旧实例；活动或无法核实归属的实例保留。启动后台维护及每小时检查，可由用户配置覆盖；0 回收全部可确认的旧实例日志。"
-          }}
-        },
-        "runtime": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["level", "pretty"],
-          "properties": {
-            "level": { "type": "string", "enum": ["debug", "info", "warning", "error", "critical"], "default": "info" },
-            "pretty": { "type": "boolean", "default": true }
-          }
-        }
-      }
-    },
-    "telemetry": {
-      "type": "object", "additionalProperties": false, "required": ["runtime"],
-      "properties": {"runtime": {
-        "type": "object", "additionalProperties": false,
-        "required": ["enabled", "sample_ratio", "sample_buffer_limit"],
-        "properties": {
-          "enabled": {"type": "boolean", "default": false},
-          "sample_ratio": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
-          "sample_buffer_limit": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 256}
-        }
-      }}
-    },
-    "statistics": {
-      "type": "object", "additionalProperties": false, "required": ["runtime"],
-      "properties": {"runtime": {
-        "type": "object", "additionalProperties": false,
-        "required": ["enabled", "collection_interval_ms"],
-        "properties": {
-          "enabled": {"type": "boolean", "default": false},
-          "collection_interval_ms": {"type": "integer", "minimum": 1000, "maximum": 60000, "default": 5000}
-        }
-      }}
-    },
-    "resources": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["skill_sources"],
-      "properties": {
-        "skill_sources": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["local_updates"],
-          "properties": {
-            "sources": {
-              "type": "array", "default": [],
-              "description": "Gateway 统一获取的共享网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
-              "items": {
-                "type": "object", "additionalProperties": false, "required": ["id", "name", "fetch"],
-                "properties": {
-                  "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
-                  "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
-                  "priority": {"type": "integer", "default": 0},
-                  "fetch": {
-                    "type": "object", "additionalProperties": false, "required": ["protocol", "url"],
-                    "properties": {
-                      "protocol": {"const": "http"},
-                      "url": {"type": "string", "pattern": "^https?://[^/]+", "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"},
-                      "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 30}
-                    }
-                  },
-                  "updates": {
-                    "type": "object", "additionalProperties": false, "required": ["mode"],
-                    "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
-                    "properties": {"mode": {"enum": ["poll", "manual"]}, "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}},
-                    "if": {"properties": {"mode": {"const": "poll"}}},
-                    "then": {"required": ["poll_interval"], "properties": {"poll_interval": {"type": "string"}}},
-                    "else": {"properties": {"poll_interval": {"type": "null"}}}
-                  }
-                }
-              }
-            },
-            "local_updates": {
-              "type": "object",
-              "description": "Gateway 本机 Skill 观察策略；经原配置候选 prepare/apply/health/promotion/rollback 热切换，旧订阅在结算后排空。",
-              "additionalProperties": false,
-              "required": ["mode", "poll_interval"],
-              "properties": {
-                "mode": {"enum": ["event", "poll", "manual", "event_poll"]},
-                "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}
-              },
-              "if": {"properties": {"mode": {"enum": ["poll", "event_poll"]}}},
-              "then": {"properties": {"poll_interval": {"type": "string"}}},
-              "else": {"properties": {"poll_interval": {"type": "null"}}}
-            }
-          }
-        }
-      }
-    },
-    "workspaces": {
-      "type": "array",
-      "description": "Gateway 启动时通过 SSH 连接的远程 Gateway。元素增删改和连接身份变化属于 restart_gateway；v2 使用持久 connection_id。",
-      "items": {
-        "$ref": "#/$defs/remoteGateway"
-      }
-    },
-    "features": {
-      "$ref": "#/$defs/featuresConfig"
-    },
-    "permissions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "federation": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "权限按当前 snapshot 原子热发布；已建立 channel 保持连接。",
-          "properties": {
-            "default_effect": { "enum": ["allow", "deny"], "default": "allow" },
-            "hardening_enabled": { "type": "boolean", "default": false },
-            "rules": {
-              "type": "array",
-              "default": [],
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["capability"],
-                "properties": {
-                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "service_plugin_installation_manage", "service_plugin_runtime_manage"] },
-                  "effect": { "enum": ["allow", "deny"], "default": "deny" },
-                  "origin_gateway_id": { "type": ["string", "null"], "minLength": 1 },
-                  "principal_ref": { "type": ["string", "null"], "minLength": 1 }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "runtime": {
-      "$ref": "#/$defs/runtimeConfig"
-    }
-  },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "config_version": { "enum": [2, 3] }
-        }
-      },
-      "then": {
-        "properties": {
-          "workspaces": {
-            "items": {
-              "required": ["connection_id"]
-            }
-          }
-        }
-      }
-    }
+    "settings"
   ],
   "$defs": {
-    "pluginBinding": {
-      "type": "object", "additionalProperties": false,
-      "required": ["package_id", "plugin_id", "package_version", "enabled"],
+    "DirectProxy": {
+      "additionalProperties": false,
       "properties": {
-        "package_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-        "plugin_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-        "package_version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"},
-        "enabled": {"type": "boolean"}
+        "mode": {
+          "const": "direct",
+          "default": "direct",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "DirectProxy",
+      "type": "object",
+      "required": [
+        "mode"
+      ]
+    },
+    "EnvironmentProxy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "environment",
+          "default": "environment",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "EnvironmentProxy",
+      "type": "object",
+      "required": [
+        "mode"
+      ]
+    },
+    "ExplicitProxy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "explicit",
+          "default": "explicit",
+          "title": "Mode",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "bypass": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Bypass",
+          "type": "array"
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyAuthentication"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "mode",
+        "url"
+      ],
+      "title": "ExplicitProxy",
+      "type": "object"
+    },
+    "ProxyAuthentication": {
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "minLength": 1,
+          "title": "Username",
+          "type": "string"
+        },
+        "password": {
+          "pattern": "^secret:sec_[0-9a-f]{32}$",
+          "title": "Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "title": "ProxyAuthentication",
+      "type": "object"
+    },
+    "networkSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "proxy": {
+          "discriminator": {
+            "mapping": {
+              "direct": "#/$defs/DirectProxy",
+              "environment": "#/$defs/EnvironmentProxy",
+              "explicit": "#/$defs/ExplicitProxy"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/EnvironmentProxy"
+            },
+            {
+              "$ref": "#/$defs/DirectProxy"
+            },
+            {
+              "$ref": "#/$defs/ExplicitProxy"
+            }
+          ],
+          "title": "Proxy",
+          "x-merge": "replace"
+        }
+      },
+      "title": "NetworkSettings",
+      "type": "object"
+    },
+    "profileSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        }
+      }
+    },
+    "scopeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "gateway": {
+          "type": "object"
+        }
+      }
+    },
+    "configNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "extends": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settings": {
+          "$ref": "#/$defs/profileSettings"
+        }
+      }
+    },
+    "pluginBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_id",
+        "plugin_id",
+        "package_version",
+        "enabled"
+      ],
+      "properties": {
+        "package_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "plugin_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "package_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
       }
     },
     "featuresConfig": {
@@ -273,9 +207,21 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "refresh_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 },
-                "max_concurrency": { "type": "integer", "minimum": 1, "default": 8 },
-                "request_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
+                "refresh_interval_seconds": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "default": 30
+                },
+                "max_concurrency": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 8
+                },
+                "request_timeout_seconds": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "default": 30
+                }
               }
             }
           }
@@ -291,7 +237,6 @@
         }
       }
     },
-
     "sessionHistoryLoadingConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -304,17 +249,36 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "turns": { "type": "integer", "minimum": 1, "maximum": 8, "default": 5 },
-                "include": { "$ref": "#/$defs/historyInclude" }
+                "turns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8,
+                  "default": 5
+                },
+                "include": {
+                  "$ref": "#/$defs/historyInclude"
+                }
               }
             },
             "anchor": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "before_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 3 },
-                "after_turns": { "type": "integer", "minimum": 1, "maximum": 256, "default": 3 },
-                "include": { "$ref": "#/$defs/historyInclude" }
+                "before_turns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 256,
+                  "default": 3
+                },
+                "after_turns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 256,
+                  "default": 3
+                },
+                "include": {
+                  "$ref": "#/$defs/historyInclude"
+                }
               }
             }
           }
@@ -341,7 +305,6 @@
         ]
       }
     },
-
     "runtimeConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -358,15 +321,27 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "request_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 2 },
-                    "poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 0.5 }
+                    "request_timeout_seconds": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "default": 2
+                    },
+                    "poll_interval_seconds": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "default": 0.5
+                    }
                   }
                 },
                 "lifecycle": {
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "connection_drain_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 2 }
+                    "connection_drain_timeout_seconds": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "default": 2
+                    }
                   }
                 }
               }
@@ -386,7 +361,10 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9-]{1,63}$"
               },
-              "default": ["gateway-context", "web-search-fetch"]
+              "default": [
+                "gateway-context",
+                "web-search-fetch"
+              ]
             }
           }
         }
@@ -401,8 +379,16 @@
         "username"
       ],
       "anyOf": [
-        { "required": ["private_key_path"] },
-        { "required": ["ssh_config_host"] }
+        {
+          "required": [
+            "private_key_path"
+          ]
+        },
+        {
+          "required": [
+            "ssh_config_host"
+          ]
+        }
       ],
       "properties": {
         "connection_id": {
@@ -463,6 +449,718 @@
           "default": false
         }
       }
+    },
+    "gatewaySettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspaces",
+        "logging"
+      ],
+      "properties": {
+        "plugins": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configuration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "values": {
+                  "type": "object",
+                  "default": {},
+                  "propertyNames": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                    },
+                    "additionalProperties": {
+                      "type": "object"
+                    }
+                  },
+                  "description": "按包 ID／插件 ID 保存参数。未绑定参数仅保留原来源，不生效；绑定时按确切版本 schema 校验。"
+                }
+              }
+            },
+            "sources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "entries": {
+                  "type": "array",
+                  "default": [],
+                  "description": "自有插件来源，数组整体替换；默认不配置、不查询任何在线目录。",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "source_id"
+                    ],
+                    "properties": {
+                      "source_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                      },
+                      "protocol_version": {
+                        "type": "integer",
+                        "const": 1,
+                        "default": 1
+                      },
+                      "base_url": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uri"
+                      },
+                      "enabled": {
+                        "type": "boolean",
+                        "default": false
+                      }
+                    },
+                    "if": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      },
+                      "required": [
+                        "enabled"
+                      ]
+                    },
+                    "then": {
+                      "required": [
+                        "base_url"
+                      ],
+                      "properties": {
+                        "base_url": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "entries": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/pluginBinding"
+                  }
+                }
+              }
+            },
+            "workspace_defaults": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "entries": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/pluginBinding"
+                  },
+                  "description": "仅用于新建工作区的冻结插件默认值；数组整体替换，已有工作区不追随修改。"
+                }
+              }
+            }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtime"
+          ],
+          "properties": {
+            "retention": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "inactive_max_bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "已停止实例日志及归档的字节总预算，缺省采用共享日志合同，超出时先删除最旧实例；活动或无法核实归属的实例保留。启动后台维护及每小时检查，可由用户配置覆盖；0 回收全部可确认的旧实例日志。"
+                }
+              }
+            },
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "level",
+                "pretty"
+              ],
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "debug",
+                    "info",
+                    "warning",
+                    "error",
+                    "critical"
+                  ],
+                  "default": "info"
+                },
+                "pretty": {
+                  "type": "boolean",
+                  "default": true
+                }
+              }
+            }
+          }
+        },
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtime"
+          ],
+          "properties": {
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "sample_ratio",
+                "sample_buffer_limit"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "sample_ratio": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1
+                },
+                "sample_buffer_limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4096,
+                  "default": 256
+                }
+              }
+            }
+          }
+        },
+        "statistics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtime"
+          ],
+          "properties": {
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "collection_interval_ms"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "collection_interval_ms": {
+                  "type": "integer",
+                  "minimum": 1000,
+                  "maximum": 60000,
+                  "default": 5000
+                }
+              }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skill_sources"
+          ],
+          "properties": {
+            "skill_sources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "local_updates"
+              ],
+              "properties": {
+                "sources": {
+                  "type": "array",
+                  "default": [],
+                  "description": "Gateway 统一获取的共享网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "name",
+                      "fetch"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "maxLength": 64
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "maxLength": 64
+                      },
+                      "priority": {
+                        "type": "integer",
+                        "default": 0
+                      },
+                      "fetch": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "protocol",
+                          "url"
+                        ],
+                        "properties": {
+                          "protocol": {
+                            "const": "http"
+                          },
+                          "url": {
+                            "type": "string",
+                            "pattern": "^https?://[^/]+",
+                            "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"
+                          },
+                          "timeout_seconds": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "default": 30
+                          }
+                        }
+                      },
+                      "updates": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "mode"
+                        ],
+                        "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
+                        "properties": {
+                          "mode": {
+                            "enum": [
+                              "poll",
+                              "manual"
+                            ]
+                          },
+                          "poll_interval": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^[1-9][0-9]*(m|h)$"
+                          }
+                        },
+                        "if": {
+                          "properties": {
+                            "mode": {
+                              "const": "poll"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "poll_interval"
+                          ],
+                          "properties": {
+                            "poll_interval": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "else": {
+                          "properties": {
+                            "poll_interval": {
+                              "type": "null"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "local_updates": {
+                  "type": "object",
+                  "description": "Gateway 本机 Skill 观察策略；经原配置候选 prepare/apply/health/promotion/rollback 热切换，旧订阅在结算后排空。",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "poll_interval"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "enum": [
+                        "event",
+                        "poll",
+                        "manual",
+                        "event_poll"
+                      ]
+                    },
+                    "poll_interval": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[1-9][0-9]*(m|h)$"
+                    }
+                  },
+                  "if": {
+                    "properties": {
+                      "mode": {
+                        "enum": [
+                          "poll",
+                          "event_poll"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "poll_interval": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "poll_interval": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "workspaces": {
+          "type": "array",
+          "description": "Gateway 启动时通过 SSH 连接的远程 Gateway。元素增删改和连接身份变化属于 restart_gateway；v2 使用持久 connection_id。",
+          "items": {
+            "$ref": "#/$defs/remoteGateway"
+          }
+        },
+        "features": {
+          "$ref": "#/$defs/featuresConfig"
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "federation": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "权限按当前 snapshot 原子热发布；已建立 channel 保持连接。",
+              "properties": {
+                "default_effect": {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "default": "allow"
+                },
+                "hardening_enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "rules": {
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "capability"
+                    ],
+                    "properties": {
+                      "capability": {
+                        "enum": [
+                          "discovery",
+                          "send",
+                          "read",
+                          "wait",
+                          "reply",
+                          "transit",
+                          "fork_source",
+                          "fork_target",
+                          "file_write",
+                          "managed_workspace_admin",
+                          "configuration_read",
+                          "configuration_write",
+                          "service_plugin_installation_manage",
+                          "service_plugin_runtime_manage"
+                        ]
+                      },
+                      "effect": {
+                        "enum": [
+                          "allow",
+                          "deny"
+                        ],
+                        "default": "deny"
+                      },
+                      "origin_gateway_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1
+                      },
+                      "principal_ref": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtimeConfig"
+        }
+      }
+    },
+    "effectiveSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gateway",
+        "network"
+      ],
+      "properties": {
+        "gateway": {
+          "$ref": "#/$defs/gatewaySettings"
+        },
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        }
+      }
+    },
+    "gatewayPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config_version",
+        "workspaces",
+        "logging",
+        "network"
+      ],
+      "properties": {
+        "config_version": {
+          "type": "integer",
+          "const": 6
+        },
+        "plugins": {
+          "$ref": "#/$defs/gatewaySettings/properties/plugins"
+        },
+        "logging": {
+          "$ref": "#/$defs/gatewaySettings/properties/logging"
+        },
+        "telemetry": {
+          "$ref": "#/$defs/gatewaySettings/properties/telemetry"
+        },
+        "statistics": {
+          "$ref": "#/$defs/gatewaySettings/properties/statistics"
+        },
+        "resources": {
+          "$ref": "#/$defs/gatewaySettings/properties/resources"
+        },
+        "workspaces": {
+          "$ref": "#/$defs/gatewaySettings/properties/workspaces"
+        },
+        "features": {
+          "$ref": "#/$defs/gatewaySettings/properties/features"
+        },
+        "permissions": {
+          "$ref": "#/$defs/gatewaySettings/properties/permissions"
+        },
+        "runtime": {
+          "$ref": "#/$defs/gatewaySettings/properties/runtime"
+        },
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        }
+      }
     }
-  }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "config_version": {
+      "type": "integer",
+      "const": 6
+    },
+    "extends": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "$ref": "#/$defs/scopeSettings"
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/configNode"
+      }
+    }
+  },
+  "$id": "https://boxteam.dev/schemas/gateway-config-v6.json",
+  "x-boxteam-config-domain": "gateway",
+  "x-boxteam-policy-manifest": [
+    {
+      "pattern": "/network",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/network/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/local_updates",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/local_updates/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/sources",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/resources/skill_sources/sources/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/plugins",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/plugins/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/logging/retention/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/logging/runtime/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/telemetry/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/statistics/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/permissions",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/permissions/federation",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/permissions/federation/**",
+      "policy": "immediate_read",
+      "activation_scope": "current",
+      "identity_key": null
+    },
+    {
+      "pattern": "/features/session_catalog/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/runtime/gateway/process/**",
+      "policy": "restart_gateway",
+      "activation_scope": "restart_gateway",
+      "identity_key": null
+    },
+    {
+      "pattern": "/workspaces",
+      "policy": "restart_gateway",
+      "activation_scope": "restart_gateway",
+      "identity_key": null
+    },
+    {
+      "pattern": "/workspaces/**",
+      "policy": "restart_gateway",
+      "activation_scope": "restart_gateway",
+      "identity_key": "connection_id"
+    }
+  ],
+  "title": "BoxTeam Gateway Config Schema"
 }

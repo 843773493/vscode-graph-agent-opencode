@@ -146,6 +146,11 @@ def _gateway_runtime_consumer_stages(
     generation = f"gateway-runtime:{candidate.revision}:{uuid4().hex}"
     fencing_token_digest = runtime_fencing_token_digest(fencing_token)
     stages: list[GatewayRuntimeConsumerStage] = []
+    if candidate.payload.get("network") != previous.payload.get("network"):
+        stages.append(app.state.external_http_transport.stage(
+            payload=candidate.payload["network"], generation=generation,
+            fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+        ))
     if candidate.payload.get("plugins") != previous.payload.get("plugins"):
         # 无副作用准入在 active 提交前完成；实例应用由 committed 回调消费。
         app.state.service_plugins.validate(candidate.payload)
@@ -153,6 +158,7 @@ def _gateway_runtime_consumer_stages(
         stages.append(app.state.skill_source_owner.sources_stage(
             sources=candidate.skill_sources, generation=generation,
             fencing_token_digest=fencing_token_digest, fence_check=fence_check,
+            prepare_http_client=lambda: app.state.external_http_transport.candidate_client(candidate.payload["network"]),
         ))
     if candidate.local_skill_updates != previous.local_skill_updates:
         skill_sources = app.state.skill_source_owner

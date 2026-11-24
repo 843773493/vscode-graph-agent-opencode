@@ -58,7 +58,7 @@ def test_gateway_source_relay_keeps_native_target_and_original_submission(
         assert current.status_code == 200, current.text
         document = current.json()["data"]
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("permissions", {})["federation"] = {
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {
             "default_effect": "allow",
             "rules": [{"capability": capability, "effect": "allow",
                        "principal_ref": principal_ref_for_gateway(gateway_a)} for capability in capabilities],
@@ -118,7 +118,7 @@ def test_gateway_source_relay_keeps_native_target_and_original_submission(
         assert listed_source["layer_digest"] == document["layer_digest"]
         assert listed_source["layer_revision"] == document["layer_revision"]
         config = commentjson.loads(document["jsonc"])
-        config["permissions"]["federation"]["default_effect"] = "deny"
+        config["settings"]["gateway"]["permissions"]["federation"]["default_effect"] = "deny"
         text = "// 通过 A 保存 B 的来源\n" + json.dumps(config, ensure_ascii=False, indent=2) + "\n"
         request = edit_request(document, text, "source-relay-concurrent-save")
         before = tuple(path.read_bytes() for path in network.gateway_config_paths)

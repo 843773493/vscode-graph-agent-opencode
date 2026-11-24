@@ -50,7 +50,7 @@ def test_paired_gateway_principal_edits_only_native_gateway_source(
         assert current.status_code == 200, current.text
         document = current.json()["data"]
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": rules}
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": rules}
         text = "// 原生来源网络验收\n" + json.dumps(config, ensure_ascii=False, indent=2) + "\n"
         saved = exchange(native, "PUT", source_path, f"{label}-save", body=edit_request(document, text, label))
         assert saved.status_code == 200, saved.text
@@ -99,7 +99,7 @@ def test_paired_gateway_principal_edits_only_native_gateway_source(
             assert baseline.status_code == 200, baseline.text
             document = baseline.json()["data"]
             config = commentjson.loads(document["jsonc"])
-            config["permissions"]["federation"]["default_effect"] = "deny"
+            config["settings"]["gateway"]["permissions"]["federation"]["default_effect"] = "deny"
             text = "// 原生来源网络验收\n" + json.dumps(config, ensure_ascii=False, indent=2) + "\n"
             request = edit_request(document, text, "gateway-source-concurrent-save")
             before = tuple(path.read_bytes() for path in network.gateway_config_paths)

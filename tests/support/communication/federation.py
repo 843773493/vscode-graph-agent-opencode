@@ -227,7 +227,7 @@ async def open_communication_triad(
                 config_path = gateway_homes[name] / "config/gateway.jsonc"
                 payload = commentjson.loads(config_path.read_text())
                 python = resolve_workspace_python_executable(root)
-                payload["workspaces"] = [{
+                payload.setdefault("settings", {}).setdefault("gateway", {})["workspaces"] = [{
                     "kind": "remote_gateway", "connection_id": "rgw_c3_" + peer, "name": "C3 " + peer,
                     "host": "127.0.0.1", "port": ports.port(60), "username": username, "private_key_path": str(private_key),
                     "remote_gateway_port": ports.port(peer_offset + 1), "activate": False,

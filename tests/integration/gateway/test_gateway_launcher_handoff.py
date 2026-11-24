@@ -468,22 +468,15 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         active_before_restart = before_restart_status["active_revision"]
         assert isinstance(active_before_restart, int)
         config_path = boxteam_home / "config" / "gateway.jsonc"
-        document = config_path.read_text(encoding="utf-8")
-        poll_match = re.search(
-            r'("poll_interval_seconds":\s*)([0-9]+(?:\.[0-9]+)?)'
-            r'(\s*// Gateway 进程健康检查轮询周期)',
-            document,
-        )
-        if poll_match is None:
-            raise AssertionError("测试没有找到 Gateway runtime 配置字段")
-        previous_poll_interval = float(poll_match.group(2))
+        source_document = _get_json(
+            f"http://127.0.0.1:{port}/api/gateway/config/sources/gateway_mutable_override", token,
+        )["data"]
+        assert isinstance(source_document, dict)
+        document = commentjson.loads(source_document["jsonc"])
+        previous_poll_interval = float(source_document["source_effective"]["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"])
         next_poll_interval = previous_poll_interval + 0.25
-        changed_document = (
-            document[: poll_match.start(2)]
-            + f"{next_poll_interval:g}"
-            + document[poll_match.end(2) :]
-        )
-        config_path.write_text(changed_document, encoding="utf-8")
+        document.setdefault("settings", {}).setdefault("gateway", {}).setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})["poll_interval_seconds"] = next_poll_interval
+        config_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         pending = _wait_for_json(
             status_url,
             token,

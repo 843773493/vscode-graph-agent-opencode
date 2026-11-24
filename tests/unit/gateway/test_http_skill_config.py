@@ -14,7 +14,10 @@ def source() -> dict:
 
 
 def _load(path: Path, sources: list[dict]):
-    path.write_text(json.dumps({"config_version": 3, "resources": {"skill_sources": {"sources": sources}}}))
+    path.write_text(json.dumps({
+        "config_version": 6, "extends": "builtin:gateway",
+        "settings": {"gateway": {"resources": {"skill_sources": {"sources": sources}}}},
+    }))
     return load_gateway_config(config_path=path, schema_path=Path.cwd() / "configs/gateway_schema.jsonc")
 
 
@@ -23,7 +26,7 @@ def test_http_sources_keep_stable_id_and_default_to_hourly_poll(tmp_path: Path, 
     assert config.skill_sources[0].id == "shared-one"
     assert config.skill_sources[0].updates.poll_seconds == 3600
     assert config.skill_sources[0].priority == 0
-    assert config.payload["config_version"] == 3
+    assert config.payload["config_version"] == 6
 
 
 @pytest.mark.parametrize("patch", [

@@ -32,7 +32,7 @@ async def proxy_mcp_upstream(
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
         raise HTTPException(400, "外部 MCP endpoint 必须是无凭据的 HTTP(S) URL")
 
-    client = request.app.state.http_client
+    client = request.app.state.external_http_client
     headers = filter_hop_by_hop_headers(
         (name, value)
         for name, value in request.headers.items()
@@ -46,6 +46,7 @@ async def proxy_mcp_upstream(
         url,
         headers=headers,
         content=request.stream() if request.method == "POST" else None,
+        timeout=None,
     )
     try:
         response = await send_upstream_request(client, upstream_request)

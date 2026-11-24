@@ -92,6 +92,8 @@ async def _manage(request: Request, auth: GatewayAuthContext, connection_id: str
         raise HTTPException(404, "命名密钥不存在") from error
     except SecretConflictError as error:
         raise HTTPException(409, str(error)) from error
+    if action in {"update", "delete"} and secret_id is not None:
+        request.app.state.external_http_transport.invalidate_secret(secret_id)
     if isinstance(payload, CreateSecretRequest):
         return APIResponse(data=GatewaySecretDTO(gateway_id=request.app.state.gateway_id, item=items), request_id=get_request_id(request))
     return APIResponse(data=GatewaySecretsDTO(gateway_id=request.app.state.gateway_id, items=items), request_id=get_request_id(request))

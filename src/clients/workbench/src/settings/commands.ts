@@ -49,6 +49,7 @@ function commandTitle(key: keyof typeof actionTitles): { value: string; original
 
 const sourceLayerLabels: Record<ConfigSourceLayer, string> = {
   inline: t('workbench.settings.layer.inline'),
+  source: t('workbench.settings.layer.source'),
   user: t('workbench.settings.layer.user'),
   user_local: t('workbench.settings.layer.userLocal'),
   workspace: t('workbench.settings.layer.workspace'),

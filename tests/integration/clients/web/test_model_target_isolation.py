@@ -78,7 +78,7 @@ async def test_same_model_names_keep_native_target_preferences_and_credentials(
     before = (await asyncio.to_thread(native.get, "/api/gateway/config/reload-status")).json()["data"]
     config_path = network.gateway_config_paths[1]
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [
         {"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(network.gateway_ids[0])}
         for capability in ("configuration_read", "configuration_write")
     ]}

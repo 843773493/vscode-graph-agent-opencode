@@ -36,7 +36,8 @@ class HttpSkillFetchConfig(SkillFetchConfig, frozen=True):
 
 class HttpSkillFetch:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        self._client = client if client is not None else httpx.AsyncClient(trust_env=False, follow_redirects=True)
+        self._owns_client = client is None
+        self._client = client if client is not None else httpx.AsyncClient(trust_env=False)
 
     async def fetch(
         self, config: SkillFetchConfig, *, validators: Mapping[str, str],
@@ -50,7 +51,8 @@ class HttpSkillFetch:
                 headers[header] = validators[key]
         try:
             async with asyncio.timeout(config.timeout_seconds):
-                async with self._client.stream("GET", config.url, headers=headers, timeout=config.timeout_seconds) as response:
+                async with self._client.stream("GET", config.url, headers=headers, timeout=config.timeout_seconds,
+                                               follow_redirects=True) as response:
                     if response.status_code == 304:
                         if not has_snapshot or not headers:
                             raise ValueError("HTTP Skill 304 缺少已接受正文或条件请求")
@@ -77,4 +79,5 @@ class HttpSkillFetch:
             raise SkillFetchError(f"HTTP Skill 获取失败: {type(error).__name__}") from error
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()

@@ -62,11 +62,11 @@ def posix_gateway_case(
 
     package = json.loads((repository_root / "package.json").read_text(encoding="utf-8"))
     capture_path = runtime_root / f"gateway-{posix_gateway_platform}.json"
-    runner_package = repository_root / "app" / "gateway" / "server"
+    runner_package = repository_root / "app" / "runtime"
     runner_package.mkdir(parents=True)
-    for package_path in (repository_root / "app", repository_root / "app" / "gateway", runner_package):
+    for package_path in (repository_root / "app", runner_package):
         (package_path / "__init__.py").write_text("", encoding="utf-8")
-    (runner_package / "runner.py").write_text(
+    (runner_package / "http_server.py").write_text(
         """\
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -238,6 +238,9 @@ def test_posix_gateway_start_health_and_cleanup(
         assert manifest["application_root"] == str(case.repository_root)
 
         config_root = case.boxteam_home / "config"
+        assert json.loads((config_root / "gateway_local.jsonc").read_text(encoding="utf-8")) == {
+            "config_version": 6, "extends": "user:gateway", "settings": {},
+        }
         for source_name, installed_name in (
             ("gateway_inline.jsonc", "gateway.jsonc"),
             ("gateway_schema.jsonc", "gateway_schema.jsonc"),

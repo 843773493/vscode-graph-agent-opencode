@@ -181,13 +181,15 @@ def prepare_startup_migrations(
             raise ValueError("身份迁移存在冲突或未结算来源，原件未改写: " + ", ".join(item.code for item in identity.blockers))
     if "configuration" not in reports:
         needs_upgrade = any(
-            item.payload is not None and (
+            (item.payload is not None or item.kind == "source_layer") and (
                 item.config_version != item.target_version
-                or item.domain == "workspace" and "logger" in item.payload
-                or item.domain == "workspace" and isinstance(item.payload.get("runtime"), dict)
-                and "auxiliary_services" in item.payload["runtime"]
-                or item.domain == "gateway" and isinstance(item.payload.get("features"), dict)
-                and "session_generators" in item.payload["features"]
+                or item.payload is not None and (
+                    item.domain == "workspace" and "logger" in item.payload
+                    or item.domain == "workspace" and isinstance(item.payload.get("runtime"), dict)
+                    and "auxiliary_services" in item.payload["runtime"]
+                    or item.domain == "gateway" and isinstance(item.payload.get("features"), dict)
+                    and "session_generators" in item.payload["features"]
+                )
             ) for item in plan.inputs
         )
         # 升级器在停旧前做只读预检；存活运行代仍由原停止流程结算，写入时必须重新取得 ownership。

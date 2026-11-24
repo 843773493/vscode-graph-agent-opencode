@@ -3,10 +3,20 @@ from __future__ import annotations
 import os
 import re
 from copy import deepcopy
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
-from app.core.config_sources import ConfigSource, config_revision
+from app.core.config_migration_guard import require_settled_config_migration
+from app.core.config_sources import (
+    ConfigSource,
+    ConfigSourceLayer,
+    StableConfigFile,
+    config_revision,
+    read_stable_config_file,
+    verify_stable_config_file,
+)
 from app.core.path_utils import (
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
@@ -14,7 +24,10 @@ from app.core.path_utils import (
 )
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.plugins.sources import plugin_sources
-from app.services.infrastructure.config.source_uri import inline_config_source_uri
+from app.services.infrastructure.config.source_uri import (
+    config_file_uri,
+    inline_config_source_uri,
+)
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     SecretReferenceRequiredError,
@@ -25,22 +38,19 @@ from app.services.infrastructure.resource_platform.observation.source_update_pol
 from app.services.infrastructure.resource_platform.sources.skill_source_config import (
     validate_skill_sources,
 )
+from configs.inheritance import ConfigGraph
+from configs.inheritance.values import thaw
 from configs.installer import resolve_config_resource_source
+from configs.network import NetworkSettings
 from configs.plugin_parameters import bound_plugin_configuration
 from configs.runtime import (
-    merge_json_objects,
     read_jsonc_object,
     validate_config_payload,
 )
 
 from .connection_ids import _normalize_connection_ids
-from .sources import (
-    _gateway_persisted_source_details,
-    _gateway_source_detail,
-    _load_or_migrate_gateway_override,
-)
+from .sources import _gateway_persisted_source_details
 from .values import (
-    _GATEWAY_SOURCE_LAYER_AUTHORITY,
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
     GatewayConfig,
     _history_loading_config,
@@ -65,11 +75,16 @@ def load_gateway_config(
     source_overrides: dict[str, dict[str, object]] | None = None,
     source_payloads: dict[str, dict[str, object]] | None = None,
     allow_new_connection_ids: bool = True,
+    entry_path: Path | None = None,
+    dependencies: dict[Path, StableConfigFile] | None = None,
 ) -> GatewayConfig:
-    """加载 Gateway 内置默认、用户配置和本地覆盖。"""
+    """从明确入口解析唯一父链；业务消费者继续读取本域平面投影。"""
     resolved_config_path = config_path or get_user_gateway_config_path()
     resolved_schema_path = schema_path or get_user_gateway_schema_path()
     schema = read_jsonc_object(resolved_schema_path)
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict) or not {"effectiveSettings", "gatewayPayload"} <= definitions.keys():
+        raise ValueError("Gateway schema 缺少 v6 源节点与业务投影定义")
     resolved_inline_config_path = inline_config_path or resolve_config_resource_source(
         "gateway_inline.jsonc"
     )
@@ -78,24 +93,34 @@ def load_gateway_config(
         if config_path is None
         else resolved_config_path.parent / "gateway_local.jsonc"
     )
-    raw_gateway_config = read_jsonc_object(resolved_inline_config_path)
-    if source_payloads is not None:
-        source_payloads["inline:0"] = deepcopy(raw_gateway_config)
-    source_paths: list[Path] = [resolved_inline_config_path]
-    user_override: dict[str, object] | None = None
-    local_override: dict[str, object] | None = None
-    inline_layer, inline_precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY["inline:0"]
-    source_details: list[ConfigSource] = [
-        ConfigSource(
-            uri=inline_config_source_uri(logical_name="gateway_inline"),
-            layer=inline_layer,
-            precedence=inline_precedence,
-            loaded=True,
-            source_key="inline:0",
-        )
-    ]
+    entry = (entry_path or (resolved_local_config_path if config_path is None else resolved_config_path)).resolve()
+    known = {
+        resolved_inline_config_path.resolve(): ("inline:0", "inline"),
+        resolved_config_path.resolve(): ("gateway_mutable_override", "user"),
+        resolved_local_config_path.resolve(): ("gateway_local_mutable_override", "user_local"),
+    }
+
+    def source_identity(path: Path) -> tuple[str, ConfigSourceLayer]:
+        return known.get(path, ("source_" + sha256(str(path).encode()).hexdigest(), "source"))
+
+    def source_uri(path: Path) -> str:
+        if path == resolved_inline_config_path.resolve():
+            return inline_config_source_uri(logical_name="gateway_inline")
+        key, _ = source_identity(path)
+        return config_file_uri(scope="gateway" if gateway_id else "user", scope_id=gateway_id or "local", logical_name=key)
+
+    def read_source(path: Path) -> StableConfigFile:
+        require_settled_config_migration(path)
+        file = read_stable_config_file(path)
+        if dependencies is not None:
+            dependencies[path] = file
+        return file
+
+    source_paths: list[Path] = []
+    source_details: list[ConfigSource] = []
     loaded_persisted_snapshot = False
     persisted_source_baseline: dict[str, object] | None = None
+    documents = None
     if startup and state_store is not None:
         blocked = state_store.migrate_legacy_active_snapshot_secrets(
             config_domain="gateway"
@@ -143,100 +168,48 @@ def load_gateway_config(
                     "Gateway active/pending snapshot 缺少来源基线"
                 )
             raw_gateway_config = dict(persisted_payload)
-            source_paths = [resolved_inline_config_path, state_store.path]
-            source_details = list(
-                _gateway_persisted_source_details(persisted_source_baseline)
-            )
+            source_details = list(_gateway_persisted_source_details(persisted_source_baseline))
+            documents = {
+                str(detail["uri"]): detail["document"]
+                for detail in persisted_source_baseline.values()
+                if isinstance(detail, dict) and isinstance(detail.get("document"), dict)
+            }
             loaded_persisted_snapshot = True
-    if state_store is None:
-        # 无 state store 分支同样只查权威表，保证与 `_gateway_source_detail` 逐字一致。
-        for config_key, fallback_path in (
-            ("gateway_mutable_override", resolved_config_path),
-            ("gateway_local_mutable_override", resolved_local_config_path),
-        ):
-            layer, precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY[config_key]
-            source_details.append(
-                ConfigSource(
-                    uri=None,
-                    layer=layer,
-                    precedence=precedence,
-                    loaded=fallback_path.is_file(),
-                    source_key=config_key,
-                    presence="present" if fallback_path.is_file() else "absent",
-                )
-            )
-        if resolved_config_path.is_file():
-            raw_gateway_config = merge_json_objects(
-                raw_gateway_config,
-                read_jsonc_object(resolved_config_path),
-                schema=schema,
-            )
-            source_paths.append(resolved_config_path)
-        if resolved_local_config_path.is_file():
-            raw_gateway_config = merge_json_objects(
-                raw_gateway_config,
-                read_jsonc_object(resolved_local_config_path),
-                schema=schema,
-            )
-            source_paths.append(resolved_local_config_path)
-    elif not loaded_persisted_snapshot:
-        overrides = {}
-        for key, path in (("gateway_mutable_override", resolved_config_path), ("gateway_local_mutable_override", resolved_local_config_path)):
-            overrides[key] = (
-                source_overrides[key] if source_overrides is not None and key in source_overrides
-                else _load_or_migrate_gateway_override(
-                    state_store=state_store, config_key=key, path=path, persist_migrations=persist_migrations,
-                )
-            )
-        user_override = overrides["gateway_mutable_override"]
-        local_override = overrides["gateway_local_mutable_override"]
-        source_details.extend(
-            [
-                _gateway_source_detail(
-                    state_store,
-                    "gateway_mutable_override",
-                    fallback_path=resolved_config_path,
-                ),
-                _gateway_source_detail(
-                    state_store,
-                    "gateway_local_mutable_override",
-                    fallback_path=resolved_local_config_path,
-                ),
-            ]
-        )
-    if source_payloads is not None:
-        source_payloads["gateway_mutable_override"] = deepcopy(user_override or {})
-        source_payloads["gateway_local_mutable_override"] = deepcopy(local_override or {})
-    if user_override is not None:
-        raw_gateway_config = merge_json_objects(raw_gateway_config, user_override, schema=schema)
-        if state_store.path not in source_paths:
-            source_paths.append(state_store.path)
-    if local_override is not None:
-        raw_gateway_config = merge_json_objects(raw_gateway_config, local_override, schema=schema)
-        if state_store.path not in source_paths:
-            source_paths.append(state_store.path)
-    validate_config_payload(
-        raw_gateway_config,
-        schema=schema,
+    graph = ConfigGraph(
+        domain="gateway", version=6, owner_id=gateway_id or "local", entry=entry,
+        aliases={"builtin:gateway": resolved_inline_config_path, "user:gateway": resolved_config_path,
+                 "user:gateway_local": resolved_local_config_path},
+        settings_schema={"$ref": "#/$defs/effectiveSettings", "$defs": schema["$defs"]},
+        options_schema={"type": "object"}, source_uri=source_uri,
+        registered_uris={source_uri(path): path for path in known},
+        authorize_source=lambda path: ".boxteam" not in path.parts, read_source=read_source,
+        source_documents=documents,
+        document_overrides={config_file_uri(scope="gateway" if gateway_id else "user",
+                                            scope_id=gateway_id or "local", logical_name=key): document
+                            for key, document in (source_overrides or {}).items()},
     )
+    scope = graph.resolve_scope()
+    if loaded_persisted_snapshot:
+        source_paths = list(graph.source_locations.values())
+    if not loaded_persisted_snapshot:
+        settings = cast(dict[str, object], thaw(scope.settings))
+        raw_gateway_config = {**cast(dict[str, object], settings["gateway"]),
+                              "network": settings["network"], "config_version": 6}
     _normalize_connection_ids(
         raw_gateway_config,
         state_store=state_store if not loaded_persisted_snapshot else None,
-        persist_migrations=persist_migrations and not loaded_persisted_snapshot,
+        persist_migrations=False,
         allow_new_ids=allow_new_connection_ids,
     )
-    # 旧版先按 v1 结构校验，再校验补入 connection_id 的规范化候选。
-    validate_config_payload(
-        raw_gateway_config,
-        schema=schema,
-    )
-    raw_workspaces = raw_gateway_config["workspaces"]
+    NetworkSettings.model_validate(raw_gateway_config["network"])
+    validate_config_payload(raw_gateway_config, schema=schema)
     plugin_sources(raw_gateway_config)
+    raw_workspaces = raw_gateway_config["workspaces"]
     raw_gateway_config = bound_plugin_configuration(raw_gateway_config)
     if not isinstance(raw_workspaces, list):
         raise TypeError("Gateway workspaces 配置必须是数组")
     validated_workspaces = cast(list[dict[str, object]], raw_workspaces)
-    return GatewayConfig(
+    result = GatewayConfig(
         workspaces=tuple(
             workspace
             for item in validated_workspaces
@@ -305,7 +278,41 @@ def load_gateway_config(
         source_paths=tuple(source_paths),
         source_details=tuple(source_details),
         payload=dict(raw_gateway_config),
+        graph=graph, inline_path=resolved_inline_config_path, entry_path=entry,
     )
+    if not loaded_persisted_snapshot:
+        for file in graph.dependencies.values():
+            verify_stable_config_file(file)
+        if state_store is not None and persist_migrations:
+            _normalize_connection_ids(raw_gateway_config, state_store=state_store)
+        for precedence, path in enumerate(dict.fromkeys(node.location.path for node in scope.chain)):
+            key, layer = source_identity(path)
+            file = graph.dependencies[path]
+            document = cast(dict[str, object], thaw(graph.source_documents[source_uri(path)]))
+            if source_payloads is not None:
+                source_payloads[key] = deepcopy(document)
+            record = None
+            if state_store is not None and persist_migrations and layer != "inline":
+                verify_stable_config_file(file)
+                previous = state_store.get_source_layer(key)
+                record = state_store.sync_config_source(
+                    config_key=key, uri=source_uri(path), config_version=6, presence=file.presence,
+                    payload=document, layer_digest=file.digest,
+                    expected_layer_revision=previous.layer_revision if previous else None,
+                    expected_layer_digest=previous.layer_digest if previous else None,
+                    journal_origin="loader",
+                )
+            elif state_store is not None:
+                record = state_store.get_source_layer(key)
+            source_paths.append(path)
+            source_details.append(ConfigSource(
+                uri=source_uri(path), layer=layer, precedence=precedence, loaded=True, source_key=key,
+                presence=file.presence, layer_digest=file.digest,
+                layer_revision=record.layer_revision if record else None,
+                source_generation=record.source_generation if record else None,
+            ))
+    return replace(result, source_paths=tuple(source_paths), source_details=tuple(source_details))
+
 def _normalize_consumer_health_digests(
     digests: dict[str, str],
 ) -> dict[str, str]:

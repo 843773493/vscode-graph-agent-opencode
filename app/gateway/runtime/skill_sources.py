@@ -6,10 +6,11 @@ import asyncio
 import hashlib
 import secrets
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.core.resource_uri import ParsedResourceUri, parse_resource_uri
@@ -45,6 +46,9 @@ from app.services.infrastructure.resource_platform.observation.source_update_pol
 from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
     ConfiguredSkillGeneration,
     ConfiguredSkillSources,
+)
+from app.services.infrastructure.resource_platform.sources.http_skill_fetch import (
+    HttpSkillFetch,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
@@ -88,7 +92,7 @@ class GatewaySkillSourceOwner:
     """只从已接受文件事实派生可跨进程传输的无路径快照。"""
 
     def __init__(self, *, gateway_id: str, skills_root: Path, update_policy: SourceUpdatePolicy | None = None,
-                 sources: tuple[SkillSourceConfig, ...] = ()) -> None:
+                 sources: tuple[SkillSourceConfig, ...] = (), external_http_client: httpx.AsyncClient | None = None) -> None:
         self.gateway_id = gateway_id
         self._skills_root = skills_root
         self._scope = LifetimeScope("gateway-skill-sources")
@@ -99,7 +103,10 @@ class GatewaySkillSourceOwner:
         )
         self._scope.register(watcher.shutdown, label="gateway-skill-file-watcher")
         self._scope.register(self.file_registry.stop, label="gateway-skill-files")
-        self.configured_sources = ConfiguredSkillSources(scope="gateway", scope_id=gateway_id, channel=self.file_registry.observation_channel)
+        self.configured_sources = ConfiguredSkillSources(
+            scope="gateway", scope_id=gateway_id, channel=self.file_registry.observation_channel,
+            runtimes={"http": HttpSkillFetch(external_http_client)} if external_http_client is not None else None,
+        )
         self._source_configs = sources
         self._scope.register(self.configured_sources.close, label="gateway-http-skills")
         self._navigation = ResourceNavigation(gateway_id=gateway_id, gateway_skills_root=skills_root,
@@ -235,13 +242,18 @@ class GatewaySkillSourceOwner:
     def sources_stage(
         self, *, sources: tuple[SkillSourceConfig, ...], generation: str,
         fencing_token_digest: str | None, fence_check: Callable[[], None] | None,
+        prepare_http_client: Callable[[], AbstractAsyncContextManager[httpx.AsyncClient]] | None = None,
     ) -> GatewayRuntimeConsumerStage:
         previous = self.configured_sources.current
         candidate: ConfiguredSkillGeneration | None = None
 
         async def prepare() -> None:
             nonlocal candidate
-            candidate = await self.configured_sources.prepare(sources)
+            if prepare_http_client is None:
+                candidate = await self.configured_sources.prepare(sources)
+            else:
+                async with prepare_http_client() as client:
+                    candidate = await self.configured_sources.prepare(sources, initial_runtimes={"http": HttpSkillFetch(client)})
 
         def apply() -> None:
             if candidate is None:

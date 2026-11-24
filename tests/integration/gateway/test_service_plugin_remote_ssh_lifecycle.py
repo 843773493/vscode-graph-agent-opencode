@@ -406,7 +406,8 @@ def remote_gateway_clients(
     gateway_config_path = home / "config/gateway.jsonc"
     gateway_config = commentjson.loads(gateway_config_path.read_text(encoding="utf-8"))
     # A 只中继远端插件，不在未安装开发工具包的本机创建默认插件绑定。
-    gateway_config["plugins"]["workspace_defaults"] = {"entries": []}
+    gateway_settings = gateway_config.setdefault("settings", {}).setdefault("gateway", {})
+    gateway_settings.setdefault("plugins", {})["workspace_defaults"] = {"entries": []}
     from app.gateway.ssh_config import resolve_user_ssh_host
 
     remote = resolve_user_ssh_host(remote_alias)
@@ -420,7 +421,7 @@ def remote_gateway_clients(
         f"Set-Location '{escaped_remote_repository}'; "
         f"& '{escaped_remote_python}' -m app.gateway.federation_pairing {{pairing_args}}\""
     )
-    gateway_config["workspaces"] = [{
+    gateway_settings["workspaces"] = [{
         "kind": "remote_gateway",
         "connection_id": "remote_plugin_ssh_lifecycle",
         "name": "Isolated Windows Gateway",
@@ -559,7 +560,11 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             source_path += f"?gateway_connection_id={connection_id}"
         before = exchange("GET", source_path).raise_for_status().json()["data"]
         document = _JSON_OBJECT_ADAPTER.validate_python(commentjson.loads(before["jsonc"]))
-        update(document)
+        settings = _JSON_OBJECT_ADAPTER.validate_python(document.get("settings", {}))
+        gateway_settings = _JSON_OBJECT_ADAPTER.validate_python(settings.get("gateway", {}))
+        update(gateway_settings)
+        settings["gateway"] = gateway_settings
+        document["settings"] = settings
         response = exchange("PUT", source_path, {
             "gateway_id": gateway_b,
             "source_key": "gateway_mutable_override",

@@ -26,6 +26,7 @@ export type ToolApprovalCommand = Omit<JobProtocol.ToolApprovalCommand, "status"
 export type DeliveryPolicy = "after_turn" | "after_tool_result" | "after_interrupt";
 export type ConfigSourceLayer =
   | "inline"
+  | "source"
   | "user"
   | "user_local"
   | "workspace"

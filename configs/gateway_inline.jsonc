@@ -1,79 +1,129 @@
+// Gateway 配置节点：仅沿显式 extends 继承；工作区业务配置由各 Backend 自行读取。
 {
-  "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
-  "config_version": 5,
-  "plugins": {
-    "sources": {"entries": []}, // 显式配置自有 HTTP(S) 来源；空源不发网络请求。
-    "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
-    "workspace_defaults": {"entries": [ // 仅新建工作区继承；已有工作区独立管理。
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "terminal", "enabled": true},
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "browser", "enabled": true},
-      {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": "debugging", "enabled": true}
-    ]}
-  },
-  "logging": {
-    "runtime": {
-      "level": "info",
-      "pretty": true
-    },
-    "retention": {} // 可选 inactive_max_bytes 覆盖共享日志合同的旧实例总预算。
-  }, // load_gateway_config 与 gateway_schema 校验配置版本。
-  "telemetry": {
-    "runtime": {"enabled": false, "sample_ratio": 1, "sample_buffer_limit": 256}
-  },
-  "statistics": {
-    "runtime": {"enabled": false, "collection_interval_ms": 5000}
-  },
-  "resources": {
-    "skill_sources": {
-      "sources": [], // 显式共享来源：稳定 id、name、fetch.protocol=http/url、updates 与层内 priority。数组整体覆盖。
-      "local_updates": {
-        "mode": "event", // Gateway 本机 Skill 的获取触发；与 Workspace 消费发布通知分别配置。
-        "poll_interval": null // poll/event_poll 必须使用正整数分钟 m 或小时 h；对象按配置层递归合并。
-      }
-    }
-  },
-  "workspaces": [], // load_gateway_config 读取远程 Gateway 注册项。
-  "features": {
-    "session_catalog": {
-      "sync": {
-        "refresh_interval_seconds": 30, // GatewaySessionCatalogSearchService 同步周期已接入配置。
-        "max_concurrency": 8, // GatewaySessionCatalogSearchService 同步并发已接入配置。
-        "request_timeout_seconds": 30 // GatewaySessionCatalogSearchService 请求超时已接入配置。
+  "$schema": "./gateway_schema.jsonc",
+  "config_version": 6,
+  "settings": {
+    "network": {
+      "proxy": {
+        "mode": "environment"
       }
     },
-    "session_history": {
-      "loading": {
-        "progressive": {
-          "initial": {
-            "turns": 5,
-            "include": ["user", "metadata", "thinking", "tool_summary", "final_response", "internal"]
-          },
-          "anchor": {
-            "before_turns": 3,
-            "after_turns": 3,
-            "include": ["user", "metadata", "final_response", "internal"]
+    "gateway": {
+      "plugins": {
+        "sources": {
+          "entries": []
+        },
+        "runtime": {
+          "entries": []
+        },
+        "workspace_defaults": {
+          "entries": [
+            {
+              "package_id": "boxteam.developer-tools",
+              "package_version": "0.1.1",
+              "plugin_id": "terminal",
+              "enabled": true
+            },
+            {
+              "package_id": "boxteam.developer-tools",
+              "package_version": "0.1.1",
+              "plugin_id": "browser",
+              "enabled": true
+            },
+            {
+              "package_id": "boxteam.developer-tools",
+              "package_version": "0.1.1",
+              "plugin_id": "debugging",
+              "enabled": true
+            }
+          ]
+        }
+      },
+      "logging": {
+        "runtime": {
+          "level": "info",
+          "pretty": true
+        },
+        "retention": {}
+      },
+      "telemetry": {
+        "runtime": {
+          "enabled": false,
+          "sample_ratio": 1,
+          "sample_buffer_limit": 256
+        }
+      },
+      "statistics": {
+        "runtime": {
+          "enabled": false,
+          "collection_interval_ms": 5000
+        }
+      },
+      "resources": {
+        "skill_sources": {
+          "sources": [],
+          "local_updates": {
+            "mode": "event",
+            "poll_interval": null
           }
         }
-      }
-    }
-  },
-  "runtime": {
-    "gateway": {
-      "process": {
-        "health": {
-          "request_timeout_seconds": 2, // Gateway 进程健康检查 HTTP 超时已接入配置。
-          "poll_interval_seconds": 0.5 // Gateway 进程健康检查轮询周期已接入配置。
+      },
+      "workspaces": [],
+      "features": {
+        "session_catalog": {
+          "sync": {
+            "refresh_interval_seconds": 30,
+            "max_concurrency": 8,
+            "request_timeout_seconds": 30
+          }
         },
-        "lifecycle": {
-          "connection_drain_timeout_seconds": 2 // 工作区后端优雅退出超时已接入配置。
+        "session_history": {
+          "loading": {
+            "progressive": {
+              "initial": {
+                "turns": 5,
+                "include": [
+                  "user",
+                  "metadata",
+                  "thinking",
+                  "tool_summary",
+                  "final_response",
+                  "internal"
+                ]
+              },
+              "anchor": {
+                "before_turns": 3,
+                "after_turns": 3,
+                "include": [
+                  "user",
+                  "metadata",
+                  "final_response",
+                  "internal"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "runtime": {
+        "gateway": {
+          "process": {
+            "health": {
+              "request_timeout_seconds": 2,
+              "poll_interval_seconds": 0.5
+            },
+            "lifecycle": {
+              "connection_drain_timeout_seconds": 2
+            }
+          }
+        },
+        "workspace": {
+          "default_skill_groups": [
+            "gateway-context",
+            "web-search-fetch"
+          ]
         }
       }
-    },
-    "workspace": {
-      "default_skill_groups": [
-        "gateway-context", // Gateway 工作区上下文扩展工具组。
-        "web-search-fetch" // Web 搜索与网页抓取扩展工具组。
-      ]
     }
   }
 }

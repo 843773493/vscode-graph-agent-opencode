@@ -112,15 +112,9 @@ from .loader import load_gateway_config as load_gateway_config
 from .reload_lifecycle import ReloadLifecycleMixin
 from .reload_pending_restart import ReloadPendingRestartMixin
 from .source_edit import GatewaySourceEditMixin
-from .sources import _gateway_source_detail as _gateway_source_detail
-from .sources import (
-    _load_or_migrate_gateway_override as _load_or_migrate_gateway_override,
-)
-from .sources import _record_gateway_source_journal as _record_gateway_source_journal
 from .sources import (
     record_gateway_restart_startup_failure as record_gateway_restart_startup_failure,
 )
-from .values import _GATEWAY_SOURCE_LAYER_AUTHORITY as _GATEWAY_SOURCE_LAYER_AUTHORITY
 from .values import (
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS as REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
 )

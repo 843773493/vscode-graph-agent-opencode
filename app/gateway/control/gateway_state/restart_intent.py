@@ -406,44 +406,7 @@ class GatewayRestartIntentMixin:
                 raise ConfigConflictError(
                     "Gateway pending discard 的 source baseline 与候选不一致"
                 )
-            expected_sources = {
-                str(key): detail
-                for key, detail in expected_source_baseline.items()
-                if isinstance(detail, dict) and detail.get("layer_revision") is not None
-            }
-            current_rows = connection.execute(
-                """
-                SELECT config_key, uri, presence, layer_revision,
-                       layer_digest, source_generation
-                FROM config_source_layers
-                """
-            ).fetchall()
-            if {str(row[0]) for row in current_rows} != set(expected_sources):
-                raise ConfigConflictError(
-                    "Gateway pending discard 的 source layer 集合已变化"
-                )
-            for row in current_rows:
-                detail = expected_sources[str(row[0])]
-                actual_uri = str(row[1]) if row[1] is not None else None
-                expected_uri = (
-                    str(detail.get("uri")) if detail.get("uri") is not None else None
-                )
-                if (
-                    expected_uri != actual_uri
-                    or str(detail.get("presence")) != str(row[2])
-                    or int(detail["layer_revision"]) != int(row[3])
-                    or (
-                        str(detail.get("layer_digest"))
-                        if detail.get("layer_digest") is not None
-                        else None
-                    )
-                    != (str(row[4]) if row[4] is not None else None)
-                    or int(detail.get("source_generation", 0)) != int(row[5])
-                ):
-                    raise ConfigConflictError(
-                        "Gateway pending discard 的 source layer 基线已变化: "
-                        f"key={row[0]}"
-                    )
+            self._assert_config_source_baseline(connection, expected_source_baseline)
 
             apply_id = str(pending[2]) if pending[2] is not None else None
             if apply_id is not None:
