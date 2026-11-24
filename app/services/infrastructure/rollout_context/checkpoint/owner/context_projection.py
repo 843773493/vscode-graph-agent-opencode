@@ -80,6 +80,14 @@ class ContextProjectionResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderContextRequest:
+    """封存前的同一次投影与最终发送正文；只在当前准备中使用。"""
+
+    projection: ContextProjectionResult
+    wire_request: dict[str, object]
+
+
 class ContextProjectionOwnerMixin:
     """负责已 seal plan 的正文来源校验和 assembly detail locator 绑定。"""
 
@@ -675,4 +683,4 @@ class ContextProjectionOwnerMixin:
         return plan, tuple(prepared_details), detail_by_ref
 
 
-__all__ = ["ContextProjectionInput", "ContextProjectionOwnerMixin", "ContextProjectionResult"]
+__all__ = ["ContextProjectionInput", "ContextProjectionOwnerMixin", "ContextProjectionResult", "ProviderContextRequest"]

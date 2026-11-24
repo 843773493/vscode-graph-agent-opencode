@@ -22,11 +22,13 @@ from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_VERSION,
     ChatWireProfile,
     ResponsesWireProfile,
+    finalize_provider_wire,
 )
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.owner.composition import (
     ContextPlanCompositionMixin,
 )
@@ -40,6 +42,7 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_projec
     ContextProjectionInput,
     ContextProjectionOwnerMixin,
     ContextProjectionResult,
+    ProviderContextRequest,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activation import (
     ResourceActivationOwnerMixin,
@@ -353,6 +356,33 @@ class ContextOwnerMixin(
             target_format=target_format, collect_capability_losses=collect_capability_losses,
             include_request_only=include_request_only, include_native=include_native,
             wire_profile=wire_profile,
+        )
+
+    def project_frozen_context_request(
+        self,
+        context: ContextProjectionInput,
+        items: Mapping[tuple[str, str, str], CanonicalItemRecord],
+        request_content: Mapping[str, object],
+        *,
+        wire_profile: ChatWireProfile | ResponsesWireProfile,
+        wire_params: Mapping[str, object],
+    ) -> ProviderContextRequest:
+        """预算与 seal 共用冻结材料；不创建 assembly 或刷新 CSM／工具目录。"""
+        snapshot = context.assembly
+        projection = self._project_context_projection(
+            snapshot.session_id, snapshot.thread_id, context, items, request_content,
+            include_runtime_notices=True, include_summaries=True,
+            target_format=snapshot.target_format,
+            include_native=isinstance(wire_profile, ResponsesWireProfile),
+            wire_profile=wire_profile,
+        )
+        return ProviderContextRequest(
+            projection=projection,
+            wire_request=normalize_wire_request(finalize_provider_wire(
+                messages=projection.messages, tools=projection.tools,
+                native_request=None if projection.native is None else projection.native["request"],
+                profile=wire_profile, params=wire_params,
+            )),
         )
 
     def _project_context_projection(

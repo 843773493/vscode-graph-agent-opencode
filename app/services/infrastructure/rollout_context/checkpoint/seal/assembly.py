@@ -11,7 +11,6 @@ from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_VERSION,
     ChatWireProfile,
     ResponsesWireProfile,
-    finalize_provider_wire,
 )
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
@@ -25,7 +24,6 @@ from app.domain.itemized.identity.refs import ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
-from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     _ValidatedPredecessors,
 )
@@ -92,19 +90,11 @@ def _project_wire_snapshot(
         snapshot.session_id, snapshot.thread_id, checkpoint_ns, sealed_plan, None,
         prepared_details=prepared_details,
     )
-    projection = owner._project_context_projection(
-        snapshot.session_id, snapshot.thread_id,
+    request = owner.project_frozen_context_request(
         ContextProjectionInput(snapshot, sealed_plan, activation), items, bodies,
-        include_runtime_notices=True, include_summaries=True,
-        target_format=snapshot.target_format,
-        include_native=isinstance(wire_profile, ResponsesWireProfile),
-        wire_profile=wire_profile,
+        wire_profile=wire_profile, wire_params=wire_params,
     )
-    preimage = normalize_wire_request(finalize_provider_wire(
-        messages=projection.messages, tools=projection.tools,
-        native_request=None if projection.native is None else projection.native["request"],
-        profile=wire_profile, params=wire_params,
-    ))
+    preimage = request.wire_request
     # snapshot 来自本次 composer，只替换 wire；冷读仍独立验证所有 hash。
     snapshot = replace(
         snapshot, request_hash_preimage=preimage,
@@ -115,7 +105,7 @@ def _project_wire_snapshot(
             recomputed_plan_hash=snapshot.plan_hash,
         )),
     )
-    return snapshot, replace(projection, assembly=snapshot)
+    return snapshot, replace(request.projection, assembly=snapshot)
 
 
 def _activation_binding_callable(
