@@ -109,12 +109,11 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
   const stream = read(['api_mode', 'streaming']);
   const booleanField = (name: string, path: OptionPath, description?: string) => {
     const value = read(path), label = t(`configuration.capability.${path.at(-1)}`);
-    const capability = path.at(-1) !== 'no_proxy';
     return <label key={name} className="configuration-entity-field" data-search-key={path.join('.')} title={description}>{label}
       <select aria-label={label} value={typeof value === 'boolean' ? String(value) : ''} disabled={disabled}
         onChange={event => onEdit(path, event.target.value === '' ? undefined : event.target.value === 'true')}>
         <option value="">{t('configuration.entities.defaultValue')}</option>
-        <option value="true">{t(capability ? 'configuration.options.enabled' : 'configuration.options.on')}</option><option value="false">{t(capability ? 'configuration.options.disabled' : 'configuration.options.off')}</option>
+        <option value="true">{t('configuration.options.enabled')}</option><option value="false">{t('configuration.options.disabled')}</option>
       </select>
 
     </label>;
@@ -211,7 +210,6 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, s
       <JsonOption label={t('configuration.options.headers')} value={read(['request_options', 'default_headers'])}
         inherited={inherited(['request_options', 'default_headers'])} objectOnly disabled={disabled}
         onEdit={value => onEdit(['request_options', 'default_headers'], value)} />
-      {booleanField('request_options.no_proxy', ['request_options', 'no_proxy'], schema.properties?.request_options.properties?.no_proxy.description)}
       </details>
     </div>
   </>;

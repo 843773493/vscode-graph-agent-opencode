@@ -5,6 +5,7 @@ import copy
 import logging
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any, ClassVar
 
 from langchain_core.callbacks import (
@@ -24,6 +25,7 @@ from langchain_openai.chat_models.base import (
 )
 from openai._models import construct_type_unchecked
 from openai.types.responses import Response
+from pydantic import Field
 
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.provider_capabilities import parse_provider_capabilities
@@ -75,6 +77,7 @@ from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
 )
 from app.runtime.litellm_runtime import litellm, prepare_model_request
+from app.runtime.network_proxy import ProxyRoutes
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
@@ -92,6 +95,9 @@ DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS = 45.0
 
 class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     """LiteLLM Responses API 包装层，保留加密 reasoning 和标准 content blocks。"""
+
+    chatgpt_auth_directory: Path | None = Field(default=None, exclude=True, repr=False)
+    auth_proxy_routes: ProxyRoutes | None = Field(default=None, exclude=True, repr=False)
 
     _uses_http_handler: ClassVar[bool] = True
     responses_include: ClassVar[list[str]] = ["reasoning.encrypted_content"]
@@ -574,8 +580,25 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         )
         client = self._provider_http_client(is_async=asynchronous)
         payload["client"] = client
+        if not asynchronous:
+            self._prepare_oauth_request(payload)
         if self.invocation_purpose == "model_test":
             payload["max_retries"] = payload["num_retries"] = 0
+
+    def _prepare_oauth_request(self, payload: dict[str, Any]) -> None:
+        if self.chatgpt_auth_directory is None:
+            return
+        from app.runtime.chatgpt_auth import prepare_chatgpt_oauth
+
+        if self.auth_proxy_routes is None:
+            raise ValueError("ChatGPT OAuth 缺少所属 Provider 的网络路由")
+        credential = prepare_chatgpt_oauth(self.chatgpt_auth_directory, routes=self.auth_proxy_routes)
+        headers = {key: value for key, value in (payload.get("extra_headers") or {}).items()
+                   if key.casefold() not in {"authorization", "chatgpt-account-id"}}
+        headers["Authorization"] = "Bearer " + credential.access_token
+        if credential.account_id:
+            headers["ChatGPT-Account-ID"] = credential.account_id
+        payload["api_key"], payload["extra_headers"] = credential.access_token, headers
 
     def _generate(
         self, messages: list[BaseMessage], stop: list[str] | None = None,
@@ -594,7 +617,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
 
@@ -609,13 +632,15 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, stream=stream, **kwargs)
         payload = self._responses_payload(messages, stop, kwargs)
         self._record_responses_request(payload, asynchronous=True)
+        if self.chatgpt_auth_directory is not None:
+            await asyncio.to_thread(self._prepare_oauth_request, payload)
         try:
             response = await self._await_nonstream_response(litellm.aresponses(**payload))
             result = self._complete_response(response, kwargs.get("response_format"))
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         await self._publish_nonstream_result(result, run_manager)
@@ -635,7 +660,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
@@ -648,7 +673,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         terminal_received = False
@@ -661,14 +686,14 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                         "Responses 流协议错误: EOF 前未收到 "
                         "response.completed/response.incomplete terminal event"
                     )
-                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                    mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise error
                 break
             except ScopeCancelledError:
                 raise
             except Exception as error:
-                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             try:
@@ -686,7 +711,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                     original_schema=original_schema,
                 )
             except Exception as error:
-                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                mark_provider_failure(error, secrets=(self.api_key, payload.get("api_key")), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:
@@ -754,13 +779,15 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             self.model,
         )
         self._record_responses_request(raw_payload, asynchronous=True)
+        if self.chatgpt_auth_directory is not None:
+            await asyncio.to_thread(self._prepare_oauth_request, raw_payload)
         open_timeout = asyncio.timeout(DEFAULT_RESPONSES_STREAM_OPEN_TIMEOUT_SECONDS)
         try:
             async with open_timeout:
                 stream = await litellm.aresponses(**raw_payload)
         except TimeoutError as error:
             if not open_timeout.expired():
-                mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
                 record_upstream_error(error)
                 raise
             logger.warning(
@@ -780,7 +807,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         apply_upstream_call_details(stream)
@@ -812,7 +839,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         except ScopeCancelledError:
             raise
         except Exception as error:
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+            mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
             record_upstream_error(error)
             raise
         terminal_received = False
@@ -827,14 +854,14 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                             "Responses 流协议错误: EOF 前未收到 "
                             "response.completed/response.incomplete terminal event"
                         )
-                        mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                        mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
                         record_upstream_error(error)
                         raise error
                     break
                 except ScopeCancelledError:
                     raise
                 except Exception as error:
-                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                    mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise
                 if scope is not None:
@@ -854,7 +881,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                         original_schema=original_schema,
                     )
                 except Exception as error:
-                    mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
+                    mark_provider_failure(error, secrets=(self.api_key, raw_payload.get("api_key")), diagnostic_logger=logger)
                     record_upstream_error(error)
                     raise
                 if getattr(event, "type", None) in {"response.completed", "response.incomplete"}:
@@ -887,6 +914,7 @@ def build_openai_responses_model(
     request_options: dict[str, Any],
     prompt_cache_key: str | None,
     invocation_purpose: ProviderInvocationPurpose = "agent",
+    chatgpt_auth_directory: Path | None = None,
 ) -> BoxteamOpenAIResponsesModel:
     api_mode = parse_provider_api_mode(provider)
     if api_mode.protocol != "responses":
@@ -937,5 +965,7 @@ def build_openai_responses_model(
         reasoning_items_summary_replay=api_mode.supports_reasoning.reasoning_items_summary,
         reasoning_items_encrypted_replay=api_mode.supports_reasoning.reasoning_items_encrypted_content,
         image_input_replay="image_input" in parse_provider_capabilities(provider),
-        no_proxy=bool(request_options.get("no_proxy")),
+        proxy_routes=provider["proxy_routes"],
+        chatgpt_auth_directory=chatgpt_auth_directory,
+        auth_proxy_routes=provider.get("auth_proxy_routes"),
     )

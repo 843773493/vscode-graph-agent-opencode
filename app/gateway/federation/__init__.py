@@ -273,7 +273,7 @@ async def discover_remote_gateway(
     headers = {
         "X-BoxTeam-Federation-Token": credential.token,
     }
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, trust_env=False, verify=httpx.create_ssl_context(trust_env=True)) as client:
         manifest_response, workspaces_response = await asyncio.gather(
             client.get(
                 f"{gateway_url}/api/gateway/federation/manifest",
@@ -382,7 +382,8 @@ async def send_remote_gateway_management(
         headers["Content-Type"] = content_type
     if last_event_id is not None:
         headers["Last-Event-ID"] = last_event_id
-    client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, read=None if stream else timeout_seconds))
+    client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, read=None if stream else timeout_seconds),
+                               trust_env=False, verify=httpx.create_ssl_context(trust_env=True))
     response: httpx.Response | None = None
     handed_off = False
 

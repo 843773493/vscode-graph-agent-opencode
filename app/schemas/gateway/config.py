@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config_sources import ConfigSourceLayer, ConfigSourceURI
+from app.schemas.config_nodes import ConfigNodeInspectionDTO
 
 
 class GatewayConfigReloadStatusDTO(BaseModel):
@@ -191,6 +192,7 @@ class GatewayConfigSourceDocumentDTO(BaseModel):
     source_effective: dict[str, object]
     source_inherited: dict[str, object]
     layers: list[GatewayConfigSourceLayerViewDTO]
+    nodes: list[ConfigNodeInspectionDTO]
     origins: list[GatewayConfigSourceOriginDTO]
     status: GatewayConfigReloadStatusDTO
     edit: GatewayConfigSourceEditDTO | None = None

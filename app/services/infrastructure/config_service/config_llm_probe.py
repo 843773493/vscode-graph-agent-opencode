@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import anyio
-import jsonschema
 from boxteam_plugin_sdk.failures import failure_message
 
 from app.core.workspace_identity import read_workspace_id
@@ -34,12 +33,7 @@ from app.services.infrastructure.config.llm_catalog import (
     public_endpoint,
     read_model_catalog,
 )
-from app.services.infrastructure.config.source_document import (
-    parse_source_text,
-    restore_source_text,
-)
 from app.services.infrastructure.config.state import ConfigConflictError
-from configs.runtime import merge_json_objects, require_current_workspace_config
 
 if TYPE_CHECKING:
     from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
@@ -85,7 +79,9 @@ class ConfigLlmProbeMixin:
     ) -> tuple[dict[str, Any], LlmProbeObservationDTO]:
         service = cast("ConfigService", self)
         async with asyncio.timeout_at(deadline):
-            _, root, store = service._source_target(request.source_key or "inline")
+            root, store = service._workspace_root, service._workspace_state_store
+            if root is None or store is None or store.workspace_root != root:
+                raise ValueError("模型探测需要已绑定精确工作区的配置 owner")
             if request.gateway_id != gateway_id or request.workspace_id != read_workspace_id(root):
                 raise ConfigConflictError("模型探测目标与请求的 Gateway／工作区不一致")
             baseline = {}
@@ -101,39 +97,19 @@ class ConfigLlmProbeMixin:
                     snapshot = service._require_snapshot()
                     if snapshot.revision != active.effective_digest:
                         raise ConfigConflictError("active 发布正在交接，请重新读取原目标")
-                    config = snapshot.to_dict()
                     active_revision, active_digest = active.active_revision, active.effective_digest
                 else:
-                    _, layers, files, baseline = service._read_saved_source_view()
-                    if request.expected_source_baseline != baseline:
-                        raise ConfigConflictError("参与来源的文件或版本已改变，请重新读取原来源后显式重试")
                     assert request.source_key is not None and request.jsonc is not None
-                    if request.source_key not in files:
-                        raise ValueError("草稿探测必须选择实际文件来源")
-                    file = files[request.source_key]
-                    original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
-                    payload = parse_source_text(restore_source_text(request.jsonc, original))
-                    require_current_workspace_config(payload, partial=True)
-                    layers[request.source_key] = payload
-                    config = {}
-                    for layer in layers.values():
-                        config = merge_json_objects(config, layer, schema=service._load_schema())
-            connection = (service._llm_resolution.resolve_provider_defaults(config, request.provider_id)
-                if model_id is None else service._llm_resolution.resolve_model_reference(config, ModelReferenceDTO(
+                    snapshot = service._build_probe_draft_snapshot(source_key=request.source_key, jsonc=request.jsonc,
+                        expected_source_baseline=request.expected_source_baseline)
+                    baseline = request.expected_source_baseline
+            graph = snapshot.graph
+            connection = (service._llm_resolution.resolve_provider(graph, request.provider_id)
+                if model_id is None else service._llm_resolution.resolve_model_reference(graph, ModelReferenceDTO(
                     provider_id=request.provider_id, model_id=model_id,
                 )))
             if streaming is not None:
                 connection["api_mode"] = {**connection["api_mode"], "streaming": streaming}
-            # 仍使用原 schema；只校验当前连接，不要求 Model、Agent 或工具目录完整。
-            schema = service._load_schema()
-            option_fields = schema["$defs"]["modelOptions"]["properties"]
-            options = {key: value for key, value in connection.items() if key in option_fields}
-            try:
-                jsonschema.Draft202012Validator({
-                    "$ref": "#/$defs/resolvedModelOptions", "$defs": schema["$defs"],
-                }).validate(options)
-            except jsonschema.ValidationError as error:
-                raise ValueError(f"当前 Provider 连接配置无效: field={'/'.join(str(part) for part in error.absolute_path)}, rule={error.validator}") from error
             temporary = request.credential_input
             if model_id is None and connection.get("auth") is not None:
                 raise ValueError("当前 OAuth 服务未提供模型目录合同，请手工添加模型；此结果不代表模型不可调用")
@@ -146,18 +122,19 @@ class ConfigLlmProbeMixin:
                 if connection.get("auth") is not None:
                     raise ValueError("OAuth 连接不能使用临时 API Key")
                 if temporary.scope == "provider" and model_id is not None:
-                    overrides = config["llm"]["providers"][request.provider_id]["models"][model_id].get("overrides", {})
-                    if "api_key" in overrides:
-                        raise ValueError("临时 Provider 凭据被 Model overrides.api_key 覆盖；请对实际 Model 凭据字段提供输入")
+                    provider_key = graph.resolve_provider(request.provider_id).origins.locate(("model_options", "api_key"))
+                    model_key = graph.resolve_model(request.provider_id, model_id).origins.locate(("model_options", "api_key"))
+                    if model_key != provider_key:
+                        raise ValueError("临时 Provider 凭据与实际 Model 的凭据定义不同；请对实际 Model 凭据字段提供输入")
                 # API Key 是原子字段，在解析引用前替换；旧引用不会被 resolve。
                 connection["api_key"] = temporary.value.get_secret_value()
                 connection["credential_source"] = "temporary"
                 credential = LlmCredentialObservationDTO(source="temporary", scope=temporary.scope)
-            else:
-                credentials = await service.prepare_llm_credentials([connection])
-                source = connection.get("api_key", "")
-                with service.use_llm_credentials(credentials):
-                    connection = service._llm_resolution.expand_model(connection)
+            credentials = await service.prepare_llm_credentials([connection])
+            source = connection.get("api_key", "")
+            with service.use_llm_credentials(credentials):
+                connection = service._llm_resolution.expand_model(connection)
+            if temporary is None:
                 if source.startswith("secret:"):
                     secret_id = source.removeprefix("secret:")
                     credential = LlmCredentialObservationDTO(source="vault", secret_id=secret_id,
@@ -178,7 +155,9 @@ class ConfigLlmProbeMixin:
     async def discover_llm_models(self, request: LlmDiscoverRequest, *, gateway_id: str) -> LlmDiscoverResultDTO:
         deadline = asyncio.get_running_loop().time() + 15
         connection, observation = await self._prepare_llm_probe(request, gateway_id=gateway_id, deadline=deadline)
-        models, complete, error = await read_model_catalog(connection, deadline=deadline)
+        models, complete, error = await read_model_catalog(
+            connection, deadline=deadline, owner_key=cast("ConfigService", self).get_snapshot().graph.owner_id,
+        )
         return LlmDiscoverResultDTO(observation=observation, models=models, complete=complete, error=error)
 
     async def prepare_llm_test(self, request: LlmTestRequest, *, gateway_id: str, deadline: float) -> LlmTestInvocation:

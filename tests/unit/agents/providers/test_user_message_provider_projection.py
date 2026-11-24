@@ -5,6 +5,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.runtime.network_proxy import ProxyRoutes
+
+DIRECT_PROXY_ROUTES = ProxyRoutes(())
 
 
 def _message() -> HumanMessage:
@@ -53,6 +56,7 @@ def test_chat_completions_projects_user_blocks_without_mutating_source():
         api_base="https://example.com/v1",
         provider_id="chat-test",
         image_input_replay=True,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     projected = model._convert_messages_to_dicts([message])[0]
@@ -72,6 +76,7 @@ def test_responses_projects_input_text_and_input_image():
         api_base="https://example.com/v1",
         provider_id="responses-test",
         image_input_replay=True,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     projected = model._history_messages([message])
@@ -93,6 +98,7 @@ def test_anthropic_messages_uses_litellm_chat_projection():
         custom_llm_provider="anthropic",
         provider_id="anthropic-test",
         image_input_replay=True,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     projected = model._convert_messages_to_dicts([message])[0]
@@ -125,6 +131,7 @@ def test_chat_completions_without_vision_replays_tool_image_as_text():
         api_base="https://example.com/v1",
         provider_id="text-only",
         image_input_replay=False,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     projected = model._convert_messages_to_dicts([message])[0]
@@ -150,6 +157,7 @@ def test_chat_completions_with_vision_keeps_tool_image_block():
         api_base="https://example.com/v1",
         provider_id="vision",
         image_input_replay=True,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     projected, media = model._convert_messages_to_dicts([message])
@@ -183,6 +191,7 @@ def test_chat_tool_results_preserve_media_in_actual_wire(multimodal_tool_result,
     model = BoxteamLiteLLMChatModel(
         model="openai/test-model", api_key="test-key", api_base="https://example.com/v1",
         image_input_replay=True,
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     value = {"role": "tool", "content": message.content, "tool_call_id": message.tool_call_id} if as_dict else message
     projected, media = model._convert_messages_to_dicts([value])
@@ -204,6 +213,7 @@ def test_responses_reports_each_media_type_and_keeps_resource_link(multimodal_to
     source = deepcopy(message)
     model = BoxteamOpenAIResponsesModel(
         model="openai/test-model", api_key="test-key", api_base="https://example.com/v1",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     assistant = AIMessage(content="", tool_calls=[{"name": "media", "args": {}, "id": message.tool_call_id}])
     projected = model._history_messages([assistant, message])[-1]

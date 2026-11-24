@@ -5,6 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
 import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { ConfigNodeInspectionDTO } from "../../common/v1/config_pb.js";
 import type { PluginInstanceView } from "./service_plugin_pb.js";
 
 /**
@@ -1108,6 +1109,11 @@ export declare type GatewayConfigSourceDocumentDTO = Message<"boxteam.gateway.v2
    * @generated from field: google.protobuf.Struct source_inherited = 20;
    */
   sourceInherited?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.common.v1.ConfigNodeInspectionDTO nodes = 21;
+   */
+  nodes: ConfigNodeInspectionDTO[];
 };
 
 /**

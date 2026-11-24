@@ -5,7 +5,6 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 from app.runtime.network_proxy import ProxyRoutes
-from configs.network import DirectProxy, EnvironmentProxy
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +37,6 @@ class LiteLLMEmbeddingComputer:
             raise TypeError(
                 f"provider {provider_id} 的 request_options.default_headers 必须是对象"
             )
-        no_proxy = request_options.get("no_proxy", False)
-        if not isinstance(no_proxy, bool):
-            raise TypeError("Embedding Model request_options.no_proxy 必须是布尔值")
         normalized_headers: dict[str, str] = {}
         for name, value in default_headers.items():
             if not isinstance(name, str) or not isinstance(value, str):
@@ -66,7 +62,7 @@ class LiteLLMEmbeddingComputer:
             api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             default_headers=normalized_headers,
-            proxy_routes=ProxyRoutes.from_configuration(DirectProxy() if no_proxy else EnvironmentProxy()),
+            proxy_routes=resolved["proxy_routes"],
         )
 
     async def compute(self, inputs: Sequence[str]) -> list[list[float]]:
@@ -75,21 +71,33 @@ class LiteLLMEmbeddingComputer:
             return []
 
         # LiteLLM 是可选运行时边界，避免仅导入工具定义时加载完整 provider 栈。
+        from app.agents.providers.provider_http_client import (
+            build_provider_http_handler,
+            build_provider_openai_client,
+        )
         from app.runtime.litellm_runtime import litellm
 
         async with AsyncExitStack() as scope:
-            client = None
-            if self.custom_llm_provider == "openai":
-                from app.agents.providers.provider_http_client import (
-                    build_provider_openai_client,
-                )
-
+            # 采用 SDK 实际接收的客户端类型，不能让它忽略错误类型后重建隐式环境客户端。
+            if self.custom_llm_provider in {"openai", "together_ai", "nvidia_nim", "litellm_proxy",
+                                             "mistral", "fireworks_ai", "nebius", "wandb", "xinference"}:
                 # SDK client 持有本次明确凭据，避免 LiteLLM 将空 Key 回退到进程环境。
                 client = await scope.enter_async_context(build_provider_openai_client(
                     is_async=True, base_url=self.endpoint, api_key=self.api_key,
                     routes=self.proxy_routes,
                 ))
-            # TODO: 其余 Embedding 适配族须接入已准备路由；不能把 OpenAI 出口的验证当成全适配族支持。
+            else:
+                # 这些 SDK 分支会忽略传入 client，或在模型 HTTP 前另走全局认证 HTTP。
+                if self.custom_llm_provider in {"sagemaker", "gigachat", "watsonx", "github_copilot", "sap"}:
+                    raise NotImplementedError(f"Embedding 适配族尚未接入网络策略: {self.custom_llm_provider}")
+                provider_config = litellm.utils.ProviderConfigManager.get_provider_embedding_config(
+                    model=self.model, provider=litellm.LlmProviders(self.custom_llm_provider),
+                )
+                if provider_config is None:
+                    # TODO: 接入这些专用 SDK 的实际代理注入后移除此限制，禁止绕回隐式环境出口。
+                    raise NotImplementedError(f"Embedding 适配族尚未接入网络策略: {self.custom_llm_provider}")
+                client = build_provider_http_handler(is_async=True, routes=self.proxy_routes, no_auth=False)
+                scope.push_async_callback(client.client.aclose)
             response = await litellm.aembedding(
                 model=self.model,
                 input=list(inputs),

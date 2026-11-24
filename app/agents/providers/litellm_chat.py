@@ -36,7 +36,7 @@ from langchain_core.outputs import (
     LLMResult,
 )
 from langchain_core.runnables.config import RunnableConfig, ensure_config
-from pydantic import PrivateAttr
+from pydantic import Field, PrivateAttr
 
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.provider_capabilities import (
@@ -102,7 +102,6 @@ from app.core.turn_execution_scope import (
 from app.domain.itemized.identity.model_source import ModelSource
 from app.runtime.litellm_runtime import ChatLiteLLM, prepare_model_request
 from app.runtime.network_proxy import ProxyRoutes
-from configs.network import DirectProxy, EnvironmentProxy
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +116,12 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
     image_input_replay: bool = False
-    # Provider 级免代理开关：为该 Provider 注入 trust_env=False 的 HTTP client。
-    no_proxy: bool = False
+    # 路由由所属配置准备边界冻结；不进入模型请求、公开结构或持久记录。
+    proxy_routes: ProxyRoutes = Field(exclude=True, repr=False)
 
     _uses_http_handler: ClassVar[bool] = False
     _owned_sync_client: Any = PrivateAttr(default=None)
     _owned_async_client: Any = PrivateAttr(default=None)
-    _proxy_routes: ProxyRoutes | None = PrivateAttr(default=None)
 
     def _provider_http_client(self, *, is_async: bool) -> Any:
         """测试与正式调用复用本实例持有的 HTTP client。
@@ -133,16 +131,13 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         """
         client = self._owned_async_client if is_async else self._owned_sync_client
         if client is None:
-            if self._proxy_routes is None:
-                # TODO: v6／v4 正式配置切换时由快照准备边界提供路由，替换旧 no_proxy 输入。
-                self._proxy_routes = ProxyRoutes.from_configuration(DirectProxy() if self.no_proxy else EnvironmentProxy())
             anonymous = self.api_key == "" and self.custom_llm_provider in {"openai", "anthropic"}
             use_handler = self._uses_http_handler or self.custom_llm_provider in {"anthropic", "deepseek", "openrouter"}
             client = (
-                build_provider_http_handler(is_async=is_async, routes=self._proxy_routes, no_auth=anonymous)
+                build_provider_http_handler(is_async=is_async, routes=self.proxy_routes, no_auth=anonymous)
                 if use_handler
                 else build_provider_openai_client(
-                    is_async=is_async, base_url=self.api_base, api_key=self.api_key, routes=self._proxy_routes,
+                    is_async=is_async, base_url=self.api_base, api_key=self.api_key, routes=self.proxy_routes,
                 )
             )
             if is_async:
@@ -1226,7 +1221,7 @@ def build_litellm_chat_model(
         "thinking_blocks_replay": api_mode.supports_reasoning.thinking_blocks,
         "redacted_thinking_replay": api_mode.supports_reasoning.thinking_blocks_redacted_thinking,
         "image_input_replay": "image_input" in capabilities,
-        "no_proxy": bool(request_options.get("no_proxy")),
+        "proxy_routes": provider["proxy_routes"],
     }
 
     if provider.get("endpoint"):

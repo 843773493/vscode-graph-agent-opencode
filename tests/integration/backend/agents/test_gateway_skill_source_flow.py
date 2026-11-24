@@ -392,7 +392,7 @@ async def test_gateway_local_update_policy_drives_workspace_skill_and_cold_resta
                 before = (await client.get(status_path)).json()["data"]
                 path = home / "config/gateway.jsonc"
                 config = commentjson.loads(path.read_text())
-                config["resources"]["skill_sources"]["local_updates"] = {"mode": mode, "poll_interval": interval}
+                config["settings"]["gateway"].setdefault("resources", {}).setdefault("skill_sources", {})["local_updates"] = {"mode": mode, "poll_interval": interval}
                 candidate = path.with_suffix(".candidate")
                 candidate.write_text(json.dumps(config, ensure_ascii=False))
                 candidate.replace(path)

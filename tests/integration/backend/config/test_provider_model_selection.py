@@ -25,35 +25,41 @@ from app.services.business.agent_service import AgentService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_trace.store import TraceEventStore
+from configs.installer import install_workspace_configuration
 
 
 @pytest.fixture
 def model_definitions() -> dict:
     return {
-        "config_version": 3,
-        "default_agent": "default",
+        "config_version": 4,
+        "extends": "user:workspace_local",
+        "settings": {"workspace": {"default_agent": "default",
         "llm": {"providers": {"team": {
             "name": "团队模型服务",
-            "defaults": {
-                "endpoint": "https://models.example/v1",
-                "custom_llm_provider": "openai", "api_key": "",
-                "api_mode": {"protocol": "chat_completions", "model_info": {
-                    "supports_function_calling": True, "supports_reasoning": False,
-                }, "supports_reasoning": {}, "streaming": False},
-                "request_options": {"parameters": {"temperature": 0.8}},
-            },
+            "config_ref": "#/profiles/team",
             "models": {
-                "main": {"model": "upstream-main", "name": "日常助手"},
-                "alternate": {"model": "upstream-alternate", "name": "备用助手", "overrides": {
-                    "request_options": {"parameters": {"temperature": 0}},
-                }},
-                "catalog-only": {"model": "unselected"},
+                "main": {"model": "upstream-main", "name": "日常助手", "config_ref": "context:provider/team"},
+                "alternate": {"model": "upstream-alternate", "name": "备用助手", "config_ref": "#/profiles/alternate"},
+                "catalog-only": {"model": "unselected", "config_ref": "context:provider/team"},
             },
         }}},
         "agents": {agent: {"model": {
             "primary": {"provider_id": "team", "model_id": "main"},
             "fallbacks": [{"provider_id": "team", "model_id": "alternate"}],
         }} for agent in ("default", "coder", "reviewer", "researcher")},
+        }},
+        "profiles": {"team": {"extends": "context:workspace", "settings": {"model_options": {
+                "endpoint": "https://models.example/v1",
+                "custom_llm_provider": "openai", "api_key": "",
+                "api_mode": {"protocol": "chat_completions", "model_info": {
+                    "supports_function_calling": True, "supports_reasoning": False,
+                }, "supports_reasoning": {}, "streaming": False},
+                "request_options": {"parameters": {"temperature": 0.8}},
+            }}},
+            "alternate": {"extends": "context:provider/team", "settings": {"model_options": {
+                    "request_options": {"parameters": {"temperature": 0}},
+            }}},
+        },
     }
 
 
@@ -63,6 +69,7 @@ def services(tmp_path: Path, model_definitions: dict) -> Iterator[tuple[ConfigSe
     workspace.mkdir()
     workspace_id = load_or_create_workspace_id(workspace)
     initialize_directories(workspace_id, workspace)
+    install_workspace_configuration(workspace_root=workspace)
     with workspace_context(workspace_id, workspace):
         path = workspace / ".boxteam/workspace.jsonc"
         path.write_text(json.dumps(model_definitions), encoding="utf-8")
@@ -120,9 +127,9 @@ async def test_removed_model_keeps_session_binding_and_requires_explicit_choice(
     selected = ModelReferenceDTO(provider_id="team", model_id="alternate")
     created = await sessions.create(SessionCreateRequest())
     await sessions.update(created.session_id, SessionUpdateRequest(model=selected))
-    for agent in model_definitions["agents"].values():
+    for agent in model_definitions["settings"]["workspace"]["agents"].values():
         agent["model"]["fallbacks"] = []
-    del model_definitions["llm"]["providers"]["team"]["models"]["alternate"]
+    del model_definitions["settings"]["workspace"]["llm"]["providers"]["team"]["models"]["alternate"]
     path.write_text(json.dumps(model_definitions), encoding="utf-8")
     restored_config = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=path.parent.parent)
     restored_config.validate_workspace_config()
@@ -157,9 +164,10 @@ async def test_queue_freezes_selected_model_as_plain_json(services) -> None:
 @pytest.mark.parametrize("invalid", ["flat", "identity", "literal", "missing-key", "missing-model", "protocol", "extra-body", "version"])
 def test_invalid_model_candidate_is_rejected_without_rewriting_source(services, model_definitions, invalid: str) -> None:
     _config, _sessions, path = services
-    options = model_definitions["llm"]["providers"]["team"]["defaults"]
+    workspace = model_definitions["settings"]["workspace"]
+    options = model_definitions["profiles"]["team"]["settings"]["model_options"]
     if invalid == "flat":
-        model_definitions["llm"]["providers"] = [{"id": "team", **options, "model": "upstream-main"}]
+        workspace["llm"]["providers"] = [{"id": "team", **options, "model": "upstream-main"}]
     elif invalid == "identity":
         options["id"] = "another-identity"
     elif invalid == "literal":
@@ -167,7 +175,7 @@ def test_invalid_model_candidate_is_rejected_without_rewriting_source(services, 
     elif invalid == "missing-key":
         del options["api_key"]
     elif invalid == "missing-model":
-        model_definitions["agents"]["default"]["model"]["primary"]["model_id"] = "missing"
+        workspace["agents"]["default"]["model"]["primary"]["model_id"] = "missing"
     elif invalid == "protocol":
         options["api_mode"]["supports_reasoning"] = {"reasoning_content": False}
         options["api_mode"]["protocol"] = "responses"

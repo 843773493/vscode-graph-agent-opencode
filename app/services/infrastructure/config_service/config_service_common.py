@@ -9,29 +9,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from app.core.config_sources import (
-    ConfigSourceLayer,
-)
 from app.services.infrastructure.config.contracts import ConfigCandidateApplier
 from app.services.infrastructure.config.source_uri import inline_config_source_uri
 from configs.installer import resolve_config_resource_source
 
 logger = logging.getLogger(__name__)
 
-# 来源权威表：每个 source_key 的逻辑来源层与 precedence 只在这里登记一次。
-# `_config_source`（从源 JSONC 构建）、`_runtime_override_source`、
-# `_persisted_source_details`（从 active snapshot 基线恢复）都只查这一张表，MUST NOT
-# 任何一条读路径再自行推导——那正是双轨，会让同一 source_key 报出不同 layer。
-# inline 用固定权威键 `_INLINE_SOURCE_KEY`：发行包内文件，诊断快照允许保留空 `source_key`，
-# 来源文档目录仍发布原权威键。它绝不参与分层兜底（否则会落入其它来源的 precedence）。
 _INLINE_SOURCE_KEY = "inline"
-_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
-    _INLINE_SOURCE_KEY: ("inline", 0),
-    "workspace_mutable_override": ("user", 1),
-    "workspace_local_mutable_override": ("user_local", 2),
-    "workspace_root_mutable_override": ("workspace", 3),
-    "workspace_runtime_override": ("runtime_override", 4),
-}
 
 
 def release_inline_config_uri_for_file(
@@ -62,4 +46,4 @@ def release_inline_config_uri_for_file(
     return inline_config_source_uri(logical_name=Path(release_config_name).stem)
 
 
-__all__ = ["_SOURCE_LAYER_AUTHORITY", "ConfigCandidateApplier", "logger", "release_inline_config_uri_for_file"]
+__all__ = ["ConfigCandidateApplier", "logger", "release_inline_config_uri_for_file"]

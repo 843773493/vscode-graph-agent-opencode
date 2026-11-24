@@ -420,7 +420,7 @@ async def service_websocket(websocket: WebSocket, package_id: str, plugin_id: st
             url = str(route.url.copy_with(scheme="wss" if route.url.scheme == "https" else "ws"))
 
             async def relay() -> None:
-                async with connect(url, additional_headers=route.headers, compression=None,
+                async with connect(url, additional_headers=route.headers, compression=None, proxy=None,
                     max_queue=1, write_limit=256 * 1024, open_timeout=10, close_timeout=5) as upstream:
                     await websocket.accept()
                     await run_channel(relay_websocket_client_to_upstream(websocket, upstream),
@@ -525,7 +525,7 @@ async def debug_runtime_websocket(
 
             async def relay_debug_runtime() -> None:
                 async with connect(
-                    url, additional_headers=route.headers, compression=None, max_queue=1,
+                    url, additional_headers=route.headers, compression=None, max_queue=1, proxy=None,
                     write_limit=256 * 1024, open_timeout=10, close_timeout=5,
                 ) as upstream:
                     await websocket.accept()

@@ -5,18 +5,24 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, cast
 
+from app.runtime.network_proxy import ProxyRoutes
 from app.schemas.gateway.secrets import ResolvedSecret
 from app.schemas.internal_v2.config import (
+    ConfigActiveOptionsInspectionDTO,
     ConfigDTO,
     ConfigReloadStatusDTO,
+    ConfigSourceBaselineDTO,
     ConfigUpdateRequest,
 )
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.snapshot import ConfigSnapshot
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigPendingCandidateRecord,
 )
+from configs.inheritance.values import thaw
+from configs.network import ExplicitProxy, NetworkSettings
 
 if TYPE_CHECKING:
     from app.services.infrastructure.config.instruction_inputs import (
@@ -128,14 +134,14 @@ class ConfigPublicMixin:
         )
 
     def _build_public_config(self) -> ConfigDTO:
-        config = self._get_effective_config()
         snapshot = self._require_snapshot()
+        config = snapshot.to_dict()
         reload_status = self.get_reload_status()
         public_config = self._load_public_runtime_config(config)
 
         default_model = public_config.get("default_model")
         if default_model is None:
-            default_model = self._llm_resolution.resolve_default_model(config)
+            default_model = self._llm_resolution.resolve_default_model(snapshot.graph)
 
         default_orchestration = public_config.get(
             "default_orchestration", "single_agent"
@@ -211,7 +217,42 @@ class ConfigPublicMixin:
         return {**raw_public_config, **self._runtime_config_overrides}
 
     def list_llm_models(self) -> list[dict[str, Any]]:
-        return self._llm_resolution.list_models(self._require_snapshot().read_only)
+        return self._llm_resolution.list_models(self._require_snapshot().graph)
+
+    def get_active_options_inspection(
+        self, *, gateway_id: str, provider_id: str, model_id: str | None = None,
+    ) -> ConfigActiveOptionsInspectionDTO:
+        """只投影同一已发布快照；文件变化和草稿仍由原预检／CAS 处理。"""
+        service = cast("ConfigService", self)
+        with service.publication_lock:
+            if not service._snapshot_store.has_snapshot():
+                raise RuntimeError("已发布选项检查要求工作区已完成配置初始化")
+            snapshot = service.get_active_snapshot()
+            store = service._workspace_state_store
+            if store is None or service._workspace_root != store.workspace_root:
+                raise ValueError("选项检查需要已绑定精确工作区的配置 owner")
+            active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
+            if active is None or active.effective_digest != snapshot.revision:
+                raise ConfigConflictError("已发布配置与运行快照不一致，请重新加载配置来源")
+            sources, _ = service._persisted_source_details(active.source_baseline)
+            if {source.source_key: source for source in sources} != {
+                source.source_key: source for source in snapshot.source_details
+            }:
+                raise ConfigConflictError("已发布配置来源身份与运行快照不一致，请重新加载配置来源")
+        baseline = {source.source_key: ConfigSourceBaselineDTO(
+            uri=source.uri, presence=source.presence, layer_revision=source.layer_revision,
+            layer_digest=source.layer_digest, source_generation=source.source_generation,
+            file_presence=source.presence if source.uri is not None else None,
+            file_digest=source.layer_digest if source.uri is not None else None,
+        ) for source in sources}
+        return ConfigActiveOptionsInspectionDTO(
+            gateway_id=gateway_id, workspace_id=snapshot.graph.owner_id,
+            active_revision=active.active_revision, active_digest=active.effective_digest,
+            source_baseline=baseline,
+            provider_options=service._llm_resolution.inspect_provider(snapshot.graph, provider_id),
+            model_options=service._llm_resolution.inspect_model_reference(snapshot.graph,
+                ModelReferenceDTO(provider_id=provider_id, model_id=model_id)) if model_id is not None else None,
+        )
 
     def get_llm_model(self, model: ModelReferenceDTO) -> dict[str, Any]:
         return self._llm_resolution.get_model(model)
@@ -224,10 +265,18 @@ class ConfigPublicMixin:
             GatewaySecretsClient,
         )
 
-        references = list(dict.fromkeys(
-            provider["api_key"].removeprefix("secret:") for provider in providers
-            if isinstance(provider.get("api_key"), str) and provider["api_key"].startswith("secret:")
-        ))
+        references: list[str] = []
+        for provider in providers:
+            key = provider.get("api_key")
+            if isinstance(key, str) and key.startswith("secret:"):
+                references.append(key.removeprefix("secret:"))
+            for name in ("network", "auth_network"):
+                if name not in provider:
+                    continue
+                proxy = NetworkSettings.model_validate(provider[name]).proxy
+                if isinstance(proxy, ExplicitProxy) and proxy.auth is not None:
+                    references.append(proxy.auth.password.removeprefix("secret:"))
+        references = list(dict.fromkeys(references))
         if not references:
             return {}
         return await GatewaySecretsClient(GatewayTransportConnection(config_service=cast("ConfigService", self))).resolve(references)
@@ -241,6 +290,16 @@ class ConfigPublicMixin:
         credentials = await self.prepare_llm_credentials([resolved])
         with self.use_llm_credentials(credentials):
             return self._llm_resolution.expand_model(resolved)
+
+    async def resolve_workspace_proxy_routes(self, *, snapshot: ConfigSnapshot | None = None) -> ProxyRoutes:
+        """当前或指定候选的默认出口；实际网络只交给原消费者创建和释放。"""
+        graph = (snapshot if snapshot is not None else self._require_snapshot()).graph
+        network = thaw(graph.resolve_scope().settings["network"])
+        credentials = await self.prepare_llm_credentials([{"network": network}])
+        proxy = NetworkSettings.model_validate(network).proxy
+        password = (credentials[proxy.auth.password.removeprefix("secret:")].value.get_secret_value()
+                    if isinstance(proxy, ExplicitProxy) and proxy.auth is not None else None)
+        return ProxyRoutes.from_configuration(proxy, environment=graph.proxy_environment, password=password)
 
     def get_default_agent_runtime_config(self) -> dict[str, Any]:
         return self.get_agent_runtime_config(self.get_default_agent_id())

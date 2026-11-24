@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.runtime.network_proxy import ProxyRoutes
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
@@ -40,6 +41,7 @@ def litellm_chat_provider() -> BoxteamLiteLLMChatModel:
         model="openai/big-pickle",
         api_key="test-key",
         api_base="https://example.com/v1",
+        proxy_routes=ProxyRoutes(()),
     )
 
 

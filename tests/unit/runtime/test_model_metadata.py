@@ -13,7 +13,7 @@ from app.runtime import litellm_runtime, model_metadata
 
 @pytest.fixture
 def catalog(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda: {
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: {
         "same-name": {"litellm_provider": "openai", "mode": "chat", "max_input_tokens": 1000,
                       "max_output_tokens": 200, "supports_reasoning": True, "supports_vision": True},
         "azure/same-name": {"litellm_provider": "azure", "mode": "chat", "max_input_tokens": 2000,
@@ -58,4 +58,4 @@ def test_catalog_reads_existing_cache_without_import_or_refresh(
     monkeypatch.setattr(litellm_runtime, "_import_litellm", forbidden)
     monkeypatch.setattr(runtime, "_refresh", forbidden)
     assert "cached-only" in runtime.catalog()
-    assert runtime._worker is None and runtime._sdk is None
+    assert runtime._worker is None

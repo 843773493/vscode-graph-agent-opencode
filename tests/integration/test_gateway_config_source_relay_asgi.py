@@ -185,7 +185,7 @@ async def relay_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIt
             data = GatewayConfigSourceDocumentDTO(
                 gateway_id=reply.wrong_owner or REMOTE, source_key=SOURCE if not reply.wrong_source else "other",
                 layer="user", writable=True, jsonc="{ // B 原文\n}\n", file_presence="present",
-                json_schema={}, effective={}, source_effective={}, layers=[], origins=[],
+                json_schema={}, effective={}, source_effective={}, source_inherited={}, layers=[], nodes=[], origins=[],
                 status=GatewayConfigReloadStatusDTO(),
             ).model_dump(mode="json")
             if request.url.path.endswith("/preflight"):

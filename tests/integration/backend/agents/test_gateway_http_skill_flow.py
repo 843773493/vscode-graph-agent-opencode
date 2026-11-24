@@ -119,7 +119,7 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
             before = (await client.get("/api/gateway/config/reload-status")).json()["data"]
             path = home / "config/gateway.jsonc"
             payload = commentjson.loads(path.read_text())
-            payload["resources"]["skill_sources"]["sources"] = [{
+            payload["settings"]["gateway"].setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = [{
                 "id": "shared-network", "name": SKILL_NAME,
                 "fetch": {"protocol": "http", "url": source.url}, "updates": {"mode": "manual"},
             }]

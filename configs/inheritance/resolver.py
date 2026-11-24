@@ -6,10 +6,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
+from boxteam_plugin_sdk.failures import validation_issues
 from jsonpointer import resolve_pointer
-from jsonschema import Draft202012Validator, SchemaError, ValidationError, validators
+from jsonschema import Draft202012Validator, ValidationError, validators
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 
@@ -31,6 +32,19 @@ _Validator = validators.extend(Draft202012Validator, type_checker=Draft202012Val
 }))
 
 
+class ConfigNodeValidationError(ValueError):
+    """配置 owner 已核定的安全问题；原生异常仍沿 cause 留给诊断。"""
+
+    def __init__(self, error: ValidationError, *, source_uri: str, document_path: bool) -> None:
+        self.issues = validation_issues(error)
+        if not document_path:
+            # 合并后的 settings/options 坐标不等于任一来源文档的原文路径。
+            for issue in self.issues:
+                issue["path_exact"] = False
+        super().__init__(f"配置节点校验失败: {self.issues[0]['message']}")
+        self.source_uri = source_uri
+
+
 class ConfigGraph:
     def __init__(
         self,
@@ -43,11 +57,15 @@ class ConfigGraph:
         settings_schema: dict[str, object],
         options_schema: dict[str, object],
         source_uri: Callable[[Path], str],
+        source_key: Callable[[Path], str],
         authorize_source: Callable[[Path], bool],
         registered_uris: Mapping[str, Path] | None = None,
         read_source: Callable[[Path], StableConfigFile] = read_stable_config_file,
         source_documents: Mapping[str, Mapping[str, ConfigValue]] | None = None,
         document_overrides: Mapping[str, Mapping[str, ConfigValue]] | None = None,
+        scope_settings_override: Mapping[str, ConfigValue] | None = None,
+        proxy_environment: Mapping[str, str] | None = None,
+        document_schema: dict[str, object] | None = None,
     ) -> None:
         self.domain, self.version, self.owner_id = domain, version, owner_id
         self.entry = NodeLocation(entry.expanduser().resolve())
@@ -59,6 +77,8 @@ class ConfigGraph:
         for uri in self._registered_uris:
             self._require_config_uri(uri)
         self._source_uri_provider, self._authorize_source, self._read_source = source_uri, authorize_source, read_source
+        self._source_key_provider = source_key
+        self._source_keys: dict[str, str] = {}
         # active/pending 的固定来源由原快照 owner 提供；禁止读取当前文件补齐历史定义。
         self._source_documents = source_documents
         self._document_overrides = document_overrides or {}
@@ -67,20 +87,24 @@ class ConfigGraph:
         self._dependencies: dict[Path, StableConfigFile] = {}
         self._nodes: dict[NodeLocation, ResolvedNode] = {}
         self._scope: ResolvedNode | None = None
+        self._scope_settings_override = scope_settings_override
+        self.proxy_environment = MappingProxyType(dict(proxy_environment or {}))
+        self._local_settings: dict[NodeLocation, Mapping[str, ConfigValue]] = {}
         self._validated_options: set[NodeLocation] = set()
         self._resolving: list[NodeLocation] = []
         self._merger = SettingsMerger(settings_schema)
-        try:
-            _Validator.check_schema(settings_schema)
-            # Workspace 共同选项可不完整；消费者最终选项使用 owner 提供的完整 schema。
-            _Validator.check_schema(options_schema)
-        except SchemaError as error:
-            raise ValueError("配置 schema 校验失败: stage=schema") from error
+        # schema 由原配置 owner 校验；候选只验证数据，不能每次按模型重复元校验相同的 $defs。
         self._settings_validator = _Validator(settings_schema, registry=Registry())
         self._options_validator = _Validator(options_schema, registry=Registry())
         self._document_validator = _Validator(
-            config_document_schema(domain=domain, version=version), registry=Registry(),
+            document_schema if document_schema is not None else config_document_schema(domain=domain, version=version),
+            registry=Registry(),
         )
+
+    @property
+    def source_keys(self) -> Mapping[str, str]:
+        """来源键由实际 owner 登记；消费者不从 URI 文本或 basename 猜身份。"""
+        return MappingProxyType(self._source_keys)
 
     @property
     def dependencies(self) -> Mapping[Path, StableConfigFile]:
@@ -98,12 +122,44 @@ class ConfigGraph:
         """原 owner 用于监听和 URI 定位；原生路径不进入来源快照。"""
         return MappingProxyType(self._source_locations)
 
+    @property
+    def nodes(self) -> tuple[ResolvedNode, ...]:
+        """只返回本图已解析的唯一节点，不展开尚未使用的根或 profile。"""
+        return tuple(self._nodes.values())
+
     def resolve_scope(self) -> ResolvedNode:
         if self._scope is None:
+            if self.entry in self._resolving:
+                raise ValueError("配置继承出现循环：未完成的 scope 不能作为自身祖先上下文")
             scope = self._resolve(self.entry)
+            if self._scope_settings_override is not None:
+                # 原运行时设置是可见的逻辑子节点，不伪造文件或另建合并优先级。
+                location = NodeLocation(self.entry.path, "/runtime_override")
+                node_id = self.owner_id + "#runtime_override"
+                local = cast(Mapping[str, ConfigValue], freeze(self._scope_settings_override))
+                merged, origins = self._merger.merge(
+                    scope.settings, local, origin=FieldOrigin(node_id, "", ("settings",)),
+                    inherited_origins=scope.origins,
+                )
+                self._local_settings[location] = local
+                self._source_keys[""] = "workspace_runtime_override"
+                scope = ResolvedNode(node_id, location, scope, merged, origins)
+                self._nodes[location] = scope
             self._validate(self._settings_validator, scope.settings, self.entry)
             self._scope = scope
         return self._scope
+
+    def local_settings(self, node: ResolvedNode) -> Mapping[str, ConfigValue]:
+        """返回节点自己的定义，包含无文件的运行时子节点。"""
+        return self._local_settings[node.location]
+
+    def node_reference(self, node: ResolvedNode) -> str:
+        """给配置 writer 返回可冷启动解析的表达式；原生路径只由目标 owner 解释。"""
+        if node.location == self.resolve_scope().location:
+            return f"context:{self.domain}"
+        source = next((alias for alias, path in self._aliases.items() if path == node.location.path),
+                      quote(node.location.path.as_posix(), safe="/:"))
+        return source + ("#" + quote(node.location.pointer, safe="/~") if node.location.pointer else "")
 
     def resolve_provider(self, provider_id: str) -> ResolvedNode:
         scope = self.resolve_scope()
@@ -147,7 +203,7 @@ class ConfigGraph:
             if pointer:
                 raise ValueError("上下文引用不接受 fragment")
             if source == f"context:{self.domain}":
-                return self.entry
+                return self.resolve_scope().location
             if source.startswith("context:provider/") and self.domain == "workspace":
                 provider_id = source.removeprefix("context:provider/")
                 if not provider_id or "/" in provider_id:
@@ -164,7 +220,8 @@ class ConfigGraph:
             parsed = urlsplit(source)
             if parsed.scheme and not Path(source).is_absolute():
                 raise ValueError("未知配置别名、未登记 URI 或不支持的网络来源")
-            path = Path(source).expanduser()
+            # 文件引用和 fragment 分别解码；文件名里的 # 不得变成节点分隔符。
+            path = Path(unquote(source)).expanduser()
             if not path.is_absolute():
                 path = declared_at.path.parent / path
         return NodeLocation(path.expanduser().resolve(), pointer)
@@ -180,6 +237,7 @@ class ConfigGraph:
         if uri in self._source_locations and self._source_locations[uri] != path:
             raise ValueError("不同配置文件不能使用同一来源 URI")
         self._source_locations[uri] = path
+        self._source_keys[uri] = self._source_key_provider(path)
         if self._source_documents is not None:
             if uri not in self._source_documents:
                 raise ValueError(f"固定配置快照缺少来源定义: source={uri}")
@@ -203,9 +261,9 @@ class ConfigGraph:
             raise ValueError("配置 schema 引用无法解析；禁止自动下载远端 schema") from error
         except ValidationError as error:
             # 正文、原生路径及秘密仅保留在原始异常链，不拼入普通错误。
-            raise ValueError(
-                f"配置节点校验失败: source={self._source_uri(location.path)}, "
-                f"node={location.pointer or '<root>'}, rule={error.validator}"
+            raise ConfigNodeValidationError(
+                error, source_uri=self._source_uri(location.path),
+                document_path=validator is self._document_validator,
             ) from error
 
     def _resolve(self, location: NodeLocation) -> ResolvedNode:
@@ -223,6 +281,7 @@ class ConfigGraph:
                 raise ValueError(f"配置引用未指向节点: source={self._source_uri(location.path)}, node={location.pointer}")
             definition = cast(Mapping[str, ConfigValue], definition)
             settings = definition["settings"]
+            self._local_settings[location] = settings
             parent_ref = definition.get("extends")
             parent = self._resolve(self._reference_location(parent_ref, location)) if isinstance(parent_ref, str) else None
             origin = FieldOrigin(self._node_id(location), self._source_uri(location.path),

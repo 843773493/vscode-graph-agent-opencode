@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package boxteam.common.v1;
+
+// 配置图已解析的真实节点；父边与引用由所属配置 owner 提供。
+message ConfigNodeInspectionDTO {
+  string node_id = 1;
+  optional string parent_id = 2;
+  string source_key = 3;
+  optional string source_uri = 4;
+  string definition_path = 5;
+  string reference = 6;
+}

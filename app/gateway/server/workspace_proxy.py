@@ -873,7 +873,7 @@ async def proxy_node_debug_dap(
 
         async def relay() -> None:
             async with connect(
-                upstream_url, additional_headers=headers, subprotocols=protocols,
+                upstream_url, additional_headers=headers, subprotocols=protocols, proxy=None,
                 compression=None, max_queue=1, write_limit=256 * 1024,
                 open_timeout=10, close_timeout=5,
             ) as upstream:

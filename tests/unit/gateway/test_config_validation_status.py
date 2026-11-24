@@ -17,6 +17,7 @@ from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
 from app.services.infrastructure.config.state import ConfigConflictError
+from configs.inheritance.resolver import ConfigNodeValidationError
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 
@@ -299,13 +300,14 @@ async def test_invalid_reload_exposes_schema_reason_and_source_identity(
     payload["settings"]["gateway"].update(override)
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
+    with pytest.raises(ConfigNodeValidationError, match="JSON schema type") as failure:
         await service.reload()
     cause = failure.value.__cause__
     assert isinstance(cause, jsonschema.ValidationError)
     assert list(cause.absolute_path) == ["gateway", *location.split(".")]
-    assert "rule=type" in str(failure.value)
-    assert "gateway_mutable_override" in str(failure.value)
+    assert failure.value.issues[0]["code"] == "type"
+    assert "gateway_mutable_override" in failure.value.source_uri
+    assert failure.value.source_uri not in str(failure.value)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://test",
@@ -318,8 +320,8 @@ async def test_invalid_reload_exposes_schema_reason_and_source_identity(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"].startswith("Gateway 配置应用失败: stage=reload, error=ValueError, reason=配置节点校验失败")
-        assert "stage=reload, error=ValueError" in caplog.text
+        assert status["last_error"].startswith("Gateway 配置应用失败: stage=reload, error=ConfigNodeValidationError, reason=配置节点校验失败")
+        assert "stage=reload, error=ConfigNodeValidationError" in caplog.text
         assert str(config_path) not in response.text
         assert str(schema_path) not in response.text
         assert str(config_path.parent) not in response.text
@@ -380,8 +382,9 @@ async def test_schema_failure_status_never_echoes_values_or_dynamic_keys(
         status = response.json()["data"]
         assert status["healthy"] is False
         assert status["reason"] == "invalid_config"
-        assert status["last_error"].startswith("Gateway 配置应用失败: stage=reload, error=ValueError, reason=")
-        assert "stage=reload, error=ValueError" in caplog.text
+        error_type = "ConfigNodeValidationError" if damage in {"value", "key"} else "ValueError"
+        assert status["last_error"].startswith(f"Gateway 配置应用失败: stage=reload, error={error_type}, reason=")
+        assert f"stage=reload, error={error_type}" in caplog.text
         assert "secret-marker" not in response.text
         assert str(config_path.parent) not in response.text
         assert service.config is initial_config

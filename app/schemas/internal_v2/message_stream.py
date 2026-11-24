@@ -48,6 +48,8 @@ class MessageStreamFailureDTO(_MessageStreamDTO):
     after_interrupt_requested: bool | None = None
     resumable: bool | None = None
 
+    terminal_commit_id: int | None = Field(default=None, ge=1)
+    terminal_outcome: str | None = None
 
 class MessageStreamBlockSnapshotDTO(_MessageStreamDTO):
     block_id: str = Field(min_length=1)

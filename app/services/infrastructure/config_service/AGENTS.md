@@ -20,7 +20,7 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
   访问器、5 个类常量与 `__all__`。
 - 可以维护各方法族 mixin 文件中的方法体与族内私有静态方法。
 - 可以维护 `config_service_common.py` 中的 `logger`、`ConfigCandidateApplier`、
-  `_INLINE_SOURCE_KEY`、`_SOURCE_LAYER_AUTHORITY` 与 `release_inline_config_uri_for_file`。
+  `_INLINE_SOURCE_KEY` 与 `release_inline_config_uri_for_file`。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/services/infrastructure/` 下。
 
@@ -32,7 +32,7 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
   旧签名兼容。配置 CAS、promotion proof 与补偿仍由原配置 owner 执行。
 - 不得为兼容旧调用点保留转发方法、旧模块 shim 或双套实现；跨族协作必须走同一 `self`。
 - 不得在 `config_service_common.py` 之外重复定义 `logger`、`ConfigCandidateApplier`、
-  `_SOURCE_LAYER_AUTHORITY` 或 `release_inline_config_uri_for_file`；其它族一律从本模块导入。
+  `release_inline_config_uri_for_file`；其它族一律从本模块导入。
 - 纯结构搬迁不得夹带语义变更；已授权的 per-mount 合同调整须迁齐真实调用闭包，
   验证目标成员与 sibling 的配置隔离及原成功语义。
 - 不得在本目录实现 `config/` 子包已承载的聚焦组件（快照模型、文件监听器、状态模型、
@@ -43,8 +43,7 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
 - 方法族 mixin 之间只通过宿主 `self` 协作；跨 mixin 引用静态方法时按 MRO 凸性规则用
   具体 mixin 类名限定（例如 `ConfigAgentToolsMixin._preflight_custom_tool_factories`），
   每个方法在 `ConfigService.__mro__` 中只允许定义一处。
-- 来源权威表 `_SOURCE_LAYER_AUTHORITY` 是每个 `source_key` 分层与 precedence 的唯一登记处，
-  任何读路径都只查该表，禁止再自行推导。
+- 来源键与归属由原 owner 登记，precedence 来自当前实际父链；禁止恢复固定层优先级表。active／pending 必须固定来源正文，不能读取当前文件补齐旧配置。
 - 保持模块级符号的唯一定义点：新增共享符号时落在 `config_service_common.py`，不在各族复制。
 - 修改本目录后运行 `uv run ruff check app/services/infrastructure/config_service/`，并跑
   `tests/unit/services/infrastructure/test_config_service.py` 等配置相关用例

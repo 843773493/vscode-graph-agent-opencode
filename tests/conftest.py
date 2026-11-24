@@ -14,6 +14,7 @@ import pytest
 from dotenv import load_dotenv
 
 from app.gateway.plugins.packages import PluginPackageStore
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.processes.scope import capture_test_processes
@@ -318,6 +319,7 @@ def setup_test_config(
         (config_root / "workspace_schema.jsonc").write_bytes(workspace_schema)
         (config_root / "gateway.jsonc").write_bytes(gateway_inline)
         (config_root / "gateway_schema.jsonc").write_bytes(gateway_schema)
+        install_user_configuration(config_root=config_root, profile="default", project_root=Path.cwd())
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
 

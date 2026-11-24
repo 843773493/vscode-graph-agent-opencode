@@ -71,6 +71,7 @@ class NodeDebugPluginRuntime:
                 "X-Request-ID": request_id,
             },
             compression=None,
+            proxy=None,
             max_queue=1,
             open_timeout=connection.resolve_timeout_seconds(),
             close_timeout=5,

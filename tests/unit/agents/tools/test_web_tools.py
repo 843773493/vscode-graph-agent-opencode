@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -14,6 +14,14 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from app.agents.tools import web as web_tools
+from app.runtime.network_proxy import ProxyRoutes
+
+
+@pytest.fixture
+def tool_context() -> MagicMock:
+    context = MagicMock()
+    context.config_service.resolve_workspace_proxy_routes = AsyncMock(return_value=ProxyRoutes(()))
+    return context
 
 
 @pytest.mark.parametrize("tool_name", ["web_search", "fetch_webpage"])
@@ -46,16 +54,7 @@ def test_skill_parameter_contract_matches_live_tool_schema(tool_name: str) -> No
 
 @pytest.fixture(autouse=True)
 def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
-    """R19 测试内 hermetic 修复：清掉本机代理环境变量。
-
-    本文件用例全部 monkeypatch 掉真实抓取（``_fetch_page``/搜索工具），
-    自身不经任何网络；而环境的 NO_PROXY 含 IPv6 字面量（``::1``/
-    ``[::1]``）会让 httpx 客户端构造时（``create_fetch_webpage_tool`` 内
-    建 AsyncClient）的代理解析直接抛 ``InvalidURL: Invalid port: ':1]'``
-    ——属外部环境噪声混入测试。与 R18 对 gateway 会话上下文客户端的
-    同类修复一致（任务书许可的 monkeypatch 清 ``*_proxy`` 做法）；清掉
-    后客户端不取代理，与用例意图一致。
-    """
+    """显式替换外部依赖的单元测试不采用开发机代理。"""
     for name in (
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -71,29 +70,20 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_web_search_returns_structured_duckduckgo_results(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tool_context: MagicMock,
 ) -> None:
-    class FakeDuckDuckGoSearchResults:
-        def __init__(self, **kwargs: object) -> None:
-            assert kwargs["output_format"] == "list"
-            assert kwargs["num_results"] == 2
-
-        def invoke(self, query: str) -> list[dict[str, str]]:
-            assert query == "Python official website"
-            return [
-                {
-                    "title": "Python",
-                    "link": "https://www.python.org/",
-                    "snippet": "The official home of Python.",
-                }
-            ]
+    def search(query: str, **kwargs: object) -> list[dict[str, str]]:
+        assert query == "Python official website"
+        assert kwargs["max_results"] == 2
+        assert kwargs["routes"] == ProxyRoutes(())
+        return [{"title": "Python", "url": "https://www.python.org/", "snippet": "The official home of Python."}]
 
     monkeypatch.setattr(
         web_tools,
-        "DuckDuckGoSearchResults",
-        FakeDuckDuckGoSearchResults,
+        "search_web",
+        search,
     )
-    tool = web_tools.create_web_search_tool(MagicMock())
+    tool = web_tools.create_web_search_tool(tool_context)
 
     result = json.loads(
         await tool.ainvoke(
@@ -242,7 +232,7 @@ async def test_fetch_page_total_deadline_closes_continuously_streaming_response(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["failure", "cancel"])
 async def test_batch_fetch_closes_other_streams_before_leaving(
-    monkeypatch: pytest.MonkeyPatch, mode: str,
+    monkeypatch: pytest.MonkeyPatch, mode: str, tool_context: MagicMock,
 ) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
@@ -270,7 +260,7 @@ async def test_batch_fetch_closes_other_streams_before_leaving(
     urls = ["https://example.com/slow"]
     if mode == "failure":
         urls.append("https://example.com/fail")
-    task = asyncio.create_task(web_tools.create_fetch_webpage_tool(MagicMock()).ainvoke({"urls": urls}))
+    task = asyncio.create_task(web_tools.create_fetch_webpage_tool(tool_context).ainvoke({"urls": urls}))
     try:
         await started.wait()
         if mode == "cancel":
@@ -302,13 +292,14 @@ async def test_fetch_webpage_rejects_removed_query_before_network(monkeypatch: p
 @pytest.mark.parametrize("location", ["/private/web-library-cache", r"C:\private\web-library-cache", r"\\target\private\web-library-cache"])
 async def test_web_dependency_failure_preserves_cause_without_publishing_native_locations(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tool_name: str, location: str,
+    tool_context: MagicMock,
 ) -> None:
     native = PermissionError(13, "外部库无法读取本机文件: " + location, location)
     url = "https://web-failure.invalid/document"
     dependency_error = httpx.ConnectError(str(native), request=httpx.Request("GET", url)) if tool_name == "fetch_webpage" else native
     observed: list[str] = []
 
-    def search(_self: object, query: str) -> list[dict[str, str]]:
+    def search(query: str, **_kwargs: object) -> list[dict[str, str]]:
         observed.append(query)
         raise dependency_error
 
@@ -320,9 +311,9 @@ async def test_web_dependency_failure_preserves_cause_without_publishing_native_
             raise dependency_error from native
         return await handle(transport, request)
 
-    monkeypatch.setattr(web_tools.DuckDuckGoSearchResults, "invoke", search)
+    monkeypatch.setattr(web_tools, "search_web", search)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fetch)
-    context = MagicMock()
+    context = tool_context
     context.tool_options = {}
     tool = web_tools.create_web_search_tool(context) if tool_name == "web_search" else web_tools.create_fetch_webpage_tool(context)
     arguments = {"query": "  Python documentation  "} if tool_name == "web_search" else {"urls": [url]}

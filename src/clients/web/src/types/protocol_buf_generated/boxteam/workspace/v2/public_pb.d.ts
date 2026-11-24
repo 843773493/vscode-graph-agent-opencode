@@ -5,6 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
 import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { ConfigNodeInspectionDTO } from "../../common/v1/config_pb.js";
 import type { AttachmentRef } from "./message_pb.js";
 import type { PluginServiceReference } from "../../gateway/v2/service_plugin_pb.js";
 import type { Error } from "../../common/v1/error_pb.js";
@@ -796,6 +797,16 @@ export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.Conf
    * @generated from field: repeated boxteam.workspace.v2.ConfigSourceOriginDTO active_origins = 23;
    */
   activeOrigins: ConfigSourceOriginDTO[];
+
+  /**
+   * @generated from field: google.protobuf.Struct source_inherited = 24;
+   */
+  sourceInherited?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.common.v1.ConfigNodeInspectionDTO nodes = 25;
+   */
+  nodes: ConfigNodeInspectionDTO[];
 };
 
 /**
@@ -1471,6 +1482,16 @@ export declare type ConfigSourcePreflightDTO = Message<"boxteam.workspace.v2.Con
    * @generated from field: optional boxteam.workspace.v2.ConfigModelInspectionDTO active_model_options = 6;
    */
   activeModelOptions?: ConfigModelInspectionDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigProviderInspectionDTO provider_options = 7;
+   */
+  providerOptions?: ConfigProviderInspectionDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigProviderInspectionDTO active_provider_options = 8;
+   */
+  activeProviderOptions?: ConfigProviderInspectionDTO | undefined;
 };
 
 /**
@@ -1478,6 +1499,52 @@ export declare type ConfigSourcePreflightDTO = Message<"boxteam.workspace.v2.Con
  * Use `create(ConfigSourcePreflightDTOSchema)` to create a new message.
  */
 export declare const ConfigSourcePreflightDTOSchema: GenMessage<ConfigSourcePreflightDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigActiveOptionsInspectionDTO
+ */
+export declare type ConfigActiveOptionsInspectionDTO = Message<"boxteam.workspace.v2.ConfigActiveOptionsInspectionDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: int64 active_revision = 3;
+   */
+  activeRevision: bigint;
+
+  /**
+   * @generated from field: string active_digest = 4;
+   */
+  activeDigest: string;
+
+  /**
+   * @generated from field: map<string, boxteam.workspace.v2.ConfigSourceBaselineDTO> source_baseline = 5;
+   */
+  sourceBaseline: { [key: string]: ConfigSourceBaselineDTO };
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigProviderInspectionDTO provider_options = 6;
+   */
+  providerOptions?: ConfigProviderInspectionDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigModelInspectionDTO model_options = 7;
+   */
+  modelOptions?: ConfigModelInspectionDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigActiveOptionsInspectionDTO.
+ * Use `create(ConfigActiveOptionsInspectionDTOSchema)` to create a new message.
+ */
+export declare const ConfigActiveOptionsInspectionDTOSchema: GenMessage<ConfigActiveOptionsInspectionDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ConfigModelOptionOriginDTO
@@ -1502,6 +1569,11 @@ export declare type ConfigModelOptionOriginDTO = Message<"boxteam.workspace.v2.C
    * @generated from field: string definition_path = 4;
    */
   definitionPath: string;
+
+  /**
+   * @generated from field: optional string node_id = 5;
+   */
+  nodeId?: string | undefined;
 };
 
 /**
@@ -1543,6 +1615,41 @@ export declare type ConfigModelInspectionDTO = Message<"boxteam.workspace.v2.Con
    * @generated from field: optional string catalog_url = 6;
    */
   catalogUrl?: string | undefined;
+
+  /**
+   * @generated from field: string config_ref = 7;
+   */
+  configRef: string;
+
+  /**
+   * @generated from field: string node_id = 8;
+   */
+  nodeId: string;
+
+  /**
+   * @generated from field: repeated boxteam.common.v1.ConfigNodeInspectionDTO chain = 9;
+   */
+  chain: ConfigNodeInspectionDTO[];
+
+  /**
+   * @generated from field: google.protobuf.Struct local_settings = 10;
+   */
+  localSettings?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct inherited_settings = 11;
+   */
+  inheritedSettings?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct network = 12;
+   */
+  network?: JsonObject | undefined;
+
+  /**
+   * @generated from field: bool shared = 13;
+   */
+  shared: boolean;
 };
 
 /**
@@ -1550,6 +1657,72 @@ export declare type ConfigModelInspectionDTO = Message<"boxteam.workspace.v2.Con
  * Use `create(ConfigModelInspectionDTOSchema)` to create a new message.
  */
 export declare const ConfigModelInspectionDTOSchema: GenMessage<ConfigModelInspectionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigProviderInspectionDTO
+ */
+export declare type ConfigProviderInspectionDTO = Message<"boxteam.workspace.v2.ConfigProviderInspectionDTO"> & {
+  /**
+   * @generated from field: string provider_id = 1;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct options = 2;
+   */
+  options?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigModelOptionOriginDTO origins = 3;
+   */
+  origins: ConfigModelOptionOriginDTO[];
+
+  /**
+   * @generated from field: optional string catalog_url = 5;
+   */
+  catalogUrl?: string | undefined;
+
+  /**
+   * @generated from field: string config_ref = 6;
+   */
+  configRef: string;
+
+  /**
+   * @generated from field: string node_id = 7;
+   */
+  nodeId: string;
+
+  /**
+   * @generated from field: repeated boxteam.common.v1.ConfigNodeInspectionDTO chain = 8;
+   */
+  chain: ConfigNodeInspectionDTO[];
+
+  /**
+   * @generated from field: google.protobuf.Struct local_settings = 9;
+   */
+  localSettings?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct inherited_settings = 10;
+   */
+  inheritedSettings?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct network = 11;
+   */
+  network?: JsonObject | undefined;
+
+  /**
+   * @generated from field: bool shared = 12;
+   */
+  shared: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigProviderInspectionDTO.
+ * Use `create(ConfigProviderInspectionDTOSchema)` to create a new message.
+ */
+export declare const ConfigProviderInspectionDTOSchema: GenMessage<ConfigProviderInspectionDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ConfigEventDTO

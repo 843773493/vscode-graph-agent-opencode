@@ -1,28 +1,2318 @@
+// Workspace v4：节点文档、完整 scope settings 与业务 API 投影各有明确校验入口。
 {
-  // ============================================================
-  // BoxTeam Workspace 配置模式定义 (JSON Schema)
-  // ============================================================
-  // 此文件定义了 workspace.jsonc 配置文件的验证模式。
-  // 用于 JSON Schema 验证，确保配置文件结构正确。
-  //
-  // 文件位置: configs/workspace_schema.jsonc
-  // 参考标准: https://json-schema.org/
-  //
-  // 配置生效规则:
-  // - llm、agents、development 支持热重载；有效配置变化后从下一轮 Job 开始生效，
-  //   已经运行中的 Job 会继续使用启动时的配置快照。
-  // - default_agent 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。
-  // - ui 配置支持热重载，后续配置读取使用新值。
-  // - mcp.servers 使用 Gateway 插件服务引用或外部 Streamable HTTP endpoint，运行时由原 MCP owner 管理。
-  //   MCP supervision 参数需重启工作区。
-  // - 用户级配置与工作区级配置深度合并；被高优先级值遮蔽的低优先级变化
-  //   不会触发有效配置 revision 变化。
-  // ============================================================
-
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://boxteam.dev/schemas/workspace-config-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config_version",
+    "settings"
+  ],
+  "$defs": {
+    "DirectProxy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "direct",
+          "default": "direct",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "DirectProxy",
+      "type": "object",
+      "required": [
+        "mode"
+      ]
+    },
+    "EnvironmentProxy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "environment",
+          "default": "environment",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "EnvironmentProxy",
+      "type": "object",
+      "required": [
+        "mode"
+      ]
+    },
+    "ExplicitProxy": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "explicit",
+          "default": "explicit",
+          "title": "Mode",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "bypass": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Bypass",
+          "type": "array"
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyAuthentication"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "mode",
+        "url"
+      ],
+      "title": "ExplicitProxy",
+      "type": "object"
+    },
+    "ProxyAuthentication": {
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "minLength": 1,
+          "title": "Username",
+          "type": "string"
+        },
+        "password": {
+          "pattern": "^secret:sec_[0-9a-f]{32}$",
+          "title": "Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "title": "ProxyAuthentication",
+      "type": "object"
+    },
+    "networkSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "proxy": {
+          "discriminator": {
+            "mapping": {
+              "direct": "#/$defs/DirectProxy",
+              "environment": "#/$defs/EnvironmentProxy",
+              "explicit": "#/$defs/ExplicitProxy"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/EnvironmentProxy"
+            },
+            {
+              "$ref": "#/$defs/DirectProxy"
+            },
+            {
+              "$ref": "#/$defs/ExplicitProxy"
+            }
+          ],
+          "title": "Proxy",
+          "x-merge": "replace"
+        }
+      },
+      "title": "NetworkSettings",
+      "type": "object"
+    },
+    "profileSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "model_options": {
+          "$ref": "#/$defs/modelOptions"
+        }
+      }
+    },
+    "scopeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "model_options": {
+          "$ref": "#/$defs/modelOptions"
+        },
+        "workspace": {
+          "type": "object"
+        }
+      }
+    },
+    "configNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "extends": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settings": {
+          "$ref": "#/$defs/profileSettings"
+        }
+      }
+    },
+    "toolingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_defaults": {
+          "$ref": "#/$defs/toolPolicyPatch"
+        },
+        "policy_rules": {
+          "$ref": "#/$defs/toolPolicyRules"
+        },
+        "restrictions": {
+          "$ref": "#/$defs/toolPolicyRestrictions"
+        }
+      }
+    },
+    "toolPolicyPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution_enabled": {
+          "type": "boolean"
+        },
+        "model_visible": {
+          "type": "boolean"
+        },
+        "confirmation_required": {
+          "type": "boolean"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_result_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 104857600
+            }
+          }
+        }
+      }
+    },
+    "toolPolicyRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "by_origin": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/toolPolicyPatch"
+          }
+        },
+        "by_kind": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/toolPolicyPatch"
+          }
+        },
+        "by_group": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/toolPolicyPatch"
+          }
+        },
+        "by_tool": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/toolPolicyPatch"
+          }
+        }
+      }
+    },
+    "toolPolicyRestrictions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution_disabled": {
+          "$ref": "#/$defs/toolPolicySelectors"
+        },
+        "model_hidden": {
+          "$ref": "#/$defs/toolPolicySelectors"
+        },
+        "confirmation_required": {
+          "$ref": "#/$defs/toolPolicySelectors"
+        }
+      }
+    },
+    "toolPolicySelectors": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 200,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$"
+      },
+      "default": []
+    },
+    "sessionStopPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "jobs",
+        "pending_messages",
+        "debug",
+        "background_task",
+        "terminal",
+        "browser",
+        "collaboration",
+        "goal",
+        "thread_runtime"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "thread",
+            "session"
+          ]
+        },
+        "jobs": {
+          "enum": [
+            "interrupt",
+            "cancel",
+            "delete"
+          ]
+        },
+        "pending_messages": {
+          "enum": [
+            "continue",
+            "keep",
+            "discard"
+          ]
+        },
+        "debug": {
+          "enum": [
+            "keep",
+            "stop"
+          ]
+        },
+        "background_task": {
+          "enum": [
+            "keep",
+            "stop",
+            "delete"
+          ]
+        },
+        "terminal": {
+          "enum": [
+            "keep",
+            "stop",
+            "delete",
+            "release"
+          ]
+        },
+        "browser": {
+          "enum": [
+            "keep",
+            "stop",
+            "delete",
+            "release"
+          ]
+        },
+        "collaboration": {
+          "enum": [
+            "keep",
+            "stop"
+          ]
+        },
+        "goal": {
+          "enum": [
+            "keep",
+            "pause"
+          ]
+        },
+        "thread_runtime": {
+          "enum": [
+            "keep",
+            "close"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "thread_runtime": {
+                "const": "close"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "enum": [
+                  "release",
+                  "delete"
+                ]
+              },
+              "browser": {
+                "enum": [
+                  "release",
+                  "delete"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "thread"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "collaboration": {
+                "const": "keep"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "jobs": {
+                "const": "delete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "pending_messages": {
+                "const": "discard"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "pending_messages": {
+                "const": "continue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "jobs": {
+                "const": "interrupt"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sessionStopConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interrupt",
+        "stop"
+      ],
+      "properties": {
+        "interrupt": {
+          "$ref": "#/$defs/sessionStopPolicy"
+        },
+        "stop": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/sessionStopPolicy"
+            },
+            {
+              "properties": {
+                "jobs": {
+                  "enum": [
+                    "cancel",
+                    "delete"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "runtimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/agentRuntimeConfig"
+        },
+        "gateway": {
+          "$ref": "#/$defs/gatewayRuntimeConfig"
+        },
+        "workspace": {
+          "$ref": "#/$defs/workspaceRuntimeConfig"
+        },
+        "events": {
+          "$ref": "#/$defs/eventsRuntimeConfig"
+        },
+        "session_stop": {
+          "$ref": "#/$defs/sessionStopConfig"
+        },
+        "debug": {
+          "$ref": "#/$defs/debugRuntimeConfig"
+        }
+      }
+    },
+    "workspacePluginsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/workspacePluginRuntimeConfig"
+        },
+        "configuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "values": {
+              "type": "object",
+              "default": {},
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "additionalProperties": {
+                  "type": "object"
+                }
+              },
+              "description": "按包 ID／插件 ID 保存参数。未绑定参数仅保留原来源，不生效；绑定时按确切版本 schema 校验。"
+            }
+          }
+        }
+      }
+    },
+    "workspacePluginRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "package_id",
+              "plugin_id",
+              "package_version",
+              "enabled"
+            ],
+            "properties": {
+              "package_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "plugin_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "package_version": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "debugRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否允许 Agent 使用源码调试后端。"
+        },
+        "default_adapter": {
+          "type": "string",
+          "enum": [
+            "node_inspector",
+            "debugpy",
+            "dap",
+            "vscode"
+          ],
+          "default": "node_inspector",
+          "description": "未指定 launch profile 时使用的逻辑调试 adapter。"
+        },
+        "command_timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 10,
+          "description": "单个调试后端命令的超时时间。"
+        },
+        "node": {
+          "$ref": "#/$defs/nodeDebugRuntimeConfig"
+        },
+        "python": {
+          "$ref": "#/$defs/pythonDebugRuntimeConfig"
+        },
+        "launch_profiles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/debugLaunchProfile"
+          },
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+          }
+        }
+      }
+    },
+    "nodeDebugRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inspector_host": {
+          "type": "string",
+          "minLength": 1,
+          "default": "127.0.0.1"
+        },
+        "inspector_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0
+        },
+        "executable": {
+          "type": "string",
+          "default": "",
+          "description": "Node 可执行文件；为空时由运行时按既有环境规则解析。"
+        }
+      }
+    },
+    "pythonDebugRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "const": "debugpy",
+          "default": "debugpy"
+        },
+        "debugpy_host": {
+          "type": "string",
+          "minLength": 1,
+          "default": "127.0.0.1"
+        },
+        "debugpy_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0
+        }
+      }
+    },
+    "debugLaunchProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "node_inspector",
+            "debugpy",
+            "dap",
+            "vscode"
+          ],
+          "default": "node_inspector"
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1,
+          "default": "node"
+        },
+        "program": {
+          "type": "string",
+          "default": ""
+        },
+        "working_directory": {
+          "type": "string",
+          "default": ""
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      }
+    },
+    "agentRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "single_agent",
+                "team"
+              ],
+              "default": "single_agent"
+            },
+            "response_mode": {
+              "type": "string",
+              "minLength": 1,
+              "default": "stream"
+            },
+            "async": {
+              "type": "boolean",
+              "default": true
+            },
+            "max_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            },
+            "timeout_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 600
+            }
+          }
+        }
+      }
+    },
+    "gatewayRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "minLength": 1,
+              "default": "http://127.0.0.1:8014"
+            },
+            "timeout_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 30
+            }
+          }
+        }
+      }
+    },
+    "workspaceRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "list": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "default_limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 500
+                }
+              }
+            },
+            "preview": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 1048576
+                },
+                "binary_sample_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 8192
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "eventsRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace_stream": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "heartbeat_interval_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 15,
+              "default": 15
+            }
+          }
+        }
+      }
+    },
+    "uiConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "可选的 UI 展示模型；省略时根据默认 Agent 的 model.primary 引用动态解析。"
+        },
+        "default_orchestration": {
+          "type": "string",
+          "minLength": 1,
+          "default": "single_agent"
+        },
+        "max_concurrent_agents": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4
+        },
+        "allow_shell_tools": {
+          "type": "boolean",
+          "default": false
+        },
+        "ignored_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "auto_summarize": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "mcpConfig": {
+      "type": "object",
+      "description": "当前工作区后端可使用 Gateway 插件提供的 MCP 服务，或连接外部 Streamable HTTP MCP endpoint。工作区后端不启动 stdio MCP 子进程；连接切换与恢复由 Gateway 插件服务管理。监督参数仍需重启，混合候选整体延后。",
+      "additionalProperties": false,
+      "properties": {
+        "supervision": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sealed_call_timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 1800,
+              "description": "模型发送前开始保留原连接执行资格的最长秒数，包含模型生成及人工确认等待。到期拒绝尚未开始的调用，不将执行中的远端操作伪报为已停止。修改需重启工作区。"
+            }
+          }
+        },
+        "servers": {
+          "type": "object",
+          "default": {},
+          "propertyNames": {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/mcpServer"
+          }
+        }
+      }
+    },
+    "mcpServer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/mcpPluginServer"
+        },
+        {
+          "$ref": "#/$defs/mcpStreamableHttpServer"
+        }
+      ]
+    },
+    "mcpPluginServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "service"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "plugin"
+        },
+        "service": {
+          "$ref": "#/$defs/mcpServiceReference"
+        }
+      }
+    },
+    "mcpServiceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gateway_id",
+        "package_id",
+        "package_version",
+        "plugin_id",
+        "service_id"
+      ],
+      "properties": {
+        "gateway_id": {
+          "type": "string",
+          "pattern": "^gateway_[0-9a-f]{32}$"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "package_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "package_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "mcpPrivateHeaderRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "workspace_id",
+        "server_id",
+        "header_name",
+        "endpoint",
+        "version"
+      ],
+      "description": "仅引用工作区私有凭据的不可变版本；精确绑定 Server、header 名与展开后的 endpoint。更换任一身份必须重新写入，不迁移明文。",
+      "properties": {
+        "kind": {
+          "const": "mcp_private_header"
+        },
+        "workspace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "server_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+        },
+        "header_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1,
+          "pattern": "^[^#]*$",
+          "not": {
+            "pattern": "^[^:/?#]+://[^/?#]*@"
+          }
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      }
+    },
+    "mcpStreamableHttpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "url"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "transport": {
+          "const": "streamable_http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/mcpPrivateHeaderRef"
+              }
+            ]
+          },
+          "default": {}
+        },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "redirect_uri"
+          ],
+          "description": "显式启用标准 MCP OAuth；回调必须到实际工作区 owner。未配置时保留 headers 凭据引用行为；变更本对象需重启工作区。",
+          "properties": {
+            "redirect_uri": {
+              "type": "string",
+              "format": "uri",
+              "minLength": 1,
+              "description": "实际 owner 可达的回调 URI，支持环境变量引用；仅 loopback 可使用 HTTP。不得填写客户端本机地址冒充远端工作区。"
+            }
+          }
+        }
+      }
+    },
+    "developmentConfig": {
+      "type": "object",
+      "description": "仅由开发安装生成器写入的功能开关。支持热重载，从下一轮 Job 开始生效。",
+      "additionalProperties": false,
+      "properties": {
+        "test_tools": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config_ref",
+        "models"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "models": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/modelDefinition"
+          }
+        },
+        "config_ref": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "agentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "instructions",
+        "model"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the agent",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "language": {
+          "type": "string",
+          "description": "Default response language",
+          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+          "default": "zh-CN"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "Default timezone, preferably IANA timezone name",
+          "minLength": 1,
+          "maxLength": 64,
+          "default": "Asia/Shanghai"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "uniqueItems": true,
+          "maxItems": 20,
+          "default": []
+        },
+        "persona": {
+          "$ref": "#/$defs/agentPersona"
+        },
+        "instructions": {
+          "$ref": "#/$defs/agentInstructions"
+        },
+        "model": {
+          "$ref": "#/$defs/agentModel"
+        },
+        "tools": {
+          "$ref": "#/$defs/agentTools"
+        },
+        "safety": {
+          "$ref": "#/$defs/agentSafety"
+        },
+        "execution": {
+          "$ref": "#/$defs/agentExecution"
+        },
+        "env": {
+          "$ref": "#/$defs/agentEnv"
+        }
+      }
+    },
+    "agentPersona": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "professional",
+            "friendly",
+            "concise",
+            "formal",
+            "technical"
+          ],
+          "default": "professional"
+        },
+        "identity": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "verbosity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium"
+        }
+      }
+    },
+    "agentInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_prompt"
+      ],
+      "properties": {
+        "system_prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30000
+        },
+        "system_prompt_file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "description": "null 使用 inline system_prompt；files 资源 URI 由目标文件 owner 稳定读取并替换正文，不接受真实路径或请求期读取。"
+        },
+        "runtime_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string",
+              "maxLength": 20000,
+              "description": "R02 可覆盖说明；不修改软件生成的工作区范围、Agent 身份及配置候选事实。省略时不附加说明。"
+            },
+            "description_file": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "description": "null 使用 inline description；files 资源 URI 替换说明正文，软件身份事实仍由运行时生成。"
+            }
+          }
+        },
+        "developer_prompt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "fallback_prompt": {
+          "type": "string",
+          "maxLength": 5000
+        }
+      }
+    },
+    "agentModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary"
+      ],
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Optional explicit sampling temperature. Omit to use the provider/model default."
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional explicit nucleus sampling value. Omit to use the provider/model default."
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional explicit output cap. Omit to avoid imposing a client-side output limit."
+        },
+        "primary": {
+          "$ref": "#/$defs/modelReference"
+        },
+        "fallbacks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/modelReference"
+          },
+          "default": []
+        }
+      }
+    },
+    "agentTools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rules": {
+              "$ref": "#/$defs/toolPolicyRules"
+            },
+            "restrictions": {
+              "$ref": "#/$defs/toolPolicyRestrictions"
+            }
+          }
+        },
+        "tool_choice": {
+          "type": "string",
+          "enum": [
+            "none",
+            "auto",
+            "required"
+          ],
+          "default": "auto"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 300000,
+          "default": 10000
+        },
+        "allowlist": {
+          "type": "array",
+          "description": "恢复列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。默认所有工具可用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100,
+          "default": []
+        },
+        "denylist": {
+          "type": "array",
+          "description": "禁用列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。扩展子工具直接按其 name 禁用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100,
+          "default": []
+        },
+        "confirmation_required": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100,
+          "default": []
+        },
+        "custom": {
+          "type": "array",
+          "description": "内置工具使用稳定 tool_id；第三方扩展使用 name 与 factory。",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tool_id"
+                ],
+                "properties": {
+                  "tool_id": {
+                    "type": "string",
+                    "enum": [
+                      "connections.manage",
+                      "read_context",
+                      "search_context",
+                      "discover_workspaces",
+                      "search_resources",
+                      "web_search",
+                      "fetch_webpage",
+                      "listBrowserPage",
+                      "openBrowserPage",
+                      "readPage",
+                      "navigatePage",
+                      "clickElement",
+                      "typeInPage",
+                      "hoverElement",
+                      "dragElement",
+                      "handleDialog",
+                      "screenshotPage",
+                      "runPlaywrightCode",
+                      "test_tool_2",
+                      "large_test_output"
+                    ]
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "传给该工具 factory 的专属配置。",
+                    "additionalProperties": true
+                  },
+                  "skills": {
+                    "type": "array",
+                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                    },
+                    "uniqueItems": true,
+                    "maxItems": 20,
+                    "default": []
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "工具目录中展示的扩展工具说明。"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "factory"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+                  },
+                  "factory": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
+                  },
+                  "options": {
+                    "type": "object",
+                    "description": "传给该工具 factory 的专属配置。",
+                    "additionalProperties": true
+                  },
+                  "skills": {
+                    "type": "array",
+                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                    },
+                    "uniqueItems": true,
+                    "maxItems": 20,
+                    "default": []
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "工具目录中展示的扩展工具说明。"
+                  }
+                }
+              }
+            ]
+          },
+          "uniqueItems": true,
+          "maxItems": 100,
+          "default": []
+        }
+      }
+    },
+    "agentSafety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy_mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "standard",
+            "strict"
+          ],
+          "default": "standard"
+        },
+        "prompt_injection_protection": {
+          "type": "boolean",
+          "default": true
+        },
+        "pii_redaction": {
+          "type": "boolean",
+          "default": true
+        },
+        "refuse_secrets_exfiltration": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "agentExecution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stream": {
+          "type": "boolean",
+          "default": true
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 16
+        },
+        "max_history_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200,
+          "default": 30
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 512,
+          "maximum": 200000,
+          "default": 32000
+        },
+        "require_delegated_report": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否强制委派子 Agent 通过 send_message_to_session 向父会话报告结果"
+        }
+      }
+    },
+    "agentEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "development",
+            "staging",
+            "production"
+          ],
+          "default": "development"
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 64,
+          "default": ""
+        },
+        "feature_flags": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        }
+      }
+    },
+    "modelOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "api_key": {
+          "type": "string",
+          "pattern": "^(?:secret:sec_[a-f0-9]{32}|\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}|)$",
+          "description": "所属 Gateway 的密钥引用、目标 Workspace 的环境引用或显式无认证空值；不接受密钥字面量。"
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "method"
+          ],
+          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
+          "properties": {
+            "type": {
+              "const": "oauth"
+            },
+            "method": {
+              "const": "chatgpt"
+            }
+          }
+        },
+        "custom_llm_provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
+        },
+        "api_mode": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "沿单父节点解析的协议、传输、能力和 reasoning 线格式。",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "chat_completions",
+                "responses",
+                "anthropic_messages"
+              ],
+              "description": "选择 LiteLLM 请求协议；custom_llm_provider 只选择适配族，不替代协议。"
+            },
+            "model_info": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
+              "properties": {
+                "max_input_tokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "显式声明模型输入上下文容量，写入 LangChain model.profile；不作为上游请求参数，也不推导输出上限。"
+                },
+                "supports_vision": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受图片输入；对应 LiteLLM supports_vision。"
+                },
+                "supports_video_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受视频输入；LiteLLM 当前没有统一 supports_video 字段，因此由本项目显式声明。"
+                },
+                "supports_audio_input": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否接受音频输入；对应 LiteLLM supports_audio_input。"
+                },
+                "supports_audio_output": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否能输出音频；对应 LiteLLM supports_audio_output，当前只作为能力声明保存。"
+                },
+                "supports_function_calling": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持工具/函数调用；对应 LiteLLM supports_function_calling。"
+                },
+                "supports_reasoning": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "模型是否支持 reasoning；必须与 supports_reasoning 下至少一个实际线格式字段一致。"
+                }
+              }
+            },
+            "supports_reasoning": {
+              "type": "object",
+              "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
+              "x-merge": "replace",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_content": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 的 assistant.reasoning_content。"
+                    },
+                    "thinking_blocks": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Chat Completions 兼容端返回 thinking_blocks。"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "required": [
+                        "reasoning_content"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "thinking_blocks"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reasoning_items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "summary",
+                        "encrypted_content"
+                      ],
+                      "properties": {
+                        "summary": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 summary。"
+                        },
+                        "encrypted_content": {
+                          "type": "boolean",
+                          "description": "Responses reasoning item 的 encrypted_content。"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "reasoning_items"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "thinking_blocks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "thinking",
+                        "redacted_thinking"
+                      ],
+                      "properties": {
+                        "thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的明文 thinking。"
+                        },
+                        "redacted_thinking": {
+                          "type": "boolean",
+                          "description": "Anthropic Messages thinking block 的 redacted_thinking。"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "thinking_blocks"
+                  ]
+                },
+                {
+                  "maxProperties": 0
+                }
+              ]
+            },
+            "request_features": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "请求适配器可选附加的特性，不属于模型输入输出能力。",
+              "properties": {
+                "prompt_cache_key": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "是否向 Chat Completions 请求附加 prompt_cache_key。"
+                }
+              }
+            },
+            "replay_policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "历史 reasoning 回放规则；加密内容不能仅凭 custom_llm_provider 相同而回放。",
+              "properties": {
+                "encrypted_content": {
+                  "type": "string",
+                  "enum": [
+                    "same_source"
+                  ],
+                  "default": "same_source",
+                  "description": "仅相同完整模型、归属、连接、协议和认证来源可回放密文。"
+                }
+              }
+            },
+            "streaming": {
+              "type": "boolean",
+              "description": "上游传输模式；内置 Workspace 根明确声明 true。"
+            }
+          }
+        },
+        "auth_header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_options": {
+          "type": "object",
+          "description": "Provider-specific request options passed to the chat model client.",
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "default_headers": {
+              "type": "object",
+              "description": "Additional default HTTP headers for this provider.",
+              "x-key-casefold": true,
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "parameters": {
+              "type": "object",
+              "description": "请求默认或覆盖；Agent 及本次调用显式参数优先，最终 null 表示不发送，扩展放入 extra_body。",
+              "x-key-aliases": {
+                "max_tokens": "max_output_tokens"
+              },
+              "additionalProperties": {
+                "x-merge": "replace"
+              },
+              "default": {}
+            }
+          }
+        }
+      }
+    },
+    "resolvedModelOptions": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/connectionModelOptions"
+        },
+        {
+          "properties": {
+            "api_mode": {
+              "required": [
+                "model_info",
+                "supports_reasoning"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "modelDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "config_ref"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_ref": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "modelReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+        },
+        "model_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+        }
+      }
+    },
+    "workspaceSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "llm",
+        "default_agent",
+        "agents"
+      ],
+      "properties": {
+        "llm": {
+          "type": "object",
+          "description": "LLM Provider 配置。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
+          "additionalProperties": false,
+          "required": [
+            "providers"
+          ],
+          "properties": {
+            "providers": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/provider"
+              }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skill_sources"
+          ],
+          "properties": {
+            "skill_sources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "gateway_updates"
+              ],
+              "properties": {
+                "sources": {
+                  "type": "array",
+                  "default": [],
+                  "description": "Workspace owner 获取的私有网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "name",
+                      "fetch"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "maxLength": 64
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "maxLength": 64
+                      },
+                      "priority": {
+                        "type": "integer",
+                        "default": 0
+                      },
+                      "fetch": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "protocol",
+                          "url"
+                        ],
+                        "properties": {
+                          "protocol": {
+                            "const": "http"
+                          },
+                          "url": {
+                            "type": "string",
+                            "pattern": "^https?://[^/]+",
+                            "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"
+                          },
+                          "timeout_seconds": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "default": 30
+                          }
+                        }
+                      },
+                      "updates": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "mode"
+                        ],
+                        "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
+                        "properties": {
+                          "mode": {
+                            "enum": [
+                              "poll",
+                              "manual"
+                            ]
+                          },
+                          "poll_interval": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^[1-9][0-9]*(m|h)$"
+                          }
+                        },
+                        "if": {
+                          "properties": {
+                            "mode": {
+                              "const": "poll"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "poll_interval"
+                          ],
+                          "properties": {
+                            "poll_interval": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "else": {
+                          "properties": {
+                            "poll_interval": {
+                              "type": "null"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "gateway_updates": {
+                  "type": "object",
+                  "description": "Gateway 快照获取触发策略；对象按配置层递归合并，经配置 shadow 提交时切换，原订阅随后排空。",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "poll_interval"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "enum": [
+                        "event",
+                        "poll",
+                        "manual",
+                        "event_poll"
+                      ]
+                    },
+                    "poll_interval": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[1-9][0-9]*(m|h)$"
+                    }
+                  },
+                  "if": {
+                    "properties": {
+                      "mode": {
+                        "enum": [
+                          "poll",
+                          "event_poll"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "poll_interval": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "poll_interval": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "description": "上下文注入生命周期配置。",
+          "additionalProperties": false,
+          "required": [
+            "resource_activation"
+          ],
+          "properties": {
+            "source_messages": {
+              "type": "object",
+              "description": "来源消息分组；按已有配置层覆盖，只影响后续新 preparation，不重组历史封存。",
+              "additionalProperties": false,
+              "properties": {
+                "grouping": {
+                  "type": "string",
+                  "enum": [
+                    "aggregate",
+                    "separate"
+                  ],
+                  "default": "aggregate"
+                }
+              }
+            },
+            "resource_activation": {
+              "type": "object",
+              "description": "资源上下文 activation 边界；修改后只在下一个 Turn active slot 冻结。",
+              "additionalProperties": false,
+              "required": [
+                "default_boundary",
+                "overrides"
+              ],
+              "properties": {
+                "default_boundary": {
+                  "type": "string",
+                  "enum": [
+                    "turn",
+                    "model_call"
+                  ],
+                  "default": "turn"
+                },
+                "overrides": {
+                  "type": "object",
+                  "description": "按已登记 resource kind 覆盖 effective boundary。",
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "turn",
+                      "model_call"
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "default_agent": {
+          "type": "string",
+          "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
+          "pattern": "^[a-zA-Z0-9._-]{2,64}$",
+          "default": "default"
+        },
+        "agents": {
+          "type": "object",
+          "description": "按 Agent 名称索引的工作区 Agent 注册表。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。timezone、persona、safety、env、tools.tool_choice、tools.timeout_ms、execution.stream、execution.max_turns、execution.max_history_messages 和 execution.max_context_tokens 当前未接入，保存这些字段不会改变运行行为。",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/agentConfig"
+          },
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
+          }
+        },
+        "tooling": {
+          "$ref": "#/$defs/toolingConfig"
+        },
+        "ui": {
+          "$ref": "#/$defs/uiConfig"
+        },
+        "mcp": {
+          "$ref": "#/$defs/mcpConfig"
+        },
+        "development": {
+          "$ref": "#/$defs/developmentConfig"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtimeConfig"
+        },
+        "plugins": {
+          "$ref": "#/$defs/workspacePluginsConfig"
+        }
+      }
+    },
+    "connectionModelOptions": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/modelOptions"
+        },
+        {
+          "required": [
+            "endpoint",
+            "custom_llm_provider",
+            "api_mode"
+          ],
+          "properties": {
+            "api_mode": {
+              "required": [
+                "protocol"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "auth"
+            ]
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "chatgpt"
+              },
+              "api_mode": {
+                "properties": {
+                  "protocol": {
+                    "const": "responses"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "api_key"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "api_mode": {
+                "properties": {
+                  "protocol": {
+                    "const": "anthropic_messages"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "custom_llm_provider": {
+                "const": "anthropic"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "effectiveSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace",
+        "network",
+        "model_options"
+      ],
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/workspaceSettings"
+        },
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "model_options": {
+          "$ref": "#/$defs/modelOptions"
+        }
+      }
+    },
+    "effectiveOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "model_options"
+      ],
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "model_options": {
+          "$ref": "#/$defs/connectionModelOptions"
+        }
+      }
+    },
+    "workspacePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config_version",
+        "network",
+        "llm",
+        "default_agent",
+        "agents"
+      ],
+      "properties": {
+        "config_version": {
+          "type": "integer",
+          "const": 4
+        },
+        "network": {
+          "$ref": "#/$defs/networkSettings"
+        },
+        "llm": {
+          "$ref": "#/$defs/workspaceSettings/properties/llm"
+        },
+        "resources": {
+          "$ref": "#/$defs/workspaceSettings/properties/resources"
+        },
+        "context": {
+          "$ref": "#/$defs/workspaceSettings/properties/context"
+        },
+        "default_agent": {
+          "$ref": "#/$defs/workspaceSettings/properties/default_agent"
+        },
+        "agents": {
+          "$ref": "#/$defs/workspaceSettings/properties/agents"
+        },
+        "tooling": {
+          "$ref": "#/$defs/workspaceSettings/properties/tooling"
+        },
+        "ui": {
+          "$ref": "#/$defs/workspaceSettings/properties/ui"
+        },
+        "mcp": {
+          "$ref": "#/$defs/workspaceSettings/properties/mcp"
+        },
+        "development": {
+          "$ref": "#/$defs/workspaceSettings/properties/development"
+        },
+        "runtime": {
+          "$ref": "#/$defs/workspaceSettings/properties/runtime"
+        },
+        "plugins": {
+          "$ref": "#/$defs/workspaceSettings/properties/plugins"
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "config_version": {
+      "type": "integer",
+      "const": 4
+    },
+    "extends": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "$ref": "#/$defs/scopeSettings"
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/configNode"
+      }
+    }
+  },
+  "$id": "https://boxteam.dev/schemas/workspace-config-v4.json",
+  "title": "BoxTeam Workspace Config Schema",
   "x-boxteam-config-domain": "workspace",
   "x-boxteam-policy-manifest": [
+    {
+      "pattern": "/network",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
+    {
+      "pattern": "/network/**",
+      "policy": "next_job",
+      "activation_scope": "next_job",
+      "identity_key": null
+    },
     {
       "pattern": "/runtime/session_stop/**",
       "policy": "immediate_read",
@@ -197,1545 +2487,5 @@
       "activation_scope": "current",
       "identity_key": null
     }
-  ],
-  "title": "BoxTeam Workspace Config Schema",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "config_version",
-    "llm",
-    "default_agent",
-    "agents"
-  ],
-  "properties": {
-    "$schema": {
-      "type": "string"
-    },
-    "config_version": {
-      "type": "integer",
-      "const": 3,
-      "description": "配置格式版本；旧 logger 必须通过 migrate-runtime-config 显式迁移。"
-    },
-    "llm": {
-      "type": "object",
-      "description": "LLM Provider 配置。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
-      "additionalProperties": false,
-      "required": [
-        "providers"
-      ],
-      "properties": {
-        "providers": {
-          "type": "object",
-          "minProperties": 1,
-          "propertyNames": {
-            "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/provider"
-          }
-        }
-      }
-    },
-    "resources": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["skill_sources"],
-      "properties": {
-        "skill_sources": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["gateway_updates"],
-          "properties": {
-            "sources": {
-              "type": "array", "default": [],
-              "description": "Workspace owner 获取的私有网络 Skill；获取地址保持私有，不因代理获取改变 network 层归属。id 唯一且稳定；同层 priority 越大越优先，同名同优先级报冲突。",
-              "items": {
-                "type": "object", "additionalProperties": false, "required": ["id", "name", "fetch"],
-                "properties": {
-                  "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
-                  "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64},
-                  "priority": {"type": "integer", "default": 0},
-                  "fetch": {
-                    "type": "object", "additionalProperties": false, "required": ["protocol", "url"],
-                    "properties": {
-                      "protocol": {"const": "http"},
-                      "url": {"type": "string", "pattern": "^https?://[^/]+", "description": "仅 owner 用于获取；禁止 fragment，最终 typed 校验绝对 HTTP(S) 地址。"},
-                      "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 30}
-                    }
-                  },
-                  "updates": {
-                    "type": "object", "additionalProperties": false, "required": ["mode"],
-                    "description": "缺省为每1小时 poll；HTTP 获取尚未登记事件协议，event/event_poll 明确拒绝。",
-                    "properties": {"mode": {"enum": ["poll", "manual"]}, "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}},
-                    "if": {"properties": {"mode": {"const": "poll"}}},
-                    "then": {"required": ["poll_interval"], "properties": {"poll_interval": {"type": "string"}}},
-                    "else": {"properties": {"poll_interval": {"type": "null"}}}
-                  }
-                }
-              }
-            },
-            "gateway_updates": {
-              "type": "object",
-              "description": "Gateway 快照获取触发策略；对象按配置层递归合并，经配置 shadow 提交时切换，原订阅随后排空。",
-              "additionalProperties": false,
-              "required": ["mode", "poll_interval"],
-              "properties": {
-                "mode": {"enum": ["event", "poll", "manual", "event_poll"]},
-                "poll_interval": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*(m|h)$"}
-              },
-              "if": {"properties": {"mode": {"enum": ["poll", "event_poll"]}}},
-              "then": {"properties": {"poll_interval": {"type": "string"}}},
-              "else": {"properties": {"poll_interval": {"type": "null"}}}
-            }
-          }
-        }
-      }
-    },
-    "context": {
-      "type": "object",
-      "description": "上下文注入生命周期配置。",
-      "additionalProperties": false,
-      "required": ["resource_activation"],
-      "properties": {
-        "source_messages": {
-          "type": "object",
-          "description": "来源消息分组；按已有配置层覆盖，只影响后续新 preparation，不重组历史封存。",
-          "additionalProperties": false,
-          "properties": {
-            "grouping": {
-              "type": "string",
-              "enum": ["aggregate", "separate"],
-              "default": "aggregate"
-            }
-          }
-        },
-        "resource_activation": {
-          "type": "object",
-          "description": "资源上下文 activation 边界；修改后只在下一个 Turn active slot 冻结。",
-          "additionalProperties": false,
-          "required": ["default_boundary", "overrides"],
-          "properties": {
-            "default_boundary": {
-              "type": "string",
-              "enum": ["turn", "model_call"],
-              "default": "turn"
-            },
-            "overrides": {
-              "type": "object",
-              "description": "按已登记 resource kind 覆盖 effective boundary。",
-              "additionalProperties": {
-                "type": "string",
-                "enum": ["turn", "model_call"]
-              },
-              "propertyNames": {
-                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
-              }
-            }
-          }
-        }
-      }
-    },
-    "default_agent": {
-      "type": "string",
-      "description": "Default agent key in the agents object. 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。",
-      "pattern": "^[a-zA-Z0-9._-]{2,64}$",
-      "default": "default"
-    },
-    "agents": {
-      "type": "object",
-      "description": "按 Agent 名称索引的工作区 Agent 注册表。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。timezone、persona、safety、env、tools.tool_choice、tools.timeout_ms、execution.stream、execution.max_turns、execution.max_history_messages 和 execution.max_context_tokens 当前未接入，保存这些字段不会改变运行行为。",
-      "minProperties": 1,
-      "additionalProperties": {
-        "$ref": "#/$defs/agentConfig"
-      },
-      "propertyNames": {
-        "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-      }
-    },
-    "tooling": {
-      "$ref": "#/$defs/toolingConfig"
-    },
-    "ui": {
-      "$ref": "#/$defs/uiConfig"
-    },
-    "mcp": {
-      "$ref": "#/$defs/mcpConfig"
-    },
-    "development": {
-      "$ref": "#/$defs/developmentConfig"
-    },
-    "runtime": {
-      "$ref": "#/$defs/runtimeConfig"
-    },
-    "plugins": {
-      "$ref": "#/$defs/workspacePluginsConfig"
-    }
-  },
-  "$defs": {
-    "toolingConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "policy_defaults": {
-          "$ref": "#/$defs/toolPolicyPatch"
-        },
-        "policy_rules": {
-          "$ref": "#/$defs/toolPolicyRules"
-        },
-        "restrictions": {
-          "$ref": "#/$defs/toolPolicyRestrictions"
-        }
-      }
-    },
-
-    "toolPolicyPatch": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "execution_enabled": { "type": "boolean" },
-        "model_visible": { "type": "boolean" },
-        "confirmation_required": { "type": "boolean" },
-        "limits": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "timeout_ms": {
-              "type": "integer",
-              "minimum": 100,
-              "maximum": 300000
-            },
-            "max_result_bytes": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 104857600
-            }
-          }
-        }
-      }
-    },
-
-    "toolPolicyRules": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "by_origin": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
-        },
-        "by_kind": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
-        },
-        "by_group": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
-        },
-        "by_tool": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/toolPolicyPatch" }
-        }
-      }
-    },
-
-    "toolPolicyRestrictions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "execution_disabled": { "$ref": "#/$defs/toolPolicySelectors" },
-        "model_hidden": { "$ref": "#/$defs/toolPolicySelectors" },
-        "confirmation_required": { "$ref": "#/$defs/toolPolicySelectors" }
-      }
-    },
-
-    "toolPolicySelectors": {
-      "type": "array",
-      "uniqueItems": true,
-      "maxItems": 200,
-      "items": {
-        "type": "string",
-        "pattern": "^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$"
-      },
-      "default": []
-    },
-
-    "sessionStopPolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["scope", "jobs", "pending_messages", "debug", "background_task", "terminal", "browser", "collaboration", "goal", "thread_runtime"],
-      "properties": {
-        "scope": { "enum": ["thread", "session"] },
-        "jobs": { "enum": ["interrupt", "cancel", "delete"] },
-        "pending_messages": { "enum": ["continue", "keep", "discard"] },
-        "debug": { "enum": ["keep", "stop"] },
-        "background_task": { "enum": ["keep", "stop", "delete"] },
-        "terminal": { "enum": ["keep", "stop", "delete", "release"] },
-        "browser": { "enum": ["keep", "stop", "delete", "release"] },
-        "collaboration": { "enum": ["keep", "stop"] },
-        "goal": { "enum": ["keep", "pause"] },
-        "thread_runtime": { "enum": ["keep", "close"] }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "thread_runtime": { "const": "close" } } },
-          "then": { "properties": { "terminal": { "enum": ["release", "delete"] }, "browser": { "enum": ["release", "delete"] } } }
-        },
-        {
-          "if": { "properties": { "scope": { "const": "thread" } } },
-          "then": { "properties": { "collaboration": { "const": "keep" } } }
-        },
-        {
-          "if": { "properties": { "jobs": { "const": "delete" } } },
-          "then": { "properties": { "pending_messages": { "const": "discard" } } }
-        },
-        {
-          "if": { "properties": { "pending_messages": { "const": "continue" } } },
-          "then": { "properties": { "jobs": { "const": "interrupt" } } }
-        }
-      ]
-    },
-    "sessionStopConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["interrupt", "stop"],
-      "properties": {
-        "interrupt": { "$ref": "#/$defs/sessionStopPolicy" },
-        "stop": {
-          "allOf": [
-            { "$ref": "#/$defs/sessionStopPolicy" },
-            { "properties": { "jobs": { "enum": ["cancel", "delete"] } } }
-          ]
-        }
-      }
-    },
-    "runtimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agent": { "$ref": "#/$defs/agentRuntimeConfig" },
-        "gateway": { "$ref": "#/$defs/gatewayRuntimeConfig" },
-        "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
-        "events": { "$ref": "#/$defs/eventsRuntimeConfig" },
-        "session_stop": { "$ref": "#/$defs/sessionStopConfig" },
-        "debug": { "$ref": "#/$defs/debugRuntimeConfig" }
-      }
-    },
-
-    "workspacePluginsConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "runtime": { "$ref": "#/$defs/workspacePluginRuntimeConfig" },
-        "configuration": {
-          "type": "object", "additionalProperties": false,
-          "properties": {
-            "values": {
-              "type": "object", "default": {},
-              "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-              "additionalProperties": {
-                "type": "object",
-                "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-                "additionalProperties": {"type": "object"}
-              },
-              "description": "按包 ID／插件 ID 保存参数。未绑定参数仅保留原来源，不生效；绑定时按确切版本 schema 校验。"
-            }
-          }
-        }
-      }
-    },
-
-    "workspacePluginRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "entries": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["package_id", "plugin_id", "package_version", "enabled"],
-            "properties": {
-              "package_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-              "plugin_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-              "package_version": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$" },
-              "enabled": { "type": "boolean" }
-            }
-          }
-        }
-      }
-    },
-
-    "debugRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "是否允许 Agent 使用源码调试后端。"
-        },
-        "default_adapter": {
-          "type": "string",
-          "enum": ["node_inspector", "debugpy", "dap", "vscode"],
-          "default": "node_inspector",
-          "description": "未指定 launch profile 时使用的逻辑调试 adapter。"
-        },
-        "command_timeout_seconds": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 10,
-          "description": "单个调试后端命令的超时时间。"
-        },
-        "node": { "$ref": "#/$defs/nodeDebugRuntimeConfig" },
-        "python": { "$ref": "#/$defs/pythonDebugRuntimeConfig" },
-        "launch_profiles": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/debugLaunchProfile" },
-          "propertyNames": {
-            "pattern": "^[a-zA-Z0-9._-]{1,64}$"
-          }
-        }
-      }
-    },
-
-    "nodeDebugRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "inspector_host": {
-          "type": "string",
-          "minLength": 1,
-          "default": "127.0.0.1"
-        },
-        "inspector_port": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 0
-        },
-        "executable": {
-          "type": "string",
-          "default": "",
-          "description": "Node 可执行文件；为空时由运行时按既有环境规则解析。"
-        }
-      }
-    },
-
-    "pythonDebugRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "type": "string",
-          "const": "debugpy",
-          "default": "debugpy"
-        },
-        "debugpy_host": {
-          "type": "string",
-          "minLength": 1,
-          "default": "127.0.0.1"
-        },
-        "debugpy_port": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 0
-        }
-      }
-    },
-
-    "debugLaunchProfile": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "type": "string",
-          "enum": ["node_inspector", "debugpy", "dap", "vscode"],
-          "default": "node_inspector"
-        },
-        "runtime": {
-          "type": "string",
-          "minLength": 1,
-          "default": "node"
-        },
-        "program": {
-          "type": "string",
-          "default": ""
-        },
-        "working_directory": {
-          "type": "string",
-          "default": ""
-        },
-        "args": {
-          "type": "array",
-          "maxItems": 20,
-          "items": { "type": "string" },
-          "default": []
-        }
-      }
-    },
-
-    "agentRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "run": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "mode": { "enum": ["single_agent", "team"] , "default": "single_agent" },
-            "response_mode": { "type": "string", "minLength": 1, "default": "stream" },
-            "async": { "type": "boolean", "default": true },
-            "max_steps": { "type": "integer", "minimum": 1, "default": 20 },
-            "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 600 }
-          }
-        }
-      }
-    },
-
-    "gatewayRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "connection": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8014" },
-            "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
-          }
-        }
-      }
-    },
-
-    "workspaceRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "files": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "list": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "default_limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 }
-              }
-            },
-            "preview": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "max_bytes": { "type": "integer", "minimum": 1, "default": 1048576 },
-                "binary_sample_bytes": { "type": "integer", "minimum": 1, "default": 8192 }
-              }
-            }
-          }
-        }
-      }
-    },
-
-    "eventsRuntimeConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "trace_stream": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            // 上界是跨层契约：浏览器端唯一空闲阈值 SSE_IDLE_TIMEOUT_MS=45000ms，
-            // 取 3×心跳余量，因此心跳必须 <= 15s。超过上界的配置在此响亮失败，
-            // 而不是让前端把健康长连误判为断线。见
-            // tests/contracts/api/test_sse_idle_heartbeat_contract.py。
-            "heartbeat_interval_seconds": {
-              "type": "number",
-              "exclusiveMinimum": 0,
-              "maximum": 15,
-              "default": 15
-            }
-          }
-        }
-      }
-    },
-
-    "uiConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "default_model": {
-          "type": "string",
-          "minLength": 1,
-          "description": "可选的 UI 展示模型；省略时根据默认 Agent 的 model.primary 引用动态解析。"
-        },
-        "default_orchestration": {
-          "type": "string",
-          "minLength": 1,
-          "default": "single_agent"
-        },
-        "max_concurrent_agents": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 4
-        },
-        "allow_shell_tools": {
-          "type": "boolean",
-          "default": false
-        },
-        "ignored_paths": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "auto_summarize": {
-          "type": "boolean",
-          "default": true
-        }
-      }
-    },
-
-    "mcpConfig": {
-      "type": "object",
-      "description": "当前工作区后端可使用 Gateway 插件提供的 MCP 服务，或连接外部 Streamable HTTP MCP endpoint。工作区后端不启动 stdio MCP 子进程；连接切换与恢复由 Gateway 插件服务管理。监督参数仍需重启，混合候选整体延后。",
-      "additionalProperties": false,
-      "properties": {
-        "supervision": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "sealed_call_timeout_seconds": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 86400,
-              "default": 1800,
-              "description": "模型发送前开始保留原连接执行资格的最长秒数，包含模型生成及人工确认等待。到期拒绝尚未开始的调用，不将执行中的远端操作伪报为已停止。修改需重启工作区。"
-            }
-          }
-        },
-        "servers": {
-          "type": "object",
-          "default": {},
-          "propertyNames": {
-            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/mcpServer"
-          }
-        }
-      }
-    },
-
-    "mcpServer": {
-      "oneOf": [
-        { "$ref": "#/$defs/mcpPluginServer" },
-        { "$ref": "#/$defs/mcpStreamableHttpServer" }
-      ]
-    },
-
-    "mcpPluginServer": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["transport", "service"],
-      "properties": {
-        "enabled": { "type": "boolean", "default": false },
-        "transport": { "const": "plugin" },
-        "service": { "$ref": "#/$defs/mcpServiceReference" }
-      }
-    },
-
-    "mcpServiceReference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["gateway_id", "package_id", "package_version", "plugin_id", "service_id"],
-      "properties": {
-        "gateway_id": { "type": "string", "pattern": "^gateway_[0-9a-f]{32}$" },
-        "workspace_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
-        "package_id": { "type": "string", "minLength": 1 },
-        "package_version": { "type": "string", "minLength": 1 },
-        "plugin_id": { "type": "string", "minLength": 1 },
-        "service_id": { "type": "string", "minLength": 1 }
-      }
-    },
-
-    "mcpPrivateHeaderRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "workspace_id", "server_id", "header_name", "endpoint", "version"],
-      "description": "仅引用工作区私有凭据的不可变版本；精确绑定 Server、header 名与展开后的 endpoint。更换任一身份必须重新写入，不迁移明文。",
-      "properties": {
-        "kind": { "const": "mcp_private_header" },
-        "workspace_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
-        "server_id": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$" },
-        "header_name": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
-        "endpoint": {
-          "type": "string", "format": "uri", "minLength": 1,
-          "pattern": "^[^#]*$",
-          "not": { "pattern": "^[^:/?#]+://[^/?#]*@" }
-        },
-        "version": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
-      }
-    },
-
-    "mcpStreamableHttpServer": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "transport",
-        "url"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "transport": {
-          "const": "streamable_http"
-        },
-        "url": {
-          "type": "string",
-          "format": "uri",
-          "minLength": 1
-        },
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "oneOf": [
-              { "type": "string" },
-              { "$ref": "#/$defs/mcpPrivateHeaderRef" }
-            ]
-          },
-          "default": {}
-        },
-        "oauth": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["redirect_uri"],
-          "description": "显式启用标准 MCP OAuth；回调必须到实际工作区 owner。未配置时保留 headers 凭据引用行为；变更本对象需重启工作区。",
-          "properties": {
-            "redirect_uri": {
-              "type": "string",
-              "format": "uri",
-              "minLength": 1,
-              "description": "实际 owner 可达的回调 URI，支持环境变量引用；仅 loopback 可使用 HTTP。不得填写客户端本机地址冒充远端工作区。"
-            }
-          }
-        }
-      }
-    },
-
-    "developmentConfig": {
-      "type": "object",
-      "description": "仅由开发安装生成器写入的功能开关。支持热重载，从下一轮 Job 开始生效。",
-      "additionalProperties": false,
-      "properties": {
-        "test_tools": {
-          "type": "boolean",
-          "default": false
-        }
-      }
-    },
-
-    "provider": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "models"
-      ],
-      "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "defaults": {
-          "$ref": "#/$defs/modelOptions"
-        },
-        "models": {
-          "type": "object",
-          "propertyNames": {
-            "pattern": "^[a-zA-Z0-9._-]{1,64}$"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/modelDefinition"
-          }
-        }
-      }
-    },
-
-    "agentConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "name",
-        "instructions",
-        "model"
-      ],
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Display name of the agent",
-          "minLength": 1,
-          "maxLength": 100
-        },
-        "description": {
-          "type": "string",
-          "maxLength": 1000
-        },
-        "language": {
-          "type": "string",
-          "description": "Default response language",
-          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
-          "default": "zh-CN"
-        },
-        "timezone": {
-          "type": "string",
-          "description": "Default timezone, preferably IANA timezone name",
-          "minLength": 1,
-          "maxLength": 64,
-          "default": "Asia/Shanghai"
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "uniqueItems": true,
-          "maxItems": 20,
-          "default": []
-        },
-        "persona": {
-          "$ref": "#/$defs/agentPersona"
-        },
-        "instructions": {
-          "$ref": "#/$defs/agentInstructions"
-        },
-        "model": {
-          "$ref": "#/$defs/agentModel"
-        },
-        "tools": {
-          "$ref": "#/$defs/agentTools"
-        },
-        "safety": {
-          "$ref": "#/$defs/agentSafety"
-        },
-        "execution": {
-          "$ref": "#/$defs/agentExecution"
-        },
-        "env": {
-          "$ref": "#/$defs/agentEnv"
-        }
-      }
-    },
-
-    "agentPersona": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "role": {
-          "type": "string",
-          "maxLength": 100
-        },
-        "tone": {
-          "type": "string",
-          "enum": [
-            "professional",
-            "friendly",
-            "concise",
-            "formal",
-            "technical"
-          ],
-          "default": "professional"
-        },
-        "identity": {
-          "type": "string",
-          "maxLength": 2000
-        },
-        "verbosity": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "default": "medium"
-        }
-      }
-    },
-
-    "agentInstructions": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "system_prompt"
-      ],
-      "properties": {
-        "system_prompt": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 30000
-        },
-        "system_prompt_file": {
-          "type": ["string", "null"],
-          "minLength": 1,
-          "description": "null 使用 inline system_prompt；files 资源 URI 由目标文件 owner 稳定读取并替换正文，不接受真实路径或请求期读取。"
-        },
-        "runtime_identity": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "description": {
-              "type": "string",
-              "maxLength": 20000,
-              "description": "R02 可覆盖说明；不修改软件生成的工作区范围、Agent 身份及配置候选事实。省略时不附加说明。"
-            },
-            "description_file": {
-              "type": ["string", "null"],
-              "minLength": 1,
-              "description": "null 使用 inline description；files 资源 URI 替换说明正文，软件身份事实仍由运行时生成。"
-            }
-          }
-        },
-        "developer_prompt": {
-          "type": "string",
-          "maxLength": 20000
-        },
-        "fallback_prompt": {
-          "type": "string",
-          "maxLength": 5000
-        }
-      }
-    },
-
-    "agentModel": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "primary"
-      ],
-      "properties": {
-        "temperature": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 2,
-          "description": "Optional explicit sampling temperature. Omit to use the provider/model default."
-        },
-        "top_p": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Optional explicit nucleus sampling value. Omit to use the provider/model default."
-        },
-        "max_output_tokens": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Optional explicit output cap. Omit to avoid imposing a client-side output limit."
-        },
-        "primary": {
-          "$ref": "#/$defs/modelReference"
-        },
-        "fallbacks": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/modelReference"
-          },
-          "default": []
-        }
-      }
-    },
-    "agentTools": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "policy": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "rules": { "$ref": "#/$defs/toolPolicyRules" },
-            "restrictions": { "$ref": "#/$defs/toolPolicyRestrictions" }
-          }
-        },
-        "tool_choice": {
-          "type": "string",
-          "enum": [
-            "none",
-            "auto",
-            "required"
-          ],
-          "default": "auto"
-        },
-        "timeout_ms": {
-          "type": "integer",
-          "minimum": 100,
-          "maximum": 300000,
-          "default": 10000
-        },
-        "allowlist": {
-          "type": "array",
-          "description": "恢复列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。默认所有工具可用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
-          },
-          "uniqueItems": true,
-          "maxItems": 100,
-          "default": []
-        },
-        "denylist": {
-          "type": "array",
-          "description": "禁用列表。工具全集为 U：先把 denylist 展开为禁用集合 D，再把 allowlist 展开为恢复集合 A；最终禁用 D-A，最终可用 U-(D-A)。扩展子工具直接按其 name 禁用。保留值 all 表示所有工具，extensions 表示所有扩展子工具。",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
-          },
-          "uniqueItems": true,
-          "maxItems": 100,
-          "default": []
-        },
-        "confirmation_required": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
-          },
-          "uniqueItems": true,
-          "maxItems": 100,
-          "default": []
-        },
-        "custom": {
-          "type": "array",
-          "description": "内置工具使用稳定 tool_id；第三方扩展使用 name 与 factory。",
-          "items": {
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["tool_id"],
-                "properties": {
-                  "tool_id": {
-                    "type": "string",
-                    "enum": [
-                      "connections.manage", "read_context", "search_context", "discover_workspaces", "search_resources", "web_search", "fetch_webpage",
-                      "listBrowserPage", "openBrowserPage", "readPage", "navigatePage", "clickElement",
-                      "typeInPage", "hoverElement", "dragElement", "handleDialog",
-                      "screenshotPage", "runPlaywrightCode", "test_tool_2", "large_test_output"
-                    ]
-                  },
-                  "options": {
-                    "type": "object",
-                    "description": "传给该工具 factory 的专属配置。",
-                    "additionalProperties": true
-                  },
-                  "skills": {
-                    "type": "array",
-                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
-                    "items": {
-                      "type": "string",
-                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                    },
-                    "uniqueItems": true,
-                    "maxItems": 20,
-                    "default": []
-                  },
-                  "description": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "工具目录中展示的扩展工具说明。"
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["name", "factory"],
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
-                  },
-                  "factory": {
-                    "type": "string",
-                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
-                  },
-                  "options": {
-                    "type": "object",
-                    "description": "传给该工具 factory 的专属配置。",
-                    "additionalProperties": true
-                  },
-                  "skills": {
-                    "type": "array",
-                    "description": "独立工具归属配置:该工具触发事件归因到的 Skill 名。",
-                    "items": {
-                      "type": "string",
-                      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                    },
-                    "uniqueItems": true,
-                    "maxItems": 20,
-                    "default": []
-                  },
-                  "description": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "工具目录中展示的扩展工具说明。"
-                  }
-                }
-              }
-            ]
-          },
-          "uniqueItems": true,
-          "maxItems": 100,
-          "default": []
-        }
-      }
-    },
-    "agentSafety": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "policy_mode": {
-          "type": "string",
-          "enum": [
-            "off",
-            "standard",
-            "strict"
-          ],
-          "default": "standard"
-        },
-        "prompt_injection_protection": {
-          "type": "boolean",
-          "default": true
-        },
-        "pii_redaction": {
-          "type": "boolean",
-          "default": true
-        },
-        "refuse_secrets_exfiltration": {
-          "type": "boolean",
-          "default": true
-        }
-      }
-    },
-
-    "agentExecution": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "stream": {
-          "type": "boolean",
-          "default": true
-        },
-        "max_turns": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100,
-          "default": 16
-        },
-        "max_history_messages": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 200,
-          "default": 30
-        },
-        "max_context_tokens": {
-          "type": "integer",
-          "minimum": 512,
-          "maximum": 200000,
-          "default": 32000
-        },
-        "require_delegated_report": {
-          "type": "boolean",
-          "default": false,
-          "description": "是否强制委派子 Agent 通过 send_message_to_session 向父会话报告结果"
-        }
-      }
-    },
-
-    "agentEnv": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "development",
-            "staging",
-            "production"
-          ],
-          "default": "development"
-        },
-        "region": {
-          "type": "string",
-          "maxLength": 64,
-          "default": ""
-        },
-        "feature_flags": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "boolean"
-          },
-          "default": {}
-        }
-      }
-    },
-    "modelOptions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "endpoint": {
-          "type": "string",
-          "format": "uri",
-          "minLength": 1
-        },
-        "api_key": {
-          "type": "string",
-          "pattern": "^(?:secret:sec_[a-f0-9]{32}|\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}|)$",
-          "description": "所属 Gateway 的密钥引用、目标 Workspace 的环境引用或显式无认证空值；不接受密钥字面量。"
-        },
-        "auth": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "method"
-          ],
-          "description": "Provider 专属认证。ChatGPT OAuth 凭据由 LiteLLM 在 BOXTEAM_HOME/auth/chatgpt 下独立维护。",
-          "properties": {
-            "type": {
-              "const": "oauth"
-            },
-            "method": {
-              "const": "chatgpt"
-            }
-          }
-        },
-        "custom_llm_provider": {
-          "type": "string",
-          "minLength": 1,
-          "description": "LiteLLM custom_llm_provider 参数，例如 openai、openrouter、anthropic。"
-        },
-        "api_mode": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "来源及 Provider/Model 两阶段合并后的协议、传输、能力和 reasoning 线格式。",
-          "properties": {
-            "protocol": {
-              "type": "string",
-              "enum": [
-                "chat_completions",
-                "responses",
-                "anthropic_messages"
-              ],
-              "description": "选择 LiteLLM 请求协议；custom_llm_provider 只选择适配族，不替代协议。"
-            },
-            "model_info": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "模型能力声明，字段名与 LiteLLM ModelInfo 的 supports_* 字段保持一致；supports_video_input 是本项目对视频输入的显式补充。",
-              "properties": {
-                "max_input_tokens": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "显式声明模型输入上下文容量，写入 LangChain model.profile；不作为上游请求参数，也不推导输出上限。"
-                },
-                "supports_vision": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受图片输入；对应 LiteLLM supports_vision。"
-                },
-                "supports_video_input": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受视频输入；LiteLLM 当前没有统一 supports_video 字段，因此由本项目显式声明。"
-                },
-                "supports_audio_input": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否接受音频输入；对应 LiteLLM supports_audio_input。"
-                },
-                "supports_audio_output": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否能输出音频；对应 LiteLLM supports_audio_output，当前只作为能力声明保存。"
-                },
-                "supports_function_calling": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否支持工具/函数调用；对应 LiteLLM supports_function_calling。"
-                },
-                "supports_reasoning": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "模型是否支持 reasoning；必须与 supports_reasoning 下至少一个实际线格式字段一致。"
-                }
-              }
-            },
-            "supports_reasoning": {
-              "type": "object",
-              "description": "按 protocol 声明模型返回和接收的 reasoning 字段；这里描述 wire format，不复制到 AIMessage.additional_kwargs。",
-              "x-merge": "replace",
-              "oneOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "reasoning_content": {
-                      "type": "boolean",
-                      "default": false,
-                      "description": "Chat Completions 的 assistant.reasoning_content。"
-                    },
-                    "thinking_blocks": {
-                      "type": "boolean",
-                      "default": false,
-                      "description": "Chat Completions 兼容端返回 thinking_blocks。"
-                    }
-                  },
-                  "anyOf": [
-                    {
-                      "required": [
-                        "reasoning_content"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "thinking_blocks"
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "reasoning_items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "summary",
-                        "encrypted_content"
-                      ],
-                      "properties": {
-                        "summary": {
-                          "type": "boolean",
-                          "description": "Responses reasoning item 的 summary。"
-                        },
-                        "encrypted_content": {
-                          "type": "boolean",
-                          "description": "Responses reasoning item 的 encrypted_content。"
-                        }
-                      }
-                    }
-                  },
-                  "required": [
-                    "reasoning_items"
-                  ]
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "thinking_blocks": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "thinking",
-                        "redacted_thinking"
-                      ],
-                      "properties": {
-                        "thinking": {
-                          "type": "boolean",
-                          "description": "Anthropic Messages thinking block 的明文 thinking。"
-                        },
-                        "redacted_thinking": {
-                          "type": "boolean",
-                          "description": "Anthropic Messages thinking block 的 redacted_thinking。"
-                        }
-                      }
-                    }
-                  },
-                  "required": [
-                    "thinking_blocks"
-                  ]
-                },
-                {
-                  "maxProperties": 0
-                }
-              ]
-            },
-            "request_features": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "请求适配器可选附加的特性，不属于模型输入输出能力。",
-              "properties": {
-                "prompt_cache_key": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "是否向 Chat Completions 请求附加 prompt_cache_key。"
-                }
-              }
-            },
-            "replay_policy": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "历史 reasoning 回放规则；加密内容不能仅凭 custom_llm_provider 相同而回放。",
-              "properties": {
-                "encrypted_content": {
-                  "type": "string",
-                  "enum": [
-                    "same_source"
-                  ],
-                  "default": "same_source",
-                  "description": "仅相同完整模型、归属、连接、协议和认证来源可回放密文。"
-                }
-              }
-            },
-            "streaming": {
-              "type": "boolean",
-              "description": "上游传输模式；最终未声明时为 true。"
-            }
-          }
-        },
-        "auth_header": {
-          "type": "string",
-          "minLength": 1
-        },
-        "request_options": {
-          "type": "object",
-          "description": "Provider-specific request options passed to the chat model client.",
-          "additionalProperties": false,
-          "default": {},
-          "properties": {
-            "default_headers": {
-              "type": "object",
-              "description": "Additional default HTTP headers for this provider.",
-              "x-key-casefold": true,
-              "additionalProperties": {
-                "type": "string"
-              },
-              "default": {}
-            },
-            "no_proxy": {
-              "type": "boolean",
-              "default": false,
-              "description": "该 Provider 的请求是否绕过 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；用于本地或内网网关，避免被全局代理拦截。需要重启工作区后端。"
-            },
-            "parameters": {
-              "type": "object",
-              "description": "请求默认或覆盖；Agent 及本次调用显式参数优先，最终 null 表示不发送，扩展放入 extra_body。",
-              "x-key-aliases": {"max_tokens": "max_output_tokens"},
-              // TODO: Workspace v4 信封切换时，将参数的对象值改为 x-merge: replace，和版本语义一起切换。
-              "additionalProperties": true,
-              "default": {}
-            }
-          }
-        }
-      }
-    },
-    "resolvedModelOptions": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/modelOptions"
-        },
-        {
-          "required": [
-            "endpoint",
-            "custom_llm_provider",
-            "api_mode"
-          ],
-          "properties": {
-            "api_mode": {
-              "required": [
-                "protocol",
-                "model_info",
-                "supports_reasoning"
-              ]
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "auth"
-            ]
-          },
-          "then": {
-            "properties": {
-              "custom_llm_provider": {
-                "const": "chatgpt"
-              },
-              "api_mode": {
-                "properties": {
-                  "protocol": {
-                    "const": "responses"
-                  }
-                }
-              }
-            }
-          },
-          "else": {
-            "required": [
-              "api_key"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "api_mode": {
-                "properties": {
-                  "protocol": {
-                    "const": "anthropic_messages"
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "custom_llm_provider": {
-                "const": "anthropic"
-              }
-            }
-          }
-        }
-      ]
-    },
-    "modelDefinition": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "model"
-      ],
-      "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "model": {
-          "type": "string",
-          "minLength": 1
-        },
-        "overrides": {
-          "$ref": "#/$defs/modelOptions"
-        }
-      }
-    },
-    "modelReference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "provider_id",
-        "model_id"
-      ],
-      "properties": {
-        "provider_id": {
-          "type": "string",
-          "pattern": "^[a-zA-Z0-9._-]{2,64}$"
-        },
-        "model_id": {
-          "type": "string",
-          "pattern": "^[a-zA-Z0-9._-]{1,64}$"
-        }
-      }
-    }
-  }
+  ]
 }

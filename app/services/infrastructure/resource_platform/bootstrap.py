@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -17,6 +17,7 @@ from typing import cast
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.abstractions.resource_file_content import ResourceFileReader
+from app.runtime.network_proxy import ProxyRoutes
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
@@ -38,6 +39,9 @@ from app.services.infrastructure.resource_platform.sources.gateway_resource_navi
 )
 from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
     GatewaySkillSources,
+)
+from app.services.infrastructure.resource_platform.sources.http_skill_fetch import (
+    HttpSkillFetch,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
@@ -136,6 +140,7 @@ def bootstrap_resource_platform(
     file_paths: WorkspaceFilePaths | None = None,
     artifact_reader: ResourceFileReader | None = None,
     gateway_skill_updates: SourceUpdatePolicy | None = None,
+    workspace_proxy_routes: Callable[[], Awaitable[ProxyRoutes]] | None = None,
 ) -> ResourcePlatform:
     """按固定顺序装配进程级资源平台。
 
@@ -182,7 +187,9 @@ def bootstrap_resource_platform(
             update_policy=gateway_skill_updates,
         )
         scope.register(gateway_skill_sources.close, label="gateway-skill-sources")
-    configured_skill_sources = ConfiguredSkillSources(scope="workspace", scope_id=workspace_id, channel=observation_channel) if workspace_id is not None else None
+    configured_skill_sources = ConfiguredSkillSources(scope="workspace", scope_id=workspace_id, channel=observation_channel,
+        runtimes={"http": HttpSkillFetch(routes_provider=workspace_proxy_routes)} if workspace_proxy_routes is not None else None,
+    ) if workspace_id is not None else None
     if configured_skill_sources is not None:
         scope.register(configured_skill_sources.close, label="workspace-http-skills")
     return ResourcePlatform(

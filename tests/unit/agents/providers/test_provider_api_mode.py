@@ -31,6 +31,8 @@ from app.agents.upstream_request_trace import (
 )
 from app.core.failures import is_provider_failure
 from app.runtime.agent_runtime import prepare_agent_model
+from app.runtime.chatgpt_auth import ChatGPTCredential
+from app.runtime.network_proxy import ProxyRoutes
 from app.runtime.provider_model import build_model_from_provider
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.orchestration.event_stream.model_events import (
@@ -393,8 +395,8 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         lambda: None,
     )
     monkeypatch.setattr(
-        "app.runtime.chatgpt_auth.ensure_chatgpt_oauth_ready",
-        lambda _token_dir: None,
+        "app.runtime.chatgpt_auth.prepare_chatgpt_oauth",
+        lambda _token_dir, **_kwargs: ChatGPTCredential("test-oauth-token", None),
     )
     monkeypatch.setattr(
         "app.runtime.chatgpt_auth.ensure_litellm_chatgpt_model_capabilities",
@@ -402,6 +404,7 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
     )
     provider = {
         "provider_id": "backup_4",
+        "auth_proxy_routes": ProxyRoutes(()),
         "model_id": "general",
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
@@ -1478,6 +1481,7 @@ def test_responses_failure_events_are_marked_as_provider_failures(event_type: st
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=ProxyRoutes(()),
     )
 
     with pytest.raises(RuntimeError, match="LiteLLM Responses 请求失败") as raised:

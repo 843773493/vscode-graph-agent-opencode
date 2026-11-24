@@ -6,7 +6,99 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from configs.runtime import validate_config
+from app.services.infrastructure.config.source_uri import config_file_uri
+from configs.inheritance import ConfigGraph
+from configs.installer import install_user_configuration
+from configs.runtime import (
+    merge_json_objects,
+    read_jsonc_object,
+    validate_config,
+    validate_config_document_payload,
+    validate_config_payload,
+)
+
+
+@pytest.fixture(scope="module")
+def workspace_schema() -> dict[str, object]:
+    return read_jsonc_object(Path.cwd() / "configs/workspace_schema.jsonc")
+
+
+@pytest.fixture
+def workspace_graph(tmp_path: Path, workspace_schema: dict[str, object]) -> ConfigGraph:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_root = tmp_path / "home/config"
+    install_user_configuration(config_root=config_root, profile="default", workspace_root=workspace)
+    entry = workspace / ".boxteam/workspace.jsonc"
+    aliases = {
+        "builtin:workspace": Path.cwd() / "configs/workspace_inline.jsonc",
+        "user:workspace": config_root / "workspace.jsonc",
+        "user:workspace_local": config_root / "workspace_local.jsonc",
+    }
+    names = {path: alias.replace(":", "_") for alias, path in aliases.items()}
+    names[entry] = "workspace_root"
+    return ConfigGraph(
+        domain="workspace", version=4, owner_id="workspace-test", entry=entry, aliases=aliases,
+        settings_schema={"$ref": "#/$defs/effectiveSettings", "$defs": workspace_schema["$defs"]},
+        options_schema={"$ref": "#/$defs/effectiveOptions", "$defs": workspace_schema["$defs"]},
+        source_key=lambda path: names[path],
+        source_uri=lambda path: config_file_uri(scope="user", scope_id="local", logical_name=names[path]),
+        authorize_source=lambda path: path in names,
+    )
+
+
+def test_workspace_initialization_resolves_the_written_chain_and_all_model_nodes(workspace_graph: ConfigGraph) -> None:
+    scope = workspace_graph.resolve_scope()
+    assert len(scope.chain) == 4
+    assert scope.settings["model_options"]["api_mode"]["streaming"] is True
+    for provider_id, provider in scope.settings["workspace"]["llm"]["providers"].items():
+        workspace_graph.resolve_provider(provider_id)
+        for model_id in provider["models"]:
+            options = workspace_graph.resolve_model(provider_id, model_id).settings
+            assert options["model_options"]["api_mode"]["streaming"] is True
+    assert workspace_graph.resolve_provider("DeepSeek-V4.1-Flash").settings["network"]["proxy"]["mode"] == "direct"
+
+
+def test_workspace_document_and_flat_payload_require_their_explicit_validation_port(
+    workspace_schema: dict[str, object],
+) -> None:
+    document = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
+    payload = {**document["settings"]["workspace"], "network": document["settings"]["network"], "config_version": 4}
+    assert validate_config_document_payload(document, schema=workspace_schema) is document
+    assert validate_config_payload(payload, schema=workspace_schema) is payload
+    with pytest.raises(ValueError, match="配置验证失败"):
+        validate_config_payload(document, schema=workspace_schema)
+    with pytest.raises(ValueError, match="配置验证失败"):
+        validate_config_document_payload(payload, schema=workspace_schema)
+
+
+def test_connection_options_allow_metadata_to_be_filled_before_final_validation(workspace_schema: dict[str, object]) -> None:
+    options = {"endpoint": "https://example.test/v1", "api_key": "", "custom_llm_provider": "openai",
+               "api_mode": {"protocol": "chat_completions"}}
+    definitions = workspace_schema["$defs"]
+    jsonschema.validate(options, {"$ref": "#/$defs/connectionModelOptions", "$defs": definitions})
+    final = {"$ref": "#/$defs/resolvedModelOptions", "$defs": definitions}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(options, final)
+    options["api_mode"].update(model_info={}, supports_reasoning={})
+    jsonschema.validate(options, final)
+    options["request_options"] = {"no_proxy": True}
+    with pytest.raises(jsonschema.ValidationError, match="no_proxy"):
+        jsonschema.validate(options, final)
+
+
+def test_workspace_v4_schema_replaces_parameter_objects_and_keeps_header_merge(workspace_schema: dict[str, object]) -> None:
+    schema = {"$ref": "#/$defs/effectiveSettings", "$defs": workspace_schema["$defs"]}
+    merged = merge_json_objects(
+        {"model_options": {"request_options": {"parameters": {"extra_body": {"parent": True, "keep": 1}},
+                                               "default_headers": {"X-Parent": "kept"}}}},
+        {"model_options": {"request_options": {"parameters": {"extra_body": {"keep": 0}},
+                                               "default_headers": {"X-Child": "added"}}}},
+        schema=schema,
+    )
+    assert merged["model_options"]["request_options"] == {
+        "parameters": {"extra_body": {"keep": 0}}, "default_headers": {"X-Parent": "kept", "X-Child": "added"},
+    }
 
 
 @pytest.mark.parametrize("native", ["/private/config/secret-marker", r"C:\private\config\secret-marker"])

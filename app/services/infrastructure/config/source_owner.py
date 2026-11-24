@@ -424,7 +424,7 @@ class WorkspaceSourceOwner:
             raise RuntimeError("source owner fanout 提交后无法读取")
         return record
 
-    def list_fanout(self, *, source_generation: int) -> tuple[SourceFanoutRecord, ...]:
+    def list_fanout(self, *, source_generation: int, source_key: str = SHARED_USER_WORKSPACE_SOURCE_KEY) -> tuple[SourceFanoutRecord, ...]:
         """历史消费者缺本代报告时明确未知；不据 Gateway 登记补造待应用成员。"""
         connection = self._connect()
         try:
@@ -443,7 +443,7 @@ class WorkspaceSourceOwner:
                  AND current.source_generation = ?
                 ORDER BY observed.workspace_id
                 """,
-                (source_generation, SHARED_USER_WORKSPACE_SOURCE_KEY, source_generation),
+                (source_generation, source_key, source_generation),
             ).fetchall()
         finally:
             connection.close()

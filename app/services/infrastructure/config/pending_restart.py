@@ -13,7 +13,7 @@ from app.services.infrastructure.config.state import (
     ConfigLifecycleState,
     ConfigPendingCandidateRecord,
     ConfigResult,
-    build_secret_binding_summary,
+    build_snapshot_secret_binding_summary,
     changed_json_paths,
     dump_json,
     new_config_id,
@@ -52,8 +52,8 @@ class PendingRestartCoordinator:
             raise ConfigConflictError(
                 "Workspace pending candidate 缺少 target generation 或 fencing token"
             )
-        secret_bindings = build_secret_binding_summary(
-            pending.payload,
+        secret_bindings = build_snapshot_secret_binding_summary(
+            pending.payload, pending.source_baseline,
             resolve_environment=True,
         )
         secret_binding_digest = hashlib.sha256(
@@ -120,7 +120,7 @@ class PendingRestartCoordinator:
                 source="gateway-runtime-controller",
                 result=result,
                 activation_scope="restart_workspace",
-                deferred_paths=(() if old_runtime_recovered else ()),
+                deferred_paths=(),
                 error=error,
             ),
         )
@@ -249,8 +249,8 @@ class PendingRestartCoordinator:
                 layer_revisions=layer_revisions,
                 layer_digests=layer_digests,
                 effective_digest=pending.effective_digest,
-                secret_bindings=build_secret_binding_summary(
-                    pending.payload,
+                secret_bindings=build_snapshot_secret_binding_summary(
+                    pending.payload, pending.source_baseline,
                     resolve_environment=True,
                 ),
                 schema_version=1,
@@ -395,8 +395,8 @@ class PendingRestartCoordinator:
             raise ConfigConflictError(
                 "Workspace pending candidate 缺少 target generation 或 fencing token"
             )
-        secret_bindings = build_secret_binding_summary(
-            pending.payload,
+        secret_bindings = build_snapshot_secret_binding_summary(
+            pending.payload, pending.source_baseline,
             resolve_environment=True,
         )
         secret_binding_digest = hashlib.sha256(

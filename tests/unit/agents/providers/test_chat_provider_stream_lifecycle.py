@@ -9,6 +9,7 @@ from langchain_litellm import ChatLiteLLM
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.core.failures import is_provider_failure
+from app.runtime.network_proxy import ProxyRoutes
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
@@ -19,6 +20,8 @@ from app.core.turn_execution_scope import (
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+
+DIRECT_PROXY_ROUTES = ProxyRoutes(())
 
 
 class _ChatCompletionChunkStream:
@@ -113,6 +116,7 @@ async def test_raw_semantic_delta_reaches_hook_before_langchain_yield(
         custom_llm_provider="openai",
         streaming=True,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     observed: list[str] = []
 
@@ -165,6 +169,7 @@ async def test_async_delta_hook_cancellation_stops_upstream_iteration(
         custom_llm_provider="openai",
         streaming=True,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     stream = _ChatCompletionChunkStream(
         [_chat_text_chunk("不会继续"), _chat_synthetic_finish_chunk()],
@@ -204,6 +209,7 @@ async def test_async_reader_cancels_pending_litellm_anext_and_closes_stream(
         custom_llm_provider="openai",
         streaming=True,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     class BlockingStream:
@@ -293,6 +299,7 @@ async def test_incomplete_stream_is_not_retried_after_semantic_delta(
         max_retries=1,
         streaming=True,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     published_chunks = []
@@ -332,6 +339,7 @@ async def test_chat_provider_call_marks_and_preserves_original_exception(
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(UpstreamError) as raised:
@@ -375,6 +383,7 @@ async def test_chat_stream_iteration_marks_original_upstream_exception(
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(UpstreamError) as raised:
@@ -411,6 +420,7 @@ async def test_chat_stream_iterator_acquisition_marks_original_error(
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -449,6 +459,7 @@ def test_sync_chat_stream_iterator_acquisition_marks_original_error(
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -489,6 +500,7 @@ async def test_synthetic_finish_reason_exposes_partial_tool_call_then_fails(
         max_retries=2,
         streaming=True,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     published_chunks = []
 

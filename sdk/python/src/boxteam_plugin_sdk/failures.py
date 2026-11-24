@@ -33,6 +33,7 @@ class ValidationIssue(TypedDict):
     path: list[str | int]
     code: str
     message: str
+    path_exact: bool
 
 
 class PublicError(TypedDict):
@@ -83,21 +84,24 @@ def validation_issues(error: BaseException, *, secrets: Iterable[str] = ()) -> l
     elif isinstance(error, JsonSchemaError):
         code = str(error.validator or "unknown_validation")
         path = list(islice(error.absolute_path, 32))
+        path_exact = len(error.absolute_path) <= 32
         if len(error.absolute_path) > 32:
             path[-1] = _MARKER
         if code in {"additionalProperties", "unevaluatedProperties"}:
             path.append("<extra>")
+            path_exact = False
         if code == "required" and isinstance(error.instance, dict):
             for field in islice(error.validator_value, 32):
                 if field not in error.instance:
                     path.append(field)
+                    path_exact = False
                     break
         message = f"未满足 JSON schema {code} 约束"
         # 只取官方规则中的必要标量事实，不渲染输入或复制 enum/pattern/schema。
         constraint = error.validator_value
         if type(constraint) in (int, float, bool) or code == "type" and isinstance(constraint, str):
             message += ": " + _clip(str(constraint), 128)
-        raw = ({"loc": path, "type": code, "msg": message},)
+        raw = ({"loc": path, "type": code, "msg": message, "path_exact": path_exact},)
     else:
         return []
     result: list[ValidationIssue] = []
@@ -105,19 +109,25 @@ def validation_issues(error: BaseException, *, secrets: Iterable[str] = ()) -> l
         path: list[str | int] = []
         path_bytes = 0
         location = issue["loc"]
+        path_exact = issue.get("path_exact", True)
         if issue["type"] == "extra_forbidden":
             location = (*location[:-1], "<extra>")
+            path_exact = False
         for part in islice(location, 32):
             selected = part if isinstance(part, int) else _clip(redact_failure_text(str(part), secrets=secrets), 256)
+            path_exact &= isinstance(part, (str, int)) and selected == part
             path_bytes += _size(selected)
             if path_bytes > 1024:
                 path.append(_MARKER)
+                path_exact = False
                 break
             path.append(selected)
         if len(location) > 32 and path:
             path[-1] = _MARKER
+            path_exact = False
         entry: ValidationIssue = {"path": path, "code": _clip(redact_failure_text(str(issue["type"]), secrets=secrets), 128),
-                       "message": _clip(redact_failure_text(str(issue["msg"]), secrets=secrets), 1024)}
+                       "message": _clip(redact_failure_text(str(issue["msg"]), secrets=secrets), 1024),
+                       "path_exact": path_exact}
         if _size(result) + _size(entry) > MESSAGE_BYTES:
             break
         result.append(entry)

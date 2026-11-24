@@ -89,6 +89,7 @@ const settingsHeaderRequests = [], settingsHeaderDirectory = {
   sources: [{ source_key: 'workspace_user', uri: 'boxteam-source://gateway/workspace/source.jsonc' }],
   schema_uri: 'boxteam-schema://gateway/workspace/schema.json',
 };
+const settingsHeaderSurfaces = [], settingsHeaderCommands = [];
 let headerLifetimes = 0;
 const { configSourceEditorUri } = evaluate(await source('src/settings/sourceEditor.ts', true),
   ['configSourceScheme', 'configSourceEditorUri'], { URI });
@@ -123,7 +124,7 @@ class HeaderElement {
 const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
   Disposable, DisposableStore, ITargetSettingsContext, ICommandService: serviceIdentifier(), INotificationService: serviceIdentifier(),
   IContextViewService: serviceIdentifier(), IInstantiationService: serviceIdentifier(), IEditorService: serviceIdentifier(),
-  IEditorGroupsService: serviceIdentifier(), IQuickInputService: serviceIdentifier(),
+  IEditorGroupsService: serviceIdentifier(), IQuickInputService: serviceIdentifier(), ILogService: serviceIdentifier(),
   Link: class {
     constructor(container, descriptor, options) {
       this.element = new HeaderElement(); this.element.textContent = descriptor.label;
@@ -146,6 +147,10 @@ const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts'
   listManagementTargets: async () => [{ gateway_id: 'gateway-entry', name: '本地', connection_kind: 'local' }],
   managementGateway: () => ({ gateway_id: 'gateway-entry', name: '本地', connection_kind: 'local' }),
   managementWorkspace: () => ({}), selectManagementTarget() {},
+  createElement: (type, props, ...children) => ({ type, props, children }), ChangeEvent: {},
+  ReactSurface: class { constructor() { settingsHeaderSurfaces.push(this); } render(tree) { this.tree = tree; } dispose() {} },
+  ConfigurationProxyFields: () => null, definitionObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
+  definitionValue: (value, path) => path.reduce((current, part) => current?.[part], value),
   document: { createElement: () => new HeaderElement() }, clearNode: element => { element.textContent = ''; },
 });
 const { definitionObject, definitionValue } = evaluate(await source('../web/src/components/settings/ConfigurationEntities.tsx', true),
@@ -153,7 +158,9 @@ const { definitionObject, definitionValue } = evaluate(await source('../web/src/
 let chooseCredentialImplementation = async () => '';
 const { ConfigurationEntityView } = evaluate(await source('src/settings/entities.tsx', true), ['ConfigurationEntityView'],
   { Disposable, definitionObject, definitionValue, generateUuid: () => '00000000-0000-4000-8000-000000000001',
-    chooseProviderCredential: (...args) => chooseCredentialImplementation(...args) }, ['create', 'addModel', 'setSecret']);
+    localProfilePath: () => undefined, chooseProviderCredential: (...args) => chooseCredentialImplementation(...args) },
+  ['create', 'input', 'addModel', 'createModelNode', 'copyNode', 'setSecret', 'check', 'nodeKey', 'rememberNode',
+    'nodeReady', 'editNode', 'editNodeFields']);
 const parseSearchQuery = evaluate(await source('workbench/contrib/preferences/browser/settingsTreeModels.ts'),
   ['tagRegex', 'extensionRegex', 'featureRegex', 'idRegex', 'languageRegex', 'parseQuery'], {
     MODIFIED_SETTING_TAG, POLICY_SETTING_TAG, AGENTS_WINDOW_SETTING_TAG, ENABLE_LANGUAGE_FILTER,
@@ -381,6 +388,7 @@ async function searchFixture() {
   const registration = ai.registerSettingsSearchProvider({ searchSettings(query, _options, token) { requests.push({ query, token }); } });
   pane.searchDelayer = new Delayer(0);
   pane.searchInputDelayer = new Delayer(0);
+  pane.targetSettingsContext = { target: undefined };
   pane.viewState = { settingsTarget: ConfigurationTarget.USER_REMOTE };
   pane.defaultSettingsEditorModel = { settingsGroups: [{ id: 'defaults', sections: [{ settings: [] }] }, { id: 'sample', sections: [{ settings: [] }] }] };
   pane.preferencesSearchService = {
@@ -468,7 +476,7 @@ function makeSource(locationValue) {
   const gateway = !locationValue.workspace_id;
   const jsonc = gateway
     ? `// 保留来源注释\n{\n  "config_version": 6,\n  "extends": "base",\n  "settings": { "gateway": {}, "network": {} },\n  "profiles": { "base": { "settings": { "network": {} } } }\n}\n`
-    : `// 保留来源注释\n{\n  "config_version": 2,\n  "untouched": { "value": 9 }\n}\n`;
+    : `// 保留来源注释\n{\n  "config_version": 4,\n  "extends": "user:workspace_local",\n  "settings": { "workspace": { "network": {}, "llm": { "providers": {} }, "default_agent": "default", "agents": {}, "logging": {}, "a.b": { "c": "" }, "a": { "b.c": "" } } },\n  "profiles": {}\n}\n`;
   const properties = {
     logging: { type: 'object', properties: { runtime: { type: 'object', properties: { level: { type: 'string', default: 'info' } } } } },
     'a.b': { type: 'object', properties: { c: { type: 'string' } } },
@@ -484,9 +492,15 @@ function makeSource(locationValue) {
           'a.b': { '$ref': '#/$defs/gatewaySettings/properties/a.b' },
           a: { '$ref': '#/$defs/gatewaySettings/properties/a' },
           network: { type: 'object', properties: { proxy: { type: 'object', properties: { mode: { type: 'string' } } } } },
-        } } } } : { type: 'object', properties },
+        } } } } : { type: 'object', $defs: { workspacePayload: { type: 'object', properties } } },
     source_effective: { logging: { runtime: { level: 'effective' } } },
-    ...(gateway ? { source_inherited: { logging: { runtime: { level: 'inherited' } } } } : {}),
+    source_inherited: { logging: { runtime: { level: 'inherited' } } },
+    nodes: [
+      { node_id: 'workspace-user', source_key: locationValue.source_key, source_uri: 'boxteam-source://workspace/workspace.jsonc',
+        definition_path: '', reference: 'user:workspace_local' },
+      { node_id: 'provider-primary', parent_id: 'workspace-user', source_key: locationValue.source_key,
+        source_uri: 'boxteam-source://workspace/workspace.jsonc', definition_path: '/profiles/provider.primary', reference: '#/profiles/provider.primary' },
+    ],
     layers: [
       { source_key: 'gateway_inline', precedence: 1, payload: { logging: { runtime: { level: 'inherited' } } } },
       { source_key: locationValue.source_key, precedence: 10, payload: {} },
@@ -509,11 +523,13 @@ function makeSource(locationValue) {
 
 async function settingsHeader(target) {
   const element = new HeaderElement();
-  const quickCalls = [];
+  const quickCalls = [], commandCount = settingsHeaderCommands.length;
   const header = new SettingsContextHeader(element, () => {}, async () => {}, { target }, { error() {} },
-    { async pick(items, options) { quickCalls.push({ items, options }); } }, {}, { createInstance: (Type, ...args) => new Type(...args) });
+    { async pick(items, options) { quickCalls.push({ items, options }); } }, {},
+    { executeCommand: async (...args) => { settingsHeaderCommands.push(args); } },
+    { createInstance: (Type, ...args) => new Type(...args) }, { error() {} });
   await Promise.resolve(); await Promise.resolve();
-  return { element, header, quickCalls, text: element.textContent };
+  return { element, header, quickCalls, surface: settingsHeaderSurfaces.at(-1), commandCount, text: element.textContent };
 }
 
 scenario('功能导航先选分类，独立范围保存到原 owner；Gateway 与工作区不互相激活', async () => {
@@ -660,6 +676,17 @@ scenario('普通设置不读取业务来源；来源层和保存详情折叠在�
     try {
       const header = await settingsHeader(workspace.source);
       expect(header.text).not.toContain(t('configuration.entities.agentsTitle'));
+      const visit = node => node && typeof node === 'object'
+        ? [node, ...(Array.isArray(node.children) ? node.children.flatMap(visit) : [])] : [];
+      const providerNode = visit(header.surface.tree).find(node => node.type === 'button'
+        && node.props.title === '#/profiles/provider.primary');
+      expect(providerNode).toBeDefined();
+      providerNode.props.onClick();
+      await Promise.resolve();
+      expect(settingsHeaderCommands.slice(header.commandCount)).toEqual([['boxteam.settings.openSource', {
+        location: { ...workspace.source.location, source_key: workspace.source.location.source_key },
+        definitionPath: '/profiles/provider.primary',
+      }]]);
       const details = header.element.children.at(-1).children[0];
       details.open = true;
       const locationButton = header.element.children.at(-1).children[0].children.find(element => element.textContent === t('settings.editor.sourceLocations'));
@@ -686,13 +713,13 @@ scenario('创建同 ID Agent 须确认继承覆盖，取消不编辑，确认后
   for (const confirmed of [false, true]) {
     const edits = [], confirmations = [];
     const values = ['coder', '本层名称', '本次输入的提示词'];
-    const providers = { primary: { defaults: {}, models: { main: { model: 'server-model' } } } };
-    const source = { readDraft: () => ({}), model: { textEditorModel: { getVersionId: () => 1 } },
-      document: { source_key: 'workspace', source_effective: { llm: { providers } }, layers: [
-        { source_key: 'user', precedence: 1, payload: { agents: { coder: { instructions: { system_prompt_file: 'boxteam-source://gateway/prompt.md' } } },
-          llm: { providers } } },
-        { source_key: 'workspace', precedence: 2, payload: {} },
-      ] }, editPath: (...args) => edits.push(args) };
+    const providers = { primary: { models: { main: { model: 'server-model' } } } };
+    const source = { readDraft: () => ({ config_version: 4, settings: { workspace: { llm: { providers: {} }, agents: {} } } }),
+      model: { textEditorModel: { getVersionId: () => 1 } },
+      document: { workspace_id: 'workspace', source_key: 'workspace', source_effective: { llm: { providers } },
+        source_inherited: { agents: { coder: { instructions: { system_prompt_file: 'boxteam-source://gateway/prompt.md' } } } },
+        layers: [{ source_key: 'workspace', precedence: 0, payload: {} }],
+      }, editPath: (...args) => edits.push(args) };
     const view = Object.assign(new ConfigurationEntityView(), { kind: 'agents', source, check() {}, render() {},
       lifetime: { token: CancellationToken.None }, input: async () => values.shift(), quick: { pick: async choices => {
         expect(choices.map(choice => choice.model)).toEqual([{ provider_id: 'primary', model_id: 'main' }]);
@@ -710,52 +737,52 @@ scenario('创建同 ID Agent 须确认继承覆盖，取消不编辑，确认后
   }
 });
 
-scenario('新 Provider 只建立连接草稿且零密钥请求，同名服务生成新 ID，协议选择期间编辑变化拒绝覆盖', async () => {
-  for (const failure of ['duplicate', 'changed', 'none']) {
-    let version = 1, credentialRequests = 0;
-    const edits = [], inputs = ['team'];
-    const source = { readDraft: () => ({}), model: { textEditorModel: { getVersionId: () => version } },
-      document: { source_effective: { llm: { providers: failure === 'duplicate' ? { team: { models: {} } } : {} } } },
-      editPath: (...args) => edits.push(args) };
-    chooseCredentialImplementation = async () => { credentialRequests++; return 'secret:created'; };
-    const view = Object.assign(new ConfigurationEntityView(), { kind: 'providers', source, check() {}, render() {},
-      lifetime: { token: CancellationToken.None }, input: async () => inputs.shift(), quick: { pick: async items => {
-        if (failure === 'changed') version++;
-        return items[0];
-      } } });
-    try {
-      if (failure !== 'changed') {
-        await view.create();
-        const id = edits[0][0][2];
-        if (failure === 'duplicate') { expect(id).toMatch(/^provider-/); expect(id).not.toBe('team'); }
-        else expect(id).toBe('team');
-        expect(edits).toEqual([[['llm', 'providers', id], { name: 'team', defaults: { custom_llm_provider: 'openai', api_key: '',
-          api_mode: { protocol: 'chat_completions', model_info: {}, supports_reasoning: {} } }, models: {} }]]);
-      } else {
-        await expect(view.create()).rejects.toThrow(t('configuration.entities.definitionChanged', 'team'));
-        expect(edits).toEqual([]);
-      }
-      expect(credentialRequests).toBe(0);
-    } finally { view.dispose(); }
-  }
+scenario('新 Provider 只建立独立 profile 与目录引用，不请求凭据', async () => {
+  let version = 1, credentialRequests = 0;
+  const edits = [];
+  const source = { readDraft: () => ({ config_version: 4, settings: { workspace: { llm: { providers: {} } } }, profiles: {} }),
+    model: { textEditorModel: { getVersionId: () => version } },
+    document: { writable: true, workspace_id: 'workspace', source_key: 'workspace',
+      source_effective: { llm: { providers: { team: { models: {} } } } }, layers: [] },
+    editDocumentPaths: values => { edits.push(values); version++; } };
+  chooseCredentialImplementation = async () => { credentialRequests++; return 'secret:created'; };
+  const view = Object.assign(new ConfigurationEntityView(), { kind: 'providers', source, check() {}, render() {}, nodeTargets: new Map(),
+    lifetime: { token: CancellationToken.None }, input: async () => 'team' });
+  try {
+    await view.create();
+    expect(edits).toHaveLength(1);
+    const [profile, provider] = edits[0];
+    expect(profile.path[0]).toBe('profiles');
+    const profileId = profile.path[1];
+    expect(profile.value).toEqual({ extends: 'context:workspace', settings: { model_options: { api_mode: { protocol: 'chat_completions' } } } });
+    expect(provider.path.slice(0, 4)).toEqual(['settings', 'workspace', 'llm', 'providers']);
+    expect(typeof provider.path[4]).toBe('string');
+    expect(provider.value).toEqual({ name: t('configuration.catalog.newProvider'), config_ref: `#/profiles/${profileId}`, models: {} });
+    expect(credentialRequests).toBe(0);
+  } finally { view.dispose(); }
 });
 
 scenario('凭据选择只向原脏草稿写公开引用，零保存且拒绝选择期间的并发编辑', async () => {
   for (const concurrent of [false, true]) {
     let version = 1;
     const edits = [], commits = [];
-    const source = { location: { gateway_id: 'gateway-A' }, model: { textEditorModel: { getVersionId: () => version } },
-      editPath: (...args) => edits.push(args) };
+    const source = { location: { gateway_id: 'gateway-A' }, document: { workspace_id: 'workspace-A', writable: true },
+      model: { textEditorModel: { getVersionId: () => version } },
+      editDocumentPaths: values => { edits.push(values); version++; } };
     chooseCredentialImplementation = async () => { if (concurrent) version++; return 'secret:sec_' + '1'.repeat(32); };
     const view = Object.assign(new ConfigurationEntityView(), { source, check() {},
-      lifetime: { token: CancellationToken.None }, connectionEdits: new Map(), commitConnection: id => commits.push(id) });
+      lifetime: { token: CancellationToken.None }, connectionEdits: new Map(), connectionCommits: new Map(),
+      nodeTargets: new Map([[JSON.stringify(['team', undefined]), { version: 1, path: ['profiles', 'provider'], options: {} }]]),
+      render() {},
+      commitConnection: id => commits.push(id) });
     try {
       if (concurrent) {
         await expect(view.setSecret('team')).rejects.toThrow(t('configuration.entities.definitionChanged', 'team'));
         expect(edits).toEqual([]); expect(commits).toEqual([]);
       } else {
         await view.setSecret('team');
-        expect(edits).toEqual([[['llm', 'providers', 'team', 'defaults', 'api_key'], 'secret:sec_' + '1'.repeat(32)]]);
+        expect(edits).toEqual([[{ path: ['profiles', 'provider', 'settings', 'model_options', 'api_key'],
+          value: 'secret:sec_' + '1'.repeat(32) }]]);
         expect(commits).toEqual(['team']);
       }
     } finally { view.dispose(); }
@@ -766,19 +793,33 @@ scenario('Model 稳定键局部添加和复制，草稿变化时不写入过期�
   for (const copy of [false, true]) {
     const edits = [], inputs = ['new-model'];
     let version = 1;
-    const preset = { model: 'server-model', overrides: { request_options: { parameters: { temperature: 0 } } } };
-    const source = { readDraft: () => ({}), document: { source_effective: {} },
+    const preset = { model: 'server-model', name: '预设显示名' };
+    const source = { readDraft: () => ({ config_version: 4, settings: { workspace: { llm: { providers: {} } } }, profiles: {} }),
+      document: { writable: true, workspace_id: 'workspace', source_key: 'workspace',
+        source_effective: { llm: { providers: { team: { models: {} } } } } },
       model: { textEditorModel: { getVersionId: () => version } },
-      preflightDraft: async () => ({ candidate: { llm: { providers: { team: { models: { preset } } } } } }),
-      editPath: (...args) => edits.push(args) };
-    const view = Object.assign(new ConfigurationEntityView(), { source, check() {}, render() {},
+      preflightDraft: async (_signal, selector) => ({ candidate: { llm: { providers: { team: { models: { preset } } } } },
+        ...(selector.model_id ? { model_options: { config_ref: 'context:provider/team', local_settings: {}, chain: [] } } : {}) }),
+      editDocumentPaths: values => { edits.push(values); version++; } };
+    const view = Object.assign(new ConfigurationEntityView(), { source, check() {}, render() {}, nodeTargets: new Map(),
       lifetime: { signal: new AbortController().signal }, input: async () => inputs.shift() });
     try {
-      await view.addModel('team', copy ? 'preset' : undefined);
-      expect(edits).toEqual([[['llm', 'providers', 'team', 'models', 'new-model'], copy ? { ...preset, name: 'new-model' } : { model: 'new-model' }]]);
+      await view.addModel('team', copy ? undefined : 'new-model', copy ? 'preset' : undefined);
+      expect(edits).toHaveLength(1);
+      const [profile, model] = edits[0];
+      expect(profile.path[0]).toBe('profiles');
+      const profileId = profile.path[1];
+      expect(profile.value).toEqual({ extends: 'context:provider/team', settings: {} });
+      expect(model.path).toEqual(['settings', 'workspace', 'llm', 'providers', 'team', 'models', 'new-model']);
+      expect(model.value).toMatchObject({ ...(copy ? { ...preset, name: 'new-model' } : { model: 'new-model' }) });
+      expect(model.value.config_ref).toBe(`#/profiles/${profileId}`);
       inputs.splice(0, inputs.length, 'stale');
-      source.preflightDraft = async () => { version++; return { candidate: { llm: { providers: { team: { models: { preset } } } } } }; };
-      await expect(view.addModel('team', 'preset')).rejects.toThrow(t('configuration.entities.definitionChanged', 'team'));
+      source.preflightDraft = async (_signal, selector) => ({
+        candidate: { llm: { providers: { team: { models: { preset } } } } },
+        ...(selector.model_id ? { model_options: { config_ref: 'context:provider/team', local_settings: {}, chain: [] } } : {}),
+      });
+      view.input = async () => { version++; return 'stale'; };
+      await expect(view.addModel('team', undefined, 'preset')).rejects.toThrow(t('configuration.entities.definitionChanged', 'stale'));
       expect(edits).toHaveLength(1);
     } finally { view.dispose(); }
   }
@@ -975,8 +1016,10 @@ scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编�
     targetSettings.edit('a.b%2Ec', 'nested-property');
     const draft = f.model.textEditorModel.getValue(), parsed = parse(draft);
     expect(draft).toContain('// 保留来源注释');
-    expect(parsed).toMatchObject({ config_version: 2, untouched: { value: 9 }, logging: { runtime: { level: 'debug' } },
-      'a.b': { c: 'dot-property' }, a: { 'b.c': 'nested-property' } });
+    expect(parsed).toMatchObject({ config_version: 4, extends: 'user:workspace_local', settings: { workspace: {
+      logging: { runtime: { level: 'debug' } }, 'a.b': { c: 'dot-property' }, a: { 'b.c': 'nested-property' },
+      network: {}, llm: { providers: {} }, default_agent: 'default', agents: {},
+    } }, profiles: {} });
     expect(targetSettings.inspect('logging.runtime.level')).toMatchObject({ userRemoteValue: 'debug', value: 'debug', defaultValue: 'inherited' });
     expect(configurationCalls).toEqual([]);
     const selection = targetSettings.settingSelection('a%2Eb.c', true);
@@ -1038,8 +1081,11 @@ scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入
     configuration_schema: { type: 'object', properties: { mode: { type: 'string' } } } };
   const a = makeSource(location());
   const b = makeSource(location({ gateway_id: 'gateway-B', workspace_id: 'workspace-B', gateway_connection_id: 'connection-B' }));
-  const setValues = (fixture, values) => fixture.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify({ config_version: 2,
-    plugins: { configuration: { values } } }) }]);
+  const setValues = (fixture, values) => {
+    const document = parse(fixture.model.textEditorModel.getValue());
+    document.settings.workspace.plugins = { configuration: { values } };
+    fixture.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify(document) }]);
+  };
   const setBinding = (fixture, entries) => { fixture.document.source_effective = { plugins: { runtime: { entries } } }; };
   try {
     setValues(a, { [packageId]: { [pluginId]: { mode: 'kept' } } });
@@ -1112,7 +1158,7 @@ scenario('source Input 通过原文本模型报告 dirty、显式 save 与 rever
     expect(input.isDirty()).toBe(true);
     await input.revert();
     expect(f.model.revertCalls).toBe(1);
-    expect(parse(textModel.getValue()).logging.runtime.level).toBe('debug');
+    expect(parse(textModel.getValue()).settings.workspace.logging.runtime.level).toBe('debug');
     expect(input.isDirty()).toBe(false);
     expect(dirtyEvents).toContain(true);
     expect(dirtyEvents.at(-1)).toBe(false);

@@ -8,7 +8,6 @@ from typing import cast
 
 import commentjson
 import jsonschema
-from boxteam_plugin_sdk.logging_contract import load_runtime_log_contract
 
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from configs.installer import atomic_write
@@ -49,15 +48,8 @@ def _validate_candidate(
     try:
         schema = _load_schema(schema_path)
         is_workspace = schema.get("x-boxteam-config-domain") == "workspace"
-        # 布局拆分产物仍是 v1；下一步日志迁移负责跨域选择和版本推进。
         if is_workspace:
-            properties = cast(dict[str, object], schema["properties"])
-            properties["config_version"] = {"const": 1}
-            contract = load_runtime_log_contract()
-            properties["logger"] = {
-                "type": "object", "additionalProperties": False,
-                "properties": {"level": {"enum": list(contract.levels)}, "pretty": {"type": "boolean"}},
-            }
+            raise ValueError("Workspace 旧布局缺少已验收升级基线，保留原件并阻断升级")
         else:
             # Gateway v6 schema 的根是信封；旧布局产物仍是平面业务字段。
             schema = {"$ref": "#/$defs/gatewaySettings", "$defs": schema["$defs"]}

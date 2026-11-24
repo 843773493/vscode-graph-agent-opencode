@@ -253,6 +253,8 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
         domain="workspace",
         default_policy="restart_workspace",
         rules=(
+            ConfigPolicyRule("/network", "next_job", "next_job"),
+            ConfigPolicyRule("/network/**", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/session_stop/**", "immediate_read", "current"),
             ConfigPolicyRule("/ui/**", "next_session", "next_session"),
             ConfigPolicyRule("/llm/providers", "next_job", "next_job"),

@@ -14,17 +14,17 @@ from configs.runtime import merge_json_objects, read_jsonc_object
 def workspace_config_validator() -> jsonschema.Draft202012Validator:
     schema = read_jsonc_object(Path("configs/workspace_schema.jsonc"))
     jsonschema.Draft202012Validator.check_schema(schema)
-    return jsonschema.Draft202012Validator(schema)
+    return jsonschema.Draft202012Validator({"$ref": "#/$defs/workspaceSettings", "$defs": schema["$defs"]})
 
 
 @pytest.fixture(scope="module")
 def inline_workspace_config() -> dict[str, object]:
-    return read_jsonc_object(Path("configs/workspace_inline.jsonc"))
+    return read_jsonc_object(Path("configs/workspace_inline.jsonc"))["settings"]["workspace"]
 
 
 @pytest.fixture(scope="module")
 def development_workspace_config() -> dict[str, object]:
-    return read_jsonc_object(Path("configs/workspace_dev.jsonc"))
+    return read_jsonc_object(Path("configs/workspace_dev.jsonc"))["settings"]["workspace"]
 
 
 def test_inline_default_and_dev_template_share_activation_contract(

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from ssl import SSLContext
+from types import MappingProxyType
 
 import httpx
 
@@ -35,10 +38,24 @@ def _proxy_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return proxies
 
 
+def capture_proxy_environment() -> Mapping[str, str]:
+    """owner 准备配置时捕获标准代理变量，后续请求不重读进程或系统设置。"""
+    return MappingProxyType({key: value for key, value in os.environ.items()
+        if key.casefold() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"} or key == "REQUEST_METHOD"})
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyRoutes:
     # HTTPX Proxy 的 repr 会隐藏密码；整组路由也不进入自动 dataclass repr。
     routes: tuple[tuple[str, httpx.Proxy | None], ...] = field(repr=False)
+
+    @property
+    def revision(self) -> str:
+        """驻留客户端身份只使用摘要，不把代理认证放入代键或日志。"""
+        values = [(pattern, str(proxy.url) if proxy is not None else None,
+                   [part.decode() for part in proxy.raw_auth] if proxy is not None and proxy.raw_auth else None)
+                  for pattern, proxy in self.routes]
+        return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
     @classmethod
     def from_configuration(

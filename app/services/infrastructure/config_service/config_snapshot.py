@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from app.core.config_sources import (
     ConfigSource,
-    ConfigSourceLayer,
-)
-from app.core.path_utils import (
-    get_workspace_config_path,
+    StableConfigFile,
+    verify_stable_config_file,
 )
 from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.config import ConfigSourceOriginDTO
@@ -23,21 +21,17 @@ from app.services.infrastructure.config import (
     ConfigSnapshot,
     build_config_snapshot,
 )
-from app.services.infrastructure.config.source_document import source_origins
 from app.services.infrastructure.config.state import (
     ConfigActiveSnapshotRecord,
     ConfigConflictError,
     ConfigPendingCandidateRecord,
     SecretReferenceRequiredError,
-    build_secret_binding_summary,
+    build_snapshot_secret_binding_summary,
     prepare_config_for_persistence,
     restore_environment_secret_references,
 )
 from app.services.infrastructure.config.workspace_plugins import (
     workspace_plugin_bindings_for_root,
-)
-from app.services.infrastructure.config_service.config_service_common import (
-    _SOURCE_LAYER_AUTHORITY,
 )
 from app.services.infrastructure.resource_platform.sources.skill_source_config import (
     validate_skill_sources,
@@ -64,16 +58,18 @@ class ConfigSnapshotMixin:
         validate_schema: bool = True,
         source_override: tuple[str, dict[str, object]] | None = None,
         import_sources: bool = True,
+        frozen_files: Mapping[Path, StableConfigFile] | None = None,
     ) -> ConfigSnapshot:
         layers: dict[str, dict[str, object]] = {}
-        config, source_paths, source_details, schema_path = self._read_effective_config(
-            source_override=source_override, import_sources=import_sources, source_payloads=layers,
+        config, source_paths, source_details, schema_path, graph = self._read_effective_config(
+            source_override=source_override, import_sources=import_sources, source_payloads=layers, frozen_files=frozen_files,
         )
         try:
             require_current_workspace_config(config)
             schema = self._load_schema(schema_path)
             if validate_schema:
                 validate_config_payload(config, schema=schema)
+                self._llm_resolution.list_models(graph)
             workspace_plugin_bindings_for_root(config, workspace_root=cast("ConfigService", self)._workspace_root)
             config = bound_plugin_configuration(config)
             resources = cast(dict[str, object], config["resources"])
@@ -82,17 +78,18 @@ class ConfigSnapshotMixin:
             # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
             # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
             with self.use_snapshot(build_config_snapshot(
-                config, source_paths=source_paths, source_details=source_details, schema_path=schema_path,
+                config, source_paths=source_paths, source_details=source_details, schema_path=schema_path, graph=graph,
             )):
                 instruction_paths = (self._instruction_inputs.load if import_sources else self._instruction_inputs.preview)(config, schema=schema)
             if validate_schema:
                 validate_config_payload(config, schema=schema)
             return build_config_snapshot(
                 config,
+                graph=graph,
                 source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
                 source_details=source_details,
                 schema_path=schema_path,
-                origins=source_origins(layers, config, schema=schema),
+                origins=self._graph_origins(graph),
             )
         except Exception as error:
             if import_sources:
@@ -107,7 +104,8 @@ class ConfigSnapshotMixin:
         snapshot = self._require_snapshot()
         try:
             validate_config_payload(snapshot.to_dict(), schema=self._load_schema())
-            self._validate_agent_definition_references(snapshot.to_dict())
+            self._llm_resolution.list_models(snapshot.graph)
+            self._validate_agent_definition_references(snapshot)
             self._validate_agent_tool_policies(snapshot.to_dict())
         except Exception as error:
             if self._loaded_source == "source":
@@ -155,6 +153,7 @@ class ConfigSnapshotMixin:
                     self._snapshot_store.initialize(
                         self._build_persisted_snapshot(active, loaded_source="active")
                     )
+                    self._loaded_source = "active"
                 else:
                     # 首次启动没有 active snapshot 时才从 JSONC/source layers
                     # 建立初始快照；后续启动不得因为 source 已有 pending 就越过 active。
@@ -190,9 +189,11 @@ class ConfigSnapshotMixin:
             )
         if pending.fencing_token != fencing_token:
             raise ConfigConflictError("Workspace pending candidate 的 fencing token 不匹配")
+        snapshot = self._build_persisted_snapshot(pending, loaded_source="pending")
         if pending.source_edit is not None:
-            self._validate_agent_definition_references(pending.payload)
-        return self._build_persisted_snapshot(pending, loaded_source="pending")
+            self._validate_agent_definition_references(snapshot)
+        self._loaded_source = "pending"
+        return snapshot
 
     def _build_persisted_snapshot(
         self,
@@ -202,6 +203,8 @@ class ConfigSnapshotMixin:
     ) -> ConfigSnapshot:
         if not isinstance(record, (ConfigActiveSnapshotRecord, ConfigPendingCandidateRecord)):
             raise TypeError("持久化配置记录类型无效")
+        if isinstance(record, ConfigActiveSnapshotRecord) and record.schema_version != 4:
+            raise ConfigConflictError("Workspace active 配置版本不受支持；原件保持不变，不能读取当前文件补齐旧快照")
         prepare_config_for_persistence(
             record.payload,
             # 普通 active 恢复先保持旧运行时；只有用户确认的 pending
@@ -213,11 +216,22 @@ class ConfigSnapshotMixin:
             raise TypeError("持久化配置恢复结果必须是对象")
         validate_config_payload(restored, schema=self._load_schema())
         self._validate_agent_tool_policies(restored)
-        source_details, source_paths = self._persisted_source_details(
-            record.source_baseline
-        )
+        source_details, _ = self._persisted_source_details(record.source_baseline)
+        documents = {}
+        runtime_override = {}
+        for key, raw in record.source_baseline.items():
+            if not isinstance(raw, dict) or not isinstance(raw.get("document"), dict):
+                raise ConfigConflictError("配置快照缺少冻结来源文档，不能读取当前文件补齐旧历史")
+            if key == self._RUNTIME_OVERRIDE_CONFIG_KEY:
+                runtime_override = raw["document"]["settings"]["workspace"]["ui"]
+            else:
+                documents[raw["uri"]] = raw["document"]
+        graph = self._build_source_graph(source_documents=documents, runtime_override=runtime_override)
+        graph.resolve_scope()
+        source_paths = tuple(graph.source_locations.values())
         snapshot = build_config_snapshot(
             restored,
+            graph=graph,
             source_paths=source_paths,
             source_details=source_details,
             schema_path=self._resolve_schema_path(),
@@ -236,8 +250,21 @@ class ConfigSnapshotMixin:
             and record.candidate_digest != snapshot.revision
         ):
             raise ConfigConflictError("pending candidate digest 与 payload 不匹配")
-        self._loaded_source = loaded_source
         return snapshot
+
+    def _verify_snapshot_sources(self, snapshot: ConfigSnapshot) -> None:
+        """发布核磁盘真实依赖；固定历史定义不能冒充当前 CAS。"""
+        if snapshot.graph.dependencies:
+            for file in snapshot.graph.dependencies.values():
+                verify_stable_config_file(file)
+            return
+        _, _, details, _, current = self._read_effective_config(import_sources=False, operation_only=True)
+        expected = {source.source_key: source.layer_digest for source in snapshot.source_details}
+        actual = {source.source_key: source.layer_digest for source in details}
+        if actual != expected:
+            raise ConfigConflictError("配置来源文件或父依赖已变化，拒绝发布原候选")
+        for file in current.dependencies.values():
+            verify_stable_config_file(file)
 
     @staticmethod
     def _persisted_source_details(
@@ -259,7 +286,7 @@ class ConfigSnapshotMixin:
             # `f"{layer}:{precedence}"`，故这里把权威表反查成 `"{layer}:{precedence}"`
             # 一并匹配，保证同一份权威表能逐字还原真层。**禁止兜底**：未登记的持久化键
             # 一律 fail-closed（见 `_source_baseline`），绝不静默映射成其它逻辑层。
-            layer, precedence = ConfigSnapshotMixin._resolve_persisted_layer(source_key)
+            layer, precedence = raw_value["layer"], raw_value["precedence"]
             details.append(
                 ConfigSource(
                     uri=raw_uri,
@@ -289,23 +316,6 @@ class ConfigSnapshotMixin:
         # 监听候选取自显式配置路径（见 start_watching）。
         return tuple(details), ()
 
-    @staticmethod
-    def _resolve_persisted_layer(source_key: str) -> tuple[ConfigSourceLayer, int]:
-        """把持久化基线键还原为权威层的逻辑来源层与 precedence。
-
-        先按 source_key 直查；再按 `"{layer}:{precedence}"` 退化形态反查（inline）。
-        两者都未命中即抛错，不做有损兜底。
-        """
-        if source_key in _SOURCE_LAYER_AUTHORITY:
-            return _SOURCE_LAYER_AUTHORITY[source_key]
-        inline_layer, inline_precedence = _SOURCE_LAYER_AUTHORITY["inline"]
-        if source_key == f"{inline_layer}:{inline_precedence}":
-            return inline_layer, inline_precedence
-        raise ValueError(
-            "source baseline 含未登记的持久化键，无法还原逻辑来源层: "
-            f"key={source_key!r}"
-        )
-
     def get_loaded_config_proof(self) -> dict[str, object]:
         """返回可供 Gateway 校验的加载证明，不包含秘密或候选完整 payload。"""
 
@@ -329,8 +339,8 @@ class ConfigSnapshotMixin:
             and pending.candidate_ref
             else None
         )
-        secret_bindings = build_secret_binding_summary(
-            snapshot.to_dict(),
+        secret_bindings = build_snapshot_secret_binding_summary(
+            snapshot.to_dict(), self._source_baseline(snapshot)[0],
             resolve_environment=loaded_pending is not None,
         )
         secret_binding_digest = hashlib.sha256(
@@ -400,7 +410,7 @@ class ConfigSnapshotMixin:
         if self._workspace_state_store is not None:
             pending = self._workspace_state_store.load_pending_config_candidate(candidate_ref=candidate_ref, allow_recovery=True)
             if pending.source_edit is not None:
-                self._validate_agent_definition_references(pending.payload)
+                self._validate_agent_definition_references(self._build_persisted_snapshot(pending, loaded_source="pending"))
         return self._pending_restart.retry_pending_restart(candidate_ref=candidate_ref)
 
     def resolve_pending_restart(
@@ -415,8 +425,9 @@ class ConfigSnapshotMixin:
         store = service._workspace_state_store
         if store is not None:
             pending = store.load_pending_config_candidate(candidate_ref=candidate_ref, allow_recovery=True)
+            service._verify_snapshot_sources(service._build_persisted_snapshot(pending, loaded_source="pending"))
             if pending.source_edit is not None:
-                service._validate_agent_definition_references(pending.payload)
+                service._validate_agent_definition_references(service._build_persisted_snapshot(pending, loaded_source="pending"))
 
         def after_promotion(payload: dict[str, object]) -> None:
             if store is None:
@@ -531,36 +542,8 @@ class ConfigSnapshotMixin:
                     source_details,
                 )
 
-        source_details: list[ConfigSource] = [
-            ConfigSource(
-                uri=self._inline_source_uri(),
-                layer="inline",
-                precedence=0,
-                loaded=True,
-            ),
-            self._config_source(
-                path=self._get_workspace_config_path(),
-                config_key="workspace_mutable_override",
-            ),
-            self._config_source(
-                path=self._get_workspace_local_config_path(),
-                config_key="workspace_local_mutable_override",
-            ),
-        ]
-        if self._workspace_root is not None:
-            source_details.append(
-                self._config_source(
-                    path=get_workspace_config_path(self._workspace_root),
-                    config_key="workspace_root_mutable_override",
-                )
-            )
-        if self._workspace_state_store is not None or self._runtime_config_overrides:
-            source_details.append(self._runtime_override_source())
-        return (
-            "uninitialized",
-            self._resolve_schema_path(),
-            tuple(source_details),
-        )
+        _, _, sources, schema, _ = self._read_effective_config(import_sources=False, operation_only=True)
+        return "uninitialized", schema, sources
 
     def get_runtime_override_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._runtime_config_overrides))

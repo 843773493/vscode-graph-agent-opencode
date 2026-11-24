@@ -80,7 +80,7 @@ class GatewaySessionContextClient:
             config_service=config_service,
         )
         self._local_token_supplier = local_token_supplier
-        self._http_client = httpx.AsyncClient()
+        self._http_client = httpx.AsyncClient(trust_env=False, verify=httpx.create_ssl_context(trust_env=True))
         self.resource_search = GatewayResourceSearchClient(
             http_client=self._http_client, connection=self._connection,
             local_token_supplier=local_token_supplier,

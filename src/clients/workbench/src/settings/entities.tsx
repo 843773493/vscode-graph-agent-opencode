@@ -1,5 +1,6 @@
 import { t } from '../../../shared/core/i18n/index.js';
-import { ConfigurationEntities, definitionObject, definitionValue, type DefinitionKind } from '../../../web/src/components/settings/ConfigurationEntities.js';
+import { ConfigurationEntities, definitionObject, definitionValue, localProfilePath, type ConfigurationSelector, type DefinitionKind } from '../../../web/src/components/settings/ConfigurationEntities.js';
+import type { ConfigModelInspectionDTO, ConfigProviderInspectionDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { ModelConnectionProbe } from '../../../web/src/components/settings/ModelConnectionProbe.js';
 import styles from '../../../web/src/components/settings/configurationEntities.css?text';
 import { Action, toAction } from '../../upstream/src/vs/base/common/actions.js';
@@ -57,6 +58,8 @@ export class ConfigurationEntityView extends Disposable {
   private visible = true;
   private readonly connectionEdits = new Map<string, number>();
   private readonly connectionCommits = new Map<string, number>();
+  private readonly nodeTargets = new Map<string, { version: number; path: string[]; options: Record<string, unknown>; create?: { path: string[]; value: unknown }[] }>();
+  private editingNode = false;
   constructor(private readonly element: HTMLElement, private readonly source: SourceSettings, private readonly groupId: number,
     @IQuickInputService private readonly quick: IQuickInputService,
     @IDialogService private readonly dialogs: IDialogService,
@@ -80,7 +83,7 @@ export class ConfigurationEntityView extends Disposable {
     const body = document.createElement('div'); body.style.cssText = 'flex:1;min-height:0';
     container.append(header, body); element.replaceChildren(container);
     this.surface = this._register(new ReactSurface(body, [styles]));
-    this._register(source.onDidChange(() => this.render()));
+    this._register(source.onDidChange(() => { if (!this.editingNode) { this.nodeTargets.clear(); this.render(); } }));
     const receive = (snapshot: Awaited<ReturnType<SecretsClient['list']>>) => {
       this.credentialNames = Object.fromEntries(snapshot.items.map(item => [item.id, item.name])); this.render();
     };
@@ -116,7 +119,7 @@ export class ConfigurationEntityView extends Disposable {
     this.addAction.label = t(this.kind === 'providers' ? 'configuration.entities.addProvider' : 'configuration.entities.addAgent');
     this.addAction.enabled = this.saveAction.enabled = document.writable && Boolean(draft);
     this.restoreAction.enabled = this.addAction.enabled;
-    const localProviders = Object.keys(definitionObject(definitionValue(draft, ['llm', 'providers']))).length > 0;
+    const localProviders = Object.keys(definitionObject(definitionValue(draft, ['settings', 'workspace', 'llm', 'providers']))).length > 0;
     const toolbarMode = `${this.kind}:${localProviders}`;
     if (this.toolbarMode !== toolbarMode) {
       this.toolbarMode = toolbarMode;
@@ -126,13 +129,17 @@ export class ConfigurationEntityView extends Disposable {
     }
     this.surface.render(<ConfigurationEntities kind={this.kind} selectedId={this.selectedId} selectedModelId={this.selectedModelId} draft={draft} document={document} error={error} searchQuery={this.searchQuery} credentialNames={this.credentialNames} dirty={this.source.model.isDirty()}
       draftVersion={this.source.model.textEditorModel!.getVersionId()}
+      isNodeReady={selector => this.nodeReady(selector)}
+      onPrepareOptions={(selector, signal) => this.prepareNodes(selector, signal)}
       onInspectModel={async (modelRef, signal) => {
         this.check();
-        const result = await this.source.preflightDraft(AbortSignal.any([signal, this.lifetime.signal]), modelRef);
+        const result = await this.source.inspectOptions(AbortSignal.any([signal, this.lifetime.signal]), modelRef);
         this.check();
-        if (!('model_options' in result) || !result.model_options) throw new Error(t('configuration.inspect.missing'));
+        if (!('provider_options' in result) || !result.provider_options) throw new Error(t('configuration.inspect.missing'));
         return result;
       }}
+      onEditOptions={(selector, path, value) => this.run(() => this.editNode(selector, path, value))}
+      onEditNodeParent={(selector, value) => this.run(() => this.editNode(selector, ['extends'], value))}
       pendingSubmission={this.source.pendingSubmission}
       onQuerySubmission={() => this.run(() => this.source.querySubmission())}
       onSetSecret={(id, modelId) => this.run(() => this.setSecret(id, modelId))}
@@ -140,24 +147,28 @@ export class ConfigurationEntityView extends Disposable {
       onSelectModel={id => { this.selectedModelId = id; this.render(); }}
       catalogTarget={{ gateway_id: this.source.location.gateway_id, workspace_id: document.workspace_id,
         gateway_connection_id: this.source.location.gateway_connection_id }} catalogSignal={this.lifetime.signal}
-      onProviderTemplate={(id, choice) => this.run(() => {
-        const path = ['llm', 'providers', id];
-        const node = definitionObject(definitionValue(this.source.readDraft(), path));
-        const defaults = definitionObject(node.defaults);
-        const saved = definitionObject(definitionValue(this.source.document.source_effective, [...path, 'defaults']));
-        // 首次选服务商只填模板；设置密钥后再沿原提交边界发现上游模型。
-        if ((defaults.api_key ?? saved.api_key) || (defaults.auth ?? saved.auth)) {
-          this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
+      onProviderTemplate={(id, choice) => this.run(async () => {
+        const original = definitionObject(definitionValue(this.source.readDraft(), ['settings', 'workspace', 'llm', 'providers', id]));
+        const before = this.connectionEdits.get(id) ?? 0;
+        this.editNodeFields({ provider_id: id }, [
+          { path: ['model_options', 'custom_llm_provider'], value: choice.id || 'openai' },
+          { path: ['model_options', 'endpoint'], value: choice.endpoint ?? '' },
+          { path: ['model_options', 'api_mode'], value: { protocol: choice.protocol ?? 'chat_completions', supports_reasoning: {} } },
+        ]);
+        const target = this.nodeTargets.get(this.nodeKey({ provider_id: id }));
+        if (!target) throw new Error(t('configuration.inspect.missing'));
+        const options = definitionObject(definitionValue(this.source.readDraft(), [...target.path, 'settings', 'model_options']));
+        if (choice.id && (original.name === t('configuration.catalog.newProvider') || original.name === target.options.custom_llm_provider)) {
+          this.source.editPath(['llm', 'providers', id, 'name'], choice.id);
+          this.rememberNode({ provider_id: id }, target.path, target.options);
         }
-        this.source.editPath(path, { ...node,
-          ...(choice.id && (node.name === t('configuration.catalog.newProvider') || node.name === defaults.custom_llm_provider) ? { name: choice.id } : {}),
-          defaults: { ...defaults, custom_llm_provider: choice.id || 'openai', endpoint: choice.endpoint ?? '',
-            api_mode: { ...definitionObject(defaults.api_mode), protocol: choice.protocol ?? 'chat_completions', supports_reasoning: {} } } });
-        this.commitConnection(id);
+        // 首次选服务商只填模板；存在明确凭据后才自动发现目录。
+        if ((options.api_key ?? target.options.api_key) || (options.auth ?? target.options.auth)) this.commitConnection(id);
+        else this.connectionEdits.set(id, before);
       })}
       onAddModel={(id, model) => this.run(() => this.addModel(id, model))}
       onShowActions={(id, modelId, anchor) => this.run(() => this.showDefinitionActions(id, modelId, anchor))}
-      onConnectionCommit={id => this.commitConnection(id)}
+      onConnectionCommit={id => this.run(() => this.commitConnection(id))}
       renderModelProbe={(id, models, selectedModelId) => <ModelConnectionProbe key={id} providerId={id} models={models}
         selectedModelId={selectedModelId} document={document} editor={{
           target: { gateway_id: this.source.location.gateway_id, workspace_id: document.workspace_id,
@@ -176,31 +187,16 @@ export class ConfigurationEntityView extends Disposable {
             while (occupied.has(modelId)) modelId = `${base}-${++suffix}`;
             occupied.add(modelId);
             this.selectedModelId = modelId;
-            this.source.editPath(['llm', 'providers', id, 'models', modelId], { model: item.model, ...(item.name ? { name: item.name } : {}) });
+            this.createModelNode(id, modelId, { model: item.model, ...(item.name ? { name: item.name } : {}) });
           }
           this.render();
-        }} onApplyMode={(modelId, streaming) => this.run(() => this.source.editPath(['llm', 'providers', id, 'models', modelId, 'overrides', 'api_mode', 'streaming'], streaming))}
+        }} canApplyMode={modelId => this.nodeReady({ provider_id: id, model_id: modelId })}
+        onApplyMode={(modelId, streaming) => this.run(() => this.editNode({ provider_id: id, model_id: modelId }, ['model_options', 'api_mode', 'streaming'], streaming))}
         onOpenSource={() => this.run(() => this.openSource())} />}
       onEdit={(id, path, value) => this.run(() => {
-        const prefix = this.kind === 'agents' ? ['agents', id] : ['llm', 'providers', id];
-        if (this.kind === 'providers' && path[0] === 'defaults' && (
-          ['endpoint', 'custom_llm_provider', 'api_key'].includes(String(path[1]))
-          || path[1] === 'api_mode' && path.length === 2
-          || path[1] === 'request_options' && ['default_headers', 'no_proxy'].includes(String(path[2]))
-        )) this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
-        if (this.kind === 'providers' && path.length === 2 && path[0] === 'defaults' && path[1] === 'api_mode') {
-          const defaults = definitionObject(definitionValue(this.source.readDraft(), [...prefix, 'defaults']));
-          const saved = definitionObject(definitionValue(this.source.document.source_effective, [...prefix, 'defaults']));
-          const handler = defaults.custom_llm_provider ?? saved.custom_llm_provider ?? '';
-          const protocol = definitionObject(value).protocol;
-          // 原生协议直接确定适配器；其它 LiteLLM 服务保留其明确选择的适配器。
-          if (['', 'openai', 'anthropic'].includes(String(handler)) && ['chat_completions', 'responses', 'anthropic_messages'].includes(String(protocol))) {
-            this.source.editPath([...prefix, 'defaults'], { ...defaults, api_mode: value,
-              custom_llm_provider: protocol === 'anthropic_messages' ? 'anthropic' : 'openai' });
-            return;
-          }
-        }
-        this.source.editPath([...prefix, ...path], value);
+        const targets = path.at(-1) === 'config_ref' ? [] : [...this.nodeTargets];
+        this.source.editPath([...(this.kind === 'agents' ? ['agents', id] : ['llm', 'providers', id]), ...path], value);
+        for (const [key, target] of targets) this.nodeTargets.set(key, { ...target, version: this.source.model.textEditorModel!.getVersionId() });
       })}
       onSetDefaultAgent={id => this.run(() => this.source.editPath(['default_agent'], id))}
       onRestoreDefaultAgent={() => this.run(() => this.source.editPath(['default_agent'], undefined))}
@@ -209,28 +205,106 @@ export class ConfigurationEntityView extends Disposable {
         gateway_id: this.source.location.gateway_id, workspace_id: this.source.location.workspace_id,
         gateway_connection_id: this.source.location.gateway_connection_id, agent_id: id,
       }))}
-      onOpenSource={sourceKey => this.run(() => this.openSource(sourceKey))} />);
+      onOpenSource={(sourceKey, definitionPath) => this.run(() => this.openSource(sourceKey, definitionPath))} />);
   }
   private commitConnection(id: string): void {
     const edit = this.connectionEdits.get(id) ?? 0;
     if (edit === (this.connectionCommits.get(id) ?? 0)) return;
     this.connectionCommits.set(id, edit); this.render();
   }
+  private nodeKey(selector: ConfigurationSelector): string { return JSON.stringify([selector.provider_id, selector.model_id]); }
+  private rememberNode(selector: ConfigurationSelector, path: string[], options: Record<string, unknown>): void {
+    this.nodeTargets.set(this.nodeKey(selector), { version: this.source.model.textEditorModel!.getVersionId(), path, options });
+  }
+  private nodeReady(selector: ConfigurationSelector): boolean {
+    return this.nodeTargets.get(this.nodeKey(selector))?.version === this.source.model.textEditorModel!.getVersionId();
+  }
+  private async prepareNodes(selector: ConfigurationSelector, signal: AbortSignal): Promise<void> {
+    const provider = { provider_id: selector.provider_id };
+    if (this.nodeReady(provider) && this.nodeReady(selector)) return;
+    const version = this.source.model.textEditorModel!.getVersionId();
+    const result = await this.source.inspectOptions(AbortSignal.any([signal, this.lifetime.signal]), selector);
+    this.check(); signal.throwIfAborted();
+    if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', selector.provider_id));
+    if (!('provider_options' in result) || !result.provider_options || selector.model_id !== undefined && !result.model_options) throw new Error(t('configuration.inspect.missing'));
+    this.prepareNode(provider, result.provider_options);
+    if (selector.model_id !== undefined && result.model_options) this.prepareNode(selector, result.model_options);
+    this.render();
+  }
+  private prepareNode(selector: ConfigurationSelector, inspection: ConfigProviderInspectionDTO | ConfigModelInspectionDTO): void {
+    if (this.nodeReady(selector)) return;
+    const selected = inspection.chain.find(node => node.node_id === inspection.node_id);
+    if (!selected) throw new Error(t('configuration.inspect.missing'));
+    const referencePath = ['settings', 'workspace', 'llm', 'providers', selector.provider_id,
+      ...(selector.model_id === undefined ? [] : ['models', selector.model_id]), 'config_ref'];
+    const document = this.source.document;
+    if (!('workspace_id' in document)) throw new Error(t('configuration.entities.workspaceRequired'));
+    const localPath = localProfilePath(definitionValue(this.source.readDraft(), referencePath), document.source_baseline[document.source_key]?.uri);
+    const options = definitionObject(inspection.options);
+    if (localPath && selected.source_key === document.source_key && !inspection.shared) {
+      this.rememberNode(selector, localPath, options);
+    } else {
+      const profile = `private-${generateUuid()}`, path = ['profiles', profile];
+      this.nodeTargets.set(this.nodeKey(selector), { version: this.source.model.textEditorModel!.getVersionId(), path, options,
+        create: [{ path, value: { extends: selected.reference, settings: {} } }, { path: referencePath, value: `#/profiles/${profile}` }] });
+    }
+  }
+  private editNode(selector: ConfigurationSelector, path: (string | number)[], value: unknown): void {
+    this.editNodeFields(selector, [{ path, value }]);
+  }
+  private editNodeFields(selector: ConfigurationSelector, changes: { path: (string | number)[]; value: unknown }[]): void {
+    this.check();
+    const target = this.nodeTargets.get(this.nodeKey(selector));
+    if (!target || !this.nodeReady(selector)) throw new Error(t('configuration.entities.definitionChanged', selector.provider_id));
+    const edits: { path: (string | number)[]; value: unknown }[] = [...(target.create ?? [])];
+    for (const { path, value } of changes) {
+      edits.push({ path: path[0] === 'extends' ? [...target.path, ...path] : [...target.path, 'settings', ...path], value });
+      if (path.join('.') === 'model_options.api_mode') {
+        const handler = changes.find(change => change.path.join('.') === 'model_options.custom_llm_provider')?.value
+          ?? definitionValue(this.source.readDraft(), [...target.path, 'settings', 'model_options', 'custom_llm_provider']) ?? target.options.custom_llm_provider;
+        const protocol = definitionObject(value).protocol;
+        if (['', 'openai', 'anthropic'].includes(String(handler ?? '')) && ['chat_completions', 'responses', 'anthropic_messages'].includes(String(protocol))) {
+          edits.push({ path: [...target.path, 'settings', 'model_options', 'custom_llm_provider'], value: protocol === 'anthropic_messages' ? 'anthropic' : 'openai' });
+        }
+      }
+    }
+    // 编辑前取得归属，确认后同步写完整操作；原文本保存绝不会抢在字段写入前执行。
+    this.editingNode = true;
+    try { this.source.editDocumentPaths(edits); } finally { this.editingNode = false; }
+    const provider = selector.model_id === undefined ? undefined : this.nodeTargets.get(this.nodeKey({ provider_id: selector.provider_id }));
+    this.nodeTargets.clear();
+    if (provider) this.nodeTargets.set(this.nodeKey({ provider_id: selector.provider_id }), { ...provider, version: this.source.model.textEditorModel!.getVersionId() });
+    this.rememberNode(selector, target.path, changes.some(change => change.path[0] === 'extends') ? {} : target.options);
+    if (selector.model_id === undefined && changes.some(({ path }) => path[0] === 'model_options' && ['endpoint', 'custom_llm_provider', 'api_key', 'api_mode', 'request_options'].includes(String(path[1])))) {
+      this.connectionEdits.set(selector.provider_id, (this.connectionEdits.get(selector.provider_id) ?? 0) + 1);
+    }
+    this.render();
+  }
+  private createModelNode(providerId: string, modelId: string, definition: Record<string, unknown>, node: { extends?: string; settings: Record<string, unknown> } = { extends: `context:provider/${providerId}`, settings: {} }): void {
+    const profile = `model-${generateUuid()}`;
+    const providerKey = this.nodeKey({ provider_id: providerId });
+    const provider = this.nodeReady({ provider_id: providerId }) ? this.nodeTargets.get(providerKey) : undefined;
+    this.source.editDocumentPaths([{ path: ['profiles', profile], value: node },
+      { path: ['settings', 'workspace', 'llm', 'providers', providerId, 'models', modelId], value: { ...definition, config_ref: `#/profiles/${profile}` } }]);
+    if (provider) this.nodeTargets.set(providerKey, { ...provider, version: this.source.model.textEditorModel!.getVersionId() });
+    this.rememberNode({ provider_id: providerId, model_id: modelId }, ['profiles', profile], {});
+  }
   private showDefinitionActions(id: string, modelId: string | undefined, anchor: HTMLElement): void {
     const draft = this.source.readDraft();
     const enabled = this.source.document.writable;
     const path = this.kind === 'agents' ? ['agents', id] : ['llm', 'providers', id, ...(modelId === undefined ? [] : ['models', modelId])];
-    const actions = modelId === undefined ? [] : [toAction({ id: 'settings.model.copy',
+    const actions = modelId === undefined ? this.kind === 'providers' ? [toAction({ id: 'settings.provider.copy',
+      label: t('configuration.node.copyProvider'), enabled, run: () => this.run(() => this.copyProvider(id)) })] : [] : [toAction({ id: 'settings.model.copy',
       label: t('configuration.entities.copyModel'), enabled, run: () => this.run(() => this.addModel(id, undefined, modelId)) })];
-    if (definitionValue(draft, path) !== undefined) actions.push(toAction({ id: 'settings.definition.remove', enabled,
+    if (definitionValue(draft, ['settings', 'workspace', ...path]) !== undefined) actions.push(toAction({ id: 'settings.definition.remove', enabled,
       label: t(modelId !== undefined ? 'configuration.entities.removeModel' : this.kind === 'providers'
         ? 'configuration.entities.removeProvider' : 'configuration.entities.removeAgent'),
       run: () => this.run(() => modelId === undefined ? this.remove(id) : this.removeModel(id, modelId)) }));
     this.menus.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
   }
-  private async openSource(sourceKey?: string): Promise<void> {
+  private async openSource(sourceKey?: string, definitionPath?: string): Promise<void> {
     await this.commands.executeCommand('boxteam.settings.openSource', {
-      location: { ...this.source.location, source_key: sourceKey ?? this.source.location.source_key }, groupId: this.groupId,
+      location: { ...this.source.location, source_key: sourceKey ?? this.source.location.source_key }, groupId: this.groupId, definitionPath,
     });
   }
 
@@ -282,7 +356,7 @@ export class ConfigurationEntityView extends Disposable {
     this.check();
     if (credential !== undefined) {
       if (this.source.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.definitionChanged', id));
-      this.source.editPath(['llm', 'providers', id, ...(modelId === undefined ? ['defaults'] : ['models', modelId, 'overrides']), 'api_key'], credential);
+      this.editNode({ provider_id: id, ...(modelId === undefined ? {} : { model_id: modelId }) }, ['model_options', 'api_key'], credential);
       if (modelId === undefined) {
         this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
         this.commitConnection(id);
@@ -320,14 +394,16 @@ export class ConfigurationEntityView extends Disposable {
     if (label === undefined) return;
     const id = kind === 'providers' ? `provider-${generateUuid()}` : label;
     if (kind === 'providers') {
-      this.source.editPath(['llm', 'providers', id], { name: label,
-        defaults: { api_mode: { protocol: 'chat_completions' } }, models: {} });
+      const profile = `provider-${generateUuid()}`;
+      this.source.editDocumentPaths([{ path: ['profiles', profile], value: { extends: 'context:workspace', settings: { model_options: { api_mode: { protocol: 'chat_completions' } } } } },
+        { path: ['settings', 'workspace', 'llm', 'providers', id], value: { name: label, config_ref: `#/profiles/${profile}`, models: {} } }]);
+      this.rememberNode({ provider_id: id }, ['profiles', profile], {});
       this.selectedModelId = undefined;
     } else {
       const name = await this.input(t('configuration.entities.name')); if (name === undefined) return;
       const prompt = await this.input(t('configuration.entities.systemPrompt')); if (prompt === undefined) return;
       const activeProviders = definitionObject(definitionValue(this.source.document.source_effective, ['llm', 'providers']));
-      const localProviders = definitionObject(definitionValue(this.source.readDraft(), ['llm', 'providers']));
+      const localProviders = definitionObject(definitionValue(this.source.readDraft(), ['settings', 'workspace', 'llm', 'providers']));
       const choices = Object.keys({ ...activeProviders, ...localProviders }).flatMap(providerId => {
         const saved = definitionObject(definitionObject(activeProviders[providerId]).models);
         const local = definitionObject(definitionObject(localProviders[providerId]).models);
@@ -337,12 +413,9 @@ export class ConfigurationEntityView extends Disposable {
       const provider = await this.quick.pick(choices, { title: t('configuration.entities.primaryModel') }, this.lifetime.token);
       this.check(); if (!provider) return;
       if (this.source.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.definitionChanged', id));
-      const agents = definitionObject(this.source.readDraft().agents);
+      const agents = definitionObject(definitionValue(this.source.readDraft(), ['settings', 'workspace', 'agents']));
       if (Object.hasOwn(agents, id)) throw new Error(t('configuration.entities.duplicateId', id));
-      const document = this.source.document;
-      const selected = document.layers.find(layer => layer.source_key === document.source_key);
-      const inherited = document.layers.some(layer => selected && layer.precedence < selected.precedence
-        && Object.hasOwn(definitionObject(layer.payload?.agents), id));
+      const inherited = Object.hasOwn(definitionObject(definitionValue(this.source.document.source_inherited, ['agents'])), id);
       if (inherited) {
         const confirmed = await this.dialogs.confirm({ type: 'warning', message: t('configuration.entities.overrideInheritedAgent', id),
           detail: t('configuration.entities.overrideAgentBoundary'), primaryButton: t('configuration.entities.addAgent') });
@@ -360,8 +433,8 @@ export class ConfigurationEntityView extends Disposable {
     const version = this.source.model.textEditorModel!.getVersionId();
     const path = ['llm', 'providers', providerId, 'models'];
     const saved = definitionObject(definitionValue(this.source.document.source_effective, path));
-    const current = definitionObject(definitionValue(this.source.readDraft(), path));
-    const preview = copyId === undefined ? undefined : await this.source.preflightDraft(this.lifetime.signal);
+    const current = definitionObject(definitionValue(this.source.readDraft(), ['settings', 'workspace', ...path]));
+    const preview = copyId === undefined ? undefined : await this.source.preflightDraft(this.lifetime.signal, { provider_id: providerId, model_id: copyId });
     this.check();
     if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', providerId));
     const original = copyId === undefined ? undefined : definitionValue(preview?.candidate, [...path, copyId]);
@@ -372,8 +445,53 @@ export class ConfigurationEntityView extends Disposable {
     const id = /^[a-zA-Z0-9._-]{1,64}$/.test(label) && !Object.hasOwn(saved, label) && !Object.hasOwn(current, label)
       ? label : `model-${generateUuid()}`;
     if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', id));
-    this.source.editPath([...path, id], model);
+    const inspection = preview && 'model_options' in preview ? preview.model_options : undefined;
+    this.createModelNode(providerId, id, model, inspection ? this.copyNode(inspection) : undefined);
     this.selectedId = providerId; this.selectedModelId = id; this.render();
+  }
+  private copyNode(inspection: ConfigProviderInspectionDTO | ConfigModelInspectionDTO): { extends?: string; settings: Record<string, unknown> } {
+    if (inspection.config_ref.startsWith('context:')) return { extends: inspection.config_ref, settings: {} };
+    const node = inspection.chain.find(item => item.node_id === inspection.node_id);
+    const parent = inspection.chain.find(item => item.node_id === node?.parent_id);
+    const settings = definitionObject(inspection.local_settings);
+    const containsMask = (value: unknown): boolean => typeof value === 'string' ? value.startsWith('boxteam-redacted:')
+      : value !== null && typeof value === 'object' && Object.values(value).some(containsMask);
+    if (containsMask(settings)) throw new Error(t('configuration.node.copySecret'));
+    const localPath = node?.source_key === this.source.document.source_key && node.definition_path.startsWith('/profiles/')
+      ? node.definition_path.slice(1).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~')) : undefined;
+    const localParent = localPath ? definitionValue(this.source.readDraft(), [...localPath, 'extends']) : undefined;
+    const extendsRef = typeof localParent === 'string' ? localParent : parent?.reference;
+    return { ...(extendsRef === undefined ? {} : { extends: extendsRef }), settings };
+  }
+  private async copyProvider(providerId: string): Promise<void> {
+    const version = this.source.model.textEditorModel!.getVersionId();
+    const preview = await this.source.preflightDraft(this.lifetime.signal, { provider_id: providerId });
+    this.check();
+    if (!('provider_options' in preview) || !preview.provider_options) throw new Error(t('configuration.inspect.missing'));
+    const original = definitionObject(definitionValue(preview.candidate, ['llm', 'providers', providerId]));
+    const label = await this.input(t('configuration.entities.name'));
+    if (!label) return;
+    const modelNodes: { id: string; definition: Record<string, unknown>; node: { extends?: string; settings: Record<string, unknown> }; followsProvider: boolean }[] = [];
+    for (const [id, model] of Object.entries(definitionObject(original.models))) {
+      const result = await this.source.preflightDraft(this.lifetime.signal, { provider_id: providerId, model_id: id });
+      this.check();
+      if (!('model_options' in result) || !result.model_options) throw new Error(t('configuration.inspect.missing'));
+      const node = this.copyNode(result.model_options);
+      modelNodes.push({ id, definition: definitionObject(model), node, followsProvider: node.extends === `context:provider/${providerId}` });
+    }
+    if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', providerId));
+    const id = `provider-${generateUuid()}`, profile = `provider-${generateUuid()}`;
+    const edits: { path: string[]; value: unknown }[] = [{ path: ['profiles', profile], value: this.copyNode(preview.provider_options) }];
+    const models: Record<string, unknown> = {};
+    for (const model of modelNodes) {
+      const key = `model-${generateUuid()}`;
+      if (model.followsProvider) model.node.extends = `context:provider/${id}`;
+      edits.push({ path: ['profiles', key], value: model.node });
+      models[model.id] = { ...model.definition, config_ref: `#/profiles/${key}` };
+    }
+    edits.push({ path: ['settings', 'workspace', 'llm', 'providers', id], value: { name: label, config_ref: `#/profiles/${profile}`, models } });
+    this.source.editDocumentPaths(edits);
+    this.selectedId = id; this.selectedModelId = undefined; this.render();
   }
   private async removeModel(providerId: string, modelId: string): Promise<void> {
     const confirmed = await this.dialogs.confirm({ type: 'warning', message: t('configuration.entities.confirmRemove', `${providerId} / ${modelId}`),

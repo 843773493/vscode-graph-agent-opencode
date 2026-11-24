@@ -16,19 +16,20 @@ from tests.harness.python.run_context import observe_test_path
 def render_test_workspace_config(source_text: str) -> str:
     """按完整源文本复用不可变配置正文；各测试仍写入自己的目录。"""
     payload = commentjson.loads(source_text)
+    if payload.get("config_version") != 4 or not isinstance(payload.get("settings"), dict):
+        raise ValueError("测试 Workspace 模板必须显式使用 v4 节点文档")
     payload["$schema"] = "./workspace_schema.jsonc"
-    payload["config_version"] = 3
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def clear_test_provider_api_keys(config: dict, *, endpoint: str | None = None) -> None:
     """显式隔离不测认证的场景；保留协议、模型身份及 OAuth 声明。"""
-    for provider in config["llm"]["providers"].values():
-        provider["defaults"]["api_key"] = ""
-        if endpoint is not None:
-            provider["defaults"]["endpoint"] = endpoint
-        for model in provider["models"].values():
-            model.get("overrides", {}).pop("api_key", None)
+    for node in (config, *config.get("profiles", {}).values()):
+        options = node["settings"].get("model_options", {})
+        if "api_key" in options or "endpoint" in options:
+            options["api_key"] = ""
+        if endpoint is not None and "endpoint" in options:
+            options["endpoint"] = endpoint
 
 
 def _make_test_tree_writable(path: Path) -> None:

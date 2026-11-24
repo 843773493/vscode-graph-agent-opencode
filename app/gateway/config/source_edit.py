@@ -31,6 +31,7 @@ from app.services.infrastructure.config.plugin_private_inputs import (
 )
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.source_document import (
+    inspect_config_nodes,
     parse_source_text,
     redact_source_payload,
     redact_source_text,
@@ -114,10 +115,8 @@ class GatewaySourceEditMixin:
             raise ValueError("Gateway 配置来源不在当前入口的父链中")
         selected = next((node for node in source_config.graph.resolve_scope().chain
                          if node.location.path == file.path and not node.location.pointer), None)
-        if selected is None:
-            # TODO: 节点 inspection 接入 profile 原文定位后，按明确 pointer 编辑其实际定义。
-            raise ValueError("Gateway 来源仅通过 profile 参与继承，请编辑实际引用的节点")
-        inherited = cast(dict[str, object], thaw(selected.parent.settings)) if selected.parent is not None else {}
+        inherited = (cast(dict[str, object], thaw(selected.parent.settings))
+                     if selected is not None and selected.parent is not None else {})
         inherited_payload = {**cast(dict[str, object], inherited.get("gateway", {})),
                              **({"network": inherited["network"]} if "network" in inherited else {})}
         verify_stable_config_file(file)
@@ -147,6 +146,7 @@ class GatewaySourceEditMixin:
             effective=cast(dict[str, object], redact_source_payload(service.config.payload)),
             source_effective=cast(dict[str, object], redact_source_payload(source_payload)),
             source_inherited=cast(dict[str, object], redact_source_payload(inherited_payload)),
+            nodes=inspect_config_nodes(source_config.graph, source_config.graph.nodes),
             layers=[GatewayConfigSourceLayerViewDTO(
                 source_key=key, layer=details[key].layer, precedence=details[key].precedence,
                 writable=key != "inline:0", payload=cast(dict[str, object], redact_source_payload(payload)),

@@ -79,6 +79,18 @@ def _profile_config_resource(domain: str, profile: ConfigProfile) -> str:
     return f"{domain}{suffix}.jsonc"
 
 
+def install_workspace_configuration(*, workspace_root: Path) -> Path:
+    """显式初始化当前工作区的最小入口；既有来源保持原样。"""
+    root = workspace_root.expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"显式初始化工作区不是目录: {root}")
+    target = root / ".boxteam/workspace.jsonc"
+    if not target.exists():
+        document = {"config_version": 4, "extends": "user:workspace_local", "settings": {}}
+        atomic_write(target, (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode(), 0o600)
+    return target
+
+
 def install_user_configuration(
     *,
     config_root: Path,
@@ -86,6 +98,7 @@ def install_user_configuration(
     project_root: Path | None = None,
     force: bool = False,
     bundled_packages: Sequence[dict[str, str]] = (),
+    workspace_root: Path | None = None,
 ) -> ConfigurationInstallation:
     """从静态资源安装双配置；普通模式只补缺失配置。"""
     resolved_root = config_root.expanduser().resolve()
@@ -126,11 +139,12 @@ def install_user_configuration(
         schema_paths.append(schema_target)
         if force or not config_target.exists():
             content = config_source.read_bytes()
-            if config_target.name == "gateway.jsonc" and profile == "default":
+            if profile == "default":
                 config = _read_jsonc_object(config_source)
+                domain = config_target.stem
                 content = (json.dumps({
-                    "$schema": "./gateway_schema.jsonc", "config_version": config["config_version"],
-                    "extends": "builtin:gateway", "settings": {},
+                    "$schema": f"./{domain}_schema.jsonc", "config_version": config["config_version"],
+                    "extends": f"builtin:{domain}", "settings": {},
                 }, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             if config_target.name == "gateway.jsonc" and bundled_packages:
                 # 只初始化新来源；已有绑定和新工作区默认项不随普通启动更新。
@@ -149,14 +163,22 @@ def install_user_configuration(
             created_config_paths.append(config_target)
         if schema_content is not None:
             atomic_write(schema_target, schema_content, 0o600)
-        if config_target.name == "gateway.jsonc":
-            local_target = resolved_root / "gateway_local.jsonc"
-            config_paths.append(local_target)
-            if force or not local_target.exists():
-                local = {"$schema": "./gateway_schema.jsonc", "config_version": 6,
-                         "extends": "user:gateway", "settings": {}}
-                atomic_write(local_target, (json.dumps(local, ensure_ascii=False, indent=2) + "\n").encode(), 0o600)
-                created_config_paths.append(local_target)
+        domain = config_target.stem
+        local_target = resolved_root / f"{domain}_local.jsonc"
+        config_paths.append(local_target)
+        if force or not local_target.exists():
+            config = _read_jsonc_object(config_source)
+            local = {"$schema": f"./{domain}_schema.jsonc", "config_version": config["config_version"],
+                     "extends": f"user:{domain}", "settings": {}}
+            atomic_write(local_target, (json.dumps(local, ensure_ascii=False, indent=2) + "\n").encode(), 0o600)
+            created_config_paths.append(local_target)
+
+    if workspace_root is not None:
+        workspace_target = workspace_root.expanduser().resolve() / ".boxteam/workspace.jsonc"
+        existed = workspace_target.exists()
+        config_paths.append(install_workspace_configuration(workspace_root=workspace_root))
+        if not existed:
+            created_config_paths.append(workspace_target)
 
     return ConfigurationInstallation(
         config_paths=tuple(config_paths),
@@ -172,6 +194,7 @@ def install_source_development_configuration(
     local_only: bool = False,
     force: bool = False,
     bundled_packages: Sequence[dict[str, str]] = (),
+    workspace_root: Path | None = None,
 ) -> ConfigurationInstallation:
     """把源码开发资源安装到 BOXTEAM_HOME，运行期不再读取源码文件。"""
     resolved_project_root = project_root.expanduser().resolve()
@@ -184,6 +207,7 @@ def install_source_development_configuration(
         project_root=resolved_project_root,
         force=force,
         bundled_packages=bundled_packages,
+        workspace_root=workspace_root,
     )
     env_path = config_root.expanduser().resolve() / ".env"
     if force or not env_path.exists():

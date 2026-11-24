@@ -475,6 +475,7 @@ def main() -> None:
             local_only=local_only,
             force=args.force,
             bundled_packages=args.bundled_plugins,
+            workspace_root=args.workspace,
         )
         gateway_development_assets = _environment_flag(
             GATEWAY_DEVELOPMENT_ASSETS_ENV
@@ -508,6 +509,7 @@ def main() -> None:
             project_root=project_root,
             force=args.force,
             bundled_packages=args.bundled_plugins,
+            workspace_root=args.workspace,
         )
         print(
             json.dumps(
@@ -540,6 +542,7 @@ def main() -> None:
             config_root=config_root,
             profile="default",
             project_root=project_root,
+            workspace_root=args.workspace,
         )
         from configs.maintenance.runtime_logging_commit import (
             commit_runtime_logging_migration,

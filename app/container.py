@@ -808,6 +808,7 @@ def _build_app_container(
         file_paths=workspace_service.file_paths,
         artifact_reader=read_artifact,
         gateway_skill_updates=config_service.get_gateway_skill_update_policy(),
+        workspace_proxy_routes=config_service.resolve_workspace_proxy_routes,
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry

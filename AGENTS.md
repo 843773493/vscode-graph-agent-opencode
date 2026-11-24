@@ -263,7 +263,7 @@
 1. 对所有 JS/TS 相关工具使用 `bun`。
 2. 对所有 Python 相关工具使用 `uv`。
 3. Gateway 内置默认配置位于发行包 `configs/gateway_inline.jsonc`，用户覆盖位于 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc`；Workspace 内置默认配置位于发行包 `configs/workspace_inline.jsonc`，用户覆盖位于同目录 `workspace.jsonc`；两者 schema 与配置文件同目录；使用 `python -m configs.boxteam` 安装或迁移配置。
-4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，其有效配置覆盖 `workspace_inline.jsonc`、用户级 `workspace.jsonc` 和 `workspace_local.jsonc` 中的同名项；Gateway 不得读取该文件。
+4. 工作区级配置入口位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，只沿显式 `extends` 单父链解析。安装器写入 inline → user → user_local → 工作区的默认父边；自定义父链可跳过来源，运行时不得按固定文件顺序补齐。Gateway 不得读取该文件。
 5. 工作区后端初始化只能创建当前显式工作区的 `.boxteam/` 数据目录，不得顺带创建用户默认工作区或修改 Gateway 全局状态。
 
 ### 已验收版本与迁移边界

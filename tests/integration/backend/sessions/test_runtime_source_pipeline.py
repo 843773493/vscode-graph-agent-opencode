@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, closing
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import commentjson
 import httpx
@@ -43,10 +44,13 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
+from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id
+from app.gateway.plugins.workspaces import WorkspacePluginBindings
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes.secrets import router as gateway_secrets_router
 from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
+from app.gateway.runtime.external_http import GatewayExternalHTTPTransport
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.secrets.vault import SecretVault
 from app.prompting import PromptSection, internal_message_factory
@@ -56,7 +60,6 @@ from app.services.business.runtime_reminder import (
     submit_execution_interruption_reminder,
     submit_runtime_reminder,
 )
-from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.extension_catalog import (
     MCP_GUIDANCE_SOURCE_ID,
 )
@@ -219,19 +222,22 @@ def _prepare_source_workspace(
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"].values():
-        if "auth" in provider["defaults"]:
+    workspace_settings = config["settings"]["workspace"]
+    for provider in workspace_settings["llm"]["providers"].values():
+        profile_name = provider["config_ref"].removeprefix("#/profiles/")
+        profile = config["profiles"][profile_name]
+        if "auth" in profile["settings"]["model_options"]:
             continue
-        provider["defaults"] = {
+        profile["settings"]["model_options"] = {
             "endpoint": f"http://127.0.0.1:{port}/v1",
             "api_key": "${BOXTEAM_E2E_MODEL_KEY}", "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "model_info": {
                 "supports_function_calling": True, "supports_reasoning": True,
             }, "supports_reasoning": {"reasoning_content": True}},
         }
-        provider["models"] = {"default": {"model": "e2e-stub-model"}}
-    config.setdefault("runtime", {}).setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
-    for agent in config["agents"].values():
+        provider["models"]["default"]["model"] = "e2e-stub-model"
+    workspace_settings.setdefault("runtime", {}).setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         agent.setdefault("execution", {})["require_delegated_report"] = delegated_report
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -241,7 +247,7 @@ def _prepare_source_workspace(
 @asynccontextmanager
 async def _managed_gateway_skill_source(
     *, workspace: Path, workspace_id: str, boxteam_home: Path, port: int,
-    artifacts_dir: Path, prepared_package_root: Path | None = None,
+    artifacts_dir: Path, backend_url: str, prepared_package_root: Path | None = None,
     terminal: bool = False, browser: bool = False,
 ):
     """为 managed 测试提供真实 owner、已登记本地 Workspace 和认证快照路由。"""
@@ -256,7 +262,7 @@ async def _managed_gateway_skill_source(
         workspace_id=workspace_id,
         name="runtime-source-pipeline",
         root_path=str(workspace.resolve()),
-        backend_url="http://127.0.0.1:8010",
+        backend_url=backend_url,
         connection_kind="local",
         owner="system",
         managed=False,
@@ -277,6 +283,10 @@ async def _managed_gateway_skill_source(
     ))
     server_task: asyncio.Task[None] | None = None
     async with AsyncExitStack() as components:
+        external_http = GatewayExternalHTTPTransport(api.state.secret_vault)
+        components.push_async_callback(external_http.aclose)
+        await external_http.start({"proxy": {"mode": "direct"}})
+        api.state.external_http_transport = external_http
         if terminal or browser:
             plugin_ids = frozenset(
                 plugin_id for plugin_id, enabled in (("terminal", terminal), ("browser", browser)) if enabled
@@ -290,8 +300,9 @@ async def _managed_gateway_skill_source(
                 artifacts_dir=artifacts_dir / "terminal-plugin-package",
                 prepared_package_root=prepared_package_root,
             ))
-            config = ConfigService(workspace_root=workspace)
-            await plugins.apply_config_service(config)
+            bindings = WorkspacePluginBindings(registry, plugins.runtime)
+            api.state.workspace_plugin_bindings = bindings
+            components.push_async_callback(bindings.close)
         try:
             await owner.start()
             server_task = asyncio.create_task(server.serve())
@@ -330,6 +341,8 @@ async def source_case(
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+    monkeypatch.setenv("BOXTEAM_BACKEND_GENERATION", f"test_backend_{uuid4().hex}")
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", get_gateway_local_token())
     monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
     gateway_id = None
     gateway_skill_source_owner = None
@@ -340,6 +353,7 @@ async def source_case(
                     workspace=workspace, workspace_id=workspace_id, boxteam_home=boxteam_home,
                     port=integration_ports_for_file(Path(request.node.path)).port(11),
                     artifacts_dir=context.artifacts_dir,
+                    backend_url=f"http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(12)}",
                     prepared_package_root=prepared_package_root,
                     terminal=options.get("terminal", False),
                     browser=options.get("browser", False),
@@ -391,6 +405,25 @@ async def source_case(
                 lifespan.push_async_callback(controller.aclose)
                 monkeypatch.setattr(main, "_model_stream_controller", controller)
                 _main_lifespan_state = await lifespan.enter_async_context(main.lifespan(main.app))
+                if options.get("managed_gateway"):
+                    # 原配置交接会回读 Backend；监听真实内部入口，不能只装配 ASGI 客户端。
+                    backend_server = uvicorn.Server(uvicorn.Config(
+                        main.app, host="127.0.0.1",
+                        port=integration_ports_for_file(Path(request.node.path)).port(12),
+                        log_level="error", access_log=False, log_config=None, lifespan="off",
+                    ))
+                    backend_task = asyncio.create_task(backend_server.serve())
+
+                    async def stop_backend() -> None:
+                        backend_server.should_exit = True
+                        await asyncio.wait_for(backend_task, timeout=10)
+
+                    lifespan.push_async_callback(stop_backend)
+                    async with asyncio.timeout(10):
+                        while not backend_server.started:
+                            if backend_task.done():
+                                await backend_task
+                            await asyncio.sleep(0.01)
                 await _main_lifespan_state["after_http_startup"]()
                 registry = main.app.state.workspace_container_registry
                 container = registry.get(workspace_id)

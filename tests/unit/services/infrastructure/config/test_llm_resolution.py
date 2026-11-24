@@ -6,14 +6,20 @@ import pytest
 
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config.llm_resolution import LlmResolution
-from app.services.infrastructure.config.source_document import source_origins
-from configs.runtime import merge_json_objects
+
+REF = ModelReferenceDTO(provider_id="team", model_id="general")
 
 
 @pytest.fixture
 def model_config() -> dict:
-    return {"llm": {"providers": {"team": {
-        "defaults": {
+    return {"config_version": 4, "settings": {
+        "network": {"proxy": {"mode": "environment"}},
+        "model_options": {"api_mode": {"streaming": True}},
+        "workspace": {"agents": {}, "llm": {"providers": {"team": {
+            "config_ref": "#/profiles/provider", "models": {"general": {
+                "model": "upstream-general", "config_ref": "#/profiles/model"}},
+        }}}}}, "profiles": {
+        "provider": {"extends": "context:workspace", "settings": {"model_options": {
             "endpoint": "https://models.example/v1", "custom_llm_provider": "openai",
             "api_key": "${BOXTEAM_UNIT_MISSING_KEY}",
             "api_mode": {"protocol": "responses", "streaming": False,
@@ -22,231 +28,254 @@ def model_config() -> dict:
             "request_options": {"parameters": {"temperature": 1, "max_tokens": 100,
                                                "extra_body": {"left": True, "nullable": None}},
                                 "default_headers": {"X-Route": "default"}},
-        },
-        "models": {"general": {"model": "upstream-general", "overrides": {
+        }}},
+        "model": {"extends": "context:provider/team", "settings": {"model_options": {
             "request_options": {"parameters": {"temperature": 0, "max_output_tokens": None,
                                                "extra_body": {"right": True}},
                                 "default_headers": {"x-route": "model"}},
         }}},
-    }}}}
+    }}
 
 
-def resolve(config: dict, workspace_config_schema: dict) -> dict:
-    return LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema).get_model(
-        {"provider_id": "team", "model_id": "general"},
-    )
+@pytest.fixture
+def resolver_factory(model_graph_factory, workspace_config_schema: dict):
+    def create(document: dict, **kwargs):
+        graph = model_graph_factory(document, **kwargs)
+        resolver = LlmResolution(graph_provider=lambda: graph, default_agent_id_provider=lambda: "default",
+                                 schema_provider=lambda: workspace_config_schema)
+        return resolver, graph
+    return create
 
 
 @pytest.fixture
 def known_model_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.runtime import model_metadata
-
-    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda: {"gpt-6-luna": {
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: {"gpt-6-luna": {
         "litellm_provider": "openai", "mode": "chat", "supports_vision": True,
         "supports_function_calling": True, "supports_reasoning": True, "max_input_tokens": 922000,
     }})
 
 
-def test_catalog_capabilities_are_defaults_for_real_model_reference(
-    model_config: dict, workspace_config_schema: dict, known_model_catalog: None,
-) -> None:
-    provider = model_config["llm"]["providers"]["team"]
-    provider["defaults"]["api_mode"] = {"protocol": "responses"}
-    provider["defaults"].pop("request_options")
-    provider["models"]["general"] = {"model": "gpt-6-luna"}
+def test_catalog_capabilities_are_defaults_for_real_model_reference(model_config, resolver_factory, known_model_catalog):
+    options = model_config["profiles"]["provider"]["settings"]["model_options"]
+    options["api_mode"] = {"protocol": "responses"}
+    options.pop("request_options")
+    model_config["profiles"]["model"]["settings"] = {}
+    model_config["settings"]["workspace"]["llm"]["providers"]["team"]["models"]["general"]["model"] = "gpt-6-luna"
     original = deepcopy(model_config)
-    resolver = LlmResolution(effective_config_provider=lambda: model_config,
-        default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    resolved = resolver.get_model({"provider_id": "team", "model_id": "general"})
+    resolver, graph = resolver_factory(model_config)
+    resolved = resolver.get_model(REF)
     assert resolved["api_mode"]["model_info"] == {
         "supports_vision": True, "supports_function_calling": True,
         "supports_reasoning": True, "max_input_tokens": 922000,
     }
     assert resolved["api_mode"]["supports_reasoning"]["reasoning_items"]["encrypted_content"] is True
     assert "request_options" not in resolved
-    origins = {str(item["path"]): str(item["source_key"]) for item in source_origins({"inline": model_config}, model_config, schema=workspace_config_schema)}
-    inspected = resolver.inspect_model_reference(model_config,
-        ModelReferenceDTO(provider_id="team", model_id="general"), origins)
+    inspected = resolver.inspect_model_reference(graph, REF)
     assert inspected.options["api_mode"] == resolved["api_mode"]
     assert any(item.definition == "catalog" and item.path.endswith("max_input_tokens") for item in inspected.origins)
     assert model_config == original
-
-    # 只声明回放字段时，派生的思考标志不能假装来自某个不存在的配置叶子。
-    provider["defaults"]["api_mode"]["supports_reasoning"] = {"reasoning_items": {"summary": True}}
-    origins = {str(item["path"]): str(item["source_key"]) for item in source_origins({"inline": model_config}, model_config, schema=workspace_config_schema)}
-    inspected = resolver.inspect_model_reference(model_config,
-        ModelReferenceDTO(provider_id="team", model_id="general"), origins)
-    inferred = next(item for item in inspected.origins if item.path == "/api_mode/model_info/supports_reasoning")
+    options["api_mode"]["supports_reasoning"] = {"reasoning_items": {"summary": True, "encrypted_content": False}}
+    resolver, graph = resolver_factory(model_config)
+    inferred = next(item for item in resolver.inspect_model_reference(graph, REF).origins
+                    if item.path == "/api_mode/model_info/supports_reasoning")
     assert inferred.definition == "builtin" and inferred.source_key == "api_mode.supports_reasoning"
 
 
-def test_explicit_capabilities_override_catalog_and_unknown_model_stays_usable(
-    model_config: dict, workspace_config_schema: dict, known_model_catalog: None,
-) -> None:
-    provider = model_config["llm"]["providers"]["team"]
-    provider["defaults"]["api_mode"] = {"protocol": "responses", "model_info": {"supports_vision": False, "max_input_tokens": 64000}}
-    provider["models"]["general"] = {"model": "gpt-6-luna", "overrides": {"api_mode": {
-        "model_info": {"supports_reasoning": False, "max_input_tokens": 4096}, "supports_reasoning": {},
-    }}}
-    info = resolve(model_config, workspace_config_schema)["api_mode"]["model_info"]
+def test_explicit_capabilities_override_catalog_and_unknown_model_stays_usable(model_config, resolver_factory, known_model_catalog):
+    options = model_config["profiles"]["provider"]["settings"]["model_options"]
+    options["api_mode"] = {"protocol": "responses", "model_info": {"supports_vision": False, "max_input_tokens": 64000}}
+    identity = model_config["settings"]["workspace"]["llm"]["providers"]["team"]["models"]["general"]
+    identity["model"] = "gpt-6-luna"
+    local = model_config["profiles"]["model"]["settings"]["model_options"]
+    local["api_mode"] = {"model_info": {"supports_reasoning": False, "max_input_tokens": 4096}, "supports_reasoning": {}}
+    resolver, _ = resolver_factory(model_config)
+    info = resolver.get_model(REF)["api_mode"]["model_info"]
     assert info["supports_vision"] is False and info["supports_reasoning"] is False
     assert info["max_input_tokens"] == 4096 and info["supports_function_calling"] is True
-    provider["models"]["general"] = {"model": "unlisted-private-model"}
-    resolved = resolve(model_config, workspace_config_schema)
-    assert resolved["model"] == "unlisted-private-model"
-    assert resolved["api_mode"]["model_info"] == {"supports_vision": False, "max_input_tokens": 64000}
+    identity["model"] = "unlisted-private-model"
+    local.pop("api_mode")
+    resolver, _ = resolver_factory(model_config)
+    assert resolver.get_model(REF)["api_mode"]["model_info"] == {"supports_vision": False, "max_input_tokens": 64000}
 
 
-def test_source_defaults_do_not_override_model_explicit_values(model_config: dict, workspace_config_schema: dict) -> None:
+def test_child_values_survive_parent_changes_and_object_parameters_replace(model_config, resolver_factory):
     original = deepcopy(model_config)
-    higher = {"llm": {"providers": {"team": {"defaults": {
-        "request_options": {"parameters": {"temperature": 0.8, "max_output_tokens": 200}},
-    }}}}}
-    result = resolve(merge_json_objects(model_config, higher, schema=workspace_config_schema), workspace_config_schema=workspace_config_schema)
-    assert result["provider_id"] == "team" and result["model_id"] == "general"
-    assert result["model"] == "upstream-general"
-    assert result["request_options"]["parameters"] == {
-        "temperature": 0, "max_output_tokens": None,
-        "extra_body": {"left": True, "nullable": None, "right": True},
-    }
+    model_config["profiles"]["provider"]["settings"]["model_options"]["request_options"]["parameters"]["temperature"] = 0.8
+    resolver, graph = resolver_factory(model_config)
+    result = resolver.get_model(REF)
+    assert (result["provider_id"], result["model_id"], result["model"]) == ("team", "general", "upstream-general")
+    assert result["request_options"]["parameters"] == {"temperature": 0, "max_output_tokens": None, "extra_body": {"right": True}}
     assert result["request_options"]["default_headers"] == {"x-route": "model"}
-    assert result["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
-    assert model_config == original
+    assert result["network"] == {"proxy": {"mode": "environment"}}
+    result["request_options"]["parameters"]["extra_body"]["right"] = False
+    assert resolver.get_model(REF)["request_options"]["parameters"]["extra_body"] == {"right": True}
+    assert graph.resolve_model("team", "general").settings["model_options"]["request_options"]["parameters"]["temperature"] == 0
+    assert original["profiles"]["provider"]["settings"]["model_options"]["request_options"]["parameters"]["temperature"] == 1
 
 
-@pytest.mark.parametrize("stage", ["source", "model"])
-def test_protocol_switch_replaces_whole_reasoning_block(model_config: dict, stage: str, workspace_config_schema: dict) -> None:
-    options = {"custom_llm_provider": "anthropic", "api_mode": {
-        "protocol": "anthropic_messages", "supports_reasoning": {"thinking_blocks": {"thinking": True}},
-    }}
-    if stage == "source":
-        model_config = merge_json_objects(model_config, {"llm": {"providers": {"team": {"defaults": options}}}}, schema=workspace_config_schema)
-    else:
-        model_config["llm"]["providers"]["team"]["models"]["general"]["overrides"].update(options)
-    result = resolve(model_config, workspace_config_schema=workspace_config_schema)
-    assert result["api_mode"]["supports_reasoning"] == {"thinking_blocks": {"thinking": True}}
-    assert result["api_mode"]["streaming"] is False
-    assert result["api_mode"]["model_info"]["supports_function_calling"] is True
+@pytest.mark.parametrize("stage", ["provider", "model"])
+def test_protocol_switch_replaces_whole_reasoning_block(model_config, stage, resolver_factory):
+    model_config["profiles"][stage]["settings"]["model_options"].update({"custom_llm_provider": "anthropic", "api_mode": {
+        "protocol": "anthropic_messages", "model_info": {"supports_reasoning": True, "supports_function_calling": True}, "supports_reasoning": {"thinking_blocks": {"thinking": True, "redacted_thinking": False}},
+    }})
+    resolver, _ = resolver_factory(model_config)
+    result = resolver.get_model(REF)
+    assert result["api_mode"]["supports_reasoning"] == {"thinking_blocks": {"thinking": True, "redacted_thinking": False}}
+    assert result["api_mode"]["streaming"] is (stage == "provider")
     assert result["request_options"]["parameters"]["max_tokens"] is None
 
 
-def test_explicit_empty_reasoning_replaces_lower_block_and_missing_key_inherits(model_config: dict, workspace_config_schema: dict) -> None:
-    overrides = model_config["llm"]["providers"]["team"]["models"]["general"]["overrides"]
-    overrides["api_mode"] = {"model_info": {"supports_reasoning": False}, "supports_reasoning": {}}
-    assert resolve(model_config, workspace_config_schema=workspace_config_schema)["api_mode"]["supports_reasoning"] == {}
-    del overrides["api_mode"]
-    assert "reasoning_items" in resolve(model_config, workspace_config_schema=workspace_config_schema)["api_mode"]["supports_reasoning"]
+def test_empty_reasoning_replaces_parent_and_missing_key_inherits(model_config, resolver_factory):
+    options = model_config["profiles"]["model"]["settings"]["model_options"]
+    options["api_mode"] = {"model_info": {"supports_reasoning": False}, "supports_reasoning": {}}
+    resolver, _ = resolver_factory(model_config)
+    assert resolver.get_model(REF)["api_mode"]["supports_reasoning"] == {}
+    del options["api_mode"]
+    resolver, _ = resolver_factory(model_config)
+    assert "reasoning_items" in resolver.get_model(REF)["api_mode"]["supports_reasoning"]
 
 
-def test_source_aliases_override_but_same_layer_aliases_are_rejected(model_config: dict, workspace_config_schema: dict) -> None:
-    options = model_config["llm"]["providers"]["team"]["models"]["general"]["overrides"]
-    options["request_options"]["parameters"] = {"max_tokens": 10, "max_output_tokens": 20}
+def test_aliases_override_across_nodes_but_duplicate_in_one_node_fails(model_config, resolver_factory):
+    parameters = model_config["profiles"]["model"]["settings"]["model_options"]["request_options"]["parameters"]
+    parameters.update(max_tokens=10, max_output_tokens=20)
+    resolver, _ = resolver_factory(model_config)
     with pytest.raises(ValueError, match="别名重复"):
-        resolve(model_config, workspace_config_schema=workspace_config_schema)
+        resolver.get_model(REF)
 
 
-def test_environment_is_resolved_only_inside_execution_scope(model_config: dict, monkeypatch: pytest.MonkeyPatch, workspace_config_schema: dict) -> None:
+def test_environment_expands_only_inside_execution_scope(model_config, resolver_factory, monkeypatch):
     monkeypatch.delenv("BOXTEAM_UNIT_MISSING_KEY", raising=False)
-    resolver = LlmResolution(effective_config_provider=lambda: model_config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    assert resolver.list_models(model_config)[0]["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
+    resolver, graph = resolver_factory(model_config)
+    assert resolver.list_models(graph)[0]["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
     with resolver.use_secrets({}), pytest.raises(ValueError, match="未设置"):
-        resolver.list_models(model_config)
+        resolver.list_models(graph)
     monkeypatch.setenv("BOXTEAM_UNIT_MISSING_KEY", "execution-only")
     with resolver.use_secrets({}):
-        assert resolver.list_models(model_config)[0]["api_key"] == "execution-only"
-    assert resolver.list_models(model_config)[0]["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
+        assert resolver.list_models(graph)[0]["api_key"] == "execution-only"
+    assert resolver.list_models(graph)[0]["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
 
 
-def test_source_header_case_is_merged_but_duplicate_same_layer_fails(model_config: dict, workspace_config_schema: dict) -> None:
-    higher = {"llm": {"providers": {"team": {"defaults": {
-        "request_options": {"default_headers": {"x-route": "higher"}},
-    }}}}}
-    merged = merge_json_objects(model_config, higher, schema=workspace_config_schema)
-    assert merged["llm"]["providers"]["team"]["defaults"]["request_options"]["default_headers"] == {"x-route": "higher"}
-    higher["llm"]["providers"]["team"]["defaults"]["request_options"]["default_headers"]["X-Route"] = "duplicate"
+def test_duplicate_header_case_fails_in_same_node(model_config, resolver_factory):
+    model_config["profiles"]["model"]["settings"]["model_options"]["request_options"]["default_headers"]["X-ROUTE"] = "duplicate"
+    resolver, _ = resolver_factory(model_config)
     with pytest.raises(ValueError, match="大小写重复"):
-        merge_json_objects(model_config, higher, schema=workspace_config_schema)
+        resolver.get_model(REF)
 
 
-def test_inspection_reports_original_alias_and_header_sources_without_expanding_credentials(
-    model_config: dict, monkeypatch: pytest.MonkeyPatch, workspace_config_schema: dict,
-) -> None:
+@pytest.mark.parametrize("lower_name,higher_name", [("max_tokens", "max_output_tokens"), ("max_output_tokens", "max_tokens")])
+def test_inspection_retains_actual_alias_header_sources_without_network(model_config, resolver_factory, monkeypatch, lower_name, higher_name):
     from app.runtime import litellm_runtime
-
-    def forbidden():
-        pytest.fail("本地模型预检不能启动公共目录刷新或等待网络")
-
-    monkeypatch.setattr(litellm_runtime, "load_litellm", forbidden)
-    original = deepcopy(model_config)
-    higher = {"llm": {"providers": {"team": {"defaults": {
-        "request_options": {"parameters": {"max_output_tokens": 200}},
-    }}}}}
-    config = merge_json_objects(model_config, higher, schema=workspace_config_schema)
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    # 作用域中缺少执行所需环境变量；管理预检仍只返回引用，不能尝试展开它。
+    monkeypatch.setattr(litellm_runtime, "load_litellm", lambda: pytest.fail("预检不能访问网络"))
+    provider = model_config["profiles"]["provider"]["settings"]["model_options"]
+    provider["request_options"]["parameters"] = {lower_name: 100}
+    local = model_config["profiles"]["model"]["settings"]["model_options"]
+    local["request_options"] = {"parameters": {higher_name: 50}, "default_headers": {"x-ROUTE": "higher"}}
+    resolver, graph = resolver_factory(model_config)
     with resolver.use_secrets({}):
-        result = resolver.inspect_model_reference(config, ModelReferenceDTO(provider_id="team", model_id="general"),
-            {str(origin["path"]): str(origin["source_key"])
-             for origin in source_origins({"inline": model_config, "workspace": higher}, config, schema=workspace_config_schema)})
+        result = resolver.inspect_model_reference(graph, REF)
     origins = {origin.path: origin for origin in result.origins}
     assert result.options["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
-    assert result.options["request_options"]["parameters"]["max_output_tokens"] is None
-    origin = origins["/request_options/parameters/max_output_tokens"]
-    assert origin.source_key == "inline" and origin.definition == "overrides"
-    assert origin.definition_path.endswith("/models/general/overrides/request_options/parameters/max_output_tokens")
-    assert origins["/request_options/default_headers/x-route"].definition_path.endswith("/default_headers/x-route")
-    assert origins["/request_options/parameters/extra_body/left"].definition == "defaults"
-    assert origins["/request_options/parameters/extra_body/right"].definition == "overrides"
-    assert model_config == original
-
-
-@pytest.mark.parametrize("lower_name,higher_name", [
-    ("max_tokens", "max_output_tokens"), ("max_output_tokens", "max_tokens"),
-])
-def test_inspection_alias_and_header_origins_use_actual_winning_source_keys(
-    model_config: dict, lower_name: str, higher_name: str, workspace_config_schema: dict,
-) -> None:
-    model_config["llm"]["providers"]["team"]["models"]["general"].pop("overrides")
-    model_config["llm"]["providers"]["team"]["defaults"]["request_options"]["parameters"] = {lower_name: 100}
-    higher = {"llm": {"providers": {"team": {"defaults": {
-        "request_options": {"parameters": {higher_name: 50}, "default_headers": {"x-ROUTE": "higher"}},
-    }}}}}
-    config = merge_json_objects(model_config, higher, schema=workspace_config_schema)
-    raw_options = config["llm"]["providers"]["team"]["defaults"]["request_options"]
-    assert raw_options["parameters"] == {higher_name: 50}
-    assert raw_options["default_headers"] == {"x-ROUTE": "higher"}
-    source_entries = source_origins({"inline": model_config, "workspace": higher}, config, schema=workspace_config_schema)
-    parameter_origin = next(origin for origin in source_entries if origin["path"].endswith(f"/parameters/{higher_name}"))
-    assert parameter_origin["source_key"] == "workspace" and parameter_origin["shadowed_sources"] == ["inline"]
-    header_origin = next(origin for origin in source_entries if origin["path"].endswith("/default_headers/x-ROUTE"))
-    assert header_origin["source_key"] == "workspace" and header_origin["shadowed_sources"] == ["inline"]
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    result = resolver.inspect_model_reference(config, ModelReferenceDTO(provider_id="team", model_id="general"),
-        {str(origin["path"]): str(origin["source_key"]) for origin in source_entries})
-    origins = {origin.path: origin for origin in result.origins}
     assert result.options["request_options"]["parameters"]["max_output_tokens"] == 50
-    assert origins["/request_options/parameters/max_output_tokens"].source_key == "workspace"
+    assert origins["/request_options/parameters/max_output_tokens"].definition == "node"
     assert origins["/request_options/parameters/max_output_tokens"].definition_path.endswith(f"/parameters/{higher_name}")
     assert origins["/request_options/default_headers/x-route"].definition_path.endswith("/default_headers/x-ROUTE")
+    assert [node.definition_path for node in result.chain] == ["", "/profiles/provider", "/profiles/model"]
 
 
-def test_oauth_inspection_does_not_construct_authentication_owner(model_config: dict, monkeypatch: pytest.MonkeyPatch, workspace_config_schema: dict) -> None:
+def test_model_can_detach_from_provider_and_select_shared_node(model_config, resolver_factory):
+    model_config["profiles"]["detached"] = {"extends": "context:workspace", "settings": {"network": {"proxy": {"mode": "direct"}},
+        "model_options": {"endpoint": "https://detached.example/v1", "custom_llm_provider": "openai", "api_key": "",
+                          "api_mode": {"protocol": "chat_completions"}}}}
+    identity = model_config["settings"]["workspace"]["llm"]["providers"]["team"]
+    identity["models"]["general"]["config_ref"] = "#/profiles/detached"
+    identity["models"]["second"] = {"model": "second", "config_ref": "#/profiles/detached"}
+    resolver, graph = resolver_factory(model_config)
+    assert resolver.resolve_provider(graph, "team")["endpoint"] == "https://models.example/v1"
+    result = resolver.get_model(REF)
+    assert result["endpoint"] == "https://detached.example/v1" and result["network"]["proxy"]["mode"] == "direct"
+    assert resolver.inspect_model_reference(graph, REF).shared is True
+    assert resolver.inspect_provider(graph, "team").shared is False
+
+
+def test_oauth_inspection_does_not_construct_authentication_owner(model_config, resolver_factory, monkeypatch):
     from app.runtime.litellm_runtime import _import_litellm
-
     _import_litellm()
     from litellm.llms.chatgpt.responses import transformation
+    monkeypatch.setattr(transformation, "Authenticator", lambda: pytest.fail("预检不能创建认证 owner"))
+    options = model_config["profiles"]["provider"]["settings"]["model_options"]
+    options.update(endpoint="https://chatgpt.com/backend-api/codex/", custom_llm_provider="chatgpt", auth={"type": "oauth", "method": "chatgpt"})
+    options.pop("api_key")
+    resolver, graph = resolver_factory(model_config)
+    result = resolver.inspect_model_reference(graph, REF)
+    assert result.request_url == "https://chatgpt.com/backend-api/codex/responses" and result.catalog_url is None
 
-    def forbidden():
-        pytest.fail("只读地址预检不能创建 OAuth 目录或认证 owner")
 
-    monkeypatch.setattr(transformation, "Authenticator", forbidden)
-    defaults = model_config["llm"]["providers"]["team"]["defaults"]
-    defaults.update(endpoint="https://chatgpt.com/backend-api/codex/", custom_llm_provider="chatgpt",
-        auth={"type": "oauth", "method": "chatgpt"})
-    defaults.pop("api_key")
-    resolver = LlmResolution(effective_config_provider=lambda: model_config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    result = resolver.inspect_model_reference(model_config, ModelReferenceDTO(provider_id="team", model_id="general"),
-        {str(origin["path"]): str(origin["source_key"])
-         for origin in source_origins({"inline": model_config}, model_config, schema=workspace_config_schema)})
-    assert result.request_url == "https://chatgpt.com/backend-api/codex/responses"
-    assert result.catalog_url is None
+def test_proxy_credentials_prepare_late_even_without_model_api_key(model_config, resolver_factory, monkeypatch):
+    from app.schemas.gateway.secrets import ResolvedSecret
+
+    proxy_id = 'sec_' + '1' * 32
+    model_config['profiles']['provider']['settings']['model_options']['api_key'] = ''
+    model_config['profiles']['model']['settings']['network'] = {'proxy': {
+        'mode': 'explicit', 'url': 'http://proxy.example:3128', 'auth': {'username': 'proxy-user', 'password': 'secret:' + proxy_id},
+    }}
+    resolver, graph = resolver_factory(model_config, environment={'HTTP_PROXY': 'http://old-env.example:3128'})
+    model = resolver.get_model(REF)
+    assert 'proxy_routes' not in model
+    monkeypatch.setenv('HTTP_PROXY', 'http://changed-env.example:3128')
+    with resolver.use_secrets({}), pytest.raises(ValueError, match='代理所需命名密钥未准备'):
+        resolver.get_model(REF)
+    with resolver.use_secrets({proxy_id: ResolvedSecret(revision=1, value='proxy-password')}):
+        prepared = resolver.get_model(REF)
+    assert prepared['api_key'] == ''
+    proxy = prepared['proxy_routes'].routes[0][1]
+    assert str(proxy.url) == 'http://proxy.example:3128'
+    assert proxy.auth == ('proxy-user', 'proxy-password')
+    assert prepared['network']['proxy']['auth']['password'] == 'secret:' + proxy_id
+    inspected = resolver.inspect_model_reference(graph, REF)
+    assert 'proxy_routes' not in inspected.options and 'proxy_environment' not in inspected.options
+    assert inspected.network['proxy']['auth']['password'] == 'secret:' + proxy_id
+
+
+@pytest.mark.asyncio
+async def test_credential_batch_includes_only_selected_api_and_proxy_references(model_config, resolver_factory, monkeypatch):
+    from app.schemas.gateway.secrets import ResolvedSecret
+    from app.services.infrastructure import gateway_client_common
+    from app.services.infrastructure.config_service.config_public import (
+        ConfigPublicMixin,
+    )
+    from app.services.infrastructure.gateway_secrets import client
+
+    key_id, proxy_id = 'sec_' + '1' * 32, 'sec_' + '2' * 32
+    model_config['profiles']['provider']['settings']['model_options']['api_key'] = 'secret:' + key_id
+    model_config['profiles']['model']['settings']['network'] = {'proxy': {
+        'mode': 'explicit', 'url': 'http://proxy.example:3128', 'auth': {'username': 'user', 'password': 'secret:' + proxy_id},
+    }}
+    resolver, _ = resolver_factory(model_config)
+    selected = resolver.get_model(REF)
+    batches = []
+
+    class Secrets:
+        def __init__(self, connection):
+            assert connection == 'target-transport'
+
+        async def resolve(self, references):
+            batches.append(references)
+            return {reference: ResolvedSecret(revision=1, value='value') for reference in references}
+
+    monkeypatch.setattr(gateway_client_common, 'GatewayTransportConnection', lambda **_kwargs: 'target-transport')
+    monkeypatch.setattr(client, 'GatewaySecretsClient', Secrets)
+    result = await ConfigPublicMixin.prepare_llm_credentials(object(), [selected, selected])
+    assert list(result) == [key_id, proxy_id] and batches == [[key_id, proxy_id]]
+
+
+def test_environment_routes_use_captured_generation_not_current_process(model_config, resolver_factory, monkeypatch):
+    model_config['profiles']['provider']['settings']['model_options']['api_key'] = ''
+    environment = {'HTTP_PROXY': 'http://captured.example:3128'}
+    resolver, graph = resolver_factory(model_config, environment=environment)
+    environment['HTTP_PROXY'] = 'http://changed-input.example:3128'
+    monkeypatch.setenv('HTTP_PROXY', 'http://changed-process.example:3128')
+    with resolver.use_secrets({}):
+        model = resolver.get_model(REF)
+    assert str(model['proxy_routes'].routes[0][1].url) == 'http://captured.example:3128'
+    assert dict(graph.proxy_environment) == {'HTTP_PROXY': 'http://captured.example:3128'}

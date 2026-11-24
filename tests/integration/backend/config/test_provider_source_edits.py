@@ -23,6 +23,7 @@ from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.source_document import parse_source_text
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -68,19 +69,26 @@ async def provider_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Asyn
     )
     load_or_create_workspace_id(workspace)
     monkeypatch.delenv("PROVIDER_SOURCE_UNSET_KEY", raising=False)
-    providers = {f"edit-{name}": {"defaults": {
+    options = {name: {
         "endpoint": f"https://{name}.example/v1", "custom_llm_provider": "openai",
         "api_key": "secret:sec_" + "1" * 32,
         "api_mode": {"protocol": "chat_completions", "model_info": {
             "supports_function_calling": True, "supports_reasoning": False,
         }, "supports_reasoning": {"reasoning_content": False}},
-    }, "models": {"main": {"model": f"{name}-model"}}} for name in ("unused", "primary", "fallback")}
-    providers["edit-fallback"]["defaults"]["api_key"] = "${PROVIDER_SOURCE_UNSET_KEY}"
-    payload = {"config_version": 3, "llm": {"providers": providers}, "default_agent": "default",
+    } for name in ("unused", "primary", "fallback")}
+    options["fallback"]["api_key"] = "${PROVIDER_SOURCE_UNSET_KEY}"
+    providers = {f"edit-{name}": {"config_ref": f"#/profiles/{name}",
+        "models": {"main": {"model": f"{name}-model", "config_ref": f"context:provider/edit-{name}"}}}
+        for name in options}
+    payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+        "llm": {"providers": providers}, "default_agent": "default",
                "agents": {"default": {"name": "Default", "instructions": {"system_prompt": "test"},
                    "model": {"primary": PRIMARY, "fallbacks": [FALLBACK]}},
                    **{name: {"model": {"primary": PRIMARY, "fallbacks": []}}
-                      for name in ("coder", "reviewer", "researcher")}}}
+                      for name in ("coder", "reviewer", "researcher")}}}},
+        "profiles": {name: {"extends": "context:workspace", "settings": {"model_options": value}}
+            for name, value in options.items()}}
+    install_user_configuration(config_root=tmp_path, profile="default", workspace_root=workspace)
     source = tmp_path / "workspace.jsonc"
     source.write_text("// 保留来源注释\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with WorkspaceStateStore(workspace_root=workspace) as store:
@@ -109,6 +117,41 @@ def _request(document: dict, payload: dict[str, object], key: str) -> dict:
             "expected_active_digest": document["active_digest"], "idempotency_key": key}
 
 
+async def test_source_validation_delivers_safe_issues_with_original_source_uri(
+    provider_case: ProviderCase,
+) -> None:
+    case = provider_case
+    document = await case.document()
+    original, active = case.source.read_bytes(), case.service.get_snapshot()
+    source_uri = next(node["source_uri"] for node in document["nodes"] if node["source_key"] == SOURCE)
+    for validation_kind in ("document", "options", "extra"):
+        payload = parse_source_text(document["jsonc"])
+        if validation_kind == "document":
+            payload["profiles"]["field.with.dot/and.slash"] = {"extends": 7, "settings": {}}
+            expected = ["profiles", "field.with.dot/and.slash", "extends"]
+        elif validation_kind == "options":
+            payload["profiles"]["primary"]["settings"]["model_options"].pop("endpoint")
+            expected = ["model_options"]
+        else:
+            payload["private-extra-field"] = "private-input"
+            expected = ["<extra>"]
+        request = _request(document, payload, "source-path-" + validation_kind)
+        for method, suffix in (("POST", "/preflight"), ("PUT", "")):
+            response = await case.client.request(method, URL + suffix, json=request)
+            assert response.status_code == 422, response.text
+            result = response.json()
+            assert response.headers["X-Request-ID"] == result["request_id"] == "provider-edit"
+            detail = result["detail"]
+            assert detail["message"].startswith("配置节点校验失败:")
+            assert detail["details"]["source_uri"] == source_uri
+            assert "cause" not in detail["details"]
+            issue, = detail["details"]["issues"]
+            assert issue["path"] == expected
+            assert issue["path_exact"] is (validation_kind == "document")
+            assert "private-extra-field" not in response.text and "private-input" not in response.text
+    assert case.source.read_bytes() == original and case.service.get_snapshot() is active
+
+
 async def test_agent_source_crud_and_remove_override_reveal_lower_definition(
     provider_case: ProviderCase,
 ) -> None:
@@ -116,7 +159,7 @@ async def test_agent_source_crud_and_remove_override_reveal_lower_definition(
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
     # deep_agent 是普通稳定 ID，不能被历史别名改绑到 default。
-    payload["agents"]["deep_agent"] = {
+    payload["settings"]["workspace"]["agents"]["deep_agent"] = {
         "name": "来源 Agent", "instructions": {"system_prompt": "用户来源提示词"},
         "model": {"primary": PRIMARY, "fallbacks": []},
     }
@@ -128,27 +171,27 @@ async def test_agent_source_crud_and_remove_override_reveal_lower_definition(
     assert [(model["provider_id"], model["model_id"]) for model in runtime["models"]] == [("edit-primary", "main")]
 
     workspace_url = "/api/v1/config/sources/workspace_root_mutable_override"
-    override = {"agents": {"deep_agent": {
+    override = {"config_version": 4, "extends": "user:workspace_local", "settings": {"workspace": {"agents": {"deep_agent": {
         "name": "本工作区显示名", "instructions": {"system_prompt": "本工作区提示词"},
-    }}}
+    }}}}}
     saved = await case.save(override, "agent-override", url=workspace_url)
     assert saved["effective"]["agents"]["deep_agent"]["name"] == "本工作区显示名"
     assert saved["effective"]["agents"]["deep_agent"]["model"]["primary"] == PRIMARY
-    assert parse_source_text(case.source.read_text())["agents"]["deep_agent"]["name"] == "来源 Agent"
+    assert parse_source_text(case.source.read_text())["settings"]["workspace"]["agents"]["deep_agent"]["name"] == "来源 Agent"
 
     # 删除仅作用于选定层，不写 tombstone，也不删除下层定义。
-    override["agents"].pop("deep_agent")
+    override["settings"]["workspace"]["agents"].pop("deep_agent")
     restored = await case.save(override, "agent-restore-inheritance", url=workspace_url)
-    assert "deep_agent" not in parse_source_text(restored["jsonc"])["agents"]
+    assert "deep_agent" not in parse_source_text(restored["jsonc"])["settings"]["workspace"]["agents"]
     assert restored["effective"]["agents"]["deep_agent"]["instructions"]["system_prompt"] == "用户来源提示词"
 
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["agents"]["deep_agent"]["name"] = "可编辑显示名"
+    payload["settings"]["workspace"]["agents"]["deep_agent"]["name"] = "可编辑显示名"
     edited = await case.save(payload, "agent-edit-name")
     assert edited["effective"]["agents"]["deep_agent"]["name"] == "可编辑显示名"
     payload = parse_source_text(edited["jsonc"])
-    payload["agents"].pop("deep_agent")
+    payload["settings"]["workspace"]["agents"].pop("deep_agent")
     removed = await case.save(payload, "agent-remove-definition")
     assert "deep_agent" not in removed["effective"]["agents"]
     for resolve in (case.service.validate_agent_id, case.service.get_agent_runtime_config,
@@ -166,12 +209,12 @@ async def test_agent_remove_rejects_current_defaults_without_writing_source(
 ) -> None:
     case = provider_case
     payload = parse_source_text((await case.document())["jsonc"])
-    payload["agents"]["custom_agent"] = {
+    payload["settings"]["workspace"]["agents"]["custom_agent"] = {
         "name": "默认值引用测试", "instructions": {"system_prompt": "独立定义"},
         "model": {"primary": PRIMARY, "fallbacks": []},
     }
     if reference == "config-default":
-        payload["default_agent"] = "custom_agent"
+        payload["settings"]["workspace"]["default_agent"] = "custom_agent"
     await case.save(payload, "agent-with-default")
     if reference == "workspace-default":
         case.service.set_workspace_default_agent("custom_agent")
@@ -179,7 +222,7 @@ async def test_agent_remove_rejects_current_defaults_without_writing_source(
         case.service.set_workspace_default_model("custom_agent", ModelReferenceDTO.model_validate(PRIMARY))
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["agents"].pop("custom_agent")
+    payload["settings"]["workspace"]["agents"].pop("custom_agent")
     request = _request(document, payload, "agent-remove-rejected")
     original = case.source.read_bytes()
     active = case.service.get_snapshot()
@@ -194,11 +237,16 @@ async def test_agent_remove_rejects_current_defaults_without_writing_source(
 async def test_provider_reorder_create_remove_and_cas_share_original_source_writer(provider_case: ProviderCase) -> None:
     case = provider_case
     document = await case.document()
+    nodes = document["nodes"]
+    assert len({node["node_id"] for node in nodes}) == len(nodes)
+    assert all(node["parent_id"] is None or any(parent["node_id"] == node["parent_id"] for parent in nodes) for node in nodes)
+    profiles = [node for node in nodes if node["source_key"] == SOURCE and node["definition_path"].startswith("/profiles/")]
+    assert {node["definition_path"] for node in profiles} == {"/profiles/primary", "/profiles/fallback", "/profiles/unused"}
     payload = parse_source_text(document["jsonc"])
     # 未展开的缺失环境凭据不应阻止定义管理。
-    providers = payload["llm"]["providers"]
+    providers = payload["settings"]["workspace"]["llm"]["providers"]
     providers.pop("edit-unused")
-    payload["llm"]["providers"] = {name: providers[name] for name in ("edit-fallback", "edit-primary")}
+    payload["settings"]["workspace"]["llm"]["providers"] = {name: providers[name] for name in ("edit-fallback", "edit-primary")}
     original = case.source.read_bytes()
     request = _request(document, payload, "provider-reorder")
     preview = await case.client.post(URL + "/preflight", json=request)
@@ -211,24 +259,24 @@ async def test_provider_reorder_create_remove_and_cas_share_original_source_writ
     assert "secret:sec_" + "1" * 32 in saved.text and "${PROVIDER_SOURCE_UNSET_KEY}" in saved.text
     raw = case.source.read_text()
     assert raw.startswith("// 保留来源注释\n")
-    assert list(parse_source_text(raw)["llm"]["providers"]) == ["edit-fallback", "edit-primary"]
-    assert parse_source_text(raw)["llm"]["providers"]["edit-primary"]["defaults"]["api_key"] == "secret:sec_" + "1" * 32
+    assert list(parse_source_text(raw)["settings"]["workspace"]["llm"]["providers"]) == ["edit-fallback", "edit-primary"]
+    assert parse_source_text(raw)["profiles"]["primary"]["settings"]["model_options"]["api_key"] == "secret:sec_" + "1" * 32
     repeated = await case.client.put(URL, json=request)
     assert repeated.status_code == 200 and repeated.json()["data"]["edit"] == saved.json()["data"]["edit"]
     stale = await case.client.put(URL, json={**request, "idempotency_key": "provider-stale"})
     assert stale.status_code == 409 and case.source.read_text() == raw
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["llm"]["providers"]["created"] = deepcopy(payload["llm"]["providers"]["edit-primary"])
+    payload["settings"]["workspace"]["llm"]["providers"]["created"] = deepcopy(payload["settings"]["workspace"]["llm"]["providers"]["edit-primary"])
     created = await case.client.put(URL, json=_request(document, payload, "provider-create"))
     assert created.status_code == 200, created.text
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    assert list(payload["llm"]["providers"]) == ["edit-fallback", "edit-primary", "created"]
-    payload["llm"]["providers"].pop("created")
+    assert list(payload["settings"]["workspace"]["llm"]["providers"]) == ["edit-fallback", "edit-primary", "created"]
+    payload["settings"]["workspace"]["llm"]["providers"].pop("created")
     removed = await case.client.put(URL, json=_request(document, payload, "provider-remove"))
     assert removed.status_code == 200, removed.text
-    assert "created" not in parse_source_text(case.source.read_text())["llm"]["providers"]
+    assert "created" not in parse_source_text(case.source.read_text())["settings"]["workspace"]["llm"]["providers"]
 
 
 async def test_public_secret_reference_can_follow_endpoint_edit_and_source_copy(
@@ -236,19 +284,24 @@ async def test_public_secret_reference_can_follow_endpoint_edit_and_source_copy(
 ) -> None:
     case = provider_case
     payload = parse_source_text((await case.document())["jsonc"])
-    provider = payload["llm"]["providers"]["edit-primary"]
-    reference = provider["defaults"]["api_key"]
-    provider["defaults"]["endpoint"] = "https://changed.example/v1"
-    saved = await case.save(payload, "provider-endpoint-change")
-    assert saved["effective"]["llm"]["providers"]["edit-primary"]["defaults"]["api_key"] == reference
+    provider = payload["settings"]["workspace"]["llm"]["providers"]["edit-primary"]
+    options = payload["profiles"]["primary"]["settings"]["model_options"]
+    reference = options["api_key"]
+    options["endpoint"] = "https://changed.example/v1"
+    await case.save(payload, "provider-endpoint-change")
+    assert case.service.get_llm_model(PRIMARY)["api_key"] == reference
 
     # 来源管理只保存公开引用；缺失的 vault 内容留给执行准备解析。
-    copied = {"llm": {"providers": {"copied": deepcopy(provider)}}}
+    copied_provider = {**deepcopy(provider), "config_ref": "#/profiles/copied"}
+    copied_provider["models"]["main"]["config_ref"] = "context:provider/copied"
+    copied = {"config_version": 4, "extends": "user:workspace_local", "settings": {"workspace": {
+        "llm": {"providers": {"copied": copied_provider}}}},
+        "profiles": {"copied": deepcopy(payload["profiles"]["primary"])}}
     workspace_url = "/api/v1/config/sources/workspace_root_mutable_override"
     override = await case.save(copied, "provider-copy-reference", url=workspace_url)
-    assert parse_source_text(override["jsonc"])["llm"]["providers"]["copied"] == provider
-    assert override["effective"]["llm"]["providers"]["copied"]["defaults"]["api_key"] == reference
-    assert "copied" not in parse_source_text(case.source.read_text())["llm"]["providers"]
+    assert parse_source_text(override["jsonc"])["settings"]["workspace"]["llm"]["providers"]["copied"] == copied_provider
+    assert case.service.get_llm_model({"provider_id": "copied", "model_id": "main"})["api_key"] == reference
+    assert "copied" not in parse_source_text(case.source.read_text())["settings"]["workspace"]["llm"]["providers"]
 
 
 async def test_selected_model_preflight_reports_values_and_both_origins_without_saving(
@@ -256,23 +309,29 @@ async def test_selected_model_preflight_reports_values_and_both_origins_without_
 ) -> None:
     case = provider_case
     payload = parse_source_text((await case.document())["jsonc"])
-    provider = payload["llm"]["providers"]["edit-primary"]
-    provider["defaults"]["request_options"] = {"parameters": {"temperature": 0.8, "top_p": 0.9, "max_tokens": 128},
+    provider = payload["settings"]["workspace"]["llm"]["providers"]["edit-primary"]
+    payload["profiles"]["primary"]["settings"]["model_options"]["request_options"] = {"parameters": {"temperature": 0.8, "top_p": 0.9, "max_tokens": 128},
                                                 "default_headers": {"X-Route": "lower"}}
-    provider["models"]["main"]["overrides"] = {
+    provider["models"]["main"]["config_ref"] = "#/profiles/model-main"
+    payload["profiles"]["model-main"] = {"extends": "context:provider/edit-primary", "settings": {"model_options": {
         "request_options": {"parameters": {"temperature": 0.25}},
         "api_mode": {"supports_reasoning": {}},
-    }
+    }}}
     await case.save(payload, "inspection-lower-source")
     workspace_url = "/api/v1/config/sources/workspace_root_mutable_override"
     document = await case.document(url=workspace_url)
-    draft = {"llm": {"providers": {"edit-primary": {
-        "defaults": {"request_options": {"parameters": {"temperature": 0, "max_output_tokens": 64},
+    draft = {"config_version": 4, "extends": "user:workspace_local", "settings": {"workspace": {
+        "llm": {"providers": {"edit-primary": {"config_ref": "#/profiles/draft-provider",
+            "models": {"main": {"config_ref": "#/profiles/draft-model"}},
+        }}}}}, "profiles": {
+        "draft-provider": {"extends": "user:workspace#/profiles/primary", "settings": {"model_options": {
+            "request_options": {"parameters": {"temperature": 0, "max_output_tokens": 64},
                                            "default_headers": {"x-ROUTE": "draft"}}},
-        "models": {"main": {"overrides": {"request_options": {"parameters": {
+        }},
+        "draft-model": {"extends": "user:workspace#/profiles/model-main", "settings": {"model_options": {"request_options": {"parameters": {
             "top_p": None, "extra_body": {"switch": False, "nullable": None},
         }}}}},
-    }}}}
+    }}
     original = case.source.read_bytes()
     active = case.service.get_snapshot()
     response = await case.client.post(workspace_url + "/preflight", params=PRIMARY,
@@ -286,20 +345,20 @@ async def test_selected_model_preflight_reports_values_and_both_origins_without_
         "temperature": 0.25, "top_p": None, "max_tokens": 64,
         "extra_body": {"switch": False, "nullable": None},
     }
-    header_placeholder = "boxteam-redacted:/llm/providers/edit-primary/defaults/request_options/default_headers/x-route"
+    header_placeholder = "boxteam-redacted:/settings/model_options/request_options/default_headers/x-route"
     assert inspected["options"]["request_options"]["default_headers"] == {"x-route": header_placeholder}
     assert inspected["options"]["api_mode"]["supports_reasoning"] == {}
     origins = {origin["path"]: origin for origin in inspected["origins"]}
-    assert origins["/request_options/parameters/temperature"] == {
-        "path": "/request_options/parameters/temperature", "source_key": SOURCE, "definition": "overrides",
-        "definition_path": "/llm/providers/edit-primary/models/main/overrides/request_options/parameters/temperature",
-    }
+    assert origins["/request_options/parameters/temperature"]["source_key"] == SOURCE
+    assert origins["/request_options/parameters/temperature"]["definition"] == "node"
+    assert origins["/request_options/parameters/temperature"]["definition_path"] == "/profiles/model-main/settings/model_options/request_options/parameters/temperature"
+    assert origins["/request_options/parameters/temperature"]["node_id"].endswith("#/profiles/model-main")
     assert origins["/request_options/parameters/top_p"]["source_key"] == "workspace_root_mutable_override"
     assert origins["/request_options/parameters/max_tokens"]["definition_path"].endswith("/parameters/max_output_tokens")
     assert origins["/request_options/parameters/max_tokens"]["source_key"] == "workspace_root_mutable_override"
     assert origins["/request_options/default_headers/x-route"]["definition_path"].endswith("/default_headers/x-ROUTE")
-    assert origins["/endpoint"]["source_key"] == SOURCE and origins["/endpoint"]["definition"] == "defaults"
-    assert origins["/api_mode/supports_reasoning"]["definition"] == "overrides"
+    assert origins["/endpoint"]["source_key"] == SOURCE and origins["/endpoint"]["definition"] == "node"
+    assert origins["/api_mode/supports_reasoning"]["definition_path"] == "/profiles/model-main/settings/model_options/api_mode/supports_reasoning"
     assert inspected["request_url"] == "https://primary.example/v1/chat/completions"
     assert inspected["catalog_url"] == "https://primary.example/v1/models"
     assert inspected["options"]["api_key"] == "secret:sec_" + "1" * 32
@@ -318,15 +377,17 @@ async def test_active_model_origins_survive_source_changes_and_service_restart(
 ) -> None:
     case = provider_case
     payload = parse_source_text((await case.document())["jsonc"])
-    payload["llm"]["providers"]["edit-primary"]["defaults"]["request_options"] = {"parameters": {"temperature": 0.25}}
+    payload["profiles"]["primary"]["settings"]["model_options"]["request_options"] = {"parameters": {"temperature": 0.25}}
     await case.save(payload, "origin-initial-active")
     workspace_url = "/api/v1/config/sources/workspace_root_mutable_override"
     document = await case.document(url=workspace_url)
     original_revision = document["active_revision"]
     temperature = 0.75 if pending else 0.25
-    draft = {"llm": {"providers": {"edit-primary": {"defaults": {
-        "request_options": {"parameters": {"temperature": temperature}},
-    }}}}}
+    draft = {"config_version": 4, "extends": "user:workspace_local", "settings": {"workspace": {
+        "llm": {"providers": {"edit-primary": {"config_ref": "#/profiles/workspace-primary"}}}}},
+        "profiles": {"workspace-primary": {"extends": "user:workspace#/profiles/primary", "settings": {
+            "model_options": {"request_options": {"parameters": {"temperature": temperature}}},
+        }}}}
 
     async def require_restart(*_args):
         raise ConfigRestartRequiredError("候选等待重启", changed_sections=("llm",))
@@ -338,9 +399,9 @@ async def test_active_model_origins_survive_source_changes_and_service_restart(
     assert saved["edit"]["state"] == ("pending_restart" if pending else "active")
     assert saved["active_revision"] == original_revision
     active_source = SOURCE if pending else "workspace_root_mutable_override"
-    path = "/llm/providers/edit-primary/defaults/request_options/parameters/temperature"
+    path = "/llm/providers/edit-primary/config_ref"
     assert next(origin["source_key"] for origin in saved["active_origins"] if origin["path"] == path) == active_source
-    assert saved["effective"]["llm"]["providers"]["edit-primary"]["defaults"]["request_options"]["parameters"]["temperature"] == 0.25
+    assert case.service.get_llm_model(PRIMARY)["request_options"]["parameters"]["temperature"] == 0.25
     assert next(origin["source_key"] for origin in saved["origins"] if origin["path"] == path) == "workspace_root_mutable_override"
     old_origins = case.service.get_snapshot().source_origins()
     await case.service.close()
@@ -374,7 +435,7 @@ async def test_source_preflight_and_save_reject_invalid_current_references_and_s
     case = provider_case
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    providers = payload["llm"]["providers"]
+    providers = payload["settings"]["workspace"]["llm"]["providers"]
     if change in {"primary", "fallback"}:
         providers.pop(f"edit-{change}")
     elif change == "invalid-item":
@@ -384,20 +445,20 @@ async def test_source_preflight_and_save_reject_invalid_current_references_and_s
     elif change == "model-id-field":
         providers["edit-primary"]["models"]["main"]["id"] = "main"
     elif change == "literal-secret":
-        providers["edit-primary"]["defaults"]["api_key"] = "explicit-test-key"
+        payload["profiles"]["primary"]["settings"]["model_options"]["api_key"] = "explicit-test-key"
     elif change == "endpoint":
-        providers["edit-primary"]["defaults"]["endpoint"] = 7
+        payload["profiles"]["primary"]["settings"]["model_options"]["endpoint"] = 7
     elif change == "identity":
         providers["changed"] = providers.pop("edit-primary")
     elif change == "missing-model":
         providers["edit-primary"]["models"].pop("main")
     elif change == "old-array":
-        payload["llm"]["providers"] = list(providers.values())
+        payload["settings"]["workspace"]["llm"]["providers"] = list(providers.values())
     elif change == "config-default":
-        payload["default_agent"] = "missing"
+        payload["settings"]["workspace"]["default_agent"] = "missing"
     else:
         case.service.set_workspace_default_model("default", ModelReferenceDTO.model_validate(PRIMARY))
-        for agent in payload["agents"].values():
+        for agent in payload["settings"]["workspace"]["agents"].values():
             agent["model"]["primary"] = FALLBACK
         providers.pop("edit-primary")
     url = f'/api/v1/config/sources/{document["source_key"]}'
@@ -421,8 +482,8 @@ async def test_source_retries_same_accepted_edit_after_replace_failure(
     case = provider_case
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["llm"]["providers"] = dict(reversed(payload["llm"]["providers"].items()))
-    payload["llm"]["providers"]["edit-primary"]["name"] = "已编辑的服务名称"
+    payload["settings"]["workspace"]["llm"]["providers"] = dict(reversed(payload["settings"]["workspace"]["llm"]["providers"].items()))
+    payload["settings"]["workspace"]["llm"]["providers"]["edit-primary"]["name"] = "已编辑的服务名称"
     request = _request(document, payload, "provider-reorder-recover")
 
     def fail_after_replace():
@@ -439,7 +500,7 @@ async def test_source_retries_same_accepted_edit_after_replace_failure(
     assert recovered.status_code == 200, recovered.text
     edit = recovered.json()["data"]["edit"]
     assert edit["candidate_id"] == candidate_id and edit["state"] == "active"
-    assert list(parse_source_text(case.source.read_text())["llm"]["providers"]) == ["edit-fallback", "edit-primary", "edit-unused"]
+    assert list(parse_source_text(case.source.read_text())["settings"]["workspace"]["llm"]["providers"]) == ["edit-fallback", "edit-primary", "edit-unused"]
     assert recovered.json()["data"]["effective"]["llm"]["providers"]["edit-primary"]["name"] == "已编辑的服务名称"
 
 
@@ -450,8 +511,8 @@ async def test_saved_candidate_rechecks_defaults_changed_after_source_replace(
     case = provider_case
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["llm"]["providers"].pop("edit-fallback")
-    payload["agents"]["default"]["model"]["fallbacks"] = []
+    payload["settings"]["workspace"]["llm"]["providers"].pop("edit-fallback")
+    payload["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] = []
     request = _request(document, payload, "provider-defaults-recover")
 
     async def fail_apply(*_args):
@@ -483,8 +544,8 @@ async def test_pending_restart_source_rechecks_current_defaults_before_effect(
     case = provider_case
     document = await case.document()
     payload = parse_source_text(document["jsonc"])
-    payload["llm"]["providers"].pop("edit-fallback")
-    payload["agents"]["default"]["model"]["fallbacks"] = []
+    payload["settings"]["workspace"]["llm"]["providers"].pop("edit-fallback")
+    payload["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] = []
     request = _request(document, payload, "provider-pending-restart")
 
     async def require_restart(*_args):

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 from app.core.config_sources import config_revision
 from app.core.sqlite_state import utc_now_text
@@ -15,9 +13,6 @@ from app.gateway.config.connection_ids import (
     _normalize_connection_ids,
 )
 from app.services.infrastructure.config.recovery import recover_stopped_config_applies
-from app.services.infrastructure.config.state import (
-    restore_environment_secret_references,
-)
 from configs.maintenance.runtime_logging_migration import (
     TARGET_CONFIG_VERSIONS,
     ConfigDomain,
@@ -26,8 +21,7 @@ from configs.maintenance.runtime_logging_migration import (
     without_retired_defaults,
 )
 from configs.migrations.gateway.v5_jsonc_to_v6_jsonc import migrate_v5_jsonc_to_v6_jsonc
-from configs.migrations.workspace_models import migrate_workspace_models
-from configs.runtime import merge_json_objects
+from configs.runtime import require_current_workspace_config
 
 MUTABLE_TABLES = (
     "config_source_layers", "config_active_snapshot", "config_revision_meta",
@@ -40,6 +34,9 @@ def migrated_payload(
     connection_entries: list[dict[str, object]] | None = None,
     *, source_key: str | None = None,
 ) -> dict[str, object]:
+    if domain == "workspace":
+        require_current_workspace_config(payload)
+        return payload
     if domain == "gateway" and payload.get("config_version") == 6:
         result = dict(payload)
         if plan.settings is not None:
@@ -59,45 +56,37 @@ def migrated_payload(
             result["settings"] = settings
         return result
     result = without_retired_defaults(payload, domain, source=f"{domain} configuration")
-    if domain == "workspace":
-        result.pop("logger", None)
-        migrate_workspace_models(result)
-    else:
-        features = result.get("features")
-        if isinstance(features, dict):
-            features.pop("session_generators", None)
-        if "workspaces" in result:
-            entries = _normalize_connection_ids(
-                result, state_store=None, previous_entries=connection_entries,
-                explicit_migration=True,
-            )
-            if connection_entries is not None:
-                connection_entries[:] = entries
-        logging = result.setdefault("logging", {}) if plan.settings is not None else result.get("logging")
-        if isinstance(logging, dict):
-            if plan.settings is not None:
-                logging["runtime"] = dict(plan.settings)
-            runtime = logging.get("runtime")
-            if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
-                runtime["level"] = runtime["level"].strip().lower()
-    result["config_version"] = 5 if domain == "gateway" else TARGET_CONFIG_VERSIONS[domain]
-    if domain == "gateway":
-        if source_key is None:
-            raise ValueError("Gateway 平面来源缺少明确层身份，保留原件")
-        user_layer_present = plan.settings is not None or any(
-            item.domain == "gateway" and item.kind == "file" and item.key == "gateway.jsonc"
-            and item.payload is not None for item in plan.inputs
+    features = result.get("features")
+    if isinstance(features, dict):
+        features.pop("session_generators", None)
+    if "workspaces" in result:
+        entries = _normalize_connection_ids(
+            result, state_store=None, previous_entries=connection_entries,
+            explicit_migration=True,
         )
-        return migrate_v5_jsonc_to_v6_jsonc(
-            result, source_key=source_key, user_layer_present=user_layer_present,
-        )
-    return result
+        if connection_entries is not None:
+            connection_entries[:] = entries
+    logging = result.setdefault("logging", {}) if plan.settings is not None else result.get("logging")
+    if isinstance(logging, dict):
+        if plan.settings is not None:
+            logging["runtime"] = dict(plan.settings)
+        runtime = logging.get("runtime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
+            runtime["level"] = runtime["level"].strip().lower()
+    result["config_version"] = 5
+    if source_key is None:
+        raise ValueError("Gateway 平面来源缺少明确层身份，保留原件")
+    user_layer_present = plan.settings is not None or any(
+        item.domain == "gateway" and item.kind == "file" and item.key == "gateway.jsonc"
+        and item.payload is not None for item in plan.inputs
+    )
+    return migrate_v5_jsonc_to_v6_jsonc(
+        result, source_key=source_key, user_layer_present=user_layer_present,
+    )
 
 
 def migrated_active_payload(
     payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
-    inline_config: dict[str, object], connection_entries: list[dict[str, object]] | None = None,
-    *, schema: Mapping[str, object],
 ) -> dict[str, object]:
     if domain == "gateway":
         if payload.get("config_version") != 6:
@@ -105,7 +94,8 @@ def migrated_active_payload(
         if plan.settings is not None:
             raise ValueError("Gateway v6 active/pending 已冻结；日志取舍需重新生成来源快照，保留原件")
         return payload
-    return merge_json_objects(inline_config, migrated_payload(payload, domain, plan, connection_entries), schema=schema)
+    require_current_workspace_config(payload)
+    return payload
 
 
 def configuration_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
@@ -128,19 +118,20 @@ def migrate_database(
     connection: sqlite3.Connection, *, domain: ConfigDomain,
     source_path: Path, plan: RuntimeLoggingMigrationPlan,
     file_digests: dict[str, tuple[str | None, str | None]],
-    inline_config: dict[str, object], schema: Mapping[str, object],
     connection_entries: list[dict[str, object]] | None = None,
 ) -> None:
     connection.row_factory = sqlite3.Row
     recover_stopped_config_applies(connection, domain)
-    if domain == "gateway":
-        identity = read_connection_identity(connection)
-        if identity is not None and identity[0] != _CONNECTION_ID_RECORD_VERSION:
-            # v3 的 entries 与稳定 ID 原样保留，只升级格式标记；不触碰其它 Gateway 记录。
-            connection.execute(
-                "UPDATE gateway_config SET config_version=? WHERE config_key='gateway_connection_ids'",
-                (_CONNECTION_ID_RECORD_VERSION,),
-            )
+    if domain == "workspace":
+        # v4 摘要属于冻结配置图；预检已拒绝旧版，日志迁移不重建当前正文或摘要。
+        return
+    identity = read_connection_identity(connection)
+    if identity is not None and identity[0] != _CONNECTION_ID_RECORD_VERSION:
+        # v3 的 entries 与稳定 ID 原样保留，只升级格式标记；不触碰其它 Gateway 记录。
+        connection.execute(
+            "UPDATE gateway_config SET config_version=? WHERE config_key='gateway_connection_ids'",
+            (_CONNECTION_ID_RECORD_VERSION,),
+        )
     selected = {item.key for item in plan.inputs if item.path == source_path and item.kind == "source_layer"}
     references: dict[str, tuple[dict[str, object], dict[str, object]]] = {}
     for row in connection.execute("SELECT * FROM config_source_layers ORDER BY config_key").fetchall():
@@ -154,18 +145,14 @@ def migrate_database(
         if changed == payload and old["config_version"] == version:
             continue
         digest = config_revision(changed) if changed is not None else None
-        filename = {"gateway_mutable_override": "gateway.jsonc", "gateway_local_mutable_override": "gateway_local.jsonc",
-                    "workspace_mutable_override": "workspace.jsonc", "workspace_local_mutable_override": "workspace_local.jsonc",
-                    "workspace_root_mutable_override": "workspace.jsonc"}[key]
+        filename = {"gateway_mutable_override": "gateway.jsonc", "gateway_local_mutable_override": "gateway_local.jsonc"}[key]
         for file, (before, after) in file_digests.items():
             path = Path(file)
-            is_workspace_root = path.parent.name == ".boxteam"
-            if path.name == filename and is_workspace_root == (key == "workspace_root_mutable_override") and before == old["layer_digest"] and before is not None:
+            if path.name == filename and before == old["layer_digest"] and before is not None:
                 digest = after
                 break
         revision = int(old["layer_revision"]) + 1
-        # 共享用户来源的 generation 属于 WorkspaceSourceOwner；下次正常观察由它推进。
-        generation = int(old["source_generation"]) + (key != "workspace_mutable_override" or domain != "workspace")
+        generation = int(old["source_generation"]) + 1
         connection.execute(
             "UPDATE config_source_layers SET config_version=?, payload_json=?, layer_revision=?, "
             "layer_digest=?, source_generation=?, previous_digest=?, previous_payload_json=?, updated_at=? WHERE config_key=?",
@@ -177,19 +164,17 @@ def migrate_database(
     ).fetchone()
     old_active_revision = int(row["active_revision"]) if row is not None else None
     if row is None:
-        _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                         old_active_revision, old_active_revision, schema=schema)
+        _migrate_pending(connection, domain, plan, references, file_digests,
+                         old_active_revision, old_active_revision)
         return
     old = dict(row)
     payload = json.loads(str(old["payload_json"]))
-    changed = migrated_active_payload(payload, domain, plan, inline_config, connection_entries, schema=schema)
-    # Workspace 启动按还原后的用户配置校验摘要，不能对 env:NAME 存储格式记账。
-    effective = restore_environment_secret_references(changed) if domain == "workspace" else changed
-    effective_digest = config_revision(cast(dict[str, object], effective))
+    changed = migrated_active_payload(payload, domain, plan)
+    effective_digest = config_revision(changed)
     if (payload == changed and not references and old["schema_version"] == TARGET_CONFIG_VERSIONS[domain]
             and old["effective_digest"] == effective_digest):
-        _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                         old_active_revision, old_active_revision, schema=schema)
+        _migrate_pending(connection, domain, plan, references, file_digests,
+                         old_active_revision, old_active_revision)
         return
     baseline = json.loads(str(old["source_baseline_json"]))
     revisions = json.loads(str(old["layer_revisions_json"]))
@@ -220,25 +205,23 @@ def migrate_database(
         (revision, _dump(changed), _dump(baseline), max([int(old["source_generation"]), *generations]),
          _dump(revisions), _dump(digests), effective_digest, TARGET_CONFIG_VERSIONS[domain], domain),
     )
-    _migrate_pending(connection, domain, plan, inline_config, references, file_digests, connection_entries,
-                     old_active_revision, revision, schema=schema)
+    _migrate_pending(connection, domain, plan, references, file_digests,
+                     old_active_revision, revision)
 
 
 def _migrate_pending(
     connection: sqlite3.Connection, domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
-    inline_config: dict[str, object], references: dict[str, tuple[dict[str, object], dict[str, object]]],
-    file_digests: dict[str, tuple[str | None, str | None]], connection_entries: list[dict[str, object]] | None,
+    references: dict[str, tuple[dict[str, object], dict[str, object]]],
+    file_digests: dict[str, tuple[str | None, str | None]],
     old_active_revision: int | None, active_revision: int | None,
-    *, schema: Mapping[str, object],
 ) -> None:
     """待生效正文与 active 使用同一转换；不复用旧运行时的健康证明。"""
     for row in connection.execute(
         "SELECT * FROM config_pending_candidate WHERE config_domain=? "
         "AND state NOT IN ('active','rejected','discarded') ORDER BY pending_revision", (domain,),
     ).fetchall():
-        payload = migrated_active_payload(json.loads(row["payload_json"]), domain, plan, inline_config, connection_entries, schema=schema)
-        effective = restore_environment_secret_references(payload) if domain == "workspace" else payload
-        digest = config_revision(cast(dict[str, object], effective))
+        payload = migrated_active_payload(json.loads(row["payload_json"]), domain, plan)
+        digest = config_revision(payload)
         baseline = json.loads(row["source_baseline_json"])
         for key, (prior, current) in references.items():
             bound = baseline.get(key)
@@ -267,11 +250,10 @@ def _migrate_pending(
             (_dump(payload), _dump(baseline), digest, digest, base, max([row["source_generation"] or 0, *generations]),
              _dump(source_edit) if source_edit is not None else None, revision, domain, row["candidate_id"]),
         )
-        if domain == "gateway":
-            connection.execute(
-                "UPDATE gateway_restart_intent SET base_active_revision=?,health_proof_json=NULL WHERE candidate_id=? "
-                "AND state NOT IN ('active','discarded')", (base, row["candidate_id"]),
-            )
+        connection.execute(
+            "UPDATE gateway_restart_intent SET base_active_revision=?,health_proof_json=NULL WHERE candidate_id=? "
+            "AND state NOT IN ('active','discarded')", (base, row["candidate_id"]),
+        )
 
 
 def replace_configuration_rows(connection: sqlite3.Connection, source: sqlite3.Connection) -> None:

@@ -5,6 +5,7 @@
 // source: boxteam/workspace/v2/public.proto
 
 /* eslint-disable */
+import { ConfigNodeInspectionDTO } from "../../common/v1/config.js";
 import { Error } from "../../common/v1/error.js";
 import { PluginServiceReference } from "../../gateway/v2/service_plugin.js";
 import { AttachmentRef } from "./message.js";
@@ -186,6 +187,8 @@ export interface ConfigSourceDocumentDTO {
   fanout?: ConfigSourceFanoutDTO | undefined;
   source_baseline: { [key: string]: ConfigSourceBaselineDTO };
   active_origins: ConfigSourceOriginDTO[];
+  source_inherited: { [key: string]: any } | undefined;
+  nodes: ConfigNodeInspectionDTO[];
 }
 
 export interface ConfigSourceDocumentDTO_SourceBaselineEntry {
@@ -362,6 +365,23 @@ export interface ConfigSourcePreflightDTO {
   changed_paths: string[];
   model_options?: ConfigModelInspectionDTO | undefined;
   active_model_options?: ConfigModelInspectionDTO | undefined;
+  provider_options?: ConfigProviderInspectionDTO | undefined;
+  active_provider_options?: ConfigProviderInspectionDTO | undefined;
+}
+
+export interface ConfigActiveOptionsInspectionDTO {
+  gateway_id: string;
+  workspace_id: string;
+  active_revision: number;
+  active_digest: string;
+  source_baseline: { [key: string]: ConfigSourceBaselineDTO };
+  provider_options?: ConfigProviderInspectionDTO | undefined;
+  model_options?: ConfigModelInspectionDTO | undefined;
+}
+
+export interface ConfigActiveOptionsInspectionDTO_SourceBaselineEntry {
+  key: string;
+  value: ConfigSourceBaselineDTO | undefined;
 }
 
 export interface ConfigModelOptionOriginDTO {
@@ -369,6 +389,7 @@ export interface ConfigModelOptionOriginDTO {
   source_key: string;
   definition: string;
   definition_path: string;
+  node_id?: string | undefined;
 }
 
 export interface ConfigModelInspectionDTO {
@@ -378,6 +399,27 @@ export interface ConfigModelInspectionDTO {
   origins: ConfigModelOptionOriginDTO[];
   request_url: string;
   catalog_url?: string | undefined;
+  config_ref: string;
+  node_id: string;
+  chain: ConfigNodeInspectionDTO[];
+  local_settings: { [key: string]: any } | undefined;
+  inherited_settings: { [key: string]: any } | undefined;
+  network: { [key: string]: any } | undefined;
+  shared: boolean;
+}
+
+export interface ConfigProviderInspectionDTO {
+  provider_id: string;
+  options: { [key: string]: any } | undefined;
+  origins: ConfigModelOptionOriginDTO[];
+  catalog_url?: string | undefined;
+  config_ref: string;
+  node_id: string;
+  chain: ConfigNodeInspectionDTO[];
+  local_settings: { [key: string]: any } | undefined;
+  inherited_settings: { [key: string]: any } | undefined;
+  network: { [key: string]: any } | undefined;
+  shared: boolean;
 }
 
 export interface ConfigEventDTO {
@@ -5104,6 +5146,8 @@ function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
     fanout: undefined,
     source_baseline: {},
     active_origins: [],
+    source_inherited: undefined,
+    nodes: [],
   };
 }
 
@@ -5151,6 +5195,10 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
         : {},
       active_origins: globalThis.Array.isArray(object?.active_origins)
         ? object.active_origins.map((e: any) => ConfigSourceOriginDTO.fromJSON(e))
+        : [],
+      source_inherited: isObject(object.source_inherited) ? object.source_inherited : undefined,
+      nodes: globalThis.Array.isArray(object?.nodes)
+        ? object.nodes.map((e: any) => ConfigNodeInspectionDTO.fromJSON(e))
         : [],
     };
   },
@@ -5232,6 +5280,12 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     if (message.active_origins?.length) {
       obj.active_origins = message.active_origins.map((e) => ConfigSourceOriginDTO.toJSON(e));
     }
+    if (message.source_inherited !== undefined) {
+      obj.source_inherited = message.source_inherited;
+    }
+    if (message.nodes?.length) {
+      obj.nodes = message.nodes.map((e) => ConfigNodeInspectionDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -5278,6 +5332,8 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
         {},
       );
     message.active_origins = object.active_origins?.map((e) => ConfigSourceOriginDTO.fromPartial(e)) || [];
+    message.source_inherited = object.source_inherited ?? undefined;
+    message.nodes = object.nodes?.map((e) => ConfigNodeInspectionDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -6550,6 +6606,8 @@ function createBaseConfigSourcePreflightDTO(): ConfigSourcePreflightDTO {
     changed_paths: [],
     model_options: undefined,
     active_model_options: undefined,
+    provider_options: undefined,
+    active_provider_options: undefined,
   };
 }
 
@@ -6565,6 +6623,12 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
       model_options: isSet(object.model_options) ? ConfigModelInspectionDTO.fromJSON(object.model_options) : undefined,
       active_model_options: isSet(object.active_model_options)
         ? ConfigModelInspectionDTO.fromJSON(object.active_model_options)
+        : undefined,
+      provider_options: isSet(object.provider_options)
+        ? ConfigProviderInspectionDTO.fromJSON(object.provider_options)
+        : undefined,
+      active_provider_options: isSet(object.active_provider_options)
+        ? ConfigProviderInspectionDTO.fromJSON(object.active_provider_options)
         : undefined,
     };
   },
@@ -6589,6 +6653,12 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
     if (message.active_model_options !== undefined) {
       obj.active_model_options = ConfigModelInspectionDTO.toJSON(message.active_model_options);
     }
+    if (message.provider_options !== undefined) {
+      obj.provider_options = ConfigProviderInspectionDTO.toJSON(message.provider_options);
+    }
+    if (message.active_provider_options !== undefined) {
+      obj.active_provider_options = ConfigProviderInspectionDTO.toJSON(message.active_provider_options);
+    }
     return obj;
   },
 
@@ -6609,12 +6679,166 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
     message.active_model_options = (object.active_model_options !== undefined && object.active_model_options !== null)
       ? ConfigModelInspectionDTO.fromPartial(object.active_model_options)
       : undefined;
+    message.provider_options = (object.provider_options !== undefined && object.provider_options !== null)
+      ? ConfigProviderInspectionDTO.fromPartial(object.provider_options)
+      : undefined;
+    message.active_provider_options =
+      (object.active_provider_options !== undefined && object.active_provider_options !== null)
+        ? ConfigProviderInspectionDTO.fromPartial(object.active_provider_options)
+        : undefined;
+    return message;
+  },
+};
+
+function createBaseConfigActiveOptionsInspectionDTO(): ConfigActiveOptionsInspectionDTO {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    active_revision: 0,
+    active_digest: "",
+    source_baseline: {},
+    provider_options: undefined,
+    model_options: undefined,
+  };
+}
+
+export const ConfigActiveOptionsInspectionDTO: MessageFns<ConfigActiveOptionsInspectionDTO> = {
+  fromJSON(object: any): ConfigActiveOptionsInspectionDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : 0,
+      active_digest: isSet(object.active_digest) ? globalThis.String(object.active_digest) : "",
+      source_baseline: isObject(object.source_baseline)
+        ? (globalThis.Object.entries(object.source_baseline) as [string, any][]).reduce(
+          (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: ConfigSourceBaselineDTO.fromJSON(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      provider_options: isSet(object.provider_options)
+        ? ConfigProviderInspectionDTO.fromJSON(object.provider_options)
+        : undefined,
+      model_options: isSet(object.model_options) ? ConfigModelInspectionDTO.fromJSON(object.model_options) : undefined,
+    };
+  },
+
+  toJSON(message: ConfigActiveOptionsInspectionDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.active_revision !== 0) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.active_digest !== "") {
+      obj.active_digest = message.active_digest;
+    }
+    if (message.source_baseline) {
+      const entries = globalThis.Object.entries(message.source_baseline) as [string, ConfigSourceBaselineDTO][];
+      if (entries.length > 0) {
+        obj.source_baseline = {};
+        entries.forEach(([k, v]) => {
+          obj.source_baseline[k] = ConfigSourceBaselineDTO.toJSON(v);
+        });
+      }
+    }
+    if (message.provider_options !== undefined) {
+      obj.provider_options = ConfigProviderInspectionDTO.toJSON(message.provider_options);
+    }
+    if (message.model_options !== undefined) {
+      obj.model_options = ConfigModelInspectionDTO.toJSON(message.model_options);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigActiveOptionsInspectionDTO>, I>>(
+    base?: I,
+  ): ConfigActiveOptionsInspectionDTO {
+    return ConfigActiveOptionsInspectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigActiveOptionsInspectionDTO>, I>>(
+    object: I,
+  ): ConfigActiveOptionsInspectionDTO {
+    const message = createBaseConfigActiveOptionsInspectionDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.active_revision = object.active_revision ?? 0;
+    message.active_digest = object.active_digest ?? "";
+    message.source_baseline =
+      (globalThis.Object.entries(object.source_baseline ?? {}) as [string, ConfigSourceBaselineDTO][]).reduce(
+        (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, ConfigSourceBaselineDTO]) => {
+          if (value !== undefined) {
+            acc[key] = ConfigSourceBaselineDTO.fromPartial(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    message.provider_options = (object.provider_options !== undefined && object.provider_options !== null)
+      ? ConfigProviderInspectionDTO.fromPartial(object.provider_options)
+      : undefined;
+    message.model_options = (object.model_options !== undefined && object.model_options !== null)
+      ? ConfigModelInspectionDTO.fromPartial(object.model_options)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseConfigActiveOptionsInspectionDTO_SourceBaselineEntry(): ConfigActiveOptionsInspectionDTO_SourceBaselineEntry {
+  return { key: "", value: undefined };
+}
+
+export const ConfigActiveOptionsInspectionDTO_SourceBaselineEntry: MessageFns<
+  ConfigActiveOptionsInspectionDTO_SourceBaselineEntry
+> = {
+  fromJSON(object: any): ConfigActiveOptionsInspectionDTO_SourceBaselineEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? ConfigSourceBaselineDTO.fromJSON(object.value) : undefined,
+    };
+  },
+
+  toJSON(message: ConfigActiveOptionsInspectionDTO_SourceBaselineEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = ConfigSourceBaselineDTO.toJSON(message.value);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigActiveOptionsInspectionDTO_SourceBaselineEntry>, I>>(
+    base?: I,
+  ): ConfigActiveOptionsInspectionDTO_SourceBaselineEntry {
+    return ConfigActiveOptionsInspectionDTO_SourceBaselineEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigActiveOptionsInspectionDTO_SourceBaselineEntry>, I>>(
+    object: I,
+  ): ConfigActiveOptionsInspectionDTO_SourceBaselineEntry {
+    const message = createBaseConfigActiveOptionsInspectionDTO_SourceBaselineEntry();
+    message.key = object.key ?? "";
+    message.value = (object.value !== undefined && object.value !== null)
+      ? ConfigSourceBaselineDTO.fromPartial(object.value)
+      : undefined;
     return message;
   },
 };
 
 function createBaseConfigModelOptionOriginDTO(): ConfigModelOptionOriginDTO {
-  return { path: "", source_key: "", definition: "", definition_path: "" };
+  return { path: "", source_key: "", definition: "", definition_path: "", node_id: undefined };
 }
 
 export const ConfigModelOptionOriginDTO: MessageFns<ConfigModelOptionOriginDTO> = {
@@ -6624,6 +6848,7 @@ export const ConfigModelOptionOriginDTO: MessageFns<ConfigModelOptionOriginDTO> 
       source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
       definition: isSet(object.definition) ? globalThis.String(object.definition) : "",
       definition_path: isSet(object.definition_path) ? globalThis.String(object.definition_path) : "",
+      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : undefined,
     };
   },
 
@@ -6641,6 +6866,9 @@ export const ConfigModelOptionOriginDTO: MessageFns<ConfigModelOptionOriginDTO> 
     if (message.definition_path !== "") {
       obj.definition_path = message.definition_path;
     }
+    if (message.node_id !== undefined) {
+      obj.node_id = message.node_id;
+    }
     return obj;
   },
 
@@ -6653,12 +6881,27 @@ export const ConfigModelOptionOriginDTO: MessageFns<ConfigModelOptionOriginDTO> 
     message.source_key = object.source_key ?? "";
     message.definition = object.definition ?? "";
     message.definition_path = object.definition_path ?? "";
+    message.node_id = object.node_id ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigModelInspectionDTO(): ConfigModelInspectionDTO {
-  return { model_ref: undefined, model: "", options: undefined, origins: [], request_url: "", catalog_url: undefined };
+  return {
+    model_ref: undefined,
+    model: "",
+    options: undefined,
+    origins: [],
+    request_url: "",
+    catalog_url: undefined,
+    config_ref: "",
+    node_id: "",
+    chain: [],
+    local_settings: undefined,
+    inherited_settings: undefined,
+    network: undefined,
+    shared: false,
+  };
 }
 
 export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
@@ -6672,6 +6915,15 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
         : [],
       request_url: isSet(object.request_url) ? globalThis.String(object.request_url) : "",
       catalog_url: isSet(object.catalog_url) ? globalThis.String(object.catalog_url) : undefined,
+      config_ref: isSet(object.config_ref) ? globalThis.String(object.config_ref) : "",
+      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
+      chain: globalThis.Array.isArray(object?.chain)
+        ? object.chain.map((e: any) => ConfigNodeInspectionDTO.fromJSON(e))
+        : [],
+      local_settings: isObject(object.local_settings) ? object.local_settings : undefined,
+      inherited_settings: isObject(object.inherited_settings) ? object.inherited_settings : undefined,
+      network: isObject(object.network) ? object.network : undefined,
+      shared: isSet(object.shared) ? globalThis.Boolean(object.shared) : false,
     };
   },
 
@@ -6695,6 +6947,27 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
     if (message.catalog_url !== undefined) {
       obj.catalog_url = message.catalog_url;
     }
+    if (message.config_ref !== "") {
+      obj.config_ref = message.config_ref;
+    }
+    if (message.node_id !== "") {
+      obj.node_id = message.node_id;
+    }
+    if (message.chain?.length) {
+      obj.chain = message.chain.map((e) => ConfigNodeInspectionDTO.toJSON(e));
+    }
+    if (message.local_settings !== undefined) {
+      obj.local_settings = message.local_settings;
+    }
+    if (message.inherited_settings !== undefined) {
+      obj.inherited_settings = message.inherited_settings;
+    }
+    if (message.network !== undefined) {
+      obj.network = message.network;
+    }
+    if (message.shared !== false) {
+      obj.shared = message.shared;
+    }
     return obj;
   },
 
@@ -6711,6 +6984,108 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
     message.origins = object.origins?.map((e) => ConfigModelOptionOriginDTO.fromPartial(e)) || [];
     message.request_url = object.request_url ?? "";
     message.catalog_url = object.catalog_url ?? undefined;
+    message.config_ref = object.config_ref ?? "";
+    message.node_id = object.node_id ?? "";
+    message.chain = object.chain?.map((e) => ConfigNodeInspectionDTO.fromPartial(e)) || [];
+    message.local_settings = object.local_settings ?? undefined;
+    message.inherited_settings = object.inherited_settings ?? undefined;
+    message.network = object.network ?? undefined;
+    message.shared = object.shared ?? false;
+    return message;
+  },
+};
+
+function createBaseConfigProviderInspectionDTO(): ConfigProviderInspectionDTO {
+  return {
+    provider_id: "",
+    options: undefined,
+    origins: [],
+    catalog_url: undefined,
+    config_ref: "",
+    node_id: "",
+    chain: [],
+    local_settings: undefined,
+    inherited_settings: undefined,
+    network: undefined,
+    shared: false,
+  };
+}
+
+export const ConfigProviderInspectionDTO: MessageFns<ConfigProviderInspectionDTO> = {
+  fromJSON(object: any): ConfigProviderInspectionDTO {
+    return {
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      options: isObject(object.options) ? object.options : undefined,
+      origins: globalThis.Array.isArray(object?.origins)
+        ? object.origins.map((e: any) => ConfigModelOptionOriginDTO.fromJSON(e))
+        : [],
+      catalog_url: isSet(object.catalog_url) ? globalThis.String(object.catalog_url) : undefined,
+      config_ref: isSet(object.config_ref) ? globalThis.String(object.config_ref) : "",
+      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
+      chain: globalThis.Array.isArray(object?.chain)
+        ? object.chain.map((e: any) => ConfigNodeInspectionDTO.fromJSON(e))
+        : [],
+      local_settings: isObject(object.local_settings) ? object.local_settings : undefined,
+      inherited_settings: isObject(object.inherited_settings) ? object.inherited_settings : undefined,
+      network: isObject(object.network) ? object.network : undefined,
+      shared: isSet(object.shared) ? globalThis.Boolean(object.shared) : false,
+    };
+  },
+
+  toJSON(message: ConfigProviderInspectionDTO): unknown {
+    const obj: any = {};
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.options !== undefined) {
+      obj.options = message.options;
+    }
+    if (message.origins?.length) {
+      obj.origins = message.origins.map((e) => ConfigModelOptionOriginDTO.toJSON(e));
+    }
+    if (message.catalog_url !== undefined) {
+      obj.catalog_url = message.catalog_url;
+    }
+    if (message.config_ref !== "") {
+      obj.config_ref = message.config_ref;
+    }
+    if (message.node_id !== "") {
+      obj.node_id = message.node_id;
+    }
+    if (message.chain?.length) {
+      obj.chain = message.chain.map((e) => ConfigNodeInspectionDTO.toJSON(e));
+    }
+    if (message.local_settings !== undefined) {
+      obj.local_settings = message.local_settings;
+    }
+    if (message.inherited_settings !== undefined) {
+      obj.inherited_settings = message.inherited_settings;
+    }
+    if (message.network !== undefined) {
+      obj.network = message.network;
+    }
+    if (message.shared !== false) {
+      obj.shared = message.shared;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigProviderInspectionDTO>, I>>(base?: I): ConfigProviderInspectionDTO {
+    return ConfigProviderInspectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigProviderInspectionDTO>, I>>(object: I): ConfigProviderInspectionDTO {
+    const message = createBaseConfigProviderInspectionDTO();
+    message.provider_id = object.provider_id ?? "";
+    message.options = object.options ?? undefined;
+    message.origins = object.origins?.map((e) => ConfigModelOptionOriginDTO.fromPartial(e)) || [];
+    message.catalog_url = object.catalog_url ?? undefined;
+    message.config_ref = object.config_ref ?? "";
+    message.node_id = object.node_id ?? "";
+    message.chain = object.chain?.map((e) => ConfigNodeInspectionDTO.fromPartial(e)) || [];
+    message.local_settings = object.local_settings ?? undefined;
+    message.inherited_settings = object.inherited_settings ?? undefined;
+    message.network = object.network ?? undefined;
+    message.shared = object.shared ?? false;
     return message;
   },
 };

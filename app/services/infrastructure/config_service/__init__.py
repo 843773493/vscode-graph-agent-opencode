@@ -204,7 +204,7 @@ class ConfigService(ConfigSourceLayersMixin,
             config_domain=self._CONFIG_DOMAIN,
         )
         self._llm_resolution = LlmResolution(
-            effective_config_provider=lambda: self._require_snapshot().read_only,
+            graph_provider=lambda: self._require_snapshot().graph,
             default_agent_id_provider=self.get_default_agent_id,
             schema_provider=self._load_schema,
         )

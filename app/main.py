@@ -59,6 +59,7 @@ from app.runtime.model_stream import configure_model_stream_from_environment
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
 from app.schemas.internal_v2.sse import install_sse_openapi_components
 from app.workspace_lifecycle import WorkspaceLifespan
+from configs.installer import install_workspace_configuration
 
 configure_application_logging(service="backend")
 load_boxteam_env()
@@ -99,6 +100,7 @@ async def lifespan(application: FastAPI):
             mount_started = time.monotonic()
             logger.info("Workspace 挂载 begin: workspace_id=%s", workspace_id)
             with catalog_provider_scope(registry):
+                install_workspace_configuration(workspace_root=mount.workspace_root)
                 initialize_directories(mount.workspace_id, mount.workspace_root)
                 container = registry.get(workspace_id)
             # 先登记已构造容器，再检查配置；校验失败不能遗留资源。

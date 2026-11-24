@@ -186,6 +186,7 @@ async def production_mcp_session_factory(
                 raise route_error
 
         client = httpx.AsyncClient(
+            trust_env=False,
             headers=headers,
             auth=auth,
             follow_redirects=False,
@@ -220,6 +221,7 @@ async def production_mcp_session_factory(
         ).resolve_gateway_url()
         proxy_url = f"{gateway_url}/api/gateway/mcp/upstream"
         client = httpx.AsyncClient(
+            trust_env=False,
             auth=auth,
             follow_redirects=False,
             timeout=httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT),

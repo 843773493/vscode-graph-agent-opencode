@@ -15,8 +15,10 @@ import pytest
 
 from app.core.config_sources import config_revision
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.cli import main
+from configs.installer import install_user_configuration
 from configs.maintenance.runtime_logging_commit import commit_runtime_logging_migration
 from configs.maintenance.runtime_logging_migration import (
     preview_runtime_logging_migration,
@@ -67,7 +69,7 @@ def _active(store: WorkspaceStateStore | GatewayStateStore, domain: str, payload
     store.ensure_active_config_snapshot(
         config_domain=domain, payload=payload, source_baseline={}, source_generation=0,
         layer_revisions={}, layer_digests={}, effective_digest=config_revision(payload),
-        secret_bindings={}, schema_version=1,
+        secret_bindings={}, schema_version=int(payload.get("config_version", 1)),
     )
 
 
@@ -126,8 +128,8 @@ def test_startup_preflight_rejects_invalid_target_before_stop_or_backup(
 
 
 @pytest.mark.parametrize("custom", [False, True])
-def test_retired_auxiliary_defaults_upgrade_but_custom_addresses_require_choice(
-    migration_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], custom: bool,
+def test_retired_workspace_auxiliary_settings_preserve_original_without_baseline(
+    migration_home: Path, monkeypatch: pytest.MonkeyPatch, custom: bool,
 ) -> None:
     path = migration_home / "config/workspace.jsonc"
     _write(path, {"config_version": 2, "runtime": {"auxiliary_services": {
@@ -135,20 +137,11 @@ def test_retired_auxiliary_defaults_upgrade_but_custom_addresses_require_choice(
         "browser_backend": {"url": "http://127.0.0.1:8015"},
     }}})
     original = path.read_bytes()
-    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
-    if custom:
-        with pytest.raises(ValueError, match="辅助服务地址包含自定义值，需要用户决定"):
+    for preview in (True, False):
+        monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
+        with pytest.raises(ValueError, match="缺少已验收升级基线"):
             main()
-    else:
-        main()
-        assert json.loads(capsys.readouterr().out)["upgrade_required"] is True
-    assert list(path.parent.iterdir()) == [path] and path.read_bytes() == original
-    if not custom:
-        monkeypatch.setattr("sys.argv", ["boxteam", "initialize"])
-        main()
-        assert "auxiliary_services" not in read_jsonc_object(path).get("runtime", {})
-        report = json.loads(capsys.readouterr().out)["upgrades"]["configuration"]
-        assert original in [file.read_bytes() for file in Path(report["backup_root"]).glob("file-*.before")]
+        assert list(path.parent.iterdir()) == [path] and path.read_bytes() == original
 
 
 def test_cli_preview_empty_home_does_not_install_or_create_databases(
@@ -165,7 +158,7 @@ def test_cli_preview_empty_home_does_not_install_or_create_databases(
     report = json.loads(capsys.readouterr().out)
     assert report["action"] == "migrate-runtime-config"
     assert report["validation_stage"] == "logging_preflight"
-    assert report["target_config_versions"] == {"gateway": 6, "workspace": 3}
+    assert report["target_config_versions"] == {"gateway": 6, "workspace": 4}
     assert report["settings"] is None
     assert report["conflicts"] == report["unsettled"] == []
     assert all(source["presence"] == "absent" for source in report["sources"])
@@ -179,13 +172,13 @@ def test_all_explicit_layers_are_read_without_scanning_other_workspaces(
     paths = [migration_home / "config/workspace.jsonc", migration_home / "config/workspace_local.jsonc",
              first / ".boxteam/workspace.jsonc"]
     for path in paths:
-        _write(path, {"logger": {"level": " DEBUG ", "pretty": False}})
+        _write(path, {"config_version": 4, "settings": {}})
     _write(second / ".boxteam/workspace.jsonc", {"logger": {"level": "invalid"}})
     originals = {path: path.read_bytes() for path in paths}
 
     plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first, first))
 
-    assert plan.settings == {"level": "debug", "pretty": False}
+    assert plan.settings is None
     assert plan.conflicts == plan.unsettled == ()
     assert sum(item.path == paths[-1] for item in plan.inputs) == 1
     assert not any(item.path.is_relative_to(second) for item in plan.inputs)
@@ -193,17 +186,47 @@ def test_all_explicit_layers_are_read_without_scanning_other_workspaces(
     assert not (first / ".boxteam/state").exists()
 
 
+async def test_gateway_migration_preserves_the_current_workspace_graph_snapshot(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    workspace = migration_workspaces[0]
+    config_root = migration_home / "config"
+    install_user_configuration(config_root=config_root, profile="default", workspace_root=workspace)
+    service = ConfigService(config_dir=config_root, config_path=config_root / "workspace.jsonc",
+        workspace_root=workspace, workspace_state_store=workspace_store)
+    try:
+        service.validate_workspace_config()
+        snapshot = service.get_snapshot()
+        assert snapshot.revision != config_revision(snapshot.to_dict())
+    finally:
+        await service.close()
+    original = _database_dump(workspace_store.path)
+    workspace_store.close()
+    _write(config_root / "gateway.jsonc", {"config_version": 4, "logging": {"runtime": {"level": "debug"}}})
+
+    commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(workspace,))
+
+    assert _database_dump(workspace_store.path) == original
+    with WorkspaceStateStore(workspace_root=workspace) as store:
+        restored = ConfigService(config_dir=config_root, config_path=config_root / "workspace.jsonc",
+            workspace_root=workspace, workspace_state_store=store)
+        try:
+            restored.validate_workspace_config()
+            assert restored.get_snapshot().revision == snapshot.revision
+        finally:
+            await restored.close()
+
+
 def test_conflicts_require_explicit_selection_per_field(
     migration_home: Path, migration_workspaces: tuple[Path, Path],
 ) -> None:
     first, second = migration_workspaces
     _write(migration_home / "config/gateway.jsonc", {"logging": {"runtime": {"level": "warning", "pretty": True}}})
-    _write(first / ".boxteam/workspace.jsonc", {"logger": {"level": "debug", "pretty": False}})
-    _write(second / ".boxteam/workspace.jsonc", {"logger": {"level": "info"}})
+    _write(migration_home / "config/gateway_local.jsonc", {"config_version": 4, "logging": {"runtime": {"level": "debug", "pretty": False}}})
 
-    plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first, second))
-    assert {conflict["field"] for conflict in plan.conflicts} == {"level", "pretty"}
-    assert plan.settings == {}
+    plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first, second), pretty=True)
+    assert {conflict["field"] for conflict in plan.conflicts} == {"level"}
+    assert plan.settings == {"pretty": True}
     partial = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first, second), level="ERROR")
     assert partial.settings == {"level": "error"}
     assert [conflict["field"] for conflict in partial.conflicts] == ["pretty"]
@@ -222,8 +245,8 @@ def test_new_gateway_layers_keep_their_existing_precedence(migration_home: Path)
 
 
 def test_partial_legacy_settings_use_shared_contract_defaults(migration_home: Path) -> None:
-    _write(migration_home / "config/workspace.jsonc", {"logger": {"pretty": False}})
-    plan = preview_runtime_logging_migration(boxteam_home=migration_home)
+    _write(migration_home / "config/gateway.jsonc", {"config_version": 4, "logging": {"runtime": {"pretty": False}}})
+    plan = preview_runtime_logging_migration(boxteam_home=migration_home, pretty=False)
     assert plan.settings == {"level": plan.contract.default_level, "pretty": False}
 
 
@@ -231,7 +254,7 @@ def test_partial_legacy_settings_use_shared_contract_defaults(migration_home: Pa
     {"logger": None}, {"logger": {"level": "verbose"}}, {"logger": {"level": 1}},
     {"logger": {"pretty": "false"}}, {"logger": {"pretty": 0}},
     {"logger": {"unknown": True}}, {"logging": {"runtime": {"level": "info"}}},
-    {"config_version": 4}, {"config_version": 0}, {"config_version": True}, {"config_version": None},
+    {"config_version": 5}, {"config_version": 0}, {"config_version": True}, {"config_version": None},
 ])
 def test_invalid_workspace_logging_is_rejected_even_with_explicit_choices(
     migration_home: Path, payload: dict[str, object],
@@ -256,32 +279,45 @@ def test_invalid_gateway_logging_is_rejected(migration_home: Path, payload: dict
         preview_runtime_logging_migration(boxteam_home=migration_home)
 
 
-def test_preview_reads_stored_source_and_active_without_leaking_business_payload(
+@pytest.mark.parametrize("kind", ["source", "active", "pending"])
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_unsupported_workspace_database_facts_are_preserved_without_baseline(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-    gateway_store: GatewayStateStore,
+    kind: str, version: int,
 ) -> None:
     secret = "test-provider-secret-must-not-appear"
-    stored: dict[str, object] = {"logger": {"level": "debug"}, "llm": {"api_key": secret}}
-    workspace_store.sync_config_source(
-        config_key="workspace_root_mutable_override", uri=None, config_version=1,
-        presence="present", payload=stored, layer_digest="frozen-file-byte-digest",
-    )
-    _active(workspace_store, "workspace", {"logger": {"level": "warning"}, "llm": {"api_key": secret}})
-    _active(gateway_store, "gateway", {"config_version": 2, "logging": {"runtime": {"level": "error"}}})
-    _write(migration_workspaces[0] / ".boxteam/workspace.jsonc", {"logger": {"level": "info"}})
-    before = {store.path: _database_dump(store.path) for store in (workspace_store, gateway_store)}
+    payload = {"config_version": version, "llm": {"api_key": secret}}
+    if kind == "source":
+        workspace_store.sync_config_source(config_key="workspace_root_mutable_override", uri=None,
+            config_version=version, presence="present", payload=payload, layer_digest="frozen-file-byte-digest")
+    elif kind == "active":
+        _active(workspace_store, "workspace", payload)
+    else:
+        workspace_store.create_pending_config_candidate(config_domain="workspace", candidate_id="old",
+            idempotency_key="old", payload=payload, source_baseline={}, candidate_digest=config_revision(payload),
+            effective_digest=config_revision(payload), target_generation=None, fencing_token=None, state="candidate_validated")
+    before = _database_dump(workspace_store.path)
+    with pytest.raises(ValueError, match="缺少已验收升级基线") as failure:
+        preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert secret not in str(failure.value)
+    assert _database_dump(workspace_store.path) == before
+    workspace_store.close()
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert _database_dump(workspace_store.path) == before
+    assert not (migration_home / "config/.runtime-logging-migration.json").exists()
 
-    plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
-    report = plan.report()
 
-    assert secret not in json.dumps(report)
-    assert "llm" not in json.dumps(report)
-    assert len(plan.conflicts) == 1
-    source = next(item for item in plan.inputs if item.domain == "workspace" and item.kind == "source_layer")
-    assert source.digest == "frozen-file-byte-digest"
-    assert source.revision == source.config_version == 1
-    assert len([item for item in plan.inputs if item.kind == "active"]) == 2
-    assert {store.path: _database_dump(store.path) for store in (workspace_store, gateway_store)} == before
+def test_workspace_active_format_version_cannot_be_hidden_by_a_current_payload(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    workspace_store.ensure_active_config_snapshot(config_domain="workspace", payload={"config_version": 4},
+        source_baseline={}, source_generation=0, layer_revisions={}, layer_digests={},
+        effective_digest="old-format", secret_bindings={}, schema_version=3)
+    before = _database_dump(workspace_store.path)
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert _database_dump(workspace_store.path) == before
 
 
 @pytest.mark.parametrize("state", ["candidate_validated", "pending_restart", "conflict", "recovery_required"])
@@ -290,7 +326,7 @@ def test_unsettled_candidates_claims_and_journals_are_reported_without_mutation(
 ) -> None:
     candidate = workspace_store.create_pending_config_candidate(
         config_domain="workspace", candidate_id="candidate", idempotency_key="preview-candidate",
-        payload={"logger": {"level": "debug"}}, source_baseline={}, candidate_digest="candidate-digest",
+        payload={"config_version": 4}, source_baseline={}, candidate_digest="candidate-digest",
         effective_digest="effective-digest", target_generation=None, fencing_token=None, state="candidate_validated",
     )
     workspace_store.acquire_config_apply_claim(
@@ -316,19 +352,19 @@ def test_unsettled_candidates_claims_and_journals_are_reported_without_mutation(
 def test_readonly_preview_observes_committed_wal_without_checkpointing(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
 ) -> None:
-    _active(workspace_store, "workspace", {"logger": {"level": "info"}})
+    _active(workspace_store, "workspace", {"config_version": 4})
     with closing(workspace_store.connection()) as writer:
         writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         original = workspace_store.path.read_bytes()
         writer.execute("UPDATE config_active_snapshot SET payload_json = ?, effective_digest = ?",
-                       (json.dumps({"logger": {"level": "critical"}}), "wal-effective-digest"))
+                       (json.dumps({"config_version": 4}), "wal-effective-digest"))
         writer.commit()
         assert workspace_store.path.read_bytes() == original
         wal_path = Path(f"{workspace_store.path}-wal")
         wal = wal_path.read_bytes()
         assert wal
         plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
-        assert plan.settings == {"level": "critical", "pretty": plan.contract.default_pretty}
+        assert plan.settings is None
         assert next(item.digest for item in plan.inputs if item.kind == "active") == "wal-effective-digest"
         assert workspace_store.path.read_bytes() == original
         assert wal_path.read_bytes() == wal
@@ -349,18 +385,19 @@ def test_cli_uses_selected_gateway_database_and_reports_legacy_layout(
     assert not (migration_home / "config/gateway.jsonc").exists()
 
 
-def test_cli_migrates_and_backs_up_original_bytes(
+def test_cli_migrates_gateway_and_backs_up_original_bytes(
     migration_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    path = migration_home / "config/workspace.jsonc"
-    _write(path, {"logger": {"level": "debug"}})
+    path = migration_home / "config/gateway.jsonc"
+    _write(path, {"config_version": 4, "logging": {"runtime": {"level": "debug"}}})
     original = path.read_bytes()
     _cli(monkeypatch)
     report = json.loads(capsys.readouterr().out)
     assert report["state"] == "completed"
-    assert "logger" not in json.loads(path.read_text())
     assert any(item.read_bytes() == original for item in Path(report["backup_root"]).glob("file-*.before"))
-    assert json.loads((migration_home / "config/gateway.jsonc").read_text())["settings"]["gateway"]["logging"]["runtime"] == {"level": "debug", "pretty": True}
+    document = read_jsonc_object(path)
+    assert document["config_version"] == 6
+    assert document["settings"]["gateway"]["logging"]["runtime"]["level"] == "debug"
     assert not (migration_home / "state/gateway/gateway.sqlite").exists()
 
 
@@ -369,14 +406,14 @@ def test_cli_accepts_multiple_explicit_workspaces_and_choices(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     first, second = migration_workspaces
-    _write(first / ".boxteam/workspace.jsonc", {"logger": {"level": "debug"}})
-    _write(second / ".boxteam/workspace.jsonc", {"logger": {"level": "error"}})
+    _write(first / ".boxteam/workspace.jsonc", {"config_version": 4, "settings": {}})
+    _write(second / ".boxteam/workspace.jsonc", {"config_version": 4, "settings": {}})
     _cli(monkeypatch, "--preview", "--workspace", str(first), "--migration-workspace", str(second),
          "--level", "warning", "--pretty", "false")
     report = json.loads(capsys.readouterr().out)
     assert report["settings"] == report["explicit_choices"] == {"level": "warning", "pretty": False}
     assert report["conflicts"] == []
-    assert sum(source["legacy_logger"] for source in report["sources"]) == 2
+    assert sum(source["legacy_logger"] for source in report["sources"]) == 0
     assert not migration_home.exists()
 
 
@@ -384,10 +421,10 @@ def test_sqlite_source_version_is_validated_even_without_payload_version(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
 ) -> None:
     workspace_store.sync_config_source(
-        config_key="workspace_mutable_override", uri=None, config_version=4,
+        config_key="workspace_mutable_override", uri=None, config_version=5,
         presence="present", payload={"logger": {"level": "info"}}, layer_digest="future-version",
     )
-    with pytest.raises(ValueError, match="配置版本不在日志迁移支持范围"):
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
         preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
 
 
@@ -395,7 +432,7 @@ def test_sqlite_source_version_is_validated_even_without_payload_version(
 def test_completed_journals_remain_history_and_active_recovery_is_reported(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore, state: str,
 ) -> None:
-    _active(workspace_store, "workspace", {"logger": {"level": "info"}})
+    _active(workspace_store, "workspace", {"config_version": 4})
     workspace_store.start_config_apply_journal(
         config_domain="workspace", apply_id="historical", candidate_id="old", attempt_id="attempt",
         owner="preview-test", base_active_revision=None, pending_revision=None,
@@ -431,170 +468,38 @@ def test_migration_flags_are_not_silently_accepted_by_other_actions(
 
 
 def _legacy_payload() -> dict[str, object]:
-    payload = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
-    return {**payload, "config_version": 1, "logger": {"level": "info", "pretty": True}}
+    return {"config_version": 1, "logger": {"level": "info", "pretty": True}}
 
 
-def test_superseded_candidate_keeps_original_without_blocking_startup(
+
+
+def test_legacy_workspace_source_and_active_are_not_reconstructed_from_inline_defaults(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+    legacy_model_configuration: dict[str, object],
 ) -> None:
-    original = {"config_version": 3, "agents": {"default": {"tools": {"custom": [{
-        "tool_id": "fetch_webpage", "options": {"embedding": {"provider_id": "backup_2"}},
-    }]}}}}
-    workspace_store.create_pending_config_candidate(
-        config_domain="workspace", candidate_id="superseded", idempotency_key="superseded",
-        payload=original, source_baseline={}, candidate_digest=config_revision(original),
-        effective_digest=config_revision(original), target_generation=None, fencing_token=None, state="candidate_validated",
-    )
-    current = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
-    workspace_store.ensure_active_config_snapshot(
-        config_domain="workspace", payload=current, source_baseline={}, source_generation=0,
-        layer_revisions={}, layer_digests={}, effective_digest=config_revision(current), secret_bindings={}, schema_version=3,
-    )
-    before = _database_dump(workspace_store.path)
-    plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
-    assert not plan.unsettled
-    assert _database_dump(workspace_store.path) == before
-    workspace_store.close()
-    result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
-    assert result["state"] == "completed"
-    with closing(sqlite3.connect(workspace_store.path)) as connection:
-        state, content = connection.execute(
-            "SELECT state,payload_json FROM config_pending_candidate WHERE candidate_id='superseded'",
-        ).fetchone()
-    assert state == "discarded"
-    assert json.loads(content) == original
-
-
-@pytest.mark.parametrize("old_models", [False, True])
-def test_migration_preserves_active_business_state_and_source_cas(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-    old_models: bool, legacy_model_configuration: dict[str, object],
-) -> None:
-    from app.services.infrastructure.config_service import ConfigService
-
     first = migration_workspaces[0]
     path = first / ".boxteam/workspace.jsonc"
-    active = _legacy_payload()
-    expected = {key: (3 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
-    if old_models:
-        # 同一个旧来源同时出现在文件、来源账本和 active 中，必须一起转换。
-        active.update(legacy_model_configuration)
-    _write(path, active)
-    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    source = workspace_store.sync_config_source(
-        config_key="workspace_root_mutable_override", uri=None, config_version=cast(int, active["config_version"]),
-        presence="present", payload=active, layer_digest=original_digest,
-    )
-    baseline: dict[str, object] = {source.config_key: {"uri": None, "presence": "present", "layer_revision": source.layer_revision,
-                                  "layer_digest": source.layer_digest, "source_generation": source.source_generation}}
-    original = workspace_store.ensure_active_config_snapshot(
-        config_domain="workspace", payload=active, source_baseline=baseline, source_generation=source.source_generation,
-        layer_revisions={source.config_key: source.layer_revision}, layer_digests={source.config_key: source.layer_digest},
-        effective_digest=config_revision(active), secret_bindings={}, schema_version=cast(int, active["config_version"]),
-    )
-    changed = {**active, "development": {"test_tools": True}}
-    _write(path, changed)
-    before = _database_dump(workspace_store.path)
-    workspace_store.close()
-
-    result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
-    assert result["state"] == "completed"
-    published = path.read_bytes()
-    with WorkspaceStateStore(workspace_root=first) as restored:
-        migrated = restored.get_active_config_snapshot("workspace")
-        assert migrated is not None
-        if old_models:
-            converted = read_jsonc_object(path)
-            for provider_id, provider in converted["llm"]["providers"].items():
-                assert migrated.payload["llm"]["providers"][provider_id] == provider
-            assert migrated.payload["agents"]["default"]["model"] == converted["agents"]["default"]["model"]
-            assert "primary_provider" not in migrated.payload["agents"]["default"]["model"]
-            expected_tools = [{"tool_id": "fetch_webpage", "options": {"embedding": {
-                "model_ref": {"provider_id": "backup_2", "model_id": "default"},
-                "model": "openai/text-embedding-3-small",
-            }}}]
-            assert converted["agents"]["default"]["tools"]["custom"] == expected_tools
-            assert migrated.payload["agents"]["default"]["tools"]["custom"] == expected_tools
-        else:
-            assert migrated.payload == expected
-        assert migrated.active_revision > original.active_revision
-        assert migrated.effective_digest == config_revision(migrated.payload)
-        assert migrated.schema_version == 3
-        layer = restored.get_source_layer(source.config_key)
-        assert layer is not None
-        if old_models:
-            from app.services.infrastructure.config.state import (
-                restore_environment_secret_references,
-            )
-
-            assert restore_environment_secret_references(layer.payload)["llm"] == converted["llm"]
-            assert layer.payload["agents"] == converted["agents"]
-        assert layer.layer_revision == source.layer_revision + 1
-        assert migrated.layer_revisions[source.config_key] == layer.layer_revision
-        assert migrated.layer_digests[source.config_key] == layer.layer_digest
-        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, workspace_state_store=restored)
-        assert service.get_snapshot().to_dict()["development"]["test_tools"] is False
-        assert json.loads(path.read_text())["development"]["test_tools"] is True
-    after = _database_dump(workspace_store.path)
-    backup_root = Path(str(result["backup_root"]))
-    backup = next(backup_root.glob("db-*.before.sqlite"))
-    assert _database_dump(backup) == before
-    repeated = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
-    assert repeated["state"] == "unchanged"
-    assert _database_dump(workspace_store.path) == after
-    # 产品重新启动后会正常写来源观察，原件恢复不能覆盖这些后续事实。
-    with pytest.raises(RuntimeError, match="配置被外部修改"):
-        commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)
-    assert _database_dump(workspace_store.path) == after
-    assert path.read_bytes() == published
-
-
-def test_restore_database_before_restart_returns_exact_original(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-) -> None:
-    _active(workspace_store, "workspace", _legacy_payload())
-    before = _database_dump(workspace_store.path)
-    workspace_store.close()
-    commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
-    assert commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)["state"] == "restored"
-    assert _database_dump(workspace_store.path) == before
-
-
-@pytest.mark.parametrize("restore", [False, True])
-def test_interrupted_migration_blocks_runtime_and_can_resume_or_restore(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, restore: bool,
-) -> None:
-    import configs.maintenance.runtime_logging_commit as commit
-
-    first = migration_workspaces[0]
-    path = first / ".boxteam/workspace.jsonc"
-    _write(path, {"config_version": 1, "logger": {"level": "debug"}})
+    payload = legacy_model_configuration
+    _write(path, payload)
     original = path.read_bytes()
-    write = commit.atomic_write
+    source = workspace_store.sync_config_source(config_key="workspace_root_mutable_override", uri=None,
+        config_version=2, presence="present", payload=payload, layer_digest=hashlib.sha256(original).hexdigest())
+    workspace_store.ensure_active_config_snapshot(config_domain="workspace", payload=payload,
+        source_baseline={source.config_key: {"presence": "present", "layer_digest": source.layer_digest}},
+        source_generation=source.source_generation, layer_revisions={source.config_key: source.layer_revision},
+        layer_digests={source.config_key: source.layer_digest}, effective_digest=config_revision(payload),
+        secret_bindings={}, schema_version=2)
+    before = _database_dump(workspace_store.path)
+    workspace_store.close()
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    assert path.read_bytes() == original
+    assert _database_dump(workspace_store.path) == before
+    assert not (migration_home / "config/.runtime-logging-migration.json").exists()
 
-    def interrupted(target: Path, content: bytes, mode: int) -> None:
-        if target == path:
-            raise OSError("注入发布中断")
-        write(target, content, mode)
 
-    with monkeypatch.context() as patch:
-        patch.setattr(commit, "atomic_write", interrupted)
-        with pytest.raises(OSError, match="注入发布中断"):
-            commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
-    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
-        read_jsonc_object(migration_home / "config/gateway.jsonc")
-    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
-        WorkspaceStateStore(workspace_root=first)
-    with pytest.raises(ValueError, match="不能更换日志选择"):
-        commit_runtime_logging_migration(boxteam_home=migration_home, level="error")
-    assert commit_runtime_logging_migration(boxteam_home=migration_home, level="debug", pretty=True, restore=restore)["state"] == ("restored" if restore else "completed")
-    if restore:
-        assert path.read_bytes() == original
-        assert not (migration_home / "config/gateway.jsonc").exists()
-    else:
-        assert json.loads(path.read_text()) == {"config_version": 3}
-        assert read_jsonc_object(migration_home / "config/gateway.jsonc")["settings"]["gateway"]["logging"] == {"runtime": {"level": "debug", "pretty": True}}
+
+
 
 
 def test_live_owner_blocks_migration_before_publishing_any_configuration(
@@ -602,7 +507,7 @@ def test_live_owner_blocks_migration_before_publishing_any_configuration(
 ) -> None:
     first = migration_workspaces[0]
     path = first / ".boxteam/workspace.jsonc"
-    _write(path, {"logger": {"level": "info"}})
+    _write(path, {"config_version": 4, "settings": {}})
     before = path.read_bytes()
     with pytest.raises(RuntimeError, match="已被另一个进程占用"):
         commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
@@ -617,43 +522,12 @@ def test_unmigrated_workspace_is_rejected_before_writing_legacy_source(
 
     path = migration_workspaces[0] / ".boxteam/workspace.jsonc"
     _write(path, {"logger": {"level": "info"}})
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path, workspace_state_store=workspace_store)
-    with pytest.raises(ValueError, match="migrate-runtime-config"):
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path, workspace_root=migration_workspaces[0], workspace_state_store=workspace_store)
+    with pytest.raises(ValueError, match="配置节点校验失败"):
         service.get_snapshot()
     assert workspace_store.get_source_layer("workspace_mutable_override") is None
 
 
-@pytest.mark.parametrize("restore", [False, True])
-def test_interrupt_after_database_commit_retains_recoverable_owner_boundary(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-    monkeypatch: pytest.MonkeyPatch, restore: bool,
-) -> None:
-    import configs.maintenance.runtime_logging_commit as commit
-
-    first = migration_workspaces[0]
-    _active(workspace_store, "workspace", _legacy_payload())
-    before = _database_dump(workspace_store.path)
-    workspace_store.close()
-    write = commit.atomic_write
-
-    def interrupted(path: Path, content: bytes, mode: int) -> None:
-        if path == migration_home / "config/workspace_schema.jsonc":
-            raise OSError("注入数据库发布后中断")
-        write(path, content, mode)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(commit, "atomic_write", interrupted)
-        with pytest.raises(OSError, match="数据库发布后中断"):
-            commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
-    with pytest.raises(RuntimeError, match="禁止读取部分迁移状态"):
-        WorkspaceStateStore(workspace_root=first)
-    commit_runtime_logging_migration(boxteam_home=migration_home, restore=restore)
-    if restore:
-        assert _database_dump(workspace_store.path) == before
-    else:
-        with WorkspaceStateStore(workspace_root=first) as store:
-            active = store.get_active_config_snapshot("workspace")
-            assert active is not None and active.schema_version == 3 and "logger" not in active.payload
 
 
 @pytest.mark.parametrize("registered", [False, True])
@@ -786,13 +660,11 @@ def test_invalid_connection_ledger_is_rejected_in_preview_without_writes(
     assert not (migration_home / "config/gateway.jsonc").exists()
 
 
-@pytest.mark.asyncio
-async def test_shared_source_owner_resumes_existing_generation_after_migration(
+def test_unsupported_workspace_migration_preserves_shared_source_owner_history(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
 ) -> None:
     from app.core.workspace_identity import load_or_create_workspace_id
     from app.services.infrastructure.config.source_owner import WorkspaceSourceOwner
-    from app.services.infrastructure.config_service import ConfigService
 
     first = migration_workspaces[0]
     workspace_id = load_or_create_workspace_id(first)
@@ -810,17 +682,11 @@ async def test_shared_source_owner_resumes_existing_generation_after_migration(
         status="applied", layer_revision=layer.layer_revision, layer_digest=digest)
     history = owner.list_journal()
     workspace_store.close()
-    commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
     assert owner.list_journal() == history
-    with WorkspaceStateStore(workspace_root=first) as store:
-        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, config_path=path,
-            workspace_state_store=store, source_owner=owner, source_owner_workspace_id=workspace_id)
-        service.validate_workspace_config()
-        assert await service.reload() is False
-        current = store.get_source_layer("workspace_mutable_override")
-        assert current is not None and current.source_generation == observed.source_generation + 1
-        assert owner.list_journal()[0] == history[0]
-        assert owner.list_journal()[-1].layer_digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert owner.list_fanout(source_generation=observed.source_generation)[0].status == "applied"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
 
 
 def test_gateway_v3_migration_retires_generator_config_with_backup(migration_home: Path) -> None:
@@ -837,68 +703,3 @@ def test_gateway_v3_migration_retires_generator_config_with_backup(migration_hom
     assert migrated["settings"]["gateway"]["logging"]["runtime"] == {"level": "debug", "pretty": False}
     assert result["state"] == "completed"
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
-
-
-@pytest.mark.parametrize("already_migrated", [False, True])
-def test_environment_secret_digest_matches_real_startup_after_migration(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-    already_migrated: bool,
-) -> None:
-    from app.services.infrastructure.config.state import prepare_config_for_persistence
-    from app.services.infrastructure.config_service import ConfigService
-
-    payload = _legacy_payload()
-    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], payload["llm"])["providers"])
-    defaults = cast(dict[str, object], providers["primary"]["defaults"])
-    defaults["api_key"] = "${BOXTEAM_MIGRATION_TEST_KEY}"
-    if already_migrated:
-        payload.pop("logger")
-        payload["config_version"] = 3
-    stored = prepare_config_for_persistence(payload)
-    original = workspace_store.ensure_active_config_snapshot(
-        config_domain="workspace", payload=stored, source_baseline={}, source_generation=0,
-        layer_revisions={}, layer_digests={}, secret_bindings={},
-        effective_digest=config_revision(stored) if already_migrated else config_revision(payload),
-        schema_version=3 if already_migrated else 1,
-    )
-    workspace_store.close()
-    first = migration_workspaces[0]
-    result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
-    assert result["state"] == "completed"
-    with WorkspaceStateStore(workspace_root=first) as restored:
-        active = restored.get_active_config_snapshot("workspace")
-        assert active is not None and active.active_revision > original.active_revision
-        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, workspace_state_store=restored)
-        snapshot = service.get_snapshot()
-        assert snapshot.revision == active.effective_digest
-        llm = snapshot.to_dict()["llm"]
-        assert llm["providers"]["primary"]["defaults"]["api_key"] == "${BOXTEAM_MIGRATION_TEST_KEY}"
-        assert active.payload["llm"]["providers"]["primary"]["defaults"]["api_key"] == "env:BOXTEAM_MIGRATION_TEST_KEY"
-    assert commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))["state"] == "unchanged"
-
-
-def test_historical_active_snapshot_gets_missing_defaults_without_replacing_user_values(
-    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
-) -> None:
-    from app.services.infrastructure.config_service import ConfigService
-
-    payload = _legacy_payload()
-    payload.pop("resources")
-    cast(dict[str, object], payload["context"]).pop("source_messages")
-    cast(dict[str, object], payload["mcp"]).pop("supervision")
-    cast(dict[str, object], payload["development"])["test_tools"] = True
-    _active(workspace_store, "workspace", payload)
-    workspace_store.close()
-    first = migration_workspaces[0]
-    assert commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))["state"] == "completed"
-    with WorkspaceStateStore(workspace_root=first) as restored:
-        service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=first, workspace_state_store=restored)
-        current = service.get_snapshot().to_dict()
-        defaults = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
-        assert current["resources"] == defaults["resources"]
-        assert current["mcp"]["supervision"] == defaults["mcp"]["supervision"]
-        assert service.get_source_message_grouping() == defaults["context"]["source_messages"]["grouping"]
-        assert service.get_gateway_skill_update_policy() is not None
-        assert current["development"]["test_tools"] is True
-        assert current["llm"] == payload["llm"]
-    assert commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))["state"] == "unchanged"

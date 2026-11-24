@@ -1,9 +1,9 @@
 import type { APIResponse, ConfigSourcesDTO } from "../types/backend";
 import type { ConfigReloadStatusDTO, ConfigSourceDocumentDTO, ConfigSourceEditRequest, ConfigSourcePreflightDTO, LlmDiscoverRequest, LlmTestRequest, LlmTestStartDTO, LlmTestDeltaDTO, LlmTestResultDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { LlmProbeObservationDTO, LlmDiscoverResultDTO, LlmModelCatalogDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
-import type { ModelReferenceDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { LlmProvidersDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
+import type { ConfigActiveOptionsInspectionDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { gatewayWorkspaceRequestHeaders, requestGatewayResponse, requestJson, unwrapApiData } from "./http";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
 import { validateLlmTestStartDTO, validateLlmTestDeltaDTO, validateLlmTestResultDTO } from "../../../../shared/sseRuntimeValidators.js";
@@ -28,6 +28,25 @@ export async function listConfigSources(port: number, target: GatewayWorkspaceRe
   return unwrapApiData(await requestJson<APIResponse<ConfigSourcesDTO>>(port, "/api/v1/config/sources", {
     headers: gatewayWorkspaceRequestHeaders(target), cache: "no-store", signal,
   }));
+}
+
+/** 无草稿时只读原 active 快照；不预检草稿、不读取当前父文件。 */
+export async function inspectActiveConfigOptions(target: GatewayWorkspaceRequestTarget,
+  selector: { provider_id: string; model_id?: string }, signal?: AbortSignal): Promise<ConfigActiveOptionsInspectionDTO> {
+  const route = { ...target };
+  const query = new URLSearchParams({ provider_id: selector.provider_id,
+    ...(selector.model_id === undefined ? {} : { model_id: selector.model_id }) });
+  const result = unwrapApiData(await requestJson<APIResponse<ConfigActiveOptionsInspectionDTO>>(0,
+    `/api/v1/config/llm/inspection?${query}`, {
+      headers: gatewayWorkspaceRequestHeaders(route), cache: "no-store", signal,
+    }));
+  if (result.gateway_id !== route.gateway_id || result.workspace_id !== route.workspace_id) {
+    throw new Error("已发布选项回执不属于原 Gateway／工作区");
+  }
+  if (result.provider_options?.provider_id !== selector.provider_id) throw new Error("服务选项回执不属于原服务");
+  if (selector.model_id !== undefined && (result.model_options?.model_ref?.provider_id !== selector.provider_id
+      || result.model_options.model_ref.model_id !== selector.model_id)) throw new Error("模型选项回执不属于原模型");
+  return result;
 }
 
 export async function listLlmCatalog(target: GatewayWorkspaceRequestTarget, provider: string, signal?: AbortSignal): Promise<LlmModelCatalogDTO> {
@@ -150,19 +169,21 @@ export async function getConfigSourceDocument(port: number, target: GatewayWorks
 
 /** 同一意图原样预检和保存；不在客户端合并来源或更新 active。 */
 export async function preflightConfigSource(port: number, target: GatewayWorkspaceRequestTarget, intent: ConfigSourceEditRequest,
-  signal?: AbortSignal, modelRef?: ModelReferenceDTO): Promise<ConfigSourcePreflightDTO> {
+  signal?: AbortSignal, selector?: { provider_id: string; model_id?: string }): Promise<ConfigSourcePreflightDTO> {
   const route = { ...target };
   if (intent.gateway_id !== route.gateway_id || intent.workspace_id !== route.workspace_id) throw new Error("配置编辑意图不属于原 Gateway／工作区");
   const { source_key: sourceKey } = intent;
-  const query = modelRef ? `?${new URLSearchParams({ provider_id: modelRef.provider_id, model_id: modelRef.model_id })}` : '';
+  const query = selector ? `?${new URLSearchParams({ provider_id: selector.provider_id,
+    ...(selector.model_id === undefined ? {} : { model_id: selector.model_id }) })}` : '';
   const result = unwrapApiData(await requestJson<APIResponse<ConfigSourcePreflightDTO>>(port,
     `/api/v1/config/sources/${encodeURIComponent(sourceKey)}/preflight${query}`, {
       method: "POST", headers: gatewayWorkspaceRequestHeaders(route), body: JSON.stringify(intent), cache: "no-store", signal,
     }));
   if (!result.document) throw new Error("配置预检没有返回原来源完整文档");
   assertDocumentTarget(result.document, route, sourceKey);
-  if (modelRef && (result.model_options?.model_ref?.provider_id !== modelRef.provider_id
-      || result.model_options.model_ref.model_id !== modelRef.model_id)) throw new Error("模型选项回执不属于原模型");
+  if (selector && result.provider_options?.provider_id !== selector.provider_id) throw new Error("服务选项回执不属于原服务");
+  if (selector?.model_id !== undefined && (result.model_options?.model_ref?.provider_id !== selector.provider_id
+      || result.model_options.model_ref.model_id !== selector.model_id)) throw new Error("模型选项回执不属于原模型");
   return result;
 }
 

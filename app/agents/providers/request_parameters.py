@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.agents.provider_api_mode import ApiProtocol
+from configs.inheritance.merge import SettingsMerger
+from configs.inheritance.values import FieldOrigin, freeze, thaw
 
 # 这些字段由连接、封存正文或执行生命周期持有，不是模型采样参数。
 CONFIGURATION_OWNED_PARAMETERS = frozenset({
@@ -38,11 +40,17 @@ def normalize_request_parameters(
 def merge_request_parameters(
     *layers: Mapping[str, Any], protocol: ApiProtocol,
 ) -> dict[str, Any]:
-    """低优先级在前，省略标记仅在所有层完成合并后处理。"""
-    result: dict[str, Any] = {}
-    for layer in layers:
-        result.update(normalize_request_parameters(layer, protocol=protocol))
-    return {key: value for key, value in result.items() if value is not None}
+    """临时参数子节点复用配置合并；完成逻辑键覆盖后才按叶子协议映射并省略 null。"""
+    merger = SettingsMerger({
+        "x-key-aliases": {"max_tokens": "max_output_tokens"},
+        "additionalProperties": {"x-merge": "replace"},
+    })
+    result, origins = freeze({}), None
+    for index, layer in enumerate(layers):
+        result, origins = merger.merge(result, freeze(layer),
+            origin=FieldOrigin(f"request:{index}", "", ()), inherited_origins=origins)
+    values = normalize_request_parameters(thaw(result), protocol=protocol)
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def normalize_request_headers(headers: Mapping[str, object]) -> dict[str, str]:

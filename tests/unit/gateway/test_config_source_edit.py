@@ -293,19 +293,19 @@ async def test_legacy_connection_source_requires_explicit_migration_without_writ
     text = json.dumps(old_source)
     request = case.request(text + "\n// v1\n")
     before = case.snapshot()
-    with pytest.raises(ValueError, match="rule=const"):
+    with pytest.raises(ValueError, match="JSON schema const"):
         case.service.preflight_source_edit(source_key=SOURCE, request=request)
-    with pytest.raises(ValueError, match="rule=const"):
+    with pytest.raises(ValueError, match="JSON schema const"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert case.snapshot() == before
     old_source["settings"]["gateway"]["workspaces"] = [_connection()]
     request = case.request(json.dumps(old_source))
-    with pytest.raises(ValueError, match="rule=const"):
+    with pytest.raises(ValueError, match="JSON schema const"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert case.snapshot() == before
     case.path.write_text(text)
     before = case.snapshot()
-    with pytest.raises(ValueError, match="rule=const"):
+    with pytest.raises(ValueError, match="JSON schema const"):
         case.service.get_source_document(source_key=SOURCE)
     assert case.snapshot() == before
 
@@ -402,6 +402,46 @@ async def test_unsaved_intent_does_not_block_unrelated_external_source(source_ow
     assert len(case.calls) == 1
     event, = case.service.list_events()
     assert event.idempotency_key != request.idempotency_key and event.changed_paths == ("/logging/runtime/level",)
+
+
+@pytest.mark.parametrize("validation_kind", ["document", "settings", "extra"])
+async def test_source_http_validation_preserves_source_and_path_fidelity(
+    source_owner: SourceOwner, validation_kind: str,
+) -> None:
+    case = source_owner
+    case.allow("configuration_read", "configuration_write")
+    payload = _source_document({})
+    if validation_kind == "document":
+        payload["profiles"] = {"field.with.dot/and.slash": {"extends": 7, "settings": {}}}
+        expected = ["profiles", "field.with.dot/and.slash", "extends"]
+    elif validation_kind == "settings":
+        payload["settings"]["gateway"] = {"logging": {"runtime": {"level": 7}}}
+        expected = ["gateway", "logging", "runtime", "level"]
+    else:
+        payload["private-extra-field"] = "private-input"
+        expected = ["<extra>"]
+    request = case.request(json.dumps(payload))
+    document = case.service.get_source_document(source_key=SOURCE)
+    before = case.snapshot()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test",
+                                 headers={"X-Request-ID": "source-path"}) as client:
+        for method, suffix in (("POST", "/preflight"), ("PUT", "")):
+            response = await client.request(method, "/api/gateway/config/sources/" + SOURCE + suffix,
+                                            json=request.model_dump())
+            assert response.status_code == 422, response.text
+            assert response.headers["X-Request-ID"] == "source-path"
+            detail = response.json()["detail"]
+            assert detail["message"].startswith("配置节点校验失败:")
+            assert detail["details"]["source_uri"] == next(
+                node.source_uri for node in document.nodes
+                if node.source_key == (LOCAL if validation_kind == "settings" else SOURCE)
+            )
+            assert "cause" not in detail["details"]
+            issue, = detail["details"]["issues"]
+            assert issue["path"] == expected
+            assert issue["path_exact"] is (validation_kind == "document")
+            assert "private-extra-field" not in response.text and "private-input" not in response.text
+    assert case.snapshot() == before and not case.calls
 
 
 @pytest.mark.parametrize("capabilities", [(), ("configuration_read",), ("configuration_write",)])

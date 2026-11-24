@@ -3,14 +3,19 @@ import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cance
 import type { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import type { IQuickInputService, IQuickPickItem } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { discardConfigPending, getConfigSourceDocument, retryConfigPending } from '../../../web/src/api/configSources.js';
-import { HttpRequestError } from '../../../web/src/api/http.js';
+import { errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { ConfigSourceDocumentDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { TargetSettingsLocation } from './scope.js';
 
 const valueText = (value: unknown) => value === undefined ? t('settings.editor.notSet') : JSON.stringify(value);
-const errorText = (error: unknown) => `${error instanceof Error ? error.message : String(error)}${error instanceof HttpRequestError ? ` · request_id=${error.requestId ?? t('settings.editor.notReturned')}` : ''}`;
-const sourceValue = (document: ConfigSourceDocumentDTO): unknown => document.layers.find(layer => layer.source_key === document.source_key)?.payload?.default_agent;
+const sourceValue = (document: ConfigSourceDocumentDTO): unknown => {
+  const settings = document.layers.find(layer => layer.source_key === document.source_key)?.payload?.settings;
+  return settings && typeof settings === 'object' && !Array.isArray(settings)
+    && settings.workspace && typeof settings.workspace === 'object' && !Array.isArray(settings.workspace)
+    ? settings.workspace.default_agent : undefined;
+};
 const originText = (document: ConfigSourceDocumentDTO) => {
   const origin = document.origins.find(item => item.path === '/default_agent');
   return origin ? t('settings.editor.origin', origin.source_key, origin.shadowed_sources.join(t('plugins.listSeparator')) || t('settings.editor.none')) : t('settings.editor.defaultAgentOriginMissing');
@@ -90,7 +95,7 @@ export async function inspectDefaultAgentSource(location: TargetSettingsLocation
           check();
           try { document = await read(); } catch (readError) { check(); throw new AggregateError([cause, readError], t('settings.editor.pendingAndReadFailed')); }
           check();
-          notifications.error(t('settings.editor.pendingFailed', context(), errorText(cause)));
+          notifications.error(failureSummary(t('settings.editor.pendingFailed', location.name, errorMessage(cause))));
           continue;
         }
         document = await read(); check();

@@ -539,7 +539,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
 
     async def _delegated_probe(self, target: WorkspaceTarget) -> None:
         connection_id = self._registry.remote_connection_for_target(target).connection_id
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False, verify=httpx.create_ssl_context(trust_env=True)) as client:
             response = await client.post(
                 (
                     f"{self._registry.remote_gateway_url(connection_id)}"
@@ -567,7 +567,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         connection_id = self._registry.remote_connection_for_target(target).connection_id
         gateway_url = self._registry.remote_gateway_url(connection_id)
         path = "restart-force" if forced else "restart-safe"
-        async with httpx.AsyncClient(timeout=40) as client:
+        async with httpx.AsyncClient(timeout=40, trust_env=False, verify=httpx.create_ssl_context(trust_env=True)) as client:
             response = await client.post(
                 (
                     f"{gateway_url}/api/gateway/workspaces/"
@@ -598,7 +598,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         if not target.managed:
             raise ValueError("远程 Gateway 报告该工作区不是托管目标")
         connection_id = self._registry.remote_connection_for_target(target).connection_id
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=45, trust_env=False, verify=httpx.create_ssl_context(trust_env=True)) as client:
             response = await client.post(
                 (
                     f"{self._registry.remote_gateway_url(connection_id)}"

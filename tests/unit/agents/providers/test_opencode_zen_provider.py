@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from app.runtime.network_proxy import ProxyRoutes
 import pytest
 from langchain_core.messages import (
     AIMessage,
@@ -27,6 +28,7 @@ def model() -> BoxteamLiteLLMChatModel:
         model="openai/big-pickle",
         api_key="test-key",
         api_base="https://example.com/v1",
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -38,6 +40,7 @@ def reasoning_replay_model() -> BoxteamLiteLLMChatModel:
         api_key="test-key",
         api_base="https://example.com/v1",
         reasoning_content_replay=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 

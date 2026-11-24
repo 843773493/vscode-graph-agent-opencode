@@ -82,6 +82,9 @@ from app.schemas.gateway.diagnostics import (
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
 from app.services.infrastructure.config.policy import gateway_config_policy
+from app.services.infrastructure.config.source_document import (
+    source_validation_error_detail,
+)
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
@@ -454,7 +457,7 @@ async def preflight_gateway_config_source(
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (TypeError, ValueError, FileNotFoundError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        raise HTTPException(status_code=422, detail=source_validation_error_detail(error)) from error
     require_federation_capability(request, auth, "configuration_read")
     return APIResponse(data=result, request_id=request_id)
 
@@ -511,7 +514,7 @@ async def save_gateway_config_source(
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (TypeError, ValueError, FileNotFoundError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        raise HTTPException(status_code=422, detail=source_validation_error_detail(error)) from error
     require_federation_capability(request, auth, "configuration_read")
     return APIResponse(data=result, request_id=request_id)
 

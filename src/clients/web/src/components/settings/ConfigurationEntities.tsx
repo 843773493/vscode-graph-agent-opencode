@@ -2,13 +2,24 @@ import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } 
 import { t } from '../../../../shared/core/i18n/index.js';
 import type { ConfigSourceDocumentDTO } from '../../types/protocol_generated/boxteam/workspace/v2/public.js';
 import { ModelOptionFields } from './ModelOptionFields.js';
-import { ModelOptionsInspection } from './ModelOptionsInspection.js';
-import type { ConfigSourcePreflightDTO, ModelReferenceDTO } from '../../types/protocol_generated/boxteam/workspace/v2/public.js';
+import { ModelOptionsInspection, type ConfigurationOptionsReceipt } from './ModelOptionsInspection.js';
 import type { GatewayWorkspaceRequestTarget } from '../../api/workspaceIdentity.js';
 import { ModelCatalogSelect, type CatalogChoice } from './ModelCatalogSelect.js';
+import { ConfigurationProxyFields } from './ConfigurationProxyFields.js';
 
 export type DefinitionKind = 'providers' | 'agents';
 export type DefinitionObject = Record<string, unknown>;
+export type ConfigurationSelector = { provider_id: string; model_id?: string };
+/** 只接受本来源目录明确声明的 fragment，不能把继承来源的同名 profile 当成本地定义。 */
+export function localProfilePath(reference: unknown, sourceUri?: string): string[] | undefined {
+  if (typeof reference !== 'string') return undefined;
+  const local = sourceUri && reference.startsWith(sourceUri + '#') ? reference.slice(sourceUri.length) : reference;
+  if (!local.startsWith('#/profiles/')) return undefined;
+  let decoded: string;
+  try { decoded = decodeURIComponent(local.slice(1)); } catch { return undefined; } // 输入中的未完成转义尚不能定位节点。
+  const pointer = decoded.split('/').slice(1);
+  return pointer.length === 2 ? pointer.map(part => part.replace(/~1/g, '/').replace(/~0/g, '~')) : undefined;
+}
 export function definitionObject(value: unknown): DefinitionObject {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as DefinitionObject : {};
 }
@@ -35,10 +46,10 @@ function AddModel({ disabled, catalog, onAdd }: { disabled: boolean; catalog: (s
   </form>;
 }
 
-/** 只投影当前来源草稿及下层原文，不在客户端重建一份生效配置。 */
+/** 只投影当前来源草稿与后端继承回执，不在客户端重建生效配置。 */
 export function ConfigurationEntities({ kind, draft, document, selectedId, selectedModelId, error, onSelect, onSelectModel, onAddModel, onShowActions, onEdit,
-  onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onRestoreDefaultAgent,
-  onInspectDefaultAgent, onManageAgentTools, onOpenSource, onConnectionCommit, renderModelProbe, draftVersion, onInspectModel, catalogTarget, catalogSignal, onProviderTemplate, searchQuery = '', credentialNames = {}, dirty = false }: {
+  onSetSecret, onEditOptions, onEditNodeParent, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onRestoreDefaultAgent,
+  onInspectDefaultAgent, onManageAgentTools, onOpenSource, onConnectionCommit, renderModelProbe, draftVersion, onInspectModel, isNodeReady, onPrepareOptions, catalogTarget, catalogSignal, onProviderTemplate, searchQuery = '', credentialNames = {}, dirty = false }: {
   searchQuery?: string; credentialNames?: Record<string, string>; dirty?: boolean;
   kind: DefinitionKind; draft?: DefinitionObject; document: ConfigSourceDocumentDTO; selectedId?: string; selectedModelId?: string; error?: string;
   onSelect: (id: string) => void;
@@ -46,16 +57,20 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
   onAddModel?: (providerId: string, model: string) => void;
   onShowActions?: (id: string, modelId: string | undefined, anchor: HTMLElement) => void;
   onEdit: (id: string, path: (string | number)[], value: unknown) => void;
+  onEditOptions?: (selector: ConfigurationSelector, path: (string | number)[], value: unknown) => void;
+  onEditNodeParent?: (selector: ConfigurationSelector, value: string | undefined) => void;
   onSetDefaultAgent: (id: string) => void;
   onRestoreDefaultAgent?: () => void;
   onInspectDefaultAgent?: () => void;
-  onOpenSource: (sourceKey?: string) => void;
+  onOpenSource: (sourceKey?: string, definitionPath?: string) => void;
   onManageAgentTools?: (id: string) => void;
   onConnectionCommit?: (id: string) => void;
   renderModelProbe?: (id: string, models: { id: string; model: string }[], selectedModelId?: string) => ReactNode;
   onSetSecret?: (id: string, modelId?: string) => void; pendingSubmission?: string; onQuerySubmission?: () => void;
   draftVersion?: number;
-  onInspectModel?: (reference: ModelReferenceDTO, signal: AbortSignal) => Promise<ConfigSourcePreflightDTO>;
+  onInspectModel?: (reference: ConfigurationSelector, signal: AbortSignal) => Promise<ConfigurationOptionsReceipt>;
+  isNodeReady: (selector: ConfigurationSelector) => boolean;
+  onPrepareOptions: (selector: ConfigurationSelector, signal: AbortSignal) => Promise<void>;
   catalogTarget?: GatewayWorkspaceRequestTarget; catalogSignal?: AbortSignal;
   onProviderTemplate?: (id: string, choice: CatalogChoice) => void;
 }) {
@@ -66,50 +81,62 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
   const [expandedProvider, setExpandedProvider] = useState<string>();
   const [modelSearch, setModelSearch] = useState('');
   const [providerSearch, setProviderSearch] = useState('');
+  const [inspected, setInspected] = useState<{ version: number; data: ConfigurationOptionsReceipt }>();
+  const [preparationError, setPreparationError] = useState<string>();
+  const prepareOptions = useRef(onPrepareOptions);
+  prepareOptions.current = onPrepareOptions;
+  if (!document.source_inherited) throw new Error(t('settings.editor.inheritedMissing'));
+  const workspace = definitionObject(definitionValue(draft, ['settings', 'workspace']));
   const selectedLayer = document.layers.find(layer => layer.source_key === document.source_key);
   const lower = document.layers.filter(layer => selectedLayer && layer.precedence < selectedLayer.precedence).sort((a, b) => a.precedence - b.precedence);
   const basePath = kind === 'providers' ? ['llm', 'providers'] : ['agents'];
-  const localDefinitions = definitionObject(definitionValue(draft, basePath));
+  const localDefinitions = definitionObject(definitionValue(workspace, basePath));
   // 这里只枚举身份和原文位置；有效模型选项仍由 Backend resolver 计算。
   const inheritedDefinitions = new Map<string, string>();
-  for (const layer of lower) for (const id of Object.keys(definitionObject(definitionValue(layer.payload, basePath)))) {
-    inheritedDefinitions.set(id, layer.source_key);
+  for (const id of Object.keys(definitionObject(definitionValue(document.source_inherited, basePath)))) {
+    const owner = [...lower].reverse().find(layer => definitionValue(layer.payload, ['settings', 'workspace', ...basePath, id]) !== undefined);
+    if (!owner) throw new Error(t('configuration.node.inheritedOriginMissing', id));
+    inheritedDefinitions.set(id, owner.source_key);
   }
   const entries = [...new Set([...inheritedDefinitions.keys(), ...Object.keys(localDefinitions)])].map(id => ({
     id, value: definitionObject(localDefinitions[id]), local: Object.hasOwn(localDefinitions, id),
     sourceKey: Object.hasOwn(localDefinitions, id) ? document.source_key : inheritedDefinitions.get(id)!,
   }));
   const selected = selectedId === undefined ? entries[0] : entries.find(entry => entry.id === selectedId);
-  const entryName = (entry: typeof entries[number]) => text(entry.value.name) || text([...lower].reverse()
-    .map(layer => definitionValue(layer.payload, [...basePath, entry.id, 'name'])).find(value => value !== undefined)) || entry.id;
+  const entryName = (entry: typeof entries[number]) => text(entry.value.name)
+    || text(definitionValue(document.source_inherited, [...basePath, entry.id, 'name'])) || entry.id;
   const visibleEntries = entries.filter(entry => kind !== 'providers'
     || `${entryName(entry)} ${entry.id}`.toLowerCase().includes(providerSearch.toLowerCase()));
   const editable = Boolean(document.writable && selected && draft);
   const inherited = (path: (string | number)[]): unknown => {
     if (!selected) return undefined;
-    for (const layer of [...lower].reverse()) {
-      const value = definitionValue(layer.payload, [...basePath, selected.id, ...path]);
-      if (value !== undefined) return value;
-    }
-    return undefined;
+    return definitionValue(document.source_inherited, [...basePath, selected.id, ...path]);
   };
   const selectedValue = (path: (string | number)[]): unknown => selected?.local
     ? definitionValue(selected.value, path) : inherited(path);
   const localModels = definitionObject(definitionValue(selected?.value, ['models']));
-  const modelSources = new Map<string, string>();
-  if (selected) for (const layer of lower) for (const id of Object.keys(definitionObject(
-    definitionValue(layer.payload, ['llm', 'providers', selected.id, 'models'])))) modelSources.set(id, layer.source_key);
-  const modelIds = [...new Set([...modelSources.keys(), ...Object.keys(localModels)])];
+  const inheritedModels = definitionObject(inherited(['models']));
+  const modelIds = [...new Set([...Object.keys(inheritedModels), ...Object.keys(localModels)])];
   const visibleModels = modelIds.filter(id => `${id} ${text(selectedValue(['models', id, 'name']) ?? inherited(['models', id, 'name']))} ${text(selectedValue(['models', id, 'model']) ?? inherited(['models', id, 'model']))}`
     .toLowerCase().includes(modelSearch.toLowerCase()));
   const modelId = selectedModelId === undefined ? modelIds[0] : selectedModelId;
+  const providerReady = selected !== undefined && isNodeReady({ provider_id: selected.id });
+  const modelReady = selected !== undefined && (modelId === undefined || isNodeReady({ provider_id: selected.id, model_id: modelId }));
+  useEffect(() => {
+    setPreparationError(undefined);
+    if (kind !== 'providers' || !selected) return;
+    const controller = new AbortController();
+    void prepareOptions.current({ provider_id: selected.id, ...(modelId === undefined ? {} : { model_id: modelId }) }, controller.signal)
+      .catch(error => { if (!controller.signal.aborted) setPreparationError(error instanceof Error ? error.message : String(error)); });
+    return () => controller.abort();
+  }, [kind, selected?.id, modelId, draftVersion, document, providerReady, modelReady]);
   const modelPath = modelId === undefined ? [] : ['models', modelId];
   const modelTitle = text(selectedValue([...modelPath, 'model']) ?? inherited([...modelPath, 'model'])) || modelId || '';
   const fallbackValue = selectedValue(['model', 'fallbacks']);
   const inheritedFallback = inherited(['model', 'fallbacks']);
   const fallbacks = Array.isArray(fallbackValue) ? fallbackValue : Array.isArray(inheritedFallback) ? inheritedFallback : [];
-  const configuredDefault = draft?.default_agent !== undefined ? draft.default_agent
-    : [...lower].reverse().find(layer => layer.payload?.default_agent !== undefined)?.payload?.default_agent;
+  const configuredDefault = workspace.default_agent !== undefined ? workspace.default_agent
+    : document.source_inherited?.default_agent;
   useEffect(() => {
     if (!searchQuery.trim() || !root.current) { setSearchMatches(0); return; }
     const tokens = searchQuery.toLowerCase().trim().split(/\s+/);
@@ -151,17 +178,62 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     </div>;
   };
   const active = definitionValue(document.effective, [...basePath, selected?.id ?? '']);
-  const optionFields = (prefix: string[]) => <ModelOptionFields
-    scope={prefix[0] === 'models' ? 'model' : 'provider'}
-    schema={definitionObject(definitionValue(document.json_schema, ['$defs', 'modelOptions']))} disabled={!editable}
-    read={path => definitionValue(selected?.value, [...prefix, ...path])} inherited={path => inherited([...prefix, ...path])}
-    onEdit={(path, value) => onEdit(selected!.id, [...prefix, ...path], value)} />;
-  const credential = (prefix: string[], targetModel?: string) => {
-    const path = [...prefix, 'api_key'];
-    const value = selectedValue(path);
-    const local = definitionValue(selected?.value, path);
-    const reference = text(value) || text(inherited(path));
-    const auth = definitionObject(selectedValue([...prefix, 'auth']) ?? inherited([...prefix, 'auth']));
+  const nodeView = (targetModel?: string) => {
+    const prefix = targetModel === undefined ? [] : ['models', targetModel];
+    const reference = definitionValue(selected?.value, [...prefix, 'config_ref']);
+    const profilePath = localProfilePath(reference, document.source_baseline[document.source_key]?.uri);
+    const local = profilePath ? definitionObject(definitionValue(draft, [...profilePath, 'settings'])) : {};
+    const currentReceipt = inspected?.version === draftVersion ? inspected?.data : undefined;
+    const providerReceipt = currentReceipt?.provider_options, modelReceipt = currentReceipt?.model_options;
+    const receipt = targetModel === undefined ? providerReceipt && providerReceipt.provider_id === selected?.id ? providerReceipt : undefined
+      : modelReceipt?.model_ref && modelReceipt.model_ref.provider_id === selected?.id && modelReceipt.model_ref.model_id === targetModel ? modelReceipt : undefined;
+    const lower = profilePath ? receipt?.inherited_settings : receipt ? { model_options: receipt.options, network: receipt.network } : undefined;
+    const selector = { provider_id: selected!.id, ...(targetModel === undefined ? {} : { model_id: targetModel }) };
+    return { local, lower, profilePath, receipt, prefix, selector, ready: isNodeReady(selector) };
+  };
+  const optionFields = (targetModel?: string) => <ModelOptionFields
+    scope={targetModel === undefined ? 'provider' : 'model'}
+    schema={definitionObject(definitionValue(document.json_schema, ['$defs', 'modelOptions']))} disabled={!editable || !onEditOptions || !nodeView(targetModel).ready}
+    read={path => definitionValue(nodeView(targetModel).local, ['model_options', ...path])}
+    inherited={path => definitionValue(nodeView(targetModel).lower, ['model_options', ...path])}
+    onEdit={(path, value) => onEditOptions?.(nodeView(targetModel).selector, ['model_options', ...path], value)} />;
+  const optionField = (label: string, path: string[], targetModel?: string) => {
+    const node = nodeView(targetModel), local = definitionValue(node.local, path), lower = definitionValue(node.lower, path);
+    return <div className="configuration-entity-field" data-search-key={path.join('.')}>
+      <label>{label}<input value={text(local)} placeholder={text(lower)} disabled={!editable || !onEditOptions || !node.ready}
+        onChange={event => onEditOptions?.(node.selector, path, event.target.value)} /></label>
+      {local !== undefined && lower !== undefined ? <button type="button" disabled={!editable || !node.ready}
+        onClick={() => onEditOptions?.(node.selector, path, undefined)}>{t('configuration.entities.restoreField')}</button> : null}
+    </div>;
+  };
+  const nodeFields = (targetModel?: string) => {
+    const node = nodeView(targetModel), profile = definitionObject(node.profilePath ? definitionValue(draft, node.profilePath) : undefined);
+    const parentId = node.receipt?.chain.find(item => item.node_id === node.receipt?.node_id)?.parent_id;
+    const parent = node.receipt?.chain.find(item => item.node_id === parentId);
+    const proxy = definitionValue(node.local, ['network', 'proxy']);
+    const inheritedProxy = definitionValue(node.lower, ['network', 'proxy']);
+    return <details className="configuration-node-reference"><summary>{t('configuration.node.title')}</summary>
+      {field(t('configuration.node.reference'), [...node.prefix, 'config_ref'])}
+      <label className="configuration-entity-field">{t('configuration.node.parent')}
+        <input value={text(profile.extends)} placeholder={parent?.reference ?? ''} disabled={!editable || !onEditNodeParent || !node.ready}
+          onChange={event => onEditNodeParent?.(node.selector, event.target.value || undefined)} /></label>
+      <p>{t('configuration.node.isolation')}</p>
+      {!node.ready ? <p role={preparationError ? 'alert' : 'status'}>{preparationError ?? t('configuration.inspect.loading')}</p> : null}
+      <ConfigurationProxyFields local={proxy === undefined ? undefined : definitionObject(proxy)}
+        inherited={inheritedProxy === undefined ? undefined : definitionObject(inheritedProxy)} disabled={!editable || !onEditOptions || !node.ready}
+        allowInherit={!node.profilePath || typeof profile.extends === 'string'}
+        onChange={value => onEditOptions?.(node.selector, ['network', 'proxy'], value)} />
+      {onInspectModel && draftVersion !== undefined ? <ModelOptionsInspection version={draftVersion} modelRef={node.selector}
+        inspect={async (selector, signal) => { const result = await onInspectModel(selector, signal); if (!signal.aborted) setInspected({ version: draftVersion, data: result }); return result; }} onOpenSource={onOpenSource} /> : null}
+    </details>;
+  };
+  const credential = (targetModel?: string) => {
+    const node = nodeView(targetModel), path = ['model_options', 'api_key'];
+    const value = definitionValue(node.local, path);
+    const local = value;
+    const lower = definitionValue(node.lower, path);
+    const reference = text(value ?? lower);
+    const auth = definitionObject(definitionValue(node.local, ['model_options', 'auth']) ?? definitionValue(node.lower, ['model_options', 'auth']));
     const oauth = auth.type === 'oauth';
     const env = /^(?:\$\{(.+)\}|env:(.+))$/.exec(reference);
     const label = oauth ? t('configuration.entities.oauth') : value === '' ? t('configuration.entities.noAuthentication')
@@ -172,20 +244,20 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
       <h4>{t(oauth ? 'configuration.entities.authentication' : 'configuration.entities.apiKey')}</h4>
       <div className="configuration-credential-controls">
       <p>{label}</p>
-      {onSetSecret && !oauth ? <button type="button" disabled={!editable || Boolean(pendingSubmission)}
+      {onSetSecret && !oauth ? <button type="button" disabled={!editable || !node.ready || Boolean(pendingSubmission)}
         onClick={() => onSetSecret(selected!.id, targetModel)}>{t('configuration.entities.setSecret')}</button> : null}
-      {!oauth && local !== undefined && (local !== '' || inherited(path) !== undefined || targetModel !== undefined) ? <button type="button" disabled={!editable || Boolean(pendingSubmission)}
-        onClick={() => onEdit(selected!.id, path, inherited(path) !== undefined || targetModel !== undefined ? undefined : '')}>{t(inherited(path) !== undefined ? 'configuration.entities.restoreField'
+      {!oauth && local !== undefined && (local !== '' || lower !== undefined || targetModel !== undefined) ? <button type="button" disabled={!editable || !onEditOptions || !node.ready || Boolean(pendingSubmission)}
+        onClick={() => onEditOptions?.(node.selector, path, lower !== undefined || targetModel !== undefined ? undefined : '')}>{t(lower !== undefined ? 'configuration.entities.restoreField'
           : targetModel !== undefined ? 'configuration.entities.useServiceDefault' : 'configuration.entities.clearKey')}</button> : null}
       </div>
     </section>;
   };
-  const provider = text(selectedValue(['defaults', 'custom_llm_provider']) ?? inherited(['defaults', 'custom_llm_provider']));
+  const provider = selected ? text(definitionValue(nodeView().local, ['model_options', 'custom_llm_provider']) ?? definitionValue(nodeView().lower, ['model_options', 'custom_llm_provider'])) : '';
   const catalog = (kind: 'provider' | 'model', onSelect: (choice: CatalogChoice) => void) => catalogTarget && catalogSignal
     ? <ModelCatalogSelect key={`${kind}:${kind === 'model' ? provider : ''}`} kind={kind} provider={provider}
-      target={catalogTarget} signal={catalogSignal} disabled={!editable}
+      target={catalogTarget} signal={catalogSignal} disabled={!editable || !nodeView().ready}
       custom={kind === 'provider' && customProvider === selected?.id}
-      needsConnection={kind === 'provider' && !text(selectedValue(['defaults', 'endpoint']) ?? inherited(['defaults', 'endpoint']))}
+      needsConnection={kind === 'provider' && selected !== undefined && !text(definitionValue(nodeView().local, ['model_options', 'endpoint']) ?? definitionValue(nodeView().lower, ['model_options', 'endpoint']))}
       onSelect={onSelect} /> : null;
   return <section ref={root} className="configuration-entity-content" data-definition-kind={kind}>
     {searchQuery ? <p role="status" className="configuration-search-status">{t('configuration.search.matches', searchMatches)}</p> : null}
@@ -235,17 +307,18 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
               })}
             </div>
             {field(t('configuration.entities.name'), ['name'])}
-            <div className="configuration-field-wide">{field(t('configuration.entities.endpoint'), ['defaults', 'endpoint'])}</div>
+            <div className="configuration-field-wide">{optionField(t('configuration.entities.endpoint'), ['model_options', 'endpoint'])}</div>
             </div>
-            {credential(['defaults'])}
+            {credential()}
             <details className="configuration-provider-connection" open={expandedProvider === selected.id}
               onToggle={event => { const open = event.currentTarget.open;
                 setExpandedProvider(current => open ? selected.id : current === selected.id ? undefined : current); }}>
               <summary>{t('configuration.catalog.connectionSettings')}</summary>
               <div className="configuration-form-grid">
-              {field(t('configuration.entities.handler'), ['defaults', 'custom_llm_provider'])}
+              {optionField(t('configuration.entities.handler'), ['model_options', 'custom_llm_provider'])}
               </div>
-              {optionFields(['defaults'])}
+              {optionFields()}
+              {nodeFields()}
             </details>
           </section>
           <section className="configuration-models-section">
@@ -287,11 +360,10 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
             </div>
             <details className="configuration-model-overrides"><summary>{t('configuration.entities.modelOverrides')}</summary>
             <p>{t('configuration.entities.modelDefaultsHint')}</p>
-            {field(t('configuration.entities.endpoint'), [...modelPath, 'overrides', 'endpoint'])}
-            {optionFields([...modelPath, 'overrides'])}
-            {credential([...modelPath, 'overrides'], modelId)}
-            {onInspectModel && draftVersion !== undefined ? <ModelOptionsInspection version={draftVersion}
-              modelRef={{ provider_id: selected.id, model_id: modelId }} inspect={onInspectModel} onOpenSource={onOpenSource} /> : null}
+            {optionField(t('configuration.entities.endpoint'), ['model_options', 'endpoint'], modelId)}
+            {optionFields(modelId)}
+            {credential(modelId)}
+            {nodeFields(modelId)}
             </details>
           </section> : selectedModelId !== undefined ? <p role="alert">{t('configuration.entities.definitionChanged', selectedModelId)}</p> : null}
           </section>
@@ -318,7 +390,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
           {fallbackValue !== undefined ? <button type="button" disabled={!editable} onClick={() => onEdit(selected.id, ['model', 'fallbacks'], undefined)}>{t('configuration.entities.restoreField')}</button> : null}
           <p>{t('configuration.entities.defaultsBoundary', text(configuredDefault))}</p>
           <button type="button" disabled={!document.writable || !draft} onClick={() => onSetDefaultAgent(selected.id)}>{t('configuration.entities.setConfiguredDefault')}</button>
-          {draft?.default_agent !== undefined && onRestoreDefaultAgent
+          {workspace.default_agent !== undefined && onRestoreDefaultAgent
             ? <button type="button" disabled={!document.writable || !draft} onClick={onRestoreDefaultAgent}>{t('configuration.entities.restoreDefaultAgent')}</button> : null}
           {onInspectDefaultAgent ? <button type="button" onClick={onInspectDefaultAgent}>{t('configuration.entities.inspectDefaultAgent')}</button> : null}
           {onManageAgentTools ? <button type="button" disabled={!active} onClick={() => onManageAgentTools(selected.id)}>{t('configuration.entities.manageAgentTools')}</button> : null}

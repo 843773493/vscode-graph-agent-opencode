@@ -5,13 +5,40 @@ from __future__ import annotations
 import json
 
 import pytest
+from boxteam_plugin_sdk.failures import PUBLIC_ERROR_BYTES
+from jsonschema import ValidationError as JsonSchemaError
 
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
     redact_source_text,
     restore_source_text,
     set_source_value,
+    source_validation_error_detail,
 )
+from app.services.infrastructure.config.source_uri import config_file_uri
+from configs.inheritance.resolver import ConfigNodeValidationError
+
+
+@pytest.mark.parametrize("uri_length", [0, 13000, 100000])
+def test_source_validation_detail_keeps_total_budget_and_never_clips_source_uri(uri_length: int) -> None:
+    source_uri = config_file_uri(scope="user", scope_id="local", logical_name="source" + "x" * uri_length)
+    raw = JsonSchemaError("private-input", validator="type", validator_value="integer",
+                          path=["settings", *["field" * 50] * 5], instance="private-input")
+    error = ConfigNodeValidationError(raw, source_uri=source_uri, document_path=True)
+    error.__cause__ = raw
+    result = source_validation_error_detail(error)
+    assert isinstance(result, dict)
+    serialized = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    assert len(serialized.encode("utf-8")) <= PUBLIC_ERROR_BYTES
+    assert "private-input" not in serialized
+    assert source_uri not in result["message"] and "node=" not in result["message"]
+    assert result["message"] == "配置节点校验失败: 未满足 JSON schema type 约束: integer"
+    assert result["details"]["issues"] == error.issues
+    assert "cause" not in result["details"]
+    if uri_length < 100000:
+        assert result["details"]["source_uri"] == source_uri
+    else:
+        assert "source_uri" not in result["details"] and result["details"]["truncated"] is True
 
 
 @pytest.mark.parametrize("text", [
@@ -70,11 +97,12 @@ def test_ambiguous_or_non_object_ancestor_is_rejected(text: str) -> None:
 
 
 @pytest.mark.parametrize("reference", ["${TARGET_MODEL_KEY}", "secret:sec_00000000000040008000000000000001", ""])
-@pytest.mark.parametrize("scope", ["defaults", "model"])
+@pytest.mark.parametrize("scope", ["provider", "model"])
 def test_model_key_reference_stays_visible_when_connection_is_edited(reference: str, scope: str) -> None:
     options = {"endpoint": "https://model.example/old", "api_key": reference}
-    provider = {"defaults": options} if scope == "defaults" else {"models": {"main": {"overrides": options}}}
-    original = json.dumps({"llm": {"providers": {"team": provider}}})
+    original = json.dumps({"config_version": 4, "settings": {}, "profiles": {
+        scope: {"settings": {"model_options": options}},
+    }})
     public = redact_source_text(original)
     assert public == original, "公开引用和无认证不能变成绑定旧地址的秘密占位"
     edited = public.replace("https://model.example/old", "https://model.example/new")
@@ -82,7 +110,7 @@ def test_model_key_reference_stays_visible_when_connection_is_edited(reference: 
 
 
 def test_literal_model_key_and_arbitrary_headers_remain_secret() -> None:
-    original = json.dumps({"llm": {"providers": {"team": {"defaults": {
+    original = json.dumps({"config_version": 4, "settings": {}, "profiles": {"provider": {"settings": {"model_options": {
         "api_key": "literal-key-must-stay-hidden", "endpoint": "https://model.example/old",
         "request_options": {"default_headers": {"X-Custom": "header-must-stay-hidden"}},
     }}}}})

@@ -22,7 +22,7 @@ from app.services.infrastructure.config.recovery import plan_stopped_config_reco
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 6, "workspace": 3}
+TARGET_CONFIG_VERSIONS = {"gateway": 6, "workspace": 4}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (
@@ -222,14 +222,14 @@ def _read_database(
                 _json_payload(content, source=f"{path}#{key}") if content is not None else None,
                 digest, revision, version,
             ))
-        for content, revision, state, digest in connection.execute(
-            "SELECT payload_json, active_revision, state, effective_digest FROM config_active_snapshot WHERE config_domain = ?",
+        for content, revision, state, digest, version in connection.execute(
+            "SELECT payload_json, active_revision, state, effective_digest, schema_version FROM config_active_snapshot WHERE config_domain = ?",
             (domain,),
         ):
             inputs.append(LoggingMigrationInput(
                 domain, path, "active", domain,
                 _json_payload(content, source=f"{path}#active"),
-                digest, revision,
+                digest, revision, version,
             ))
             if state not in CONFIG_LIFECYCLE_STATES:
                 raise ValueError(f"SQLite 配置 active 状态非法: {path}#{domain}")
@@ -350,6 +350,9 @@ def preview_runtime_logging_migration(
     unsettled.extend(_read_shared_source_owner(home / "config/workspace-source.sqlite"))
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
+        if item.domain == "workspace" and (item.payload is not None or item.kind == "source_layer") \
+                and item.config_version != TARGET_CONFIG_VERSIONS["workspace"]:
+            raise ValueError("Workspace 旧配置缺少已验收升级基线，保留原件并阻断升级")
         if item.domain == "gateway" and item.kind in {"file", "source_layer"} and item.payload is not None \
                 and item.config_version == 6 and not isinstance(item.payload.get("settings"), dict):
             raise ValueError(f"Gateway v6 来源缺少 settings 信封，保留原件: {item.identity}")

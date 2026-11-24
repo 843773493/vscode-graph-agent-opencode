@@ -20,11 +20,14 @@ from app.agents.providers.openai_responses import (
     ResponsesPayloadBuildTimeoutError,
     ResponsesStreamOpenTimeoutError,
 )
+from app.runtime.network_proxy import ProxyRoutes
 from app.core.failures import is_provider_failure
 from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+
+DIRECT_PROXY_ROUTES = ProxyRoutes(())
 
 
 @pytest.fixture
@@ -80,6 +83,7 @@ async def test_responses_done_arguments_preserve_parallel_calls_in_both_entries(
     monkeypatch.setattr("app.agents.providers.openai_responses.litellm.aresponses", open_async)
     model = BoxteamOpenAIResponsesModel(
         model="gpt-test", api_key="test-key", custom_llm_provider="openai", invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     messages: list[BaseMessage] = [HumanMessage(content="调用两次工具")]
     chunks = [chunk async for chunk in model._astream(messages)] if asynchronous else list(model._stream(messages))
@@ -113,6 +117,7 @@ async def test_responses_terminal_rejects_unconfirmed_added_arguments(
     monkeypatch.setattr("app.agents.providers.openai_responses.litellm.aresponses", open_async)
     model = BoxteamOpenAIResponsesModel(
         model="gpt-test", api_key="test-key", custom_llm_provider="openai", invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     with pytest.raises(RuntimeError, match="工具参数未完成") as failure:
         if asynchronous:
@@ -136,7 +141,7 @@ def test_responses_completion_conflicts_fail_before_dispatch(responses_function_
     else:
         events.insert(6, SimpleNamespace(type="response.function_call_arguments.delta", output_index=0,
                                          item_id="fc_0", delta=" "))
-    model = BoxteamOpenAIResponsesModel(model="gpt-test", api_key="test-key", custom_llm_provider="openai")
+    model = BoxteamOpenAIResponsesModel(model="gpt-test", api_key="test-key", custom_llm_provider="openai", proxy_routes=DIRECT_PROXY_ROUTES)
     state = _StreamPartState()
     with pytest.raises(RuntimeError, match="冲突|完成后"):
         for event in events:
@@ -180,6 +185,7 @@ async def test_responses_stream_open_has_a_bounded_provider_timeout(monkeypatch)
         responses_store=False,
         responses_include=["reasoning.encrypted_content"],
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     first_chunk = asyncio.create_task(
@@ -214,6 +220,7 @@ async def test_responses_provider_open_preserves_and_marks_original_error(
         custom_llm_provider="openai",
         provider_id="primary",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(UpstreamError) as raised:
@@ -249,6 +256,7 @@ async def test_responses_stream_iterator_acquisition_marks_original_error(
         custom_llm_provider="openai",
         provider_id="primary",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -279,6 +287,7 @@ def test_sync_responses_iterator_acquisition_marks_original_error(
         custom_llm_provider="openai",
         provider_id="primary",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -311,6 +320,7 @@ async def test_responses_payload_preparation_does_not_block_event_loop(monkeypat
         provider_id="backup_4",
         responses_store=False,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     original_payload_builder = model._responses_payload
 
@@ -360,6 +370,7 @@ async def test_responses_payload_timeout_is_reported_before_provider_call(
         provider_id="backup_4",
         responses_store=False,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     def timed_out_payload(*_args, **kwargs):
@@ -405,6 +416,7 @@ async def test_responses_payload_build_watchdog_does_not_wait_for_blocked_builde
         provider_id="backup_4",
         responses_store=False,
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
 
     def blocked_payload_builder(*_args, **_kwargs):
@@ -485,6 +497,7 @@ async def test_responses_semantic_delta_reaches_hook_before_langchain_yield(
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=DIRECT_PROXY_ROUTES,
     )
     observed: list[str] = []
 

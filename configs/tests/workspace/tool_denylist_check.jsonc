@@ -1,9 +1,105 @@
 {
   "$schema": "../../workspace_schema.jsonc",
-  "llm": {
-    "providers": {
-      "primary": {
-        "defaults": {
+  "config_version": 4,
+  "extends": "builtin:workspace",
+  "settings": {
+    "workspace": {
+      "llm": {
+        "providers": {
+          "primary": {
+            "models": {
+              "default": {
+                "model": "big-pickle",
+                "config_ref": "context:provider/primary"
+              }
+            },
+            "config_ref": "#/profiles/provider.primary"
+          },
+          "backup_1": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_1"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_1"
+          },
+          "backup_2": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_2"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_2"
+          },
+          "backup_3": {
+            "models": {
+              "default": {
+                "model": "gpt-6-luna",
+                "config_ref": "context:provider/backup_3"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_3"
+          }
+        }
+      },
+      "default_agent": "coder",
+      "agents": {
+        "coder": {
+          "name": "Coding Assistant",
+          "description": "用于验证工具 denylist 的测试代理。",
+          "instructions": {
+            "system_prompt": "你是一个用于测试工具过滤的助手。当用户询问你是否拥有 send_message_to_session 和 edit_file 这两个工具时，如果你看不到这两个工具，请且只能回答：否。不要输出解释、不要列出其他内容。"
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              }
+            ]
+          },
+          "tools": {
+            "denylist": [
+              "send_message_to_session",
+              "task",
+              "create_team_member",
+              "edit_file"
+            ],
+            "confirmation_required": []
+          }
+        }
+      }
+    },
+    "network": {
+      "proxy": {
+        "mode": "environment"
+      }
+    },
+    "model_options": {
+      "api_mode": {
+        "streaming": true
+      }
+    }
+  },
+  "profiles": {
+    "provider.primary": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://opencode.ai/zen/v1",
           "api_key": "${OPENCODE_ZEN_API_KEY}",
           "custom_llm_provider": "openai",
@@ -17,15 +113,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "big-pickle"
-          }
         }
-      },
-      "backup_1": {
-        "defaults": {
+      }
+    },
+    "provider.backup_1": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://api.kilo.ai/api/gateway",
           "api_key": "${KILO_API_KEY}",
           "custom_llm_provider": "openai",
@@ -39,15 +133,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_2": {
-        "defaults": {
+      }
+    },
+    "provider.backup_2": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://openrouter.ai/api/v1",
           "api_key": "${OPENROUTER_API_KEY}",
           "custom_llm_provider": "openrouter",
@@ -61,15 +153,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_3": {
-        "defaults": {
+      }
+    },
+    "provider.backup_3": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://newapi.hyf2333.top/v1",
           "api_key": "${CCTQ_API_KEY}",
           "custom_llm_provider": "openai",
@@ -97,51 +187,7 @@
               }
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "gpt-6-luna"
-          }
         }
-      }
-    }
-  },
-  "default_agent": "coder",
-  "agents": {
-    "coder": {
-      "name": "Coding Assistant",
-      "description": "用于验证工具 denylist 的测试代理。",
-      "instructions": {
-        "system_prompt": "你是一个用于测试工具过滤的助手。当用户询问你是否拥有 send_message_to_session 和 edit_file 这两个工具时，如果你看不到这两个工具，请且只能回答：否。不要输出解释、不要列出其他内容。"
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          }
-        ]
-      },
-      "tools": {
-        "denylist": [
-          "send_message_to_session",
-          "task",
-          "create_team_member",
-          "edit_file"
-        ],
-        "confirmation_required": []
       }
     }
   }

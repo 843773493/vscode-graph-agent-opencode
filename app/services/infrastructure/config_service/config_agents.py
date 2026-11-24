@@ -6,15 +6,17 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+from app.services.infrastructure.config.snapshot import ConfigSnapshot
 
 if TYPE_CHECKING:
     from app.services.infrastructure.config_service import ConfigService
 
 
 class ConfigAgentsMixin:
-    def _validate_agent_definition_references(self, config: dict[str, object]) -> None:
+    def _validate_agent_definition_references(self, snapshot: ConfigSnapshot) -> None:
         """只核完整候选及本工作区会话默认值，不展开凭据或查询历史。"""
         service = cast("ConfigService", self)
+        config = snapshot.read_only
         agents = cast(dict[str, dict[str, object]], config["agents"])
         if config["default_agent"] not in agents:
             raise ValueError("default_agent 引用了不存在的 Agent")
@@ -29,7 +31,7 @@ class ConfigAgentsMixin:
         for agent_id, agent in agents.items():
             references = self._agent_model_references(agent)
             for reference in references:
-                service._llm_resolution.resolve_model_reference(config, reference)
+                service._llm_resolution.resolve_model_reference(snapshot.graph, reference)
             allowed[agent_id] = references
         for agent_id, model in model_defaults.items():
             reference = ModelReferenceDTO.model_validate(model)
@@ -43,7 +45,8 @@ class ConfigAgentsMixin:
                 (model["primary"], *model.get("fallbacks", []))]
 
     def get_default_agent_id(self) -> str:
-        config = cast("ConfigService", self)._require_snapshot().read_only
+        snapshot = cast("ConfigService", self)._require_snapshot()
+        config = snapshot.read_only
         default_agent_id = config["default_agent"]
         if default_agent_id not in config["agents"]:
             raise ValueError(f"default_agent 引用了不存在的 Agent: {default_agent_id}")
@@ -99,7 +102,8 @@ class ConfigAgentsMixin:
         agent_id: str | None = None,
         preferred_model: ModelReferenceDTO | None = None,
     ) -> dict[str, Any]:
-        config = cast("ConfigService", self)._require_snapshot().read_only
+        snapshot = cast("ConfigService", self)._require_snapshot()
+        config = snapshot.read_only
         agents = config["agents"]
         resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
         if resolved_agent_id not in agents:
@@ -131,7 +135,7 @@ class ConfigAgentsMixin:
                 preferred_model,
                 *(item for item in references if item != preferred_model),
             ]
-        selected_models = [self._llm_resolution.resolve_model_reference(config, reference)
+        selected_models = [self._llm_resolution.resolve_model_reference(snapshot.graph, reference)
                            for reference in references]
 
         runtime_config: dict[str, Any] = {

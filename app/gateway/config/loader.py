@@ -181,6 +181,7 @@ def load_gateway_config(
                  "user:gateway_local": resolved_local_config_path},
         settings_schema={"$ref": "#/$defs/effectiveSettings", "$defs": schema["$defs"]},
         options_schema={"type": "object"}, source_uri=source_uri,
+        source_key=lambda path: source_identity(path)[0],
         registered_uris={source_uri(path): path for path in known},
         authorize_source=lambda path: ".boxteam" not in path.parts, read_source=read_source,
         source_documents=documents,

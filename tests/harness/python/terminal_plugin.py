@@ -198,10 +198,22 @@ def prepare_terminal_plugin_configuration(
 
     config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    config = commentjson.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {
+        "config_version": 4,
+        "extends": "user:workspace_local",
+        "settings": {},
+    }
     if not isinstance(config, dict):
         raise TypeError(f"Workspace 配置根节点必须为对象: {config_path}")
-    runtime_config = config.setdefault("runtime", {})
+    if config.get("config_version") != 4:
+        raise ValueError("测试 Workspace 配置必须使用 v4 节点文档")
+    settings = config.setdefault("settings", {})
+    if not isinstance(settings, dict):
+        raise TypeError("settings 必须是对象")
+    workspace_settings = settings.setdefault("workspace", {})
+    if not isinstance(workspace_settings, dict):
+        raise TypeError("settings.workspace 必须是对象")
+    runtime_config = workspace_settings.setdefault("runtime", {})
     if not isinstance(runtime_config, dict):
         raise TypeError("runtime 必须是对象")
     gateway_config = runtime_config.setdefault("gateway", {})
@@ -211,7 +223,7 @@ def prepare_terminal_plugin_configuration(
     if not isinstance(connection, dict):
         raise TypeError("runtime.gateway.connection 必须是对象")
     connection["url"] = gateway_url
-    plugins = config.setdefault("plugins", {})
+    plugins = workspace_settings.setdefault("plugins", {})
     if not isinstance(plugins, dict):
         raise TypeError("plugins 必须是对象")
     runtime = plugins.setdefault("runtime", {})
@@ -299,7 +311,7 @@ async def install_terminal_plugin_gateway_components(
     if node_bin is None:
         raise RuntimeError("Terminal 插件 Gateway 组件测试需要 PATH 中存在 node")
     node_environment = {key: os.environ.get(key) for key in ("BOXTEAM_NODE_BIN",)}
-    runtime_config = commentjson.loads((Path.cwd() / "configs/gateway_inline.jsonc").read_text(encoding="utf-8"))
+    runtime_config = commentjson.loads((Path.cwd() / "configs/gateway_inline.jsonc").read_text(encoding="utf-8"))["settings"]["gateway"]
     runtime_config["logging"]["runtime"] = {"level": "WARNING", "pretty": False}
     try:
         os.environ["BOXTEAM_NODE_BIN"] = node_bin

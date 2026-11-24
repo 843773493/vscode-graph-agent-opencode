@@ -1,5 +1,6 @@
 import datetime
 
+from boxteam.common.v1 import config_pb2 as _config_pb2
 from boxteam.common.v1 import error_pb2 as _error_pb2
 from boxteam.gateway.v2 import service_plugin_pb2 as _service_plugin_pb2
 from boxteam.workspace.v2 import message_pb2 as _message_pb2
@@ -279,7 +280,7 @@ class ConfigSourceFanoutDTO(_message.Message):
     def __init__(self, source_generation: _Optional[int] = ..., fanout_id: _Optional[str] = ..., result: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[ConfigSourceFanoutWorkspaceDTO, _Mapping]]] = ..., coverage: _Optional[str] = ...) -> None: ...
 
 class ConfigSourceDocumentDTO(_message.Message):
-    __slots__ = ("gateway_id", "workspace_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit", "fanout", "source_baseline", "active_origins")
+    __slots__ = ("gateway_id", "workspace_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit", "fanout", "source_baseline", "active_origins", "source_inherited", "nodes")
     class SourceBaselineEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -310,6 +311,8 @@ class ConfigSourceDocumentDTO(_message.Message):
     FANOUT_FIELD_NUMBER: _ClassVar[int]
     SOURCE_BASELINE_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_ORIGINS_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_INHERITED_FIELD_NUMBER: _ClassVar[int]
+    NODES_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     workspace_id: str
     source_key: str
@@ -333,7 +336,9 @@ class ConfigSourceDocumentDTO(_message.Message):
     fanout: ConfigSourceFanoutDTO
     source_baseline: _containers.MessageMap[str, ConfigSourceBaselineDTO]
     active_origins: _containers.RepeatedCompositeFieldContainer[ConfigSourceOriginDTO]
-    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[ConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[ConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[ConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[ConfigSourceEditDTO, _Mapping]] = ..., fanout: _Optional[_Union[ConfigSourceFanoutDTO, _Mapping]] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_origins: _Optional[_Iterable[_Union[ConfigSourceOriginDTO, _Mapping]]] = ...) -> None: ...
+    source_inherited: _struct_pb2.Struct
+    nodes: _containers.RepeatedCompositeFieldContainer[_config_pb2.ConfigNodeInspectionDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[ConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[ConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[ConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[ConfigSourceEditDTO, _Mapping]] = ..., fanout: _Optional[_Union[ConfigSourceFanoutDTO, _Mapping]] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_origins: _Optional[_Iterable[_Union[ConfigSourceOriginDTO, _Mapping]]] = ..., source_inherited: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[_config_pb2.ConfigNodeInspectionDTO, _Mapping]]] = ...) -> None: ...
 
 class LlmCredentialInput(_message.Message):
     __slots__ = ("scope", "provider_id", "model_id", "value")
@@ -610,48 +615,119 @@ class LlmTestResultDTO(_message.Message):
     def __init__(self, request_id: _Optional[str] = ..., observation: _Optional[_Union[LlmProbeObservationDTO, _Mapping]] = ..., model_ref: _Optional[_Union[ModelReferenceDTO, _Mapping]] = ..., streaming: _Optional[bool] = ..., status: _Optional[str] = ..., first_content_ms: _Optional[float] = ..., elapsed_ms: _Optional[float] = ..., preview: _Optional[str] = ..., preview_truncated: _Optional[bool] = ..., usage: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., error: _Optional[_Union[LlmProbeErrorDTO, _Mapping]] = ...) -> None: ...
 
 class ConfigSourcePreflightDTO(_message.Message):
-    __slots__ = ("document", "candidate", "candidate_digest", "changed_paths", "model_options", "active_model_options")
+    __slots__ = ("document", "candidate", "candidate_digest", "changed_paths", "model_options", "active_model_options", "provider_options", "active_provider_options")
     DOCUMENT_FIELD_NUMBER: _ClassVar[int]
     CANDIDATE_FIELD_NUMBER: _ClassVar[int]
     CANDIDATE_DIGEST_FIELD_NUMBER: _ClassVar[int]
     CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
     MODEL_OPTIONS_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_MODEL_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_PROVIDER_OPTIONS_FIELD_NUMBER: _ClassVar[int]
     document: ConfigSourceDocumentDTO
     candidate: _struct_pb2.Struct
     candidate_digest: str
     changed_paths: _containers.RepeatedScalarFieldContainer[str]
     model_options: ConfigModelInspectionDTO
     active_model_options: ConfigModelInspectionDTO
-    def __init__(self, document: _Optional[_Union[ConfigSourceDocumentDTO, _Mapping]] = ..., candidate: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., candidate_digest: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ..., model_options: _Optional[_Union[ConfigModelInspectionDTO, _Mapping]] = ..., active_model_options: _Optional[_Union[ConfigModelInspectionDTO, _Mapping]] = ...) -> None: ...
+    provider_options: ConfigProviderInspectionDTO
+    active_provider_options: ConfigProviderInspectionDTO
+    def __init__(self, document: _Optional[_Union[ConfigSourceDocumentDTO, _Mapping]] = ..., candidate: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., candidate_digest: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ..., model_options: _Optional[_Union[ConfigModelInspectionDTO, _Mapping]] = ..., active_model_options: _Optional[_Union[ConfigModelInspectionDTO, _Mapping]] = ..., provider_options: _Optional[_Union[ConfigProviderInspectionDTO, _Mapping]] = ..., active_provider_options: _Optional[_Union[ConfigProviderInspectionDTO, _Mapping]] = ...) -> None: ...
+
+class ConfigActiveOptionsInspectionDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "active_revision", "active_digest", "source_baseline", "provider_options", "model_options")
+    class SourceBaselineEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: ConfigSourceBaselineDTO
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[ConfigSourceBaselineDTO, _Mapping]] = ...) -> None: ...
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_BASELINE_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    MODEL_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    active_revision: int
+    active_digest: str
+    source_baseline: _containers.MessageMap[str, ConfigSourceBaselineDTO]
+    provider_options: ConfigProviderInspectionDTO
+    model_options: ConfigModelInspectionDTO
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., active_revision: _Optional[int] = ..., active_digest: _Optional[str] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., provider_options: _Optional[_Union[ConfigProviderInspectionDTO, _Mapping]] = ..., model_options: _Optional[_Union[ConfigModelInspectionDTO, _Mapping]] = ...) -> None: ...
 
 class ConfigModelOptionOriginDTO(_message.Message):
-    __slots__ = ("path", "source_key", "definition", "definition_path")
+    __slots__ = ("path", "source_key", "definition", "definition_path", "node_id")
     PATH_FIELD_NUMBER: _ClassVar[int]
     SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
     DEFINITION_FIELD_NUMBER: _ClassVar[int]
     DEFINITION_PATH_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
     path: str
     source_key: str
     definition: str
     definition_path: str
-    def __init__(self, path: _Optional[str] = ..., source_key: _Optional[str] = ..., definition: _Optional[str] = ..., definition_path: _Optional[str] = ...) -> None: ...
+    node_id: str
+    def __init__(self, path: _Optional[str] = ..., source_key: _Optional[str] = ..., definition: _Optional[str] = ..., definition_path: _Optional[str] = ..., node_id: _Optional[str] = ...) -> None: ...
 
 class ConfigModelInspectionDTO(_message.Message):
-    __slots__ = ("model_ref", "model", "options", "origins", "request_url", "catalog_url")
+    __slots__ = ("model_ref", "model", "options", "origins", "request_url", "catalog_url", "config_ref", "node_id", "chain", "local_settings", "inherited_settings", "network", "shared")
     MODEL_REF_FIELD_NUMBER: _ClassVar[int]
     MODEL_FIELD_NUMBER: _ClassVar[int]
     OPTIONS_FIELD_NUMBER: _ClassVar[int]
     ORIGINS_FIELD_NUMBER: _ClassVar[int]
     REQUEST_URL_FIELD_NUMBER: _ClassVar[int]
     CATALOG_URL_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_REF_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    CHAIN_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    INHERITED_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    NETWORK_FIELD_NUMBER: _ClassVar[int]
+    SHARED_FIELD_NUMBER: _ClassVar[int]
     model_ref: ModelReferenceDTO
     model: str
     options: _struct_pb2.Struct
     origins: _containers.RepeatedCompositeFieldContainer[ConfigModelOptionOriginDTO]
     request_url: str
     catalog_url: str
-    def __init__(self, model_ref: _Optional[_Union[ModelReferenceDTO, _Mapping]] = ..., model: _Optional[str] = ..., options: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., origins: _Optional[_Iterable[_Union[ConfigModelOptionOriginDTO, _Mapping]]] = ..., request_url: _Optional[str] = ..., catalog_url: _Optional[str] = ...) -> None: ...
+    config_ref: str
+    node_id: str
+    chain: _containers.RepeatedCompositeFieldContainer[_config_pb2.ConfigNodeInspectionDTO]
+    local_settings: _struct_pb2.Struct
+    inherited_settings: _struct_pb2.Struct
+    network: _struct_pb2.Struct
+    shared: bool
+    def __init__(self, model_ref: _Optional[_Union[ModelReferenceDTO, _Mapping]] = ..., model: _Optional[str] = ..., options: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., origins: _Optional[_Iterable[_Union[ConfigModelOptionOriginDTO, _Mapping]]] = ..., request_url: _Optional[str] = ..., catalog_url: _Optional[str] = ..., config_ref: _Optional[str] = ..., node_id: _Optional[str] = ..., chain: _Optional[_Iterable[_Union[_config_pb2.ConfigNodeInspectionDTO, _Mapping]]] = ..., local_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., inherited_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., network: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., shared: _Optional[bool] = ...) -> None: ...
+
+class ConfigProviderInspectionDTO(_message.Message):
+    __slots__ = ("provider_id", "options", "origins", "catalog_url", "config_ref", "node_id", "chain", "local_settings", "inherited_settings", "network", "shared")
+    PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
+    OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    ORIGINS_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_URL_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_REF_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    CHAIN_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    INHERITED_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    NETWORK_FIELD_NUMBER: _ClassVar[int]
+    SHARED_FIELD_NUMBER: _ClassVar[int]
+    provider_id: str
+    options: _struct_pb2.Struct
+    origins: _containers.RepeatedCompositeFieldContainer[ConfigModelOptionOriginDTO]
+    catalog_url: str
+    config_ref: str
+    node_id: str
+    chain: _containers.RepeatedCompositeFieldContainer[_config_pb2.ConfigNodeInspectionDTO]
+    local_settings: _struct_pb2.Struct
+    inherited_settings: _struct_pb2.Struct
+    network: _struct_pb2.Struct
+    shared: bool
+    def __init__(self, provider_id: _Optional[str] = ..., options: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., origins: _Optional[_Iterable[_Union[ConfigModelOptionOriginDTO, _Mapping]]] = ..., catalog_url: _Optional[str] = ..., config_ref: _Optional[str] = ..., node_id: _Optional[str] = ..., chain: _Optional[_Iterable[_Union[_config_pb2.ConfigNodeInspectionDTO, _Mapping]]] = ..., local_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., inherited_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., network: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., shared: _Optional[bool] = ...) -> None: ...
 
 class ConfigEventDTO(_message.Message):
     __slots__ = ("event_seq", "event_id", "config_domain", "candidate_id", "attempt_id", "apply_id", "idempotency_key", "commit_revision", "active_revision", "pending_revision", "source", "result", "activation_scope", "changed_paths", "applied_paths", "deferred_paths", "error", "occurred_at")

@@ -13,9 +13,9 @@ _CAPABILITIES = (
 )
 
 
-def model_metadata(provider: str, model: str) -> dict[str, object] | None:
+def model_metadata(provider: str, model: str, *, owner_key: str | None = None) -> dict[str, object] | None:
     """服务商和名称共同匹配；同名其它服务商的能力不能串入。"""
-    catalog = local_model_catalog()
+    catalog = local_model_catalog(owner_key=owner_key)
     name = model.removeprefix(provider + "/")
     for key in dict.fromkeys((f"{provider}/{name}", name)):
         entry = catalog.get(key)
@@ -31,13 +31,13 @@ def model_metadata(provider: str, model: str) -> dict[str, object] | None:
     return None
 
 
-def apply_model_metadata(options: Mapping[str, object], model: str | None) -> dict[str, object]:
+def apply_model_metadata(options: Mapping[str, object], model: str | None, *, owner_key: str | None = None) -> dict[str, object]:
     """目录是最低优先级默认；显式 false、容量与回放声明均保留。"""
     result = deepcopy(dict(options))
     mode = result.get("api_mode")
     if not isinstance(mode, dict):
         return result
-    info = model_metadata(str(result.get("custom_llm_provider", "")), model) if model else None
+    info = model_metadata(str(result.get("custom_llm_provider", "")), model, owner_key=owner_key) if model else None
     explicit_info = mode.get("model_info", {})
     if not isinstance(explicit_info, Mapping):
         return result  # 由既有严格解析器报告输入错误。

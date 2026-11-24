@@ -33,6 +33,7 @@ from app.gateway.runtime_proof import (
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import ConfigConflictError
+from configs.inheritance.resolver import ConfigNodeValidationError
 
 
 def _write_gateway_config(
@@ -439,14 +440,16 @@ def test_load_gateway_config_rejects_schema_violation(
 ) -> None:
     config_path, schema_path = _write_gateway_config(tmp_path, [workspace])
 
-    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
+    with pytest.raises(ConfigNodeValidationError, match="配置节点校验失败") as failure:
         load_gateway_config(config_path=config_path, schema_path=schema_path)
     cause = failure.value.__cause__
     assert isinstance(cause, ValidationError)
     assert list(cause.absolute_path) == ["gateway", *path]
     assert cause.validator == rule
-    assert f"rule={rule}" in str(failure.value)
-    assert "node=<root>" in str(failure.value)
+    assert failure.value.issues[0]["code"] == rule
+    assert failure.value.issues[0]["path"] == ["gateway", *path, *(["<extra>"] if rule == "additionalProperties" else [])]
+    assert failure.value.issues[0]["path_exact"] is False
+    assert failure.value.source_uri not in str(failure.value)
     assert str(config_path) not in str(failure.value)
     assert str(schema_path) not in str(failure.value)
 
@@ -875,7 +878,7 @@ def test_old_gateway_versions_require_explicit_migration(tmp_path: Path, version
     original = config_path.read_bytes()
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        with pytest.raises(ValueError, match="rule=const"):
+        with pytest.raises(ConfigNodeValidationError, match="JSON schema const"):
             load_gateway_config(
                 config_path=config_path,
                 schema_path=schema_path,

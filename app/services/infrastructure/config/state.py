@@ -347,7 +347,7 @@ def prepare_config_for_persistence(
                     reference = normalize_secret_reference(item)
                     # 字面量自包含：无需也不能解析环境变量。
                     # 模型凭据在执行准入时按实际候选解析；配置恢复只核对其引用。
-                    if resolve_environment and reference.startswith("env:") and item_path[:2] != ("llm", "providers"):
+                    if resolve_environment and reference.startswith("env:") and not any(item_path[index:index + 2] == ("settings", "model_options") for index in range(len(item_path) - 1)):
                         _resolve_secret_reference(
                             reference,
                             path="/" + "/".join(item_path),
@@ -451,7 +451,7 @@ def build_secret_binding_summary(
                                 reference,
                                 path="/" + "/".join(item_path),
                             )
-                            if resolve_environment and item_path[:2] != ("llm", "providers")
+                            if resolve_environment and not any(item_path[index:index + 2] == ("settings", "model_options") for index in range(len(item_path) - 1))
                             else reference
                         )
                     else:
@@ -472,6 +472,15 @@ def build_secret_binding_summary(
 
     visit(value, ())
     return bindings
+
+
+def build_snapshot_secret_binding_summary(
+    payload: object, source_baseline: dict[str, object], *, resolve_environment: bool = False,
+) -> dict[str, object]:
+    """原快照的来源定义也参与启动证明；不读取现有文件或提前展开模型凭据。"""
+    documents = {key: detail["document"] for key, detail in source_baseline.items()
+                 if isinstance(detail, dict) and "document" in detail}
+    return build_secret_binding_summary({"payload": payload, "sources": documents}, resolve_environment=resolve_environment)
 
 
 @dataclass(frozen=True, slots=True)

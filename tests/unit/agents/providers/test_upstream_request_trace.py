@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from app.runtime.network_proxy import ProxyRoutes
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
@@ -92,6 +93,7 @@ async def test_chat_attempts_do_not_accumulate_across_calls() -> None:
             provider_id="primary",
             streaming=True,
             invocation_purpose="tool_test",
+            proxy_routes=ProxyRoutes(()),
         )
         for round_index in range(4):
             attempts = await _capture(
@@ -122,6 +124,7 @@ async def test_responses_attempts_do_not_accumulate_across_calls() -> None:
             responses_store=False,
             streaming=True,
             invocation_purpose="tool_test",
+            proxy_routes=ProxyRoutes(()),
         )
         for round_index in range(4):
             attempts = await _capture(
@@ -150,6 +153,7 @@ async def test_model_calls_leave_litellm_callback_tables_untouched() -> None:
             custom_llm_provider="openai",
             streaming=True,
             invocation_purpose="tool_test",
+            proxy_routes=ProxyRoutes(()),
         )
         for round_index in range(3):
             await _capture(
@@ -208,6 +212,7 @@ def failed_provider(
         model = BoxteamOpenAIResponsesModel(
             model="test-model", api_key="test-key", api_base="https://example.com/v1",
             custom_llm_provider="openai", invocation_purpose="tool_test",
+            proxy_routes=ProxyRoutes(()),
         )
     else:
         def chat_open(_self: ChatLiteLLM, **kwargs: object) -> FailedStream:
@@ -221,6 +226,7 @@ def failed_provider(
         model = BoxteamLiteLLMChatModel(
             model="test-model", api_key="test-key", api_base="https://example.com/v1",
             custom_llm_provider="openai", invocation_purpose="tool_test", max_retries=0,
+            proxy_routes=ProxyRoutes(()),
         )
     return model, error
 
@@ -309,6 +315,7 @@ async def test_nonstream_chat_generation_records_request_and_response_in_existin
     model = BoxteamLiteLLMChatModel(
         model="test-model", api_key="test-key", custom_llm_provider="openai",
         invocation_purpose="tool_test", streaming=False,
+        proxy_routes=ProxyRoutes(()),
     )
     token = begin_upstream_capture()
     try:
@@ -335,6 +342,7 @@ async def test_responses_attempt_keeps_detailed_open_timeout(
     model = BoxteamOpenAIResponsesModel(
         model="test-model", api_key="test-key", custom_llm_provider="openai",
         invocation_purpose="tool_test",
+        proxy_routes=ProxyRoutes(()),
     )
     token = begin_upstream_capture()
     try:
@@ -386,6 +394,7 @@ async def test_empty_chat_retry_settles_each_attempt_before_next_request(
     model = BoxteamLiteLLMChatModel(
         model="test-model", api_key="test-key", custom_llm_provider="openai",
         invocation_purpose="tool_test", max_retries=1,
+        proxy_routes=ProxyRoutes(()),
     )
     token = begin_upstream_capture()
     try:

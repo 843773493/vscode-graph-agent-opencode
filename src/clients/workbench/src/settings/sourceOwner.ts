@@ -1,6 +1,6 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import type { GatewayConfigSourceDocumentDTO, GatewayConfigSourceEditRequest, GatewayConfigSourcePreflightDTO, GatewayConfigSourcesDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest, ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { GatewayRequestTarget, GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
 import { watchPluginConfigurationSchemas } from '../../../web/src/api/pluginConfigurationSchemas.js';
@@ -13,8 +13,8 @@ export type SourceBaseline = Pick<SourceIntent, 'base_file_digest' | 'base_layer
 
 /** 业务投影保持平铺；原文档路径由明确的 Gateway／Workspace 目标决定。 */
 export function sourceDocumentPath(target: Pick<GatewayRequestTarget, 'gateway_id' | 'workspace_id'>, path: readonly (string | number)[]): (string | number)[] {
-  if (target.workspace_id) return [...path];
-  return path[0] === 'network' ? ['settings', 'network', ...path.slice(1)] : ['settings', 'gateway', ...path];
+  return path[0] === 'network' ? ['settings', 'network', ...path.slice(1)]
+    : ['settings', target.workspace_id ? 'workspace' : 'gateway', ...path];
 }
 
 export function sourceBaseline(document: SourceDocument): SourceBaseline {
@@ -72,7 +72,7 @@ export class ConfigurationSourceOwner {
     return { gateway_id: this.target.gateway_id, ...(this.target.workspace_id ? { workspace_id: this.target.workspace_id } : {}),
       source_key: sourceKey, jsonc, ...baseline, idempotency_key: crypto.randomUUID() };
   }
-  async preflight(intent: SourceIntent, signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+  async preflight(intent: SourceIntent, signal?: AbortSignal, modelRef?: { provider_id: string; model_id?: string }) {
     if (this.target.workspace_id) return preflightConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal, modelRef);
     if (modelRef) throw new Error(t('configuration.entities.workspaceRequired'));
     const result = await this.request<GatewayConfigSourcePreflightDTO>(this.path(intent.source_key, '/preflight'), { method: 'POST', body: JSON.stringify(intent), signal });
@@ -100,8 +100,8 @@ export function sourceStatus(document: SourceDocument): string {
 }
 
 export function sourceFanoutStatus(document: SourceDocument): string {
-  if (!('workspace_id' in document) || document.source_key !== 'workspace_mutable_override') return '';
-  const fanout = 'fanout' in document ? document.fanout : undefined;
+  if (!('workspace_id' in document) || (!document.fanout && !['user', 'user_local', 'source'].includes(document.layer))) return '';
+  const fanout = document.fanout;
   const scope = t('settings.source.sharedScope');
   if (!fanout) return scope + t('settings.source.noObservations');
   return scope

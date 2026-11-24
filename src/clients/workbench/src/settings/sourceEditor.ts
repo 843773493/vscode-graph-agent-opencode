@@ -18,7 +18,6 @@ import { ITextFileService, TextFileEditorModelState } from '../../upstream/src/v
 import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import type { ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -78,7 +77,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     await this.storage.flush();
   }
   pendingSubmission(resource: URI): string | undefined { return this.edit(resource).submission?.key; }
-  async preflight(resource: URI, jsonc: string, signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+  async preflight(resource: URI, jsonc: string, signal?: AbortSignal, modelRef?: { provider_id: string; model_id?: string }) {
     const edit = this.edit(resource);
     if (!edit.baseline) throw new Error(t('settings.editor.restoredBaselineMissing'));
     return edit.owner.preflight(edit.owner.intent(edit.sourceKey, jsonc, edit.baseline), signal, modelRef);

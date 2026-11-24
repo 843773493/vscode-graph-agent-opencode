@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package boxteam.workspace.v2;
 
+import "boxteam/common/v1/config.proto";
 import "boxteam/common/v1/error.proto";
 import "boxteam/gateway/v2/service_plugin.proto";
 import "boxteam/workspace/v2/message.proto";
@@ -183,6 +184,8 @@ message ConfigSourceDocumentDTO {
   optional ConfigSourceFanoutDTO fanout = 21;
   map<string, ConfigSourceBaselineDTO> source_baseline = 22;
   repeated ConfigSourceOriginDTO active_origins = 23;
+  google.protobuf.Struct source_inherited = 24;
+  repeated boxteam.common.v1.ConfigNodeInspectionDTO nodes = 25;
 }
 
 message LlmCredentialInput {
@@ -332,6 +335,18 @@ message ConfigSourcePreflightDTO {
   repeated string changed_paths = 4;
   optional ConfigModelInspectionDTO model_options = 5;
   optional ConfigModelInspectionDTO active_model_options = 6;
+  optional ConfigProviderInspectionDTO provider_options = 7;
+  optional ConfigProviderInspectionDTO active_provider_options = 8;
+}
+
+message ConfigActiveOptionsInspectionDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  int64 active_revision = 3;
+  string active_digest = 4;
+  map<string, ConfigSourceBaselineDTO> source_baseline = 5;
+  optional ConfigProviderInspectionDTO provider_options = 6;
+  optional ConfigModelInspectionDTO model_options = 7;
 }
 
 message ConfigModelOptionOriginDTO {
@@ -339,6 +354,7 @@ message ConfigModelOptionOriginDTO {
   string source_key = 2;
   string definition = 3;
   string definition_path = 4;
+  optional string node_id = 5;
 }
 
 message ConfigModelInspectionDTO {
@@ -348,6 +364,27 @@ message ConfigModelInspectionDTO {
   repeated ConfigModelOptionOriginDTO origins = 4;
   string request_url = 5;
   optional string catalog_url = 6;
+  string config_ref = 7;
+  string node_id = 8;
+  repeated boxteam.common.v1.ConfigNodeInspectionDTO chain = 9;
+  google.protobuf.Struct local_settings = 10;
+  google.protobuf.Struct inherited_settings = 11;
+  google.protobuf.Struct network = 12;
+  bool shared = 13;
+}
+
+message ConfigProviderInspectionDTO {
+  string provider_id = 1;
+  google.protobuf.Struct options = 2;
+  repeated ConfigModelOptionOriginDTO origins = 3;
+  optional string catalog_url = 5;
+  string config_ref = 6;
+  string node_id = 7;
+  repeated boxteam.common.v1.ConfigNodeInspectionDTO chain = 8;
+  google.protobuf.Struct local_settings = 9;
+  google.protobuf.Struct inherited_settings = 10;
+  google.protobuf.Struct network = 11;
+  bool shared = 12;
 }
 
 message ConfigEventDTO {

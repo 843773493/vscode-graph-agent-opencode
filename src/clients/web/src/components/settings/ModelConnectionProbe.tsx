@@ -38,11 +38,12 @@ function baselineKey(document: ConfigSourceDocumentDTO | LlmProbeObservationDTO)
 }
 
 /** 只保留本表单的临时观察；配置修改仍交回同一个来源文本模型。 */
-export function ModelConnectionProbe({ providerId, models, selectedModelId, document, editor, onImport, onApplyMode, onOpenSource }: {
+export function ModelConnectionProbe({ providerId, models, selectedModelId, document, editor, onImport, onApplyMode, canApplyMode, onOpenSource }: {
   providerId: string; models: { id: string; model: string }[]; selectedModelId?: string;
   document: ConfigSourceDocumentDTO; editor: ModelProbeEditor;
   onImport: (models: LlmDiscoveredModelDTO[], version: number) => void;
   onApplyMode: (modelId: string, streaming: boolean) => void;
+  canApplyMode: (modelId: string) => boolean;
   onOpenSource?: () => void;
 }) {
   const [observedDocument, setObservedDocument] = useState(document);
@@ -296,7 +297,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
           {onOpenSource ? <button type="button" onClick={onOpenSource}>{t('configuration.entities.openJsonc')}</button> : null}
         </details>
       </> : null}
-      {entry.status === 'passed' && entry.result ? <button type="button" disabled={!document.writable || stale(entry.result.observation, entry.version) || !models.some(model => model.id === entry.modelId)} onClick={() => onApplyMode(entry.modelId, entry.result!.streaming)}>{t('configuration.probe.applyMode')}</button> : null}
+      {entry.status === 'passed' && entry.result ? <button type="button" disabled={!document.writable || !canApplyMode(entry.modelId) || stale(entry.result.observation, entry.version) || !models.some(model => model.id === entry.modelId)} onClick={() => onApplyMode(entry.modelId, entry.result!.streaming)}>{t('configuration.probe.applyMode')}</button> : null}
     </section>)}
     {error ? <p role="alert">{error}</p> : null}
   </section>;

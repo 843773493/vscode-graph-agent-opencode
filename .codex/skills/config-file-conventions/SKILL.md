@@ -127,11 +127,11 @@ workspace_local.jsonc     # Workspace 用户级机器私有覆盖，不纳入 Gi
 
 合并规则必须按加载边界解释，而不是把所有 JSONC 文件自动叠加：
 
-1. `gateway_inline.jsonc` 与 `workspace_inline.jsonc` 是发行包随代码分发的完整内置默认配置；`.env` 仍由环境/安装流程单独管理。`*_dev.jsonc` 是安装器选择的开发模板，不因文件名自动参与运行时加载。Gateway 开发模板只声明开发差异，Workspace 当前 v3 仍使用完整模板。
+1. `gateway_inline.jsonc` 与 `workspace_inline.jsonc` 是发行包随代码分发的完整内置默认配置；`.env` 仍由环境/安装流程单独管理。`*_dev.jsonc` 是安装器选择的开发模板，只声明开发差异，不因文件名自动参与运行时加载。
 2. Gateway v6 文件使用 `config_version`、`extends`、`settings`、`profiles` 节点信封，业务设置分别放在 `settings.gateway` 和 `settings.network`。加载只沿明确入口的单父链解析；安装器生成 inline → user → local 默认链，local 入口必须存在，自定义父链可绕过原来源，不按固定层序补齐。使用 `gateway_schema.jsonc` 校验节点和最终设置，再向既有业务 API 投影，不读取工作区 `.boxteam/`。
-3. Workspace 的有效配置按“`workspace_inline.jsonc` → 用户级 `workspace.jsonc` → 用户级 `workspace_local.jsonc` → 工作区 `${workspace}/.boxteam/workspace.jsonc`”生成；高优先级配置覆盖同名值。对象递归合并，标量直接覆盖，数组整体替换，不能对数组隐式去重或拼接。
-4. schema 校验对象是合并后的最终 Workspace 配置，不是工作区覆盖片段单独的完整配置。覆盖片段可以只声明需要覆盖的字段，但不得包含 Gateway 字段。
-5. `_local` 文件属于用户级机器私有配置，必须被 Git 忽略。Gateway 默认明确以 `gateway_local.jsonc` 为入口，缺失即报错，不自动回退到 user／inline；Workspace 当前 v3 的 `workspace_local.jsonc` 仍是可选覆盖。配置诊断必须反映实际依赖，不按历史固定层表伪造来源。
+3. Workspace v4 采用相同信封，业务字段置于 `settings.workspace`，网络与共同模型选项分别置于 `settings.network`、`settings.model_options`。默认父链由安装器明确写为 inline → user → user_local → 工作区入口；运行时只跟随选定入口的 `extends`，允许绕过来源。Provider／Model 目录以 `config_ref` 选择节点，不再叠加 defaults／overrides；相对引用基于声明文件，`context:*` 绑定所属 owner 的当前快照。
+4. 每份已读取文档先校验本地节点形状，再校验真实消费者的最终有效值；未引用 profile 不自动参与继承。对象递归合并、数组和标量替换，schema 的 `x-merge: replace` 块整体替换；参数对象值也整体替换，合法 null 依所属字段解释，删除本地字段才表示恢复继承。普通读取不补默认值或缺失文件。
+5. `_local` 文件属于用户级机器私有配置，必须被 Git 忽略。默认 Gateway local 入口及工作区入口都必须存在，缺失即报错，不回退其它来源；仅显式安装或工作区初始化创建最小节点。来源身份、来源 CAS、watcher 与诊断都依据实际可达依赖；active／pending 固定本次使用的来源正文，不读取当前文件填补历史快照。
 6. 所有合并失败、schema 错误、未知字段和版本不匹配都必须直接报告，不得返回部分合并结果或静默忽略。
 
 ## 变更工作流

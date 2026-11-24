@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { discardConfigPending, discoverLlmModels, getConfigSourceDocument, listConfigSources, preflightConfigSource, retryConfigPending, saveConfigSource, testLlmModel } from "./configSources";
 import { HttpRequestError } from "./http";
-import type { LlmTestRequest } from "../types/protocol_generated/boxteam/workspace/v2/public";
+import { ConfigModelInspectionDTO, ConfigProviderInspectionDTO, ConfigSourceDocumentDTO, LlmDiscoverResultDTO, type LlmTestRequest } from "../types/protocol_generated/boxteam/workspace/v2/public";
 
 const originalFetch = globalThis.fetch;
 const target = { gateway_id: "gateway_00000000000040008000000000000001", workspace_id: "00000000-0000-4000-8000-000000000001" };
@@ -85,9 +85,11 @@ test("模型测试首内容前取消回收正文reader并保留用户取消原�
 test("模型发现沿原目标发送单次草稿；部分目录及观察版本保持原回执", async () => {
   const input = { ...target, mode: "draft", provider_id: "team", edit_version: 3, source_key: sourceKey,
     jsonc: "// 未保存草稿\n{}", expected_source_baseline: {} };
-  const result = { observation: { ...input, source_baseline: {}, protocol: "responses", endpoint: "https://model.test/v1",
+  const result = LlmDiscoverResultDTO.fromPartial({ observation: { gateway_id: input.gateway_id, workspace_id: input.workspace_id,
+    mode: input.mode, provider_id: input.provider_id, edit_version: input.edit_version, source_key: input.source_key,
+    source_baseline: {}, protocol: "responses", endpoint: "https://model.test/v1",
     credential: { source: "temporary" }, observed_at: "2026-11-17T00:00:00Z" }, source: "upstream", models: [{ model: "model-a" }],
-    complete: false, error: { category: "pagination", message: "当前目录不完整" } };
+    complete: false, error: { category: "pagination", message: "当前目录不完整" } });
   let count = 0;
   const route = { ...target, gateway_connection_id: "original-connection" };
   const current = respond(result, (url, init) => {
@@ -121,7 +123,7 @@ test("active模型目录接受HTTP空来源，取消不重发模型发现", asyn
   expect(count).toBe(1);
 });
 
-function respond(document: Record<string, unknown> | ((url: URL, init?: RequestInit) => Record<string, unknown> | Response),
+function respond(document: object | ((url: URL, init?: RequestInit) => object | Response),
   inspect: (url: URL, init?: RequestInit) => void = () => {}) {
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
@@ -134,9 +136,10 @@ function respond(document: Record<string, unknown> | ((url: URL, init?: RequestI
 }
 
 test("来源读取保留原正文与全部CAS，查询原提交携带同一幂等键和完整owner", async () => {
-  const document = { ...target, source_key: sourceKey, jsonc: "// 原正文\r\n{}\r\n", file_digest: "file", layer: "workspace",
+  const document = ConfigSourceDocumentDTO.fromPartial({ ...target, source_key: sourceKey, jsonc: "// 原正文\r\n{}\r\n", file_digest: "file", layer: "workspace",
     writable: true, file_presence: "present", source_generation: "generation", json_schema: {}, effective: {}, source_effective: {},
-    layers: [], origins: [], source_baseline: {}, active_origins: [], status: undefined, layer_revision: 3, layer_digest: "layer", active_revision: 2, active_digest: "active" };
+    layers: [], origins: [], source_baseline: {}, active_origins: [], source_inherited: {}, nodes: [], status: undefined,
+    layer_revision: 3, layer_digest: "layer", active_revision: 2, active_digest: "active" });
   const seen: URL[] = [];
   const controller = new AbortController();
   const route = { ...target, gateway_connection_id: 'original-connection' };
@@ -161,8 +164,10 @@ const intent = { ...target, source_key: sourceKey, jsonc: '// 保留注释\n{"de
 
 test("选定模型预检只增加查询引用，沿原来源意图取回同一模型的后端投影", async () => {
   const modelRef = { provider_id: "team+/", model_id: "main model" };
-  const inspection = { model_ref: modelRef, model: "upstream-main", options: { temperature: 0 }, origins: [],
-    request_url: "https://model.test/v1/responses" };
+  const inspection = ConfigModelInspectionDTO.fromPartial({ model_ref: modelRef, model: "upstream-main", options: { temperature: 0 }, origins: [],
+    request_url: "https://model.test/v1/responses", config_ref: "#/profiles/model", node_id: "model", chain: [],
+    local_settings: {}, inherited_settings: {}, network: {}, shared: false });
+  const providerInspection = ConfigProviderInspectionDTO.fromPartial({ provider_id: modelRef.provider_id });
   let count = 0;
   const current = respond((url, init) => {
     count++;
@@ -170,7 +175,7 @@ test("选定模型预检只增加查询引用，沿原来源意图取回同一�
     expect(url.searchParams.get("provider_id")).toBe(modelRef.provider_id);
     expect(url.searchParams.get("model_id")).toBe(modelRef.model_id);
     expect(JSON.parse(String(init?.body))).toEqual(intent);
-    return { document: { ...target, source_key: sourceKey }, model_options: inspection };
+    return { document: { ...target, source_key: sourceKey }, provider_options: providerInspection, model_options: inspection };
   });
   expect((await preflightConfigSource(current, target, intent, undefined, modelRef)).model_options).toEqual(inspection);
   expect(count).toBe(1);
@@ -183,9 +188,10 @@ test.each([undefined, { provider_id: "team", model_id: "another" }])("选定模�
 
 test("来源列表、预检和保存沿同一目标传输完整意图；预检只调用无副作用端点", async () => {
   const requests: { path: string; method: string; body: unknown }[] = [];
-  const document = { ...target, source_key: sourceKey, jsonc: intent.jsonc, layer: "workspace", writable: true, file_presence: "present",
+  const document = ConfigSourceDocumentDTO.fromPartial({ ...target, source_key: sourceKey, jsonc: intent.jsonc, layer: "workspace", writable: true, file_presence: "present",
     file_digest: "file", layer_revision: 7, layer_digest: "layer", source_generation: 9, active_revision: 4, active_digest: "active",
-    json_schema: {}, effective: {}, source_effective: {}, layers: [], origins: [], source_baseline: {}, active_origins: [], status: undefined };
+    json_schema: {}, effective: {}, source_effective: {}, layers: [], origins: [], source_baseline: {}, active_origins: [], source_inherited: {},
+    nodes: [], status: undefined });
   const saved = { ...document, edit: { idempotency_key: intent.idempotency_key, candidate_id: "candidate", state: "active",
     file_digest: "file-saved", source_saved: true, layer_imported: true } };
   const current = respond((url, init) => {

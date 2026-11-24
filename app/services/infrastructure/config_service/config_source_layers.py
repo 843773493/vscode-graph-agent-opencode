@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Mapping
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
     ConfigSource,
+    ConfigSourceLayer,
     StableConfigFile,
     config_revision,
-    parse_stable_config_file,
     read_stable_config_file,
     verify_stable_config_file,
 )
@@ -22,16 +23,19 @@ from app.core.path_utils import (
     get_user_workspace_schema_path,
     get_workspace_config_path,
 )
+from app.core.user_identity import user_scope_id
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.runtime.network_proxy import capture_proxy_environment
 from app.schemas.internal_v2.config import ConfigSourceBaselineDTO
 from app.services.infrastructure.config import (
     SHARED_USER_WORKSPACE_SOURCE_KEY,
 )
-from app.services.infrastructure.config.source_uri import inline_config_source_uri
+from app.services.infrastructure.config.source_uri import (
+    config_file_uri,
+    inline_config_source_uri,
+)
 from app.services.infrastructure.config.state import (
-    SecretReferenceRequiredError,
-    dump_json,
     prepare_config_for_persistence,
-    redact_config_payload,
 )
 from app.services.infrastructure.config.workspace_plugins import (
     workspace_plugin_entries,
@@ -41,13 +45,12 @@ from app.services.infrastructure.config_service.config_agent_tools import (
 )
 from app.services.infrastructure.config_service.config_service_common import (
     _INLINE_SOURCE_KEY,
-    _SOURCE_LAYER_AUTHORITY,
     release_inline_config_uri_for_file,
 )
+from configs.inheritance import ConfigGraph
+from configs.inheritance.values import ConfigValue, json_pointer, thaw
 from configs.runtime import (
-    merge_json_objects,
     read_jsonc_object,
-    require_current_workspace_config,
 )
 
 if TYPE_CHECKING:
@@ -109,148 +112,160 @@ class ConfigSourceLayersMixin:
             return self._config_path
         return get_user_workspace_config_path()
 
+    def _source_locations(self) -> dict[Path, tuple[str, ConfigSourceLayer]]:
+        paths = {
+            self._inline_config_path.resolve(): (_INLINE_SOURCE_KEY, "inline"),
+            self._get_workspace_config_path().resolve(): ("workspace_mutable_override", "user"),
+            self._get_workspace_local_config_path().resolve(): ("workspace_local_mutable_override", "user_local"),
+        }
+        if self._workspace_root is not None:
+            paths[get_workspace_config_path(self._workspace_root).resolve()] = ("workspace_root_mutable_override", "workspace")
+        return paths
+
+    def _source_identity(self, path: Path) -> tuple[str, ConfigSourceLayer]:
+        return self._source_locations().get(path, ("source_" + sha256(str(path).encode()).hexdigest(), "source"))
+
+    def _source_uri_for_path(self, path: Path) -> str:
+        if path == self._inline_config_path.resolve():
+            return self._inline_source_uri()
+        key, layer = self._source_identity(path)
+        workspace_id = self._source_owner_workspace_id
+        if layer == "workspace" or self._workspace_root is not None and path.is_relative_to(self._workspace_root):
+            if self._workspace_root is None:
+                raise ValueError("Workspace 来源缺少工作区归属")
+            return config_file_uri(scope="workspace", scope_id=workspace_id or load_or_create_workspace_id(self._workspace_root), logical_name=key)
+        return config_file_uri(scope="user", scope_id=user_scope_id(), logical_name=key)
+
+    def _build_source_graph(
+        self, *, source_documents=None, document_overrides=None, read_source=read_stable_config_file,
+        runtime_override: dict[str, object] | None = None,
+    ) -> ConfigGraph:
+        schema = self._load_schema()
+        entry = (get_workspace_config_path(self._workspace_root) if self._workspace_root is not None
+                 else self._get_workspace_local_config_path())
+        known = self._source_locations()
+        overrides = self._runtime_config_overrides if runtime_override is None else runtime_override
+        return ConfigGraph(
+            domain="workspace", version=4,
+            owner_id=self._source_owner_workspace_id or (load_or_create_workspace_id(self._workspace_root)
+                if self._workspace_root is not None else user_scope_id()),
+            entry=entry, aliases={"builtin:workspace": self._inline_config_path,
+                "user:workspace": self._get_workspace_config_path(),
+                "user:workspace_local": self._get_workspace_local_config_path()},
+            settings_schema={"$ref": "#/$defs/effectiveSettings", "$defs": schema["$defs"]},
+            options_schema={"$ref": "#/$defs/effectiveOptions", "$defs": schema["$defs"]},
+            source_uri=self._source_uri_for_path, source_key=lambda path: self._source_identity(path)[0],
+            authorize_source=lambda path: ".boxteam" not in path.parts or self._workspace_root is not None
+                and path.is_relative_to(self._workspace_root),
+            registered_uris={self._source_uri_for_path(path): path for path in known},
+            read_source=read_source, source_documents=source_documents, document_overrides=document_overrides,
+            scope_settings_override={"workspace": {"ui": overrides}} if overrides else None,
+            proxy_environment=capture_proxy_environment(),
+            document_schema=schema,
+        )
+
     def _read_effective_config(
-        self,
-        *,
-        source_override: tuple[str, dict[str, object]] | None = None,
-        import_sources: bool = True,
-        source_payloads: dict[str, dict[str, object]] | None = None,
-        source_files: dict[str, StableConfigFile] | None = None,
-        operation_only: bool = False,
-    ) -> tuple[
-        dict[str, Any],
-        tuple[Path, ...],
-        tuple[ConfigSource, ...],
-        Path,
-    ]:
-        source_details: list[ConfigSource] = []
+        self, *, source_override: tuple[str, dict[str, object]] | None = None,
+        import_sources: bool = True, source_payloads: dict[str, dict[str, object]] | None = None,
+        source_files: dict[str, StableConfigFile] | None = None, operation_only: bool = False,
+        frozen_files: Mapping[Path, StableConfigFile] | None = None,
+    ) -> tuple[dict[str, Any], tuple[Path, ...], tuple[ConfigSource, ...], Path, ConfigGraph]:
+        """唯一显式父链；来源物化仍由原 Workspace store 和 fan-out owner 持有。"""
+        def read_source(path: Path) -> StableConfigFile:
+            require_settled_config_migration(path)
+            if frozen_files is not None and path in frozen_files:
+                return frozen_files[path]
+            return read_stable_config_file(path)
 
-        def read_override(*, config_key: str, path: Path) -> dict[str, object] | None:
-            if source_override is not None and config_key == source_override[0]:
-                payload = source_override[1]
-            elif import_sources:
-                payload = self._read_shared_override(config_key=config_key, path=path)
-            else:
-                require_settled_config_migration(path)
-                file = read_stable_config_file(path)
-                if source_files is not None:
-                    source_files[config_key] = file
-                payload = parse_stable_config_file(file)
-            source_details.append(self._config_source(path=path, config_key=config_key))
-            if (
-                not operation_only and payload is not None
-                and config_key in {
-                    "workspace_mutable_override",
-                    "workspace_local_mutable_override",
-                }
-                and workspace_plugin_entries(payload)
-            ):
-                raise ValueError(
-                    "plugins.runtime.entries 只能写入明确工作区的配置来源；"
-                    f"拒绝在 {config_key} 中配置 Workspace 插件绑定"
-                )
-            if not import_sources and payload is not None:
-                require_current_workspace_config(payload, partial=True)
-                if not operation_only:
-                    prepare_config_for_persistence(payload)
-                    ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
-            if source_payloads is not None:
-                source_payloads[config_key] = payload or {}
-            return payload
-
+        paths = {key: path for path, (key, _) in self._source_locations().items()}
+        current = getattr(self, "_candidate_source_graph", None)
+        if current is not None:
+            paths.update({current.source_keys[uri]: path for uri, path in current.source_locations.items()})
+        overrides = ({self._source_uri_for_path(paths[source_override[0]]): source_override[1]}
+                     if source_override is not None else None)
+        graph = self._build_source_graph(document_overrides=overrides, read_source=read_source)
+        self._candidate_source_graph = graph
         try:
-            config_path = self._get_workspace_config_path()
-            source_paths: list[Path] = [self._inline_config_path]
-            source_details.extend([
-                ConfigSource(
-                    uri=self._inline_source_uri(),
-                    layer="inline",
-                    precedence=0,
-                    loaded=True,
-                    source_key=_INLINE_SOURCE_KEY,
-                ),
-            ])
-            if source_files is not None:
-                require_settled_config_migration(self._inline_config_path)
-                file = read_stable_config_file(self._inline_config_path)
-                source_files[_INLINE_SOURCE_KEY] = file
-                config = parse_stable_config_file(file)
-                if config is None:
-                    raise FileNotFoundError("发行包内置 Workspace 配置不存在")
-                require_current_workspace_config(config, partial=True)
-                if not operation_only:
-                    ConfigAgentToolsMixin._preflight_custom_tool_factories(config)
-            else:
-                config = self._read_config_source(self._inline_config_path)
-            if source_payloads is not None:
-                source_payloads["inline"] = config
-            source_configs = {self._inline_config_path: config}
-            user_override = read_override(
-                config_key="workspace_mutable_override",
-                path=config_path,
-            )
-            if user_override is not None:
-                source_configs[config_path] = user_override
-            schema_path = self._resolve_schema_path(source_configs=source_configs)
-            schema = self._load_schema(schema_path)
-            if user_override is not None:
-                config = merge_json_objects(
-                    config,
-                    user_override,
-                    schema=schema,
-                )
-                self._append_source_path(source_paths, config_path)
-
-            local_config_path = self._get_workspace_local_config_path()
-            local_override = read_override(
-                config_key="workspace_local_mutable_override",
-                path=local_config_path,
-            )
-            if local_override is not None:
-                config = merge_json_objects(
-                    config,
-                    local_override,
-                    schema=schema,
-                )
-                self._append_source_path(source_paths, local_config_path)
-
-            if self._workspace_root is not None:
-                legacy_workspace_path = (
-                    self._workspace_root / ".boxteam" / "boxteam.jsonc"
-                )
-                if legacy_workspace_path.is_file():
-                    raise RuntimeError(
-                        "发现旧版工作区配置；普通配置读取不会自动迁移。请显式运行 "
-                        "`python -m configs.boxteam migrate --workspace "
-                        f"{self._workspace_root}`。文件: {legacy_workspace_path}"
-                    )
-                workspace_path = get_workspace_config_path(self._workspace_root)
-                workspace_override = read_override(
-                    config_key="workspace_root_mutable_override",
-                    path=workspace_path,
-                )
-                if workspace_override is not None:
-                    config = merge_json_objects(config, workspace_override, schema=schema)
-                    self._append_source_path(source_paths, workspace_path)
-            if self._workspace_state_store is not None or self._runtime_config_overrides:
-                source_details.append(self._runtime_override_source())
-            if self._runtime_config_overrides:
-                config["ui"] = merge_json_objects(
-                    config.get("ui", {})
-                    if isinstance(config.get("ui", {}), dict)
-                    else {},
-                    self._runtime_config_overrides,
-                )
-            if source_payloads is not None:
-                source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
-            if not operation_only:
-                self._validate_agent_tool_policies(config)
-            return config, tuple(source_paths), tuple(source_details), schema_path
+            scope = graph.resolve_scope()
+            workspace = cast(Mapping[str, ConfigValue], scope.settings["workspace"])
+            # 所有已配置消费者在发布前解析，暖读与历史恢复不延迟读取新文件。
+            for provider_id, provider in cast(Mapping, workspace["llm"]["providers"]).items():
+                graph.resolve_provider(provider_id)
+                for model_id in provider["models"]:
+                    graph.resolve_model(provider_id, model_id)
         except Exception as error:
             if import_sources:
-                cast("ConfigService", self)._record_shared_source_application(sources=tuple(source_details),
-                    result="failed", error=f"Workspace 配置来源读取失败: error={type(error).__name__}")
+                self._record_failed_source_read(graph, error)
             raise
+        ordered = list(dict.fromkeys([node.location.path for node in scope.chain] + list(graph.dependencies)))
+        details = []
+        for precedence, path in enumerate(ordered):
+            uri = self._source_uri_for_path(path)
+            key, layer = self._source_identity(path)
+            file = graph.dependencies[path]
+            document = cast(dict[str, object], thaw(graph.source_documents[uri]))
+            business = cast(dict[str, object], document["settings"]).get("workspace", {})
+            if layer in {"user", "user_local"} and workspace_plugin_entries(business):
+                raise ValueError("plugins.runtime.entries 只能写入明确工作区的配置来源")
+            if not operation_only:
+                prepare_config_for_persistence(document, resolve_environment=False)
+                ConfigAgentToolsMixin._preflight_custom_tool_factories(business)
+            record = self._workspace_state_store.get_source_layer(key) if self._workspace_state_store is not None else None
+            if import_sources and self._workspace_state_store is not None and layer != "inline":
+                verify_stable_config_file(file)
+                previous_generation = record.source_generation if record is not None else 0
+                record = self._workspace_state_store.sync_config_source(
+                    config_key=key, uri=uri, config_version=4, presence="present", payload=document,
+                    layer_digest=file.digest, expected_layer_revision=record.layer_revision if record else None,
+                    expected_layer_digest=record.layer_digest if record else None,
+                    journal_origin=None if self._shared_source_key(key) is not None else "file-watcher",
+                )
+                self._record_source_journal(record, origin="file-watcher", previous_source_generation=previous_generation)
+                record = self._workspace_state_store.get_source_layer(key)
+            details.append(ConfigSource(uri=uri, layer=layer, precedence=precedence, loaded=True,
+                source_key=key, presence="present", layer_revision=record.layer_revision if record else None,
+                layer_digest=record.layer_digest if record else file.digest,
+                source_generation=record.source_generation if record else None))
+            if source_payloads is not None:
+                source_payloads[key] = document
+            if source_files is not None:
+                source_files[key] = file
+        if self._runtime_config_overrides:
+            details.append(replace(self._runtime_override_source(), precedence=len(details)))
+            if source_payloads is not None:
+                source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"settings": {"workspace": {"ui": dict(self._runtime_config_overrides)}}}
+        settings = cast(dict[str, object], thaw(scope.settings))
+        config = {**settings["workspace"], "network": settings["network"], "config_version": 4}
+        if not operation_only:
+            self._validate_agent_tool_policies(config)
+        return config, tuple(ordered), tuple(details), self._resolve_schema_path(), graph
+
+    @staticmethod
+    def _graph_origins(graph: ConfigGraph) -> list[dict[str, object]]:
+        scope = graph.resolve_scope()
+        result = []
+
+        def visit(value: ConfigValue, path: tuple[str, ...]) -> None:
+            if isinstance(value, Mapping) and value:
+                for key, child in value.items():
+                    visit(child, (*path, key))
+                return
+            origin = scope.origins.locate(path)
+            key = graph.source_keys[origin.source_uri]
+            shadowed = []
+            for node in scope.chain:
+                try:
+                    parent_key = graph.source_keys[node.origins.locate(path).source_uri]
+                except KeyError:
+                    continue
+                if parent_key != key and parent_key not in shadowed:
+                    shadowed.append(parent_key)
+            result.append({"path": json_pointer(path[1:] if path[0] == "workspace" else path),
+                "source_key": key, "shadowed_sources": shadowed})
+
+        for namespace in ("workspace", "network"):
+            visit(scope.settings[namespace], (namespace,))
+        return result
 
     def _read_saved_source_view(self) -> tuple[
         dict[str, Any], dict[str, dict[str, object]],
@@ -260,7 +275,7 @@ class ConfigSourceLayersMixin:
         service = cast("ConfigService", self)
         layers: dict[str, dict[str, object]] = {}
         files: dict[str, StableConfigFile] = {}
-        config, _, sources, _ = service._read_effective_config(
+        config, _, sources, _, _ = service._read_effective_config(
             import_sources=False, source_payloads=layers, source_files=files, operation_only=True,
         )
         baseline = {}
@@ -279,7 +294,7 @@ class ConfigSourceLayersMixin:
     def _runtime_override_source(self) -> ConfigSource:
         # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，
         # 故 uri=None。
-        layer, precedence = _SOURCE_LAYER_AUTHORITY[self._RUNTIME_OVERRIDE_CONFIG_KEY]
+        layer, precedence = "runtime_override", 0
         if self._workspace_state_store is None:
             return ConfigSource(
                 uri=None,
@@ -402,223 +417,18 @@ class ConfigSourceLayersMixin:
             release_config_name="workspace_schema.jsonc",
         )
 
-    def _config_source(
-        self,
-        *,
-        path: Path,
-        config_key: str,
-    ) -> ConfigSource:
-        """返回一条来源的 URI 兄弟字段形态；inline 之外的层不可寻址。
-
-        逻辑来源层与 precedence 一律取自 `_SOURCE_LAYER_AUTHORITY`，本方法 MUST NOT
-        再接收调用方传入的层名：从源 JSONC 构建只影响 `loaded`/`presence`（读 `path`），
-        绝不改变对外 `layer`。有 state store 时 user/user_local/workspace 三层共享同一
-        个 `workspace.sqlite`，但共享只是**承载事实**，MUST NOT 有损改写成 `sqlite`
-        对外暴露——它们在权威轴上本就是三个不同层。不可寻址性以 `uri=None` 表达。
-        real path 只在本调用栈内用于判断 presence，MUST NOT 持久化或对外。
-        """
-        layer, resolved_precedence = _SOURCE_LAYER_AUTHORITY[config_key]
-        if self._workspace_state_store is None:
-            return ConfigSource(
-                uri=None,
-                layer=layer,
-                precedence=resolved_precedence,
-                loaded=path.is_file(),
-                source_key=config_key,
-                presence="present" if path.is_file() else "absent",
-            )
-        source_record = self._workspace_state_store.get_source_layer(config_key)
-        return ConfigSource(
-            uri=None,
-            layer=layer,
-            precedence=resolved_precedence,
-            loaded=(
-                source_record.presence == "present"
-                if source_record is not None
-                else path.is_file()
-            ),
-            presence=(
-                source_record.presence
-                if source_record is not None
-                else ("present" if path.is_file() else "absent")
-            ),
-            source_key=config_key,
-            layer_revision=(
-                source_record.layer_revision if source_record is not None else None
-            ),
-            layer_digest=(
-                source_record.layer_digest if source_record is not None else None
-            ),
-            source_generation=(
-                source_record.source_generation if source_record is not None else None
-            ),
-        )
-
-    def _append_source_path(self, source_paths: list[Path], path: Path) -> None:
-        resolved_path = (
-            self._workspace_state_store.path
-            if self._workspace_state_store is not None
-            else path
-        )
-        if resolved_path not in source_paths:
-            source_paths.append(resolved_path)
-
-    def _has_shared_override(self, *, config_key: str, path: Path) -> bool:
-        if self._workspace_state_store is None:
-            return path.is_file()
-        source_record = self._workspace_state_store.get_source_layer(config_key)
-        if source_record is not None:
-            return source_record.presence == "present"
-        return path.is_file()
-
-    def _read_shared_override(
-        self,
-        *,
-        config_key: str,
-        path: Path,
-    ) -> dict[str, Any] | None:
-        require_settled_config_migration(path)
-        if self._workspace_state_store is None:
-            return self._read_config_source(path) if path.is_file() else None
-        blocked = self._workspace_state_store.migrate_legacy_config_secrets(config_key)
-        if blocked:
-            raise SecretReferenceRequiredError(
-                "旧 Workspace SQLite 含无法恢复的秘密摘要，必须重新导入: "
-                + ", ".join(blocked)
-            )
-        source_record = self._workspace_state_store.get_source_layer(config_key)
-        previous_source_generation = (
-            source_record.source_generation if source_record is not None else 0
-        )
-        file_snapshot = read_stable_config_file(path)
-        journal_origin = (
-            None
-            if self._is_shared_user_source(config_key=config_key, path=path)
-            else "file-watcher"
-        )
-        if file_snapshot.presence == "absent":
-            if source_record is None:
-                return None
-            deleted_backup_path = path.with_name(f"{path.name}.deleted.bak")
-            if (
-                not deleted_backup_path.exists()
-                and source_record.payload is not None
-            ):
-                deleted_backup_path.write_text(
-                    dump_json(redact_config_payload(source_record.payload)),
-                    encoding="utf-8",
-                )
-            verify_stable_config_file(file_snapshot)
-            source_record = self._workspace_state_store.sync_config_source(
-                config_key=config_key,
-                # user/user_local/workspace 层均不可寻址，依据是共享同一 workspace.sqlite
-                # 这一边界载体（非 scope 闭集），故 uri 恒为 None。
-                uri=None,
-                config_version=source_record.config_version,
-                presence="absent",
-                payload=None,
-                layer_digest=None,
-                expected_layer_revision=(
-                    source_record.layer_revision if source_record is not None else None
-                ),
-                expected_layer_digest=(
-                    source_record.layer_digest if source_record is not None else None
-                ),
-                journal_origin=journal_origin,
-            )
-            self._record_source_journal(
-                source_record,
-                source_path=path,
-                origin="file-watcher",
-                previous_source_generation=previous_source_generation,
-            )
-            return None
-
-        if file_snapshot.digest is None:
-            raise RuntimeError(f"present 配置文件缺少 digest: {path}")
-        if (
-            source_record is not None
-            and source_record.presence == "present"
-            and source_record.layer_digest == file_snapshot.digest
-            # 该层不可寻址：持久化的 uri 必为 None，与读取点的 None 一致才走复用分支。
-            and source_record.uri is None
-        ):
-            payload = parse_stable_config_file(file_snapshot)
-            if payload is None:
-                raise RuntimeError(f"present 配置文件解析为空: {path}")
-            require_current_workspace_config(payload, partial=True)
-            prepare_config_for_persistence(payload)
-            ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
-            verify_stable_config_file(file_snapshot)
-            source_record = self._workspace_state_store.sync_config_source(
-                config_key=config_key,
-                uri=None,
-                config_version=int(payload.get("config_version", 3)),
-                presence="present",
-                payload=payload,
-                layer_digest=file_snapshot.digest,
-                expected_layer_revision=source_record.layer_revision,
-                expected_layer_digest=source_record.layer_digest,
-                journal_origin=("loader" if journal_origin is not None else None),
-            )
-            self._record_source_journal(
-                source_record,
-                source_path=path,
-                origin="loader",
-                previous_source_generation=previous_source_generation,
-            )
-            return dict(payload)
-
-        payload = parse_stable_config_file(file_snapshot)
-        if payload is None:
-            raise RuntimeError(f"present 配置文件解析为空: {path}")
-        require_current_workspace_config(payload, partial=True)
-        prepare_config_for_persistence(payload)
-        ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
-        verify_stable_config_file(file_snapshot)
-        backup_path = path.with_name(f"{path.name}.migrated.bak")
-        if not backup_path.exists():
-            shutil.copy2(path, backup_path)
-        source_record = self._workspace_state_store.sync_config_source(
-            config_key=config_key,
-            uri=None,
-            config_version=int(payload.get("config_version", 3)),
-            presence="present",
-            payload=payload,
-            layer_digest=file_snapshot.digest,
-            expected_layer_revision=(
-                source_record.layer_revision if source_record is not None else None
-            ),
-            expected_layer_digest=(
-                source_record.layer_digest if source_record is not None else None
-            ),
-            journal_origin=journal_origin,
-        )
-        self._record_source_journal(
-            source_record,
-            source_path=path,
-            origin="file-watcher",
-            previous_source_generation=previous_source_generation,
-        )
-        return payload
-
     def _record_source_journal(
         self,
         source_record,
         *,
-        source_path: Path,
         origin: str,
         previous_source_generation: int = 0,
     ) -> None:
-        # ``source_path`` 是最后访问点的真实路径，只在本调用栈内用于判定共享来源，
-        # MUST NOT 持久化（journal 只写 URI 兄弟字段）。
         if self._workspace_state_store is None:
             return
         source_key = source_record.config_key
-        if self._is_shared_user_source(
-            config_key=source_key,
-            path=source_path,
-        ):
+        shared_key = self._shared_source_key(source_key)
+        if shared_key is not None:
             source_owner = self._source_owner
             workspace_id = self._source_owner_workspace_id
             if source_owner is None or workspace_id is None:
@@ -628,7 +438,7 @@ class ConfigSourceLayersMixin:
                 presence=source_record.presence,
                 layer_digest=source_record.layer_digest,
                 origin=origin,
-                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                source_key=shared_key,
             )
             materialized = self._workspace_state_store.update_source_generation(
                 config_key=source_key,
@@ -638,16 +448,16 @@ class ConfigSourceLayersMixin:
             )
             source_owner.prepare_fanout(
                 workspace_id=workspace_id,
-                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                source_key=shared_key,
                 after_generation=previous_source_generation,
             )
             for prior in source_owner.list_journal(
-                source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                source_key=shared_key,
                 after_generation=previous_source_generation,
             ):
                 is_current = prior.source_generation == owner_record.source_generation
                 source_owner.record_fanout(
-                    source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                    source_key=shared_key,
                     source_generation=prior.source_generation,
                     workspace_id=workspace_id,
                     status="applying" if is_current else "superseded",
@@ -658,13 +468,13 @@ class ConfigSourceLayersMixin:
             if owner_record.source_generation <= previous_source_generation:
                 observed = next(
                     (item for item in source_owner.list_fanout(
-                        source_generation=owner_record.source_generation,
+                        source_generation=owner_record.source_generation, source_key=shared_key,
                     ) if item.workspace_id == workspace_id),
                     None,
                 )
                 if observed is None or observed.status in {"pending", "unobserved"}:
                     source_owner.record_fanout(
-                        source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                        source_key=shared_key,
                         source_generation=owner_record.source_generation,
                         workspace_id=workspace_id,
                         status="applying",
@@ -705,60 +515,49 @@ class ConfigSourceLayersMixin:
         owner, workspace_id = service._source_owner, service._source_owner_workspace_id
         if owner is None or workspace_id is None:
             return
-        source = next((source for source in sources
-                       if source.source_key == "workspace_mutable_override"), None)
-        if source is None or not source.source_generation:
-            return
-        record = owner.get_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
-            source_generation=source.source_generation, workspace_id=workspace_id)
-        if record.status not in {"pending", "applying"}:
-            return
-        if record.result == "restart_required" and result == "restart_required":
-            return
-        status = {"applied": "applied", "unchanged": "applied", "restart_required": "applying",
-                  "conflict": "conflict", "failed": "failed"}[result]
-        owner.record_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
-            source_generation=source.source_generation, workspace_id=workspace_id, status=status,
-            layer_revision=source.layer_revision, layer_digest=source.layer_digest,
-            result=result, error=error)
+        for source in sources:
+            shared_key = self._shared_source_key(source.source_key)
+            if shared_key is None or not source.source_generation:
+                continue
+            record = owner.get_fanout(source_key=shared_key,
+                source_generation=source.source_generation, workspace_id=workspace_id)
+            if record.status not in {"pending", "applying"}:
+                continue
+            if record.result == "restart_required" and result == "restart_required":
+                continue
+            status = {"applied": "applied", "unchanged": "applied", "restart_required": "applying",
+                      "conflict": "conflict", "failed": "failed"}[result]
+            owner.record_fanout(source_key=shared_key,
+                source_generation=source.source_generation, workspace_id=workspace_id, status=status,
+                layer_revision=source.layer_revision, layer_digest=source.layer_digest,
+                result=result, error=error)
 
-    @staticmethod
-    def _read_config_source(
-        path: Path,
-    ) -> dict[str, Any]:
-        require_settled_config_migration(path)
-        config_snapshot = read_stable_config_file(path)
-        config = parse_stable_config_file(config_snapshot)
-        if config is None:
-            raise FileNotFoundError(f"配置文件不存在: {path}")
-        require_current_workspace_config(config, partial=True)
-        ConfigAgentToolsMixin._preflight_custom_tool_factories(config)
-        return config
+    def _record_failed_source_read(self, graph: ConfigGraph, error: Exception) -> None:
+        """无效文档不物化为可用配置，但实际共享来源的失败必须可查询。"""
+        owner, workspace_id = self._source_owner, self._source_owner_workspace_id
+        if owner is None or workspace_id is None:
+            return
+        for path, file in graph.dependencies.items():
+            shared_key = self._shared_source_key(self._source_identity(path)[0])
+            if shared_key is None:
+                continue
+            observed = owner.observe(source_key=shared_key, uri=self._source_uri_for_path(path),
+                presence=file.presence, layer_digest=file.digest, origin="file-watcher")
+            owner.record_fanout(source_key=shared_key, source_generation=observed.source_generation,
+                workspace_id=workspace_id, status="failed", layer_digest=file.digest,
+                result="failed", error=f"Workspace 配置来源读取失败: error={type(error).__name__}")
 
-    def _apply_workspace_override(
-        self,
-        base_config: dict[str, Any],
-        workspace_root: Path,
-    ) -> tuple[
-        dict[str, Any],
-        Path | None,
-    ]:
-        override_path = get_workspace_config_path(workspace_root)
-        if override_path.is_file():
-            override_config = self._read_config_source(override_path)
-            return (
-                merge_json_objects(base_config, override_config, schema=self._load_schema()),
-                override_path,
-            )
-        return base_config, None
-
-    def _is_shared_user_source(self, *, config_key: str, path: Path) -> bool:
-        return (
-            self._source_owner is not None
-            and self._source_owner_workspace_id is not None
-            and config_key == "workspace_mutable_override"
-            and path.expanduser().resolve() == self._get_workspace_config_path().resolve()
-        )
+    def _shared_source_key(self, source_key: str | None) -> str | None:
+        """沿原来源账本按实际文件身份汇总；工作区自行观察并提交，不由 Gateway 驱动。"""
+        if self._source_owner is None or self._source_owner_workspace_id is None:
+            return None
+        if source_key == "workspace_mutable_override":
+            return SHARED_USER_WORKSPACE_SOURCE_KEY
+        if source_key == "workspace_local_mutable_override":
+            return "workspace:user_local"
+        if source_key is not None and source_key.startswith("source_"):
+            return "workspace:" + source_key
+        return None
 
     def _get_workspace_local_config_path(self) -> Path:
         if self._config_path is None:

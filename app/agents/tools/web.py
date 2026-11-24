@@ -6,14 +6,13 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
-from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.core.failures import failure_detail
 from app.runtime.web_content import extract_readable_document
+from app.runtime.web_search import search_web
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 _MAX_DOWNLOAD_BYTES = 2_000_000
@@ -142,8 +141,6 @@ async def _fetch_page(
 def create_web_search_tool(context: CustomToolFactoryContext) -> BaseTool:
     """创建 DuckDuckGo Web 搜索扩展工具。"""
 
-    del context
-
     async def web_search(
         query: str,
         max_results: int = 5,
@@ -155,39 +152,16 @@ def create_web_search_tool(context: CustomToolFactoryContext) -> BaseTool:
         normalized_query = query.strip()
         if not normalized_query:
             raise ValueError("query 不能为空")
-        wrapper = DuckDuckGoSearchAPIWrapper(
-            region=region,
-            safesearch=safesearch,
-            time=time_range,
-            source=search_type,
-        )
-        search = DuckDuckGoSearchResults(
-            output_format="list",
-            num_results=max_results,
-            backend=search_type,
-            api_wrapper=wrapper,
-        )
+        routes = await context.config_service.resolve_workspace_proxy_routes()
         try:
-            loop = asyncio.get_running_loop()
-            raw_results = await loop.run_in_executor(
-                None,
-                search.invoke,
-                normalized_query,
+            results = await asyncio.to_thread(
+                search_web, normalized_query, routes=routes, max_results=max_results,
+                search_type=search_type, region=region, safesearch=safesearch, time_range=time_range,
             )
         except Exception as error:
             raise RuntimeError(failure_detail(
                 error, stage="web-search", label=f"DuckDuckGo 搜索失败: query={normalized_query!r}",
             )) from error
-        if not isinstance(raw_results, list):
-            raise TypeError(f"DuckDuckGo 返回了非列表结果: {type(raw_results).__name__}")
-        results = []
-        for result in raw_results:
-            if not isinstance(result, dict):
-                raise TypeError(f"DuckDuckGo 结果项不是对象: {type(result).__name__}")
-            item = dict(result)
-            if "link" in item:
-                item["url"] = item.pop("link")
-            results.append(item)
         return _json(
             {
                 "query": normalized_query,
@@ -220,7 +194,12 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
         binding = context.invocation_context.thread_binding
         if binding is None:
             raise RuntimeError("网页抓取缺少精确 ThreadRuntimeBinding")
+        routes = await context.config_service.resolve_workspace_proxy_routes()
+        verify = httpx.create_ssl_context(trust_env=True)
         async with httpx.AsyncClient(
+            trust_env=False,
+            verify=verify,
+            mounts=routes.async_mounts(verify=verify),
             follow_redirects=True,
             timeout=httpx.Timeout(_FETCH_TIMEOUT_SECONDS),
             headers={"User-Agent": "BoxTeam-WebFetch/1.0"},

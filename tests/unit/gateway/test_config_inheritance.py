@@ -295,6 +295,41 @@ def test_source_inspection_inherits_actual_profile_parent(source_service):
     assert document.source_inherited["network"] == {"proxy": {"mode": "direct"}}
     assert document.source_effective["network"] == {"proxy": {"mode": "direct"}}
     assert document.model_dump(mode="json")["source_inherited"] == document.source_inherited
+    selected = [node for node in document.nodes if node.source_key == "gateway_local_mutable_override"]
+    assert {node.definition_path for node in selected} == {"", "/profiles/network"}
+    root = next(node for node in selected if not node.definition_path)
+    profile = next(node for node in selected if node.definition_path)
+    assert root.parent_id == profile.node_id
+
+
+async def test_source_document_reads_profile_only_file_without_resolving_unused_root(source_service):
+    service, store, root, _ = source_service
+    path = root / "profile-only.jsonc"
+    text = "// 仅 profile 参与，根继承不得被展开\n" + json.dumps({
+        "config_version": 6, "extends": "unused-missing.jsonc", "settings": {}, "profiles": {
+            "network": {"extends": "user:gateway", "settings": {"network": {"proxy": {"mode": "direct"}}}},
+            "unused": {"extends": "another-missing.jsonc", "settings": {}},
+        },
+    })
+    path.write_text(text)
+    write_node(root / "gateway_local.jsonc", parent="profile-only.jsonc#/profiles/network")
+    await service.reload()
+    config = service.config
+    source_key = next(source.source_key for source in config.source_details if source.layer == "source")
+    initial = store.get_active_config_snapshot("gateway")
+
+    document = service.get_source_document(source_key=source_key)
+
+    assert document.jsonc == text
+    assert document.source_inherited == {}
+    assert document.source_effective["network"] == {"proxy": {"mode": "direct"}}
+    actual = [node for node in document.model_dump(mode="json")["nodes"] if node["source_key"] == source_key]
+    assert len(actual) == 1 and actual[0]["definition_path"] == "/profiles/network"
+    assert actual[0]["reference"] == str(path) + "#/profiles/network"
+    assert all(node.parent_id is None or any(parent.node_id == node.parent_id for parent in document.nodes)
+               for node in document.nodes)
+    assert store.get_active_config_snapshot("gateway") == initial
+    assert path.read_text() == text
 
 
 def test_absent_source_preview_keeps_real_disk_dependency(gateway_files: Path):

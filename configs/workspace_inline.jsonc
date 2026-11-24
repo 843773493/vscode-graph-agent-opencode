@@ -1,11 +1,734 @@
 {
-  "$schema": "./workspace_schema.jsonc", // ConfigService._resolve_schema_path 读取 schema 引用。
-  "config_version": 3, // Workspace 配置结构版本，由 workspace_schema 校验。
-  "plugins": { "runtime": { "entries": [] } }, // Workspace 插件绑定由此配置 owner 提交。
-  "llm": {
-    "providers": {
-      "primary": {
-        "defaults": {
+  "$schema": "./workspace_schema.jsonc",
+  "config_version": 4,
+  "settings": {
+    "workspace": {
+      "plugins": {
+        "runtime": {
+          "entries": []
+        }
+      },
+      "llm": {
+        "providers": {
+          "primary": {
+            "models": {
+              "default": {
+                "model": "big-pickle",
+                "config_ref": "context:provider/primary"
+              }
+            },
+            "config_ref": "#/profiles/provider.primary"
+          },
+          "backup_1": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_1"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_1"
+          },
+          "backup_2": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_2"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_2"
+          },
+          "backup_3": {
+            "models": {
+              "default": {
+                "model": "gpt-6-luna",
+                "config_ref": "context:provider/backup_3"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_3"
+          },
+          "backup_4": {
+            "models": {
+              "default": {
+                "model": "gpt-6-luna",
+                "config_ref": "context:provider/backup_4"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_4"
+          },
+          "newapi_deepseek": {
+            "models": {
+              "default": {
+                "model": "deepseek-v4.1-flash-1017",
+                "config_ref": "context:provider/newapi_deepseek"
+              }
+            },
+            "config_ref": "#/profiles/provider.newapi_deepseek"
+          },
+          "DeepSeek-V4.1-Flash": {
+            "models": {
+              "default": {
+                "model": "DeepSeek-V4.1-Flash",
+                "config_ref": "context:provider/DeepSeek-V4.1-Flash"
+              }
+            },
+            "config_ref": "#/profiles/provider.DeepSeek-V4.1-Flash"
+          }
+        }
+      },
+      "resources": {
+        "skill_sources": {
+          "sources": [],
+          "gateway_updates": {
+            "mode": "event",
+            "poll_interval": null
+          }
+        }
+      },
+      "context": {
+        "source_messages": {
+          "grouping": "aggregate"
+        },
+        "resource_activation": {
+          "default_boundary": "turn",
+          "overrides": {
+            "mcp_tool_catalog": "turn"
+          }
+        }
+      },
+      "tooling": {
+        "policy_defaults": {
+          "execution_enabled": true,
+          "model_visible": true,
+          "confirmation_required": false,
+          "limits": {
+            "timeout_ms": 10000,
+            "max_result_bytes": 1048576
+          }
+        },
+        "policy_rules": {
+          "by_origin": {
+            "custom": {
+              "model_visible": false
+            },
+            "mcp": {
+              "model_visible": false
+            }
+          },
+          "by_kind": {
+            "debugging": {
+              "model_visible": false
+            }
+          },
+          "by_group": {},
+          "by_tool": {}
+        },
+        "restrictions": {
+          "execution_disabled": [],
+          "model_hidden": [],
+          "confirmation_required": []
+        }
+      },
+      "default_agent": "default",
+      "agents": {
+        "default": {
+          "name": "Workspace Assistant",
+          "description": "工作区默认助手，负责通用问答、代码解释、开发辅助和文档问答。",
+          "language": "zh-CN",
+          "timezone": "Asia/Shanghai",
+          "tags": [],
+          "persona": {
+            "role": "工程团队工作区助手",
+            "tone": "professional",
+            "identity": "",
+            "verbosity": "medium"
+          },
+          "instructions": {
+            "system_prompt_file": null,
+            "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。",
+            "runtime_identity": {
+              "description_file": null,
+              "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+            }
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_4",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "newapi_deepseek",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "DeepSeek-V4.1-Flash",
+                "model_id": "default"
+              }
+            ]
+          },
+          "tools": {
+            "tool_choice": "auto",
+            "timeout_ms": 10000,
+            "allowlist": [],
+            "denylist": [],
+            "confirmation_required": [],
+            "custom": [
+              {
+                "tool_id": "connections.manage"
+              },
+              {
+                "tool_id": "read_context"
+              },
+              {
+                "tool_id": "search_context"
+              },
+              {
+                "tool_id": "discover_workspaces"
+              },
+              {
+                "tool_id": "search_resources"
+              },
+              {
+                "tool_id": "web_search"
+              },
+              {
+                "tool_id": "fetch_webpage"
+              },
+              {
+                "tool_id": "listBrowserPage"
+              },
+              {
+                "tool_id": "openBrowserPage"
+              },
+              {
+                "tool_id": "readPage"
+              },
+              {
+                "tool_id": "navigatePage"
+              },
+              {
+                "tool_id": "clickElement"
+              },
+              {
+                "tool_id": "typeInPage"
+              },
+              {
+                "tool_id": "hoverElement"
+              },
+              {
+                "tool_id": "dragElement"
+              },
+              {
+                "tool_id": "handleDialog"
+              },
+              {
+                "tool_id": "screenshotPage"
+              },
+              {
+                "tool_id": "runPlaywrightCode"
+              },
+              {
+                "name": "list_debug_configurations",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "list_debug_configurations"
+                },
+                "description": "列出当前会话的可移植源码调试方案，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "create_debug_configuration",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "create_debug_configuration"
+                },
+                "description": "创建并激活目标程序调试方案，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "activate_debug_configuration",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "activate_debug_configuration"
+                },
+                "description": "激活当前会话的目标程序调试方案，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "delete_debug_configuration",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "delete_debug_configuration"
+                },
+                "description": "删除当前会话未运行的目标程序调试方案，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "start_debugging",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "start_debugging"
+                },
+                "description": "源码调试扩展工具 start_debugging，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "stop_debugging",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "stop_debugging"
+                },
+                "description": "源码调试扩展工具 stop_debugging，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "step_over",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "step_over"
+                },
+                "description": "源码调试扩展工具 step_over，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "step_into",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "step_into"
+                },
+                "description": "源码调试扩展工具 step_into，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "step_out",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "step_out"
+                },
+                "description": "源码调试扩展工具 step_out，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "continue_execution",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "continue_execution"
+                },
+                "description": "源码调试扩展工具 continue_execution，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "pause_execution",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "pause_execution"
+                },
+                "description": "源码调试扩展工具 pause_execution，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "restart_debugging",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "restart_debugging"
+                },
+                "description": "源码调试扩展工具 restart_debugging，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "add_breakpoint",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "add_breakpoint"
+                },
+                "description": "源码调试扩展工具 add_breakpoint，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "add_logpoint",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "add_logpoint"
+                },
+                "description": "源码调试扩展工具 add_logpoint，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "remove_breakpoint",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "remove_breakpoint"
+                },
+                "description": "源码调试扩展工具 remove_breakpoint，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "clear_all_breakpoints",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "clear_all_breakpoints"
+                },
+                "description": "源码调试扩展工具 clear_all_breakpoints，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "list_breakpoints",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "list_breakpoints"
+                },
+                "description": "源码调试扩展工具 list_breakpoints，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "list_variable_names",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "list_variable_names"
+                },
+                "description": "源码调试扩展工具 list_variable_names，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "get_variables_values",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "get_variables_values"
+                },
+                "description": "源码调试扩展工具 get_variables_values，必须通过 invoke_extension_tool 调用。"
+              },
+              {
+                "name": "evaluate_expression",
+                "factory": "app.agents.tools.debugging:create_debugging_tool",
+                "options": {
+                  "tool_name": "evaluate_expression"
+                },
+                "description": "源码调试扩展工具 evaluate_expression，必须通过 invoke_extension_tool 调用。"
+              }
+            ]
+          },
+          "safety": {
+            "policy_mode": "standard",
+            "prompt_injection_protection": true,
+            "pii_redaction": true,
+            "refuse_secrets_exfiltration": true
+          },
+          "execution": {
+            "stream": true,
+            "max_turns": 16,
+            "max_history_messages": 30,
+            "max_context_tokens": 32000,
+            "require_delegated_report": false
+          },
+          "env": {
+            "mode": "development",
+            "region": "",
+            "feature_flags": {}
+          }
+        },
+        "coder": {
+          "name": "Coding Assistant",
+          "description": "专门用于代码实现、重构和修复问题。",
+          "language": "zh-CN",
+          "timezone": "Asia/Shanghai",
+          "tags": [],
+          "instructions": {
+            "system_prompt_file": null,
+            "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。",
+            "runtime_identity": {
+              "description_file": null,
+              "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+            }
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_4",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "newapi_deepseek",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "DeepSeek-V4.1-Flash",
+                "model_id": "default"
+              }
+            ]
+          },
+          "tools": {
+            "tool_choice": "auto",
+            "timeout_ms": 10000,
+            "allowlist": [],
+            "denylist": [
+              "edit_file"
+            ],
+            "confirmation_required": [],
+            "custom": []
+          },
+          "execution": {
+            "stream": true,
+            "max_turns": 16,
+            "max_history_messages": 30,
+            "max_context_tokens": 32000,
+            "require_delegated_report": false
+          }
+        },
+        "reviewer": {
+          "name": "Code Reviewer",
+          "description": "专门用于代码审查、风险检查和设计评估。",
+          "language": "zh-CN",
+          "timezone": "Asia/Shanghai",
+          "tags": [],
+          "instructions": {
+            "system_prompt_file": null,
+            "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。",
+            "runtime_identity": {
+              "description_file": null,
+              "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+            }
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_4",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "newapi_deepseek",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "DeepSeek-V4.1-Flash",
+                "model_id": "default"
+              }
+            ]
+          },
+          "tools": {
+            "tool_choice": "auto",
+            "timeout_ms": 10000,
+            "allowlist": [],
+            "denylist": [],
+            "confirmation_required": [],
+            "custom": []
+          },
+          "execution": {
+            "stream": true,
+            "max_turns": 16,
+            "max_history_messages": 30,
+            "max_context_tokens": 32000,
+            "require_delegated_report": false
+          }
+        },
+        "researcher": {
+          "name": "Research Assistant",
+          "description": "专门用于资料检索、文档总结和方案调研。",
+          "language": "zh-CN",
+          "timezone": "Asia/Shanghai",
+          "tags": [],
+          "instructions": {
+            "system_prompt_file": null,
+            "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。",
+            "runtime_identity": {
+              "description_file": null,
+              "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
+            }
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_4",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "newapi_deepseek",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "DeepSeek-V4.1-Flash",
+                "model_id": "default"
+              }
+            ]
+          },
+          "tools": {
+            "tool_choice": "auto",
+            "timeout_ms": 10000,
+            "allowlist": [],
+            "denylist": [],
+            "confirmation_required": [],
+            "custom": []
+          },
+          "execution": {
+            "stream": true,
+            "max_turns": 16,
+            "max_history_messages": 30,
+            "max_context_tokens": 32000,
+            "require_delegated_report": false
+          }
+        }
+      },
+      "development": {
+        "test_tools": false
+      },
+      "ui": {
+        "default_orchestration": "single_agent",
+        "max_concurrent_agents": 4,
+        "allow_shell_tools": false,
+        "ignored_paths": [],
+        "auto_summarize": true
+      },
+      "mcp": {
+        "supervision": {
+          "sealed_call_timeout_seconds": 1800
+        },
+        "servers": {}
+      },
+      "runtime": {
+        "session_stop": {
+          "interrupt": {
+            "scope": "thread",
+            "jobs": "interrupt",
+            "pending_messages": "continue",
+            "debug": "keep",
+            "background_task": "keep",
+            "terminal": "keep",
+            "browser": "keep",
+            "collaboration": "keep",
+            "goal": "keep",
+            "thread_runtime": "keep"
+          },
+          "stop": {
+            "scope": "session",
+            "jobs": "cancel",
+            "pending_messages": "discard",
+            "debug": "stop",
+            "background_task": "stop",
+            "terminal": "stop",
+            "browser": "stop",
+            "collaboration": "stop",
+            "goal": "pause",
+            "thread_runtime": "keep"
+          }
+        },
+        "agent": {
+          "run": {
+            "mode": "single_agent",
+            "response_mode": "stream",
+            "async": true,
+            "max_steps": 20,
+            "timeout_seconds": 600
+          }
+        },
+        "gateway": {
+          "connection": {
+            "url": "http://127.0.0.1:8014",
+            "timeout_seconds": 30
+          }
+        },
+        "workspace": {
+          "files": {
+            "list": {
+              "default_limit": 500
+            },
+            "preview": {
+              "max_bytes": 1048576,
+              "binary_sample_bytes": 8192
+            }
+          }
+        },
+        "events": {
+          "trace_stream": {
+            "heartbeat_interval_seconds": 15
+          }
+        },
+        "debug": {
+          "enabled": true,
+          "default_adapter": "node_inspector",
+          "command_timeout_seconds": 10,
+          "node": {
+            "inspector_host": "127.0.0.1",
+            "inspector_port": 0,
+            "executable": ""
+          },
+          "python": {
+            "adapter": "debugpy",
+            "debugpy_host": "127.0.0.1",
+            "debugpy_port": 0
+          },
+          "launch_profiles": {
+            "node-default": {
+              "adapter": "node_inspector",
+              "runtime": "node",
+              "program": "",
+              "working_directory": "",
+              "args": []
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "proxy": {
+        "mode": "environment"
+      }
+    },
+    "model_options": {
+      "api_mode": {
+        "streaming": true
+      }
+    }
+  },
+  "profiles": {
+    "provider.primary": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://opencode.ai/zen/v1",
           "custom_llm_provider": "openai",
           "api_mode": {
@@ -23,15 +746,13 @@
             "default_headers": {},
             "parameters": {}
           }
-        },
-        "models": {
-          "default": {
-            "model": "big-pickle"
-          }
         }
-      },
-      "backup_1": {
-        "defaults": {
+      }
+    },
+    "provider.backup_1": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://api.kilo.ai/api/gateway",
           "custom_llm_provider": "openai",
           "api_mode": {
@@ -49,15 +770,13 @@
             "default_headers": {},
             "parameters": {}
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_2": {
-        "defaults": {
+      }
+    },
+    "provider.backup_2": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://openrouter.ai/api/v1",
           "custom_llm_provider": "openrouter",
           "api_mode": {
@@ -75,15 +794,13 @@
             "default_headers": {},
             "parameters": {}
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_3": {
-        "defaults": {
+      }
+    },
+    "provider.backup_3": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://newapi.hyf2333.top/v1",
           "custom_llm_provider": "openai",
           "api_mode": {
@@ -116,15 +833,13 @@
               }
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "gpt-6-luna"
-          }
         }
-      },
-      "backup_4": {
-        "defaults": {
+      }
+    },
+    "provider.backup_4": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://chatgpt.com/backend-api/codex",
           "custom_llm_provider": "chatgpt",
           "api_mode": {
@@ -156,15 +871,13 @@
               }
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "gpt-6-luna"
-          }
         }
-      },
-      "newapi_deepseek": {
-        "defaults": {
+      }
+    },
+    "provider.newapi_deepseek": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://newapi.hyf2333.top/v1",
           "custom_llm_provider": "openai",
           "api_mode": {
@@ -184,15 +897,13 @@
               "reasoning_effort": "xhigh"
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "deepseek-v4.1-flash-1017"
-          }
         }
-      },
-      "DeepSeek-V4.1-Flash": {
-        "defaults": {
+      }
+    },
+    "provider.DeepSeek-V4.1-Flash": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "http://100.64.0.58:8079/v1/messages",
           "custom_llm_provider": "anthropic",
           "api_mode": {
@@ -212,613 +923,13 @@
           "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}",
           "request_options": {
             "default_headers": {},
-            "no_proxy": true,
             "parameters": {}
           }
         },
-        "models": {
-          "default": {
-            "model": "DeepSeek-V4.1-Flash"
+        "network": {
+          "proxy": {
+            "mode": "direct"
           }
-        }
-      }
-    }
-  },
-  "resources": {
-    "skill_sources": {
-      "sources": [], // 此工作区 owner 获取的私有 HTTP Skill；数组整体替换。
-      "gateway_updates": {
-        "mode": "event", // event、poll、manual 或显式 event_poll；经配置 shadow 提交时切换并排空旧订阅。
-        "poll_interval": null // poll/event_poll 必填，例如 "5m" 或 "1h"；其它模式必须为 null。
-      }
-    }
-  },
-  "context": {
-    "source_messages": {
-      "grouping": "aggregate" // aggregate 聚合本批来源；separate 逐来源消息，仅影响新封存批次。
-    },
-    "resource_activation": {
-      "default_boundary": "turn", // active execution slot 冻结，Turn 内不可漂移。
-      "overrides": {
-        "mcp_tool_catalog": "turn" // 显式 model_call 时才允许后续 preparation 更新。
-      }
-    }
-  },
-  "tooling": {
-    "policy_defaults": {
-      "execution_enabled": true,
-      "model_visible": true,
-      "confirmation_required": false,
-      "limits": {
-        "timeout_ms": 10000,
-        "max_result_bytes": 1048576
-      }
-    },
-    "policy_rules": {
-      "by_origin": {
-        "custom": {
-          "model_visible": false
-        },
-        "mcp": {
-          "model_visible": false
-        }
-      },
-      "by_kind": {
-        "debugging": {
-          "model_visible": false
-        }
-      },
-      "by_group": {},
-      "by_tool": {}
-    },
-    "restrictions": {
-      "execution_disabled": [],
-      "model_hidden": [],
-      "confirmation_required": []
-    }
-  },
-  "default_agent": "default", // ConfigService.get_default_agent_id 选择默认 Agent。
-  "agents": {
-    "default": {
-      "name": "Workspace Assistant", // AgentService 展示名称。
-      "description": "工作区默认助手，负责通用问答、代码解释、开发辅助和文档问答。", // AgentService 展示描述。
-      "language": "zh-CN", // Agent prompt language 约定。
-      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
-      "tags": [], // AgentService 展示能力标签默认为空。
-      "persona": {
-        "role": "工程团队工作区助手", // 当前未接入独立 persona middleware。
-        "tone": "professional", // 当前未接入独立 persona middleware。
-        "identity": "", // 当前未接入独立 persona middleware。
-        "verbosity": "medium" // 当前未接入独立 persona middleware。
-      },
-      "instructions": {
-        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
-        "system_prompt": "你是面向工程团队的工作区助手。优先提供准确、可执行、可验证的回答；信息不足时明确指出缺失信息。", // Agent middleware 构造系统提示词。
-        "runtime_identity": {
-          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
-          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
-        }
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_4",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "newapi_deepseek",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "DeepSeek-V4.1-Flash",
-            "model_id": "default"
-          }
-        ]
-      },
-      "tools": {
-        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
-        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
-        "allowlist": [], // Tool policy 恢复工具集合。
-        "denylist": [], // Tool policy 禁用工具集合。
-        "confirmation_required": [], // Tool policy 需要确认的工具集合。
-        "custom": [
-          {
-            "tool_id": "connections.manage" // 本地连接控制复用扩展信封，远端未授权时仍可用。
-          },
-          {
-            "tool_id": "read_context" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "search_context" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "discover_workspaces"
-          },
-          {
-            "tool_id": "search_resources"
-          },
-          {
-            "tool_id": "web_search" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "fetch_webpage" // 网页正文抓取，无需模型配置。
-          },
-          {
-            "tool_id": "listBrowserPage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "openBrowserPage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "readPage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "navigatePage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "clickElement" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "typeInPage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "hoverElement" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "dragElement" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "handleDialog" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "screenshotPage" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "tool_id": "runPlaywrightCode" // builtin_tool_registry 稳定工具 ID。
-          },
-          {
-            "name": "list_debug_configurations", // 当前会话目标程序调试方案列表。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "list_debug_configurations" },
-            "description": "列出当前会话的可移植源码调试方案，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "create_debug_configuration", // 创建当前会话调试方案。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "create_debug_configuration" },
-            "description": "创建并激活目标程序调试方案，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "activate_debug_configuration", // 切换当前会话活动调试方案。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "activate_debug_configuration" },
-            "description": "激活当前会话的目标程序调试方案，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "delete_debug_configuration", // 删除当前会话调试方案。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "delete_debug_configuration" },
-            "description": "删除当前会话未运行的目标程序调试方案，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "start_debugging", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "start_debugging" },
-            "description": "源码调试扩展工具 start_debugging，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "stop_debugging", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "stop_debugging" },
-            "description": "源码调试扩展工具 stop_debugging，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "step_over", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "step_over" },
-            "description": "源码调试扩展工具 step_over，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "step_into", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "step_into" },
-            "description": "源码调试扩展工具 step_into，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "step_out", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "step_out" },
-            "description": "源码调试扩展工具 step_out，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "continue_execution", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "continue_execution" },
-            "description": "源码调试扩展工具 continue_execution，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "pause_execution", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "pause_execution" },
-            "description": "源码调试扩展工具 pause_execution，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "restart_debugging", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "restart_debugging" },
-            "description": "源码调试扩展工具 restart_debugging，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "add_breakpoint", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "add_breakpoint" },
-            "description": "源码调试扩展工具 add_breakpoint，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "add_logpoint", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "add_logpoint" },
-            "description": "源码调试扩展工具 add_logpoint，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "remove_breakpoint", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "remove_breakpoint" },
-            "description": "源码调试扩展工具 remove_breakpoint，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "clear_all_breakpoints", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "clear_all_breakpoints" },
-            "description": "源码调试扩展工具 clear_all_breakpoints，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "list_breakpoints", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "list_breakpoints" },
-            "description": "源码调试扩展工具 list_breakpoints，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "list_variable_names", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "list_variable_names" },
-            "description": "源码调试扩展工具 list_variable_names，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "get_variables_values", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "get_variables_values" },
-            "description": "源码调试扩展工具 get_variables_values，必须通过 invoke_extension_tool 调用。"
-          },
-          {
-            "name": "evaluate_expression", // MCP 风格源码调试扩展工具。
-            "factory": "app.agents.tools.debugging:create_debugging_tool",
-            "options": { "tool_name": "evaluate_expression" },
-            "description": "源码调试扩展工具 evaluate_expression，必须通过 invoke_extension_tool 调用。"
-          }
-        ] // Agent tool policy 读取扩展工具列表。
-      },
-      "safety": {
-        "policy_mode": "standard", // 当前未接入独立 safety middleware。
-        "prompt_injection_protection": true, // 当前未接入独立 safety middleware。
-        "pii_redaction": true, // 当前未接入独立 safety middleware。
-        "refuse_secrets_exfiltration": true // 当前未接入独立 safety middleware。
-      },
-      "execution": {
-        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
-        "max_turns": 16, // 当前未接入该独立执行限制。
-        "max_history_messages": 30, // 当前未接入该独立执行限制。
-        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
-      },
-      "env": {
-        "mode": "development", // 当前未接入按 Agent 环境切换。
-        "region": "", // 当前未接入按 Agent 区域切换。
-        "feature_flags": {} // 当前未接入按 Agent 功能开关。
-      }
-    },
-    "coder": {
-      "name": "Coding Assistant", // AgentService 展示名称。
-      "description": "专门用于代码实现、重构和修复问题。", // AgentService 展示描述。
-      "language": "zh-CN", // Agent prompt language 约定。
-      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
-      "tags": [], // AgentService 展示能力标签默认为空。
-      "instructions": {
-        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
-        "system_prompt": "你是工程实践导向的编程助手。输出代码时优先保证正确性、可读性和可验证性。", // Agent middleware 构造系统提示词。
-        "runtime_identity": {
-          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
-          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
-        }
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_4",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "newapi_deepseek",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "DeepSeek-V4.1-Flash",
-            "model_id": "default"
-          }
-        ]
-      },
-      "tools": {
-        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
-        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
-        "allowlist": [], // Tool policy 恢复工具集合。
-        "denylist": [
-          "edit_file"
-        ], // Tool policy 禁用工具集合。
-        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
-        "custom": [] // 当前 Agent 默认不增加扩展工具。
-      },
-      "execution": {
-        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
-        "max_turns": 16, // 当前未接入该独立执行限制。
-        "max_history_messages": 30, // 当前未接入该独立执行限制。
-        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
-      }
-    },
-    "reviewer": {
-      "name": "Code Reviewer", // AgentService 展示名称。
-      "description": "专门用于代码审查、风险检查和设计评估。", // AgentService 展示描述。
-      "language": "zh-CN", // Agent prompt language 约定。
-      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
-      "tags": [], // AgentService 展示能力标签默认为空。
-      "instructions": {
-        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
-        "system_prompt": "你是代码审查助手。优先指出正确性、架构、安全性和可维护性问题，并给出具体依据。", // Agent middleware 构造系统提示词。
-        "runtime_identity": {
-          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
-          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
-        }
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_4",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "newapi_deepseek",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "DeepSeek-V4.1-Flash",
-            "model_id": "default"
-          }
-        ]
-      },
-      "tools": {
-        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
-        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
-        "allowlist": [], // Tool policy 恢复工具集合默认为空。
-        "denylist": [], // Tool policy 禁用工具集合默认为空。
-        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
-        "custom": [] // 当前 Agent 默认不增加扩展工具。
-      },
-      "execution": {
-        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
-        "max_turns": 16, // 当前未接入该独立执行限制。
-        "max_history_messages": 30, // 当前未接入该独立执行限制。
-        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
-      }
-    },
-    "researcher": {
-      "name": "Research Assistant", // AgentService 展示名称。
-      "description": "专门用于资料检索、文档总结和方案调研。", // AgentService 展示描述。
-      "language": "zh-CN", // Agent prompt language 约定。
-      "timezone": "Asia/Shanghai", // 当前未接入调度逻辑；作为 Agent 默认时区保留。
-      "tags": [], // AgentService 展示能力标签默认为空。
-      "instructions": {
-        "system_prompt_file": null, // 可选 files 资源 URI；null 使用下方 inline 正文。
-        "system_prompt": "你是调研助手。优先基于可验证来源归纳结论，并明确不确定点和假设。", // Agent middleware 构造系统提示词。
-        "runtime_identity": {
-          "description_file": null, // 文件仅替换说明，不修改软件身份事实。
-          "description": "普通文件入口支持相对路径、目标机器原生绝对路径和资源 URI；相对路径按显式目标工作区或选定目录解析。`.` 表示工作区根，工具 owner 在目标机器解析真实目录。终端与 shell 保留操作系统原生路径语义。exec_command 的相对 workdir 只解析一次，结果中的 cwd_relative 用于解释其相对路径。配置候选并不等于本次实际调用，不能从工作区文件或项目名称推断模型身份。"
-        }
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_4",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "newapi_deepseek",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "DeepSeek-V4.1-Flash",
-            "model_id": "default"
-          }
-        ]
-      },
-      "tools": {
-        "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
-        "timeout_ms": 10000, // 当前未接入；值等于 schema 默认，生效超时来自 tooling.policy_defaults.limits.timeout_ms。
-        "allowlist": [], // Tool policy 恢复工具集合默认为空。
-        "denylist": [], // Tool policy 禁用工具集合默认为空。
-        "confirmation_required": [], // Tool policy 二次确认集合默认为空。
-        "custom": [] // 当前 Agent 默认不增加扩展工具。
-      },
-      "execution": {
-        "stream": true, // 当前未接入；值等于 schema 默认，执行路径恒为流式事件。
-        "max_turns": 16, // 当前未接入该独立执行限制。
-        "max_history_messages": 30, // 当前未接入该独立执行限制。
-        "max_context_tokens": 32000, // 当前未接入该独立执行限制。
-        "require_delegated_report": false // AgentExecutionService 已接入该执行策略。
-      }
-    }
-  },
-  "development": {
-    "test_tools": false // ConfigService.include_development_test_tools 使用。
-  },
-  "ui": {
-    // default_model 故意不写入：ConfigService 根据 default_agent.model.primary 动态解析。
-    "default_orchestration": "single_agent", // ConfigService._load_public_runtime_config 使用。
-    "max_concurrent_agents": 4, // ConfigService._load_public_runtime_config 使用。
-    "allow_shell_tools": false, // ConfigService._load_public_runtime_config 使用。
-    "ignored_paths": [], // ConfigService._load_public_runtime_config 使用。
-    "auto_summarize": true // ConfigService._load_public_runtime_config 使用。
-  },
-  "mcp": {
-    "supervision": {
-      "sealed_call_timeout_seconds": 1800 // 从模型发送前保留资格开始计时，包含模型响应和人工确认等待；修改需重启工作区。
-    },
-    "servers": {} // McpRuntimeManager 使用；默认不启动外部 MCP Server。
-  },
-  "runtime": {
-    "session_stop": {
-      // 每次操作读取一次策略。scope 按 Thread 或整个 Session 选择资源；不扩展到导航后代。
-      "interrupt": {
-        "scope": "thread",
-        "jobs": "interrupt",
-        "pending_messages": "continue", // keep 停住但保留旧队列；discard 停止并丢弃。
-        "debug": "keep",
-        "background_task": "keep",
-        "terminal": "keep", // stop 停止并保留；delete 删除独占资源；release 沿保留范围释放关联。
-        "browser": "keep",
-        "collaboration": "keep", // 协作排空仅允许 session scope。
-        "goal": "keep",
-        "thread_runtime": "keep"
-      },
-      "stop": {
-        "scope": "session",
-        "jobs": "cancel", // delete 额外删除 Job 内存记录；会话历史始终保留。
-        "pending_messages": "discard",
-        "debug": "stop",
-        "background_task": "stop",
-        "terminal": "stop",
-        "browser": "stop",
-        "collaboration": "stop",
-        "goal": "pause", // 使用已有 Goal 暂停状态，避免停止后自动续跑。
-        "thread_runtime": "keep" // close 会卸载图并释放 Thread 保留资源；配合 terminal/browser 的 release 或 delete 使用。
-      }
-    },
-    "agent": {
-      "run": {
-        "mode": "single_agent", // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
-        "response_mode": "stream", // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
-        "async": true, // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
-        "max_steps": 20, // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
-        "timeout_seconds": 600 // 待接入：MessageRunRequest.RunOptions 当前仍使用模型默认值。
-      }
-    },
-    "gateway": {
-      "connection": {
-        "url": "http://127.0.0.1:8014", // GatewaySessionContextClient 默认连接地址已接入配置；显式参数优先。
-        "timeout_seconds": 30 // GatewaySessionContextClient 默认请求超时已接入配置；显式参数优先。
-      }
-    },
-    "workspace": {
-      "files": {
-        "list": {
-          "default_limit": 500 // WorkspaceService 与 workspace API 默认目录分页大小已接入配置。
-        },
-        "preview": {
-          "max_bytes": 1048576, // WorkspaceService 文本预览上限已接入配置。
-          "binary_sample_bytes": 8192 // WorkspaceService 二进制检测采样大小已接入配置。
-        }
-      }
-    },
-    "events": {
-      "trace_stream": {
-        "heartbeat_interval_seconds": 15 // sessions API SSE 心跳默认值已接入配置。
-      }
-    },
-    "debug": {
-      "enabled": true, // Agent 源码调试工具默认启用。
-      "default_adapter": "node_inspector", // 首期实现的 JavaScript 调试 adapter。
-      "command_timeout_seconds": 10, // Inspector 单个命令和状态等待的默认上限。
-      "node": {
-        "inspector_host": "127.0.0.1", // 仅绑定本机，避免暴露调试器。
-        "inspector_port": 0, // 0 表示每个调试会话动态分配端口。
-        "executable": "" // 为空时按 BOXTEAM_NODE_BIN 或 PATH 解析 Node。
-      },
-      "python": {
-        "adapter": "debugpy", // 仅预留配置，当前版本尚未实现 Python adapter。
-        "debugpy_host": "127.0.0.1", // 未来 debugpy 默认只绑定本机。
-        "debugpy_port": 0 // 未来 debugpy 默认动态分配端口。
-      },
-      "launch_profiles": {
-        "node-default": {
-          "adapter": "node_inspector",
-          "runtime": "node",
-          "program": "",
-          "working_directory": "",
-          "args": []
         }
       }
     }

@@ -59,11 +59,13 @@ async def test_models_are_discovered_and_tested_in_original_settings(
     workspace = Path(integration_workspace_root_path)
     source = Path(integration_workspace_config_path)
     config = commentjson.loads(source.read_text(encoding="utf-8"))
-    primary = config["llm"]["providers"]["primary"]
-    primary["defaults"].update({"endpoint": catalog.endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
-        "request_options": {"no_proxy": True}})
-    primary["models"]["default"]["model"] = "upstream-main"
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+    primary = config["profiles"]["provider.primary"]["settings"]["model_options"]
+    primary.update({"endpoint": catalog.endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
+        "request_options": {}})
+    config["profiles"]["provider.primary"]["settings"]["network"] = {"proxy": {"mode": "direct"}}
+    business = config["settings"]["workspace"]
+    business["llm"]["providers"]["primary"]["models"]["default"]["model"] = "upstream-main"
+    business.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
     source.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     original_source = source.read_bytes()
     catalog.pages = [{"data": [{"id": "upstream-main"}, {"id": "upstream-new", "display_name": "目录新模型"}]}]

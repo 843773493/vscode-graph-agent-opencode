@@ -42,7 +42,7 @@ def proxy_endpoint():
             streaming = body.get("stream", False)
             if streaming:
                 payload = next((value for suffix, value in stream_payloads.items() if self.path.endswith(suffix)),
-                               b'data: {"id":"recorded","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: [DONE]\n\n')
+                               b'data: {"id":"recorded","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
             elif self.path.endswith("/responses"):
                 payload = json.dumps({
                     "id": "resp-test", "object": "response", "created_at": 1, "model": "test-model", "status": "completed",
@@ -230,6 +230,7 @@ async def test_authenticated_model_requests_use_instance_proxy_without_model_tes
             "endpoint": "http://upstream.invalid" + ("" if adapter == "anthropic" else "/v1"),
             "api_key": "test-key", "custom_llm_provider": adapter,
             "api_mode": {"protocol": protocol, "streaming": False, "model_info": {}, "supports_reasoning": {}},
+            "proxy_routes": ProxyRoutes.from_configuration(EnvironmentProxy()),
         },
         runtime_config={}, invocation_purpose="tool_test",
     )
@@ -252,20 +253,23 @@ async def test_authenticated_model_requests_use_instance_proxy_without_model_tes
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("proxy_policy", ["environment", "explicit"])
 @pytest.mark.parametrize("protocol,adapter,scenario_id,suffix,expected", [
+    ("chat_completions", "openai", "basic-text", "/v1/chat/completions", "ok"),
     ("chat_completions", "openrouter", "basic-text", "/v1/chat/completions", "ok"),
     ("chat_completions", "deepseek", "basic-text", "/v1/chat/completions", "ok"),
     ("responses", "openai", "responses-basic-text", "/v1/responses", "响应文本"),
     ("anthropic_messages", "anthropic", "anthropic-reasoning-stream", "/v1/messages", "Anthropic Messages 验证结论。"),
 ])
 async def test_actual_adapters_record_the_selected_proxy_route(
-    proxy_environment, tmp_path: Path, asynchronous: bool,
+    proxy_environment, proxy_endpoint, tmp_path: Path, asynchronous: bool, proxy_policy: str,
     protocol: str, adapter: str, scenario_id: str, suffix: str, expected: str,
 ):
     config = load_model_stream_config(Path.cwd() / "configs/tests/model_stream/model_stream_chat_basic.jsonc")
     config = replace(config, transport=replace(config.transport, mode="record", scenario_id=scenario_id, artifact_root=tmp_path))
     controller = ModelStreamTransportController.configure(config)
     assert controller is not None
+    proxy = EnvironmentProxy() if proxy_policy == "environment" else ExplicitProxy(url=proxy_endpoint[0])
     model = None
     try:
         model = build_model_from_provider(provider={
@@ -273,6 +277,7 @@ async def test_actual_adapters_record_the_selected_proxy_route(
             "endpoint": "http://upstream.invalid" + ("" if adapter == "anthropic" else "/v1"),
             "api_key": "test-key", "custom_llm_provider": adapter,
             "api_mode": {"protocol": protocol, "streaming": True, "model_info": {}, "supports_reasoning": {}},
+            "proxy_routes": ProxyRoutes.from_configuration(proxy),
         }, runtime_config={}, invocation_purpose="tool_test")
         text = "".join([chunk.text async for chunk in model.astream("hi")]) if asynchronous else "".join(chunk.text for chunk in model.stream("hi"))
         assert expected in text

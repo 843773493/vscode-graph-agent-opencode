@@ -20,7 +20,7 @@ function setup() {
   const onImport = mock(), onApplyMode = mock(), onOpenSource = mock();
   let selectedModelId = 'main';
   const render = () => <ModelConnectionProbe providerId="team" models={['main', 'backup', 'third', 'fourth', 'fifth'].map(id => ({ id, model: `upstream-${id}` }))}
-    selectedModelId={selectedModelId} document={document} editor={{ ...editor }} onImport={onImport} onApplyMode={onApplyMode} onOpenSource={onOpenSource} />;
+    selectedModelId={selectedModelId} document={document} editor={{ ...editor }} onImport={onImport} onApplyMode={onApplyMode} canApplyMode={() => true} onOpenSource={onOpenSource} />;
   act(() => { view = create(render()); });
   return { editor, document, abort, onImport, onApplyMode, onOpenSource, update: () => act(() => view!.update(render())),
     selectModel: (id: string) => { selectedModelId = id; act(() => view!.update(render())); } };

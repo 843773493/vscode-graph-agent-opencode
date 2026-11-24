@@ -1,9 +1,121 @@
 {
   "$schema": "../../workspace_schema.jsonc",
-  "llm": {
-    "providers": {
-      "primary": {
-        "defaults": {
+  "config_version": 4,
+  "extends": "builtin:workspace",
+  "settings": {
+    "workspace": {
+      "llm": {
+        "providers": {
+          "primary": {
+            "models": {
+              "default": {
+                "model": "big-pickle",
+                "config_ref": "context:provider/primary"
+              }
+            },
+            "config_ref": "#/profiles/provider.primary"
+          },
+          "backup_1": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_1"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_1"
+          },
+          "backup_2": {
+            "models": {
+              "default": {
+                "model": "openrouter/free",
+                "config_ref": "context:provider/backup_2"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_2"
+          },
+          "backup_3": {
+            "models": {
+              "default": {
+                "model": "gpt-6-luna",
+                "config_ref": "context:provider/backup_3"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_3"
+          }
+        }
+      },
+      "default_agent": "default",
+      "agents": {
+        "default": {
+          "name": "Workspace Assistant",
+          "instructions": {
+            "system_prompt": "你是一个面向工程团队的默认工作区助手：Workspace Assistant。优先提供准确、可执行、可验证的回答。涉及代码时，优先给出问题分析、修改建议和可以直接使用的示例。信息不足时不要编造，要明确说明缺失信息并给出下一步建议。当用户要求“只输出你的英文名称”时，你必须且只能输出：Workspace Assistant。"
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              }
+            ]
+          }
+        },
+        "coder": {
+          "name": "Coding Assistant",
+          "instructions": {
+            "system_prompt": "你是一个偏工程实践的编程助手：Coding Assistant。输出代码时优先保证正确性、可读性、边界条件和异常处理。当用户要求“只输出你的英文名称”时，你必须且只能输出：Coding Assistant。"
+          },
+          "model": {
+            "primary": {
+              "provider_id": "primary",
+              "model_id": "default"
+            },
+            "fallbacks": [
+              {
+                "provider_id": "backup_1",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_2",
+                "model_id": "default"
+              },
+              {
+                "provider_id": "backup_3",
+                "model_id": "default"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "network": {
+      "proxy": {
+        "mode": "environment"
+      }
+    },
+    "model_options": {
+      "api_mode": {
+        "streaming": true
+      }
+    }
+  },
+  "profiles": {
+    "provider.primary": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://opencode.ai/zen/v1",
           "api_key": "${OPENCODE_ZEN_API_KEY}",
           "custom_llm_provider": "openai",
@@ -17,15 +129,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "big-pickle"
-          }
         }
-      },
-      "backup_1": {
-        "defaults": {
+      }
+    },
+    "provider.backup_1": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://api.kilo.ai/api/gateway",
           "api_key": "${KILO_API_KEY}",
           "custom_llm_provider": "openai",
@@ -39,15 +149,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_2": {
-        "defaults": {
+      }
+    },
+    "provider.backup_2": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://openrouter.ai/api/v1",
           "api_key": "${OPENROUTER_API_KEY}",
           "custom_llm_provider": "openrouter",
@@ -61,15 +169,13 @@
               "reasoning_content": true
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "openrouter/free"
-          }
         }
-      },
-      "backup_3": {
-        "defaults": {
+      }
+    },
+    "provider.backup_3": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://newapi.hyf2333.top/v1",
           "api_key": "${CCTQ_API_KEY}",
           "custom_llm_provider": "openai",
@@ -97,67 +203,7 @@
               }
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "gpt-6-luna"
-          }
         }
-      }
-    }
-  },
-  "default_agent": "default",
-  "agents": {
-    "default": {
-      "name": "Workspace Assistant",
-      "instructions": {
-        "system_prompt": "你是一个面向工程团队的默认工作区助手：Workspace Assistant。优先提供准确、可执行、可验证的回答。涉及代码时，优先给出问题分析、修改建议和可以直接使用的示例。信息不足时不要编造，要明确说明缺失信息并给出下一步建议。当用户要求“只输出你的英文名称”时，你必须且只能输出：Workspace Assistant。"
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          }
-        ]
-      }
-    },
-    "coder": {
-      "name": "Coding Assistant",
-      "instructions": {
-        "system_prompt": "你是一个偏工程实践的编程助手：Coding Assistant。输出代码时优先保证正确性、可读性、边界条件和异常处理。当用户要求“只输出你的英文名称”时，你必须且只能输出：Coding Assistant。"
-      },
-      "model": {
-        "primary": {
-          "provider_id": "primary",
-          "model_id": "default"
-        },
-        "fallbacks": [
-          {
-            "provider_id": "backup_1",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_2",
-            "model_id": "default"
-          },
-          {
-            "provider_id": "backup_3",
-            "model_id": "default"
-          }
-        ]
       }
     }
   }

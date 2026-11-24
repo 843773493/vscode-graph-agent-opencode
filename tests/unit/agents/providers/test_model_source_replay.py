@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.runtime.network_proxy import ProxyRoutes
 from copy import deepcopy
 from dataclasses import replace
 
@@ -90,6 +91,7 @@ def test_canonical_roundtrip_preserves_source_and_tool_pairing(source: ModelSour
         model = BoxteamOpenAIResponsesModel(
             model="openai/upstream-model", api_key="fixture", model_source=source,
             reasoning_items_summary_replay=True, reasoning_items_encrypted_replay=True,
+            proxy_routes=ProxyRoutes(()),
         )
         tool = ToolMessage(content="文件正文", tool_call_id="call-a")
         same = model._history_messages([message, tool])

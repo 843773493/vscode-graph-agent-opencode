@@ -5,6 +5,16 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 
+// 断言原文中的私有节点；继承值由产品预检结果验证。
+const localModelOptions = (document, providerId, modelId) => {
+  const provider = document.settings.workspace.llm.providers[providerId];
+  let reference = modelId === undefined ? provider.config_ref : provider.models[modelId].config_ref;
+  if (reference === `context:provider/${providerId}`) reference = provider.config_ref;
+  assert(reference.startsWith('#/profiles/'), '本场景必须检查本来源的显式 profile');
+  const name = decodeURIComponent(reference.slice('#/profiles/'.length)).replaceAll('~1', '/').replaceAll('~0', '~');
+  return document.profiles[name].settings.model_options ?? {};
+};
+
 const fixture = JSON.parse(process.env.BOXTEAM_MODEL_PROBE_FIXTURE);
 assert(fixture.artifacts && fixture.visibleMarker, '必须显式指定测试产物目录');
 const result = { phase: 'initialization', pageErrors: [], requests: [], responses: [], initialization: [] };
@@ -65,8 +75,8 @@ try {
   ]);
   assert.equal(discovered.status(), 200, await discovered.text());
   const connectionDraft = JSON.parse(result.requests.find(item => item.path.endsWith('/llm/discover')).body.jsonc);
-  assert.equal(connectionDraft.llm.providers.primary.defaults.endpoint, fixture.endpoint + '/');
-  assert.equal(connectionDraft.llm.providers.primary.models.default.overrides?.endpoint, undefined);
+  assert.equal(localModelOptions(connectionDraft, 'primary').endpoint, fixture.endpoint + '/');
+  assert.equal(connectionDraft.settings.workspace.llm.providers.primary.models.default.config_ref, 'context:provider/primary');
   await expect(panel.getByText('完整目录：2 个模型', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '获取上游模型', exact: true }).focus();
   await panel.getByRole('button', { name: '刷新观察版本', exact: true }).focus();
@@ -117,7 +127,7 @@ try {
   assert.equal(providerReceipt.options.request_options.parameters.top_p, null);
   assert.equal(providerReceipt.request_url, fixture.endpoint + '/chat/completions');
   const temperatureOrigin = receipt => receipt.origins.find(origin => origin.path === '/request_options/parameters/temperature');
-  assert.equal(temperatureOrigin(providerReceipt).definition, 'defaults');
+  assert.equal(temperatureOrigin(providerReceipt).definition, 'node');
   assert.equal(temperatureOrigin(providerReceipt).source_key, location.source_key);
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/test')).length, 0, '选项预检不能调用模型');
   result.phase = 'restore-model-credential-in-original-draft';
@@ -126,13 +136,13 @@ try {
   await page.locator('.quick-input-widget').getByText('无认证', { exact: true }).click();
   const overriddenCredential = await inspect();
   assert.equal(overriddenCredential.options.api_key, '');
-  assert.equal(overriddenCredential.origins.find(origin => origin.path === '/api_key').definition, 'overrides');
+  assert.equal(overriddenCredential.origins.find(origin => origin.path === '/api_key').definition, 'node');
   await modelCredential.getByRole('button', { name: '使用服务默认设置', exact: true }).click();
   const inheritedCredential = await inspect();
   assert.equal(inheritedCredential.options.api_key, providerReceipt.options.api_key);
-  assert.equal(inheritedCredential.origins.find(origin => origin.path === '/api_key').definition, 'defaults');
+  assert.equal(inheritedCredential.origins.find(origin => origin.path === '/api_key').definition, 'node');
   const restoredDraft = JSON.parse(result.requests.filter(item => item.path.endsWith('/preflight')).at(-1).body.jsonc);
-  assert.equal(restoredDraft.llm.providers.primary.models.default?.overrides?.api_key, undefined,
+  assert.equal(restoredDraft.settings.workspace.llm.providers.primary.models.default.config_ref, 'context:provider/primary',
     '恢复继承只删除当前Model字段，不复制Provider值或写入null');
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, 1,
     '模型凭据覆盖与恢复不编辑Provider连接');
@@ -160,7 +170,7 @@ try {
   assert.equal(chatOptions.request_url, fixture.endpoint + '/chat/completions');
   assert.equal(chatOptions.options.api_mode.streaming, false);
   const restoredModeDraft = JSON.parse(result.requests.filter(item => item.path.endsWith('/preflight')).at(-1).body.jsonc);
-  const restoredMode = restoredModeDraft.llm.providers.primary.models.default.overrides.api_mode;
+  const restoredMode = localModelOptions(restoredModeDraft, 'primary', 'default').api_mode;
   assert.equal(restoredMode.protocol, undefined, '协议恢复继承只删除本层协议');
   assert.equal(restoredMode.supports_reasoning, undefined, '协议恢复继承移除本层reasoning块');
   assert.equal(restoredMode.model_info?.supports_reasoning, undefined, '能力恢复继承删除本层声明');
@@ -186,7 +196,7 @@ try {
   await expect(inspection.getByRole('status')).toContainText('草稿已改变');
   const modelReceipt = await inspect();
   assert.equal(modelReceipt.options.request_options.parameters.temperature, null);
-  assert.equal(temperatureOrigin(modelReceipt).definition, 'overrides');
+  assert.equal(temperatureOrigin(modelReceipt).definition, 'node');
   assert.equal(temperatureOrigin(modelReceipt).source_key, location.source_key);
   await openDetails(panel.locator('.configuration-probe-more'));
   await panel.getByRole('button', { name: '测试非流式', exact: true }).click();
@@ -197,7 +207,7 @@ try {
   assert.equal(probes.length, 2);
   assert.deepEqual(probes.map(item => item.body.streaming), [true, false]);
   assert(probes.every(item => item.body.mode === 'draft' && item.body.jsonc.includes('upstream-new')));
-  const modelDraft = JSON.parse(probes[1].body.jsonc).llm.providers.primary.models.default.overrides;
+  const modelDraft = localModelOptions(JSON.parse(probes[1].body.jsonc), 'primary', 'default');
   assert.equal(modelDraft.request_options.parameters.temperature, null);
   assert.equal(modelDraft.api_mode?.supports_reasoning, undefined);
   assert.equal(result.requests.filter(item => item.method === 'PUT').length, 0);
@@ -230,7 +240,7 @@ try {
   ]);
   assert.equal(newConnection.status(), 200, await newConnection.text());
   const connectionInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
-  assert.deepEqual(JSON.parse(connectionInput.jsonc).llm.providers[newProviderId].models, {});
+  assert.deepEqual(JSON.parse(connectionInput.jsonc).settings.workspace.llm.providers[newProviderId].models, {});
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, beforeNewConnection + 1);
   result.phase = 'credential-reference-in-original-draft';
   await form.getByRole('button', { name: '设置 API 密钥', exact: true }).click();
@@ -243,7 +253,7 @@ try {
   assert.equal((await credentialDiscovery).status(), 200);
   assert.equal(result.requests.filter(item => item.method === 'PUT').length, 0, '选择引用不能保存脏来源');
   const keyInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
-  assert.equal(JSON.parse(keyInput.jsonc).llm.providers[newProviderId].defaults.api_key, 'secret:' + key.id);
+  assert.equal(localModelOptions(JSON.parse(keyInput.jsonc), newProviderId).api_key, 'secret:' + key.id);
   await expect(panel.getByText('完整目录：2 个模型', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '选择全部匹配项', exact: true }).click();
   await panel.getByRole('button', { name: '添加选中的模型', exact: true }).click();
@@ -445,9 +455,9 @@ try {
     return sourceExchange('PUT', sourcePath, submission);
   };
   result.phase = 'other-source-active-rejects-old-browser-baseline';
-  const activeText = JSON.stringify({ llm: { providers: { primary: { defaults: {
-    request_options: { default_headers: { 'X-Active-Source': 'browser-active' } },
-  } } } } });
+  const activeText = JSON.stringify({ config_version: 4, extends: 'builtin:workspace', settings: {
+    model_options: { request_options: { default_headers: { 'X-Active-Source': 'browser-active' } } },
+  } });
   const savedActive = await saveOtherSource(activeText, 'browser-active-');
   assert.equal(savedActive.edit.source_saved, true);
   assert.equal(savedActive.edit.state, 'active');
@@ -482,9 +492,10 @@ try {
     editVersion: activeInput.edit_version, observation: activeTerminal.observation };
 
   result.phase = 'other-source-pending-rejects-old-browser-baseline';
-  const pendingText = JSON.stringify({ llm: { providers: { primary: { defaults: {
-    request_options: { default_headers: { 'X-Pending-Source': 'browser-pending' } },
-  } } } }, runtime: { workspace: { files: { list: { default_limit: 501 } } } } });
+  const pendingText = JSON.stringify({ config_version: 4, extends: 'builtin:workspace', settings: {
+    model_options: { request_options: { default_headers: { 'X-Pending-Source': 'browser-pending' } } },
+    workspace: { runtime: { workspace: { files: { list: { default_limit: 501 } } } } },
+  } });
   const savedPending = await saveOtherSource(pendingText, 'browser-pending-');
   assert.equal(savedPending.edit.source_saved, true);
   assert.equal(savedPending.edit.state, 'pending_restart');
@@ -521,15 +532,17 @@ try {
   const originalInput = result.requests.filter(item => item.path.endsWith('/llm/test')).at(-1).body;
   result.protocolWires = [];
   for (const protocol of ['chat_completions', 'responses', 'anthropic_messages']) {
-    const draft = JSON.parse(originalInput.jsonc), provider = draft.llm.providers.primary;
-    provider.defaults.endpoint = protocol === 'anthropic_messages' ? fixture.endpoint.replace(/\/v1$/, '') : fixture.endpoint;
-    provider.defaults.custom_llm_provider = protocol === 'anthropic_messages' ? 'anthropic' : 'openai';
-    provider.defaults.api_mode = { protocol, streaming: false,
+    const draft = JSON.parse(originalInput.jsonc), provider = draft.settings.workspace.llm.providers.primary;
+    const options = localModelOptions(draft, 'primary');
+    options.endpoint = protocol === 'anthropic_messages' ? fixture.endpoint.replace(/\/v1$/, '') : fixture.endpoint;
+    options.custom_llm_provider = protocol === 'anthropic_messages' ? 'anthropic' : 'openai';
+    options.api_mode = { protocol, streaming: false,
       model_info: { supports_reasoning: false, supports_function_calling: false }, supports_reasoning: {} };
-    provider.defaults.request_options.parameters = { temperature: 0.5, top_p: 0.9 };
-    provider.models.default.overrides = { request_options: { parameters: {
+    options.request_options.parameters = { temperature: 0.5, top_p: 0.9 };
+    provider.models.default.config_ref = '#/profiles/protocol-model';
+    draft.profiles['protocol-model'] = { extends: 'context:provider/primary', settings: { model_options: { request_options: { parameters: {
       temperature: 0, top_p: null, extra_body: { extension_switch: false, extension_value: null },
-    } } };
+    } } } } };
     const input = { ...originalInput, jsonc: JSON.stringify(draft), streaming: false };
     const response = await probeExchange(input);
     assert.equal(response.status, 200, response.text);
@@ -544,7 +557,7 @@ try {
         { temperature: 0, extra_body: { temperature: 1 } },
         { max_tokens: 128, max_output_tokens: 129 },
       ]) {
-        provider.models.default.overrides.request_options.parameters = parameters;
+        localModelOptions(draft, 'primary', 'default').request_options.parameters = parameters;
         const rejected = await probeExchange({ ...input, jsonc: JSON.stringify(draft) });
         assert.equal(rejected.status, 422, rejected.text);
         assert(rejected.requestId);

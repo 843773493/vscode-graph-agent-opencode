@@ -6,6 +6,16 @@ import { parse } from 'jsonc-parser';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 
+// 断言原文中的私有节点；继承值由产品预检结果验证。
+const localModelOptions = (document, providerId, modelId) => {
+  const provider = document.settings.workspace.llm.providers[providerId];
+  let reference = modelId === undefined ? provider.config_ref : provider.models[modelId].config_ref;
+  if (reference === `context:provider/${providerId}`) reference = provider.config_ref;
+  assert(reference.startsWith('#/profiles/'), '本场景必须检查本来源的显式 profile');
+  const name = decodeURIComponent(reference.slice('#/profiles/'.length)).replaceAll('~1', '/').replaceAll('~0', '~');
+  return document.profiles[name].settings.model_options ?? {};
+};
+
 const fixture = JSON.parse(process.env.BOXTEAM_ENTITIES_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
 assert(artifacts, '必须设置正式测试产物目录');
@@ -153,7 +163,7 @@ try {
   await expect(form('providers').locator(`[data-definition-id="${providerId}"]`)).toBeVisible();
   assert.equal(result.writes.length, 0, '编辑表单不能自动保存');
   await save('providers');
-  const connectionSaved = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers[providerId];
+  const connectionSaved = parse((await api(sourceUrl, fixture)).data.jsonc).settings.workspace.llm.providers[providerId];
   assert.deepEqual(connectionSaved.models, {}, '连接应可在没有模型时保存');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
@@ -178,13 +188,13 @@ try {
   await form('providers').locator('[data-model-id="entities-model"]').getByRole('textbox', { name: /^模型名称/ }).fill('entities-model-edited');
   await save('providers');
   const providerSaved = (await api(sourceUrl, fixture)).data;
-  const savedProvider = parse(providerSaved.jsonc).llm.providers[providerId];
+  const savedProvider = parse(providerSaved.jsonc).settings.workspace.llm.providers[providerId];
   assert.equal(savedProvider.models['entities-model'].model, 'entities-model-edited');
   assert.equal(savedProvider.models['entities-backup'].model, 'entities-backup');
   result.multipleModelsShareConnection = true;
   await page.screenshot({ path: path.join(artifacts, 'provider-simple-form.png') });
-  assert.equal(parse(result.writes.at(-1).jsonc).llm.providers[providerId].defaults.api_key, '${ENTITIES_MISSING_KEY}');
-  assert.equal(savedProvider.defaults.api_key, '${ENTITIES_MISSING_KEY}', '公开来源保留引用，不能展开凭据');
+  assert.equal(localModelOptions(parse(result.writes.at(-1).jsonc), providerId).api_key, '${ENTITIES_MISSING_KEY}');
+  assert.equal(localModelOptions(parse(providerSaved.jsonc), providerId).api_key, '${ENTITIES_MISSING_KEY}', '公开来源保留引用，不能展开凭据');
   result.phase = 'secret-cancel';
   const setSecret = () => form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first().click();
   let writeCount = result.writes.length;
@@ -325,8 +335,8 @@ try {
     return false;
   }, secret);
   assert.equal(leaked, false, '本机工作台存储不能包含密码');
-  const referenced = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers[providerId];
-  assert.equal(referenced.defaults.api_key, secretRef, '原来源只保存命名引用');
+  const referenced = localModelOptions(parse((await api(sourceUrl, fixture)).data.jsonc), providerId);
+  assert.equal(referenced.api_key, secretRef, '原来源只保存命名引用');
   assert(result.writes.every(write => !write.jsonc.includes(secret)), '密钥值不得进入来源 writer');
   result.secret = { cancelledBeforeInputSubmit: true, cancelledAfterPreflight: true, externalConflictRecovered: true,
     unknownRecoveredByOriginalKey: savedSecret.idempotency_key, puts: result.writes.length - writeCount, requestId: envelope.request_id };
@@ -345,9 +355,9 @@ try {
   await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
   await setSecret(); await chooseSavedKey();
   await save('providers');
-  const sharedDefinitions = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers;
-  assert.equal(sharedDefinitions[sharedProviderId].defaults.api_key, secretRef);
-  assert.equal(sharedDefinitions[providerId].defaults.api_key, secretRef);
+  const sharedDefinitions = parse((await api(sourceUrl, fixture)).data.jsonc);
+  assert.equal(localModelOptions(sharedDefinitions, sharedProviderId).api_key, secretRef);
+  assert.equal(localModelOptions(sharedDefinitions, providerId).api_key, secretRef);
   await page.locator('.configuration-entities .monaco-toolbar').getByRole('button', { name: /更多/ }).click();
   await page.getByRole('menuitem', { name: '管理 API 密钥', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: secretRef }).click();
@@ -451,7 +461,7 @@ try {
   await form('agents').getByRole('textbox', { name: /^显示名/ }).fill('修改后的显示名');
   await save('agents');
   const created = (await api(sourceUrl, fixture)).data;
-  assert.equal(parse(created.jsonc).agents['entities-agent'].name, '修改后的显示名');
+  assert.equal(parse(created.jsonc).settings.workspace.agents['entities-agent'].name, '修改后的显示名');
   assert.equal(created.source_effective.agents['entities-agent'].instructions.system_prompt, '此提示词来自真实管理表单');
   assert.deepEqual(created.source_effective.agents['entities-agent'].model.primary, { provider_id: providerId, model_id: 'entities-model' });
   // 来源保存与运行应用分开断言，不能把待重启的候选冒充当前生效值。
@@ -603,15 +613,20 @@ try {
   const lowerBefore = (await api(lowerUrl, fixture)).data;
   const lowerJsonc = parse(lowerBefore.jsonc);
   const lowerProviderId = 'mcp-plugin-replay';
-  const lowerProvider = { defaults: { endpoint: 'https://inherited.example/v1',
+  const lowerOptions = { endpoint: 'https://inherited.example/v1',
     api_key: '${INHERITED_MISSING_KEY}', custom_llm_provider: 'openai',
     api_mode: { protocol: 'chat_completions', model_info: { supports_function_calling: true, supports_reasoning: false },
-      supports_reasoning: {} } }, models: { default: { model: 'inherited-model' } } };
-  lowerJsonc.llm ??= {};
-  lowerJsonc.llm.providers ??= {};
-  lowerJsonc.llm.providers[lowerProviderId] = lowerProvider;
-  lowerJsonc.agents ??= {};
-  lowerJsonc.agents['inherited-agent'] = { name: '下层 Agent', instructions: { system_prompt: '提示词来自下层来源' },
+      supports_reasoning: {} } };
+  const lowerProvider = { config_ref: '#/profiles/lower-provider', models: { default: {
+    model: 'inherited-model', config_ref: `context:provider/${lowerProviderId}` } } };
+  lowerJsonc.profiles ??= {};
+  lowerJsonc.profiles['lower-provider'] = { extends: 'context:workspace', settings: { model_options: lowerOptions } };
+  lowerJsonc.settings.workspace ??= {};
+  lowerJsonc.settings.workspace.llm ??= {};
+  lowerJsonc.settings.workspace.llm.providers ??= {};
+  lowerJsonc.settings.workspace.llm.providers[lowerProviderId] = lowerProvider;
+  lowerJsonc.settings.workspace.agents ??= {};
+  lowerJsonc.settings.workspace.agents['inherited-agent'] = { name: '下层 Agent', instructions: { system_prompt: '提示词来自下层来源' },
     model: { primary: { provider_id: lowerProviderId, model_id: 'default' }, fallbacks: [] } };
   const lowerIntent = { gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId, source_key: lowerKey,
     jsonc: JSON.stringify(lowerJsonc, null, 2), base_file_digest: lowerBefore.file_digest,
@@ -637,14 +652,14 @@ try {
   await expect(form('agents').locator('[data-definition-id="inherited-agent"]')).toBeVisible();
   await save('agents');
   const agentOverride = (await api(sourceUrl, fixture)).data;
-  assert.equal(parse(agentOverride.jsonc).agents['inherited-agent'].name, '本层覆盖 Agent');
+  assert.equal(parse(agentOverride.jsonc).settings.workspace.agents['inherited-agent'].name, '本层覆盖 Agent');
   assert.equal(agentOverride.source_effective.agents['inherited-agent'].instructions.system_prompt, '提示词来自本层覆盖');
   await form('agents').getByRole('button', { name: '移除本层定义', exact: true }).click();
   await expect(modal).toContainText('inherited-agent');
   await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
   await save('agents');
   const agentRestored = (await api(sourceUrl, fixture)).data;
-  assert.equal(parse(agentRestored.jsonc).agents?.['inherited-agent'], undefined);
+  assert.equal(parse(agentRestored.jsonc).settings.workspace.agents?.['inherited-agent'], undefined);
   assert.equal(agentRestored.source_effective.agents['inherited-agent'].name, '下层 Agent');
   assert.equal(agentRestored.source_effective.agents['inherited-agent'].instructions.system_prompt, '提示词来自下层来源');
 
@@ -663,7 +678,7 @@ try {
   await save('providers');
   const providerRestored = (await api(sourceUrl, fixture)).data;
   const lowerAfterRestore = (await api(lowerUrl, fixture)).data;
-  assert.equal(parse(providerRestored.jsonc).llm?.providers, undefined, '仅移除当前层 Provider 对象，恢复下层定义');
+  assert.equal(parse(providerRestored.jsonc).settings.workspace.llm?.providers, undefined, '仅移除当前层 Provider 对象，恢复下层定义');
   assert.deepEqual(providerRestored.source_effective.llm.providers, lowerAfterRestore.source_effective.llm.providers);
   assert.equal(providerRestored.source_effective.llm.providers[lowerProviderId].models.default.model, lowerProvider.models.default.model);
   assert.equal(result.writes.length, writesBeforeInheritance + 4, '仅Agent覆盖/删除及Provider删除/整组恢复写入本层');

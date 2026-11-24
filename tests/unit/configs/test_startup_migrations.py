@@ -1,4 +1,4 @@
-"""正常初始化自动升级受支持来源，未知版本或配置取舍保留原件。"""
+"""Gateway 支持范围内正常升级；无验收基线的 Workspace 旧来源保持原件。"""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def test_initialize_current_workspace_reenters_without_rewriting_it(
     assert json.loads(capsys.readouterr().out)["upgrades"] == {}
     config = startup_home / "config"
     workspace = config / "workspace.jsonc"
-    assert read_jsonc_object(workspace)["config_version"] == 3
+    assert read_jsonc_object(workspace)["config_version"] == 4
     original = workspace.read_bytes()
     if upgrade_gateway:
         gateway = config / "gateway.jsonc"
@@ -66,7 +66,7 @@ def test_initialize_current_workspace_reenters_without_rewriting_it(
     assert {path: path.read_bytes() for path in config.rglob("*") if path.is_file()} == after
 
 
-@pytest.mark.parametrize("domain,current_version", [("gateway", 6), ("workspace", 3)])
+@pytest.mark.parametrize("domain,current_version", [("gateway", 6), ("workspace", 4)])
 @pytest.mark.parametrize("old_version", [False, True])
 def test_initialize_absent_source_upgrades_only_its_old_version(
     startup_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
@@ -89,6 +89,12 @@ def test_initialize_absent_source_upgrades_only_its_old_version(
         )
 
     for attempt in range(2):
+        if domain == "workspace" and old_version:
+            with pytest.raises(ValueError, match="缺少已验收升级基线"):
+                main()
+            with WorkspaceStateStore(workspace_root=workspace) as store:
+                assert store.get_source_layer(key) == source
+            continue
         main()
         upgrades = json.loads(capsys.readouterr().out)["upgrades"]
         if old_version and attempt == 0:
@@ -109,115 +115,39 @@ def test_initialize_absent_source_upgrades_only_its_old_version(
 
 
 @pytest.mark.parametrize("preview", [False, True])
-def test_initialize_migrates_legacy_models_with_backup_and_readonly_preview(
+def test_initialize_rejects_legacy_models_without_an_accepted_baseline(
     startup_home: Path, monkeypatch: pytest.MonkeyPatch, preview: bool,
-    legacy_model_configuration: dict[str, object], capsys: pytest.CaptureFixture[str],
+    legacy_model_configuration: dict[str, object],
 ) -> None:
     path = startup_home / "config/workspace.jsonc"
     path.parent.mkdir(parents=True)
     original = ('// 保留原始注释\n' + json.dumps(legacy_model_configuration)).encode()
     path.write_bytes(original)
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
-
-    main()
-    report = json.loads(capsys.readouterr().out)
-    if preview:
-        assert report["upgrade_required"] is True
-        assert list(path.parent.iterdir()) == [path]
-        assert path.read_bytes() == original
-        return
-    converted = read_jsonc_object(path)
-    assert converted["config_version"] == 3
-    providers = converted["llm"]["providers"]
-    assert list(providers) == ["primary", "backup_1", "backup_2"]
-    for old in legacy_model_configuration["llm"]["providers"]:
-        assert providers[old["id"]] == {
-            "defaults": {**{key: value for key, value in old.items() if key not in ("id", "model", "request_options")},
-                         "request_options": {"parameters": {"reasoning_effort": "max", "extra_body": {"custom": True}},
-                                             "default_headers": {"X-Test": "kept"}, "no_proxy": True}},
-            "models": {"default": {"model": old["model"]}},
-        }
-    assert converted["agents"]["default"]["model"] == {
-        "primary": {"provider_id": "primary", "model_id": "default"},
-        "fallbacks": [{"provider_id": "backup_2", "model_id": "default"},
-                      {"provider_id": "backup_1", "model_id": "default"}], "temperature": 0.2,
-    }
-    backup = Path(report["upgrades"]["configuration"]["backup_root"])
-    assert original in [file.read_bytes() for file in backup.glob("file-*.before")]
-    after = {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()}
-    main()
-    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
-    assert {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()} == after
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        main()
+    assert list(path.parent.iterdir()) == [path]
+    assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("conflict", ["duplicate", "options", "reference", "current_version", "extra_body"])
-def test_initialize_rejects_ambiguous_or_mislabeled_model_config_without_writes(
-    startup_home: Path, legacy_model_configuration: dict[str, object], conflict: str,
+
+
+@pytest.mark.parametrize("version", [1, 3, 999])
+@pytest.mark.parametrize("preview", [False, True])
+def test_initialize_preserves_unsupported_workspace_source_before_installation(
+    startup_home: Path, monkeypatch: pytest.MonkeyPatch, version: int, preview: bool,
 ) -> None:
-    providers = legacy_model_configuration["llm"]["providers"]
-    if conflict == "duplicate":
-        providers.append(providers[0])
-    elif conflict == "options":
-        providers[0]["request_options"]["parameters"] = {"reasoning_effort": "low"}
-    elif conflict == "reference":
-        legacy_model_configuration["agents"]["default"]["model"]["primary"] = {
-            "provider_id": "backup_1", "model_id": "default",
-        }
-    elif conflict == "extra_body":
-        providers[0]["request_options"]["overrides"]["reasoning_effort"] = "low"
-    else:
-        legacy_model_configuration["config_version"] = 3
     path = startup_home / "config/workspace.jsonc"
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(legacy_model_configuration), encoding="utf-8")
-    if conflict == "current_version":
-        # 另一个域需要迁移时，也不能把已标记 v3 的非法旧结构当作升级来源。
-        (path.parent / "gateway.jsonc").write_text('{"config_version":4}', encoding="utf-8")
+    original = ('// 用户原始注释\n' + json.dumps({"config_version": version, "logger": {"level": "debug"}})).encode()
+    path.write_bytes(original)
     before = {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()}
-    with pytest.raises(ValueError, match="重复 id|同时声明|配置验证失败|extra_body 重复"):
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
         main()
     assert {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()} == before
 
 
-def test_initialize_upgrades_old_config_with_exact_backups_and_reenters_without_writes(
-    startup_home: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    config = startup_home / "config"
-    config.mkdir(parents=True)
-    original = b'// user comment\n{"config_version":1,"logger":{"level":"debug"}}\n'
-    path = config / "workspace.jsonc"
-    path.write_bytes(original)
-
-    main()
-    first = json.loads(capsys.readouterr().out)
-    migration = first["upgrades"]["configuration"]
-    assert migration["state"] == "completed"
-    assert original in [file.read_bytes() for file in Path(migration["backup_root"]).glob("file-*.before")]
-    assert read_jsonc_object(path) == {"config_version": 3}
-    assert read_jsonc_object(config / "gateway.jsonc")["settings"]["gateway"]["logging"]["runtime"]["level"] == "debug"
-    after = {file: file.read_bytes() for file in config.rglob("*") if file.is_file()}
-    main()
-    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
-    assert {file: file.read_bytes() for file in config.rglob("*") if file.is_file()} == after
-
-
-@pytest.mark.parametrize("payload,reason", [
-    ({"config_version": 999}, "支持范围"),
-    ({"config_version": 1, "logger": {"level": "debug"}}, "需要用户决定"),
-])
-def test_initialize_preserves_unknown_or_conflicting_sources(
-    startup_home: Path, payload: dict[str, object], reason: str,
-) -> None:
-    config = startup_home / "config"
-    config.mkdir(parents=True)
-    workspace = config / "workspace.jsonc"
-    workspace.write_text(json.dumps(payload), encoding="utf-8")
-    gateway = config / "gateway.jsonc"
-    gateway.write_text('{"config_version":4,"logging":{"runtime":{"level":"info"}}}', encoding="utf-8")
-    before = {path: path.read_bytes() for path in config.iterdir()}
-    with pytest.raises(ValueError, match=reason):
-        main()
-    assert {path: path.read_bytes() for path in config.iterdir()} == before
 
 
 def test_initialize_automatically_migrates_supported_identity_and_preserves_backup(
@@ -271,13 +201,13 @@ def test_initialize_preserves_explicit_restore_direction(
     assert json.loads(journal_path.read_text(encoding="utf-8"))["state"] == "restored"
 
 
-def test_running_owner_blocks_layout_before_any_file_changes(
-    startup_home: Path, legacy_workspace_payload: dict[str, object],
+def test_running_owner_blocks_gateway_upgrade_before_any_file_changes(
+    startup_home: Path,
 ) -> None:
     config = startup_home / "config"
     config.mkdir(parents=True)
-    legacy = config / "boxteam.jsonc"
-    original = json.dumps(legacy_workspace_payload).encode()
+    legacy = config / "gateway.jsonc"
+    original = json.dumps({"config_version": 4, "logging": {"runtime": {"level": "debug"}}}).encode()
     legacy.write_bytes(original)
     ownership = SQLiteProcessOwnership(startup_home / "state/gateway/gateway.sqlite")
     ownership.acquire()
@@ -286,17 +216,18 @@ def test_running_owner_blocks_layout_before_any_file_changes(
             main()
     finally:
         ownership.release()
-    assert list(config.iterdir()) == [legacy]
+    assert {path.name for path in config.iterdir()} == {legacy.name, ".runtime-logging-migration.lock"}
+    assert not (config / ".runtime-logging-migration.json").exists()
     assert legacy.read_bytes() == original
 
 
-def test_live_upgrade_preflight_is_read_only_then_initialization_applies(
+def test_live_gateway_upgrade_preflight_is_read_only_then_initialization_applies(
     startup_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     config = startup_home / "config"
     config.mkdir(parents=True)
-    path = config / "workspace.jsonc"
-    original = b'{"config_version":1,"logger":{"level":"debug"}}\n'
+    path = config / "gateway.jsonc"
+    original = b'{"config_version":4,"logging":{"runtime":{"level":"debug"}}}\n'
     path.write_bytes(original)
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
     main()
@@ -325,8 +256,7 @@ def test_registered_legacy_layout_checks_all_sources_before_any_write(
 ) -> None:
     case = legacy_gateway
     workspace = case.directory / "workspace-0"
-    legacy = workspace / ".boxteam/boxteam.jsonc"
-    legacy_workspace_payload["logger"] = {"level": "debug"}
+    legacy = workspace / ".boxteam/workspace.jsonc"
     legacy.write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
     config = case.directory / "home/config"
     config.mkdir(parents=True)
@@ -344,7 +274,7 @@ def test_registered_legacy_layout_checks_all_sources_before_any_write(
     else:
         payloads = {
             "config_version": {"config_version": 999},
-            "logging_conflict": {"config_version": 4, "logging": {"runtime": {"level": "info"}}},
+            "logging_conflict": {"config_version": 4, "ui": {"theme": {"default_theme_id": "custom", "custom_themes": []}}},
             "target_schema": {"config_version": 4, "unsupported_setting": True},
         }
         (config / "gateway.jsonc").write_text(json.dumps(payloads[fault]), encoding="utf-8")
@@ -359,17 +289,16 @@ def test_registered_legacy_layout_checks_all_sources_before_any_write(
 
 
 @pytest.mark.parametrize("preview", [True, False])
-@pytest.mark.parametrize("layout", [True, False])
 @pytest.mark.parametrize("fault", ["generation", "route"])
-def test_unsettled_identity_is_rejected_before_configuration_or_layout_publish(
+def test_unsettled_identity_is_rejected_before_gateway_configuration_publish(
     legacy_gateway: LegacyGateway, monkeypatch: pytest.MonkeyPatch,
-    legacy_workspace_payload: dict[str, object], preview: bool, layout: bool, fault: str,
+    preview: bool, fault: str,
 ) -> None:
     case = legacy_gateway
     config = case.directory / "home/config"
     config.mkdir(parents=True)
-    payload = legacy_workspace_payload if layout else {"config_version": 1, "logger": {"level": "info"}}
-    (config / ("boxteam.jsonc" if layout else "workspace.jsonc")).write_text(json.dumps(payload), encoding="utf-8")
+    payload = {"config_version": 4, "logging": {"runtime": {"level": "info"}}}
+    (config / "gateway.jsonc").write_text(json.dumps(payload), encoding="utf-8")
     with closing(sqlite3.connect(case.database)) as connection:
         if fault == "generation":
             connection.execute(
@@ -395,16 +324,15 @@ def test_unsettled_identity_is_rejected_before_configuration_or_layout_publish(
 
 @pytest.mark.parametrize("legacy_gateway", [True], indirect=True)
 @pytest.mark.parametrize("preview", [True, False])
-@pytest.mark.parametrize("layout", [True, False])
-def test_unverified_remote_is_rejected_before_configuration_or_layout_publish(
+def test_unverified_remote_is_rejected_before_gateway_configuration_publish(
     legacy_gateway: LegacyGateway, monkeypatch: pytest.MonkeyPatch,
-    legacy_workspace_payload: dict[str, object], preview: bool, layout: bool,
+    preview: bool,
 ) -> None:
     case = legacy_gateway
     config = case.directory / "home/config"
     config.mkdir(parents=True)
-    payload = legacy_workspace_payload if layout else {"config_version": 1, "logger": {"level": "info"}}
-    (config / ("boxteam.jsonc" if layout else "workspace.jsonc")).write_text(json.dumps(payload), encoding="utf-8")
+    payload = {"config_version": 4, "logging": {"runtime": {"level": "info"}}}
+    (config / "gateway.jsonc").write_text(json.dumps(payload), encoding="utf-8")
     before = {path.relative_to(case.directory): path.read_bytes() if path.is_file() else None
               for path in case.directory.rglob("*")}
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--project-root", str(Path.cwd()),
@@ -436,66 +364,39 @@ def test_only_live_preview_defers_generation_settlement_to_original_stop(
     assert case.dump() == before
 
 
-def test_layout_preview_uses_in_memory_candidates_and_creates_no_files(
-    startup_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-    legacy_workspace_payload: dict[str, object],
+@pytest.mark.parametrize("preview", [False, True])
+def test_legacy_workspace_layout_is_preserved_without_an_accepted_baseline(
+    startup_home: Path, monkeypatch: pytest.MonkeyPatch,
+    legacy_workspace_payload: dict[str, object], preview: bool,
 ) -> None:
     config = startup_home / "config"
     config.mkdir(parents=True)
     legacy = config / "boxteam.jsonc"
-    legacy_workspace_payload["logger"] = {"level": "debug"}
-    legacy_workspace_payload["gateway"] = {
-        "workspaces": [], "ui": {"theme": {"default_theme_id": "warm", "custom_themes": []}},
-    }
-    runtime = legacy_workspace_payload["runtime"]
-    assert isinstance(runtime, dict)
-    runtime["auxiliary_services"] = {
-        "terminal_backend": {"url": "http://127.0.0.1:8012"},
-        "browser_backend": {"url": "http://127.0.0.1:8015"},
-    }
     legacy.write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
     original = legacy.read_bytes()
-    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
-    main()
-    result = json.loads(capsys.readouterr().out)
-    assert result["upgrade_required"] is True
-    assert result["upgrades"] == {"configuration": {"state": "migration_required"},
-                                  "layout": {"state": "migration_required"}}
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        main()
     assert list(startup_home.rglob("*")) == [config, legacy]
     assert legacy.read_bytes() == original
 
 
-def test_current_workspace_config_with_retired_auxiliary_defaults_triggers_upgrade(
-    startup_home: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    config = startup_home / "config"
-    config.mkdir(parents=True)
-    workspace = config / "workspace.jsonc"
-    original = json.dumps({"config_version": 2, "runtime": {"auxiliary_services": {
-        "terminal_backend": {"url": "http://127.0.0.1:8012"},
-        "browser_backend": {"url": "http://127.0.0.1:8015"},
-    }}}).encode()
-    workspace.write_bytes(original)
-    main()
-    result = json.loads(capsys.readouterr().out)["upgrades"]["configuration"]
-    assert result["state"] == "completed"
-    assert "auxiliary_services" not in read_jsonc_object(workspace)["runtime"]
-    assert original in [path.read_bytes() for path in Path(result["backup_root"]).glob("file-*.before")]
 
 
-def test_registered_and_explicit_workspace_layout_acquires_one_owner(
-    legacy_gateway: LegacyGateway, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+def test_registered_and_explicit_workspace_layout_refuses_before_identity_publication(
+    legacy_gateway: LegacyGateway, monkeypatch: pytest.MonkeyPatch,
     legacy_workspace_payload: dict[str, object],
 ) -> None:
     case = legacy_gateway
     workspace = case.directory / "workspace-0"
-    (workspace / ".boxteam/boxteam.jsonc").write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
+    source = workspace / ".boxteam/boxteam.jsonc"
+    source.write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
+    before = {path: path.read_bytes() for path in case.directory.rglob("*") if path.is_file()}
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--project-root", str(Path.cwd()),
                                     "--workspace", str(workspace)])
-    main()
-    result = json.loads(capsys.readouterr().out)
-    assert result["migrated_workspace_layout"] is True
-    assert read_jsonc_object(workspace / ".boxteam/workspace.jsonc")["config_version"] == 3
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        main()
+    assert {path: path.read_bytes() for path in case.directory.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize("state", ["prepared", "applying"])
@@ -556,7 +457,7 @@ def test_old_home_source_is_not_moved_before_other_config_is_checked(
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--home", str(home),
                                     *(["--preview"] if preview else [])])
     before = {path.relative_to(home): path.read_bytes() if path.is_file() else None for path in home.rglob("*")}
-    with pytest.raises(ValueError, match="支持范围"):
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
         main()
     assert {path.relative_to(home): path.read_bytes() if path.is_file() else None for path in home.rglob("*")} == before
 
@@ -605,7 +506,7 @@ def test_selected_gateway_checks_extra_old_gateway_before_moving_it(
         connection.execute("INSERT INTO schema_migrations VALUES (?, 'future')", (len(_GATEWAY_MIGRATIONS) + 1,))
         connection.commit()
     workspace = case.directory / "workspace-0"
-    (workspace / ".boxteam/boxteam.jsonc").write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
+    (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(legacy_workspace_payload), encoding="utf-8")
     config = boxteam_home / "config"
     config.mkdir()
     (config / ".env").write_text(f"BOXTEAM_GATEWAY_ROOT={case.directory / 'selected-gateway'}\n", encoding="utf-8")

@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 from app.core.config_sources import read_stable_config_file, verify_stable_config_file
 from app.services.infrastructure.config.source_uri import config_file_uri
 from configs.inheritance import ConfigGraph, NodeLocation, config_document_schema
+from configs.inheritance.resolver import ConfigNodeValidationError
 from configs.inheritance.values import thaw
 from configs.runtime import merge_json_objects
 
@@ -91,8 +92,10 @@ def graph_factory(tmp_path: Path, settings_schema: dict):
         return ConfigGraph(
             domain=domain, version=4, owner_id=owner, entry=entry, aliases=aliases or {},
             settings_schema=scope_schema, options_schema=option_schema,
+            source_key=lambda path: path.relative_to(tmp_path).as_posix(),
             source_uri=lambda path: config_file_uri(scope="user", scope_id="local",
-                logical_name=path.relative_to(tmp_path).as_posix().replace("/", "_").replace(".", "_")),
+                logical_name=path.relative_to(tmp_path).as_posix().replace("/", "_").replace(".", "_")
+                    .replace("#", "_hash_").replace("%", "_percent_").replace(" ", "_")),
             authorize_source=authorize or (lambda path: path.is_relative_to(tmp_path)),
             registered_uris=registered_uris, read_source=read, source_documents=source_documents,
         )
@@ -113,6 +116,38 @@ def write_config(tmp_path: Path):
         path.write_text("// 真实 JSONC 注释\n" + json.dumps(document), encoding="utf-8")
         return path
     return write
+
+
+@pytest.mark.parametrize("validation_kind", ["document", "settings", "options"])
+def test_validation_issues_only_map_original_document_coordinates(
+    write_config, graph_factory, validation_kind: str,
+) -> None:
+    if validation_kind == "document":
+        entry = write_config("entry.jsonc", {}, profiles={
+            "field.with.dot/and.slash": {"extends": 7, "settings": {}},
+        })
+    else:
+        entry = write_config("entry.jsonc", {"model_options": {"required_option": 7}})
+    if validation_kind == "options":
+        graph = graph_factory(entry, schema={
+            "type": "object", "properties": {"model_options": {"type": "object"}},
+        }, options_schema={
+            "properties": {"model_options": {"properties": {"required_option": {"type": "boolean"}}}},
+        })
+    else:
+        graph = graph_factory(entry)
+    with pytest.raises(ConfigNodeValidationError) as caught:
+        if validation_kind == "options":
+            graph.resolve_reference("context:workspace", declared_at=NodeLocation(entry))
+        else:
+            graph.resolve_scope()
+    issue, = caught.value.issues
+    expected = (["profiles", "field.with.dot/and.slash", "extends"] if validation_kind == "document"
+                else ["model_options", "required_option"])
+    assert issue["path"] == expected
+    assert issue["path_exact"] is (validation_kind == "document")
+    assert issue["code"] == "type" and "JSON schema type" in issue["message"]
+    assert caught.value.source_uri == config_file_uri(scope="user", scope_id="local", logical_name="entry_jsonc")
 
 
 @pytest.mark.parametrize("domain,version", [("gateway", 6), ("workspace", 4)])
@@ -403,3 +438,25 @@ def test_different_files_cannot_share_one_source_uri(write_config, graph_factory
     entry = write_config("a_b.jsonc", {}, parent="a.b.jsonc")
     with pytest.raises(ValueError, match="同一来源 URI"):
         graph_factory(entry).resolve_scope()
+
+
+@pytest.mark.parametrize("reference", ["context:workspace", "context:provider/primary"])
+def test_scope_cannot_inherit_its_unresolved_context(write_config, graph_factory, reference):
+    entry = write_config("entry.jsonc", {}, parent=reference)
+    with pytest.raises(ValueError, match="循环"):
+        graph_factory(entry).resolve_scope()
+
+
+def test_inspected_reference_round_trips_external_filename_and_profile(write_config, graph_factory):
+    entry = write_config("entry.jsonc", {})
+    write_config("shared #50%23.jsonc", {}, profiles={
+        "fast #%": {"settings": {"model_options": {"required_option": "external"}}},
+    })
+    graph = graph_factory(entry)
+    node = graph.resolve_reference("shared%20%2350%2523.jsonc#/profiles/fast%20%23%25", declared_at=NodeLocation(entry))
+    reference = graph.node_reference(node)
+    assert reference.endswith("shared%20%2350%2523.jsonc#/profiles/fast%20%23%25")
+    # 模拟另一个来源中新建局部子节点和冷启动，不依赖旧图的 URI 登记。
+    child = write_config("private/entry.jsonc", {}, profiles={"child": {"extends": reference, "settings": {}}})
+    restored = graph_factory(child).resolve_reference("#/profiles/child", declared_at=NodeLocation(child))
+    assert restored.settings["model_options"]["required_option"] == "external"

@@ -135,6 +135,8 @@ function installDevelopmentConfiguration(environment, bundledPlugins) {
       JSON.stringify(bundledPlugins),
       "--project-root",
       projectRoot,
+      "--workspace",
+      defaultWorkspaceRoot,
     ],
     {
       cwd: projectRoot,

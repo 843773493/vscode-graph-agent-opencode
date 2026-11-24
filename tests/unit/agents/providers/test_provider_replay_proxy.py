@@ -11,14 +11,14 @@ import pytest
 
 from app.agents.providers import provider_http_client
 from app.runtime.model_stream import ModelStreamTransportController
-from app.runtime.network_proxy import ProxyRoutes
+from app.runtime.network_proxy import ProxyRoutes, capture_proxy_environment
 from app.runtime.provider_model import build_model_from_provider
 from app.testing.model_stream import (
     load_cassette_from_object,
     load_model_stream_config,
     load_scenario,
 )
-from configs.network import DirectProxy, EnvironmentProxy
+from configs.network import DirectProxy, EnvironmentProxy, ExplicitProxy
 
 
 @pytest.fixture
@@ -103,14 +103,16 @@ async def test_sdk_short_connection_retry_does_not_close_the_resident_client(mon
 @pytest.mark.parametrize("adapter", ["openai", "anthropic"])
 @pytest.mark.parametrize("failing_pool", ["async", "sync"])
 async def test_failed_model_pool_close_keeps_retry_and_releases_the_other_pool(
-    monkeypatch: pytest.MonkeyPatch, adapter: str, failing_pool: str,
+    monkeypatch: pytest.MonkeyPatch, adapter: str, failing_pool: str, direct_proxy_routes,
 ):
     model = build_model_from_provider(provider={
         "provider_id": "test", "model_id": "test", "model": "test-model",
         "endpoint": "http://model.invalid/v1", "api_key": "test-key", "custom_llm_provider": adapter,
         "api_mode": {"protocol": "anthropic_messages" if adapter == "anthropic" else "chat_completions",
                      "model_info": {}, "supports_reasoning": {}},
-        "request_options": {"no_proxy": True},
+        "network": {"proxy": {"mode": "direct"}},
+        "proxy_environment": {},
+        "proxy_routes": direct_proxy_routes,
     }, runtime_config={}, invocation_purpose="tool_test")
     async_owner = model._provider_http_client(is_async=True)
     sync_owner = model._provider_http_client(is_async=False)
@@ -151,6 +153,7 @@ async def test_failed_model_pool_close_keeps_retry_and_releases_the_other_pool(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("proxy_policy", ["environment", "explicit", "bypass"])
 @pytest.mark.parametrize("scenario_id,protocol,suffix,expected,adapter", [
     ("basic-text", "chat_completions", "/chat/completions", "基础回放", "openai"),
     ("basic-text", "chat_completions", "/chat/completions", "基础回放", "openrouter"),
@@ -160,7 +163,7 @@ async def test_failed_model_pool_close_keeps_retry_and_releases_the_other_pool(
 ])
 async def test_actual_adapters_replay_without_creating_live_transports(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-    asynchronous: bool, scenario_id: str, protocol: str, suffix: str, expected: str, adapter: str,
+    asynchronous: bool, proxy_policy: str, scenario_id: str, protocol: str, suffix: str, expected: str, adapter: str,
 ):
     """真实构建、SDK 解码和流消费；所有代理／上游 transport 的创建都禁止。"""
     def forbidden_transport(*_args, **_kwargs):
@@ -184,6 +187,11 @@ async def test_actual_adapters_replay_without_creating_live_transports(
     assert controller is not None
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", forbidden_transport)
     monkeypatch.setattr(httpx, "HTTPTransport", forbidden_transport)
+    proxy_environment = capture_proxy_environment()
+    proxy = EnvironmentProxy() if proxy_policy == "environment" else ExplicitProxy(
+        url="http://proxy.invalid",
+        bypass=(httpx.URL(request.url).host,) if proxy_policy == "bypass" else (),
+    )
     model = None
     try:
         model = build_model_from_provider(
@@ -192,6 +200,9 @@ async def test_actual_adapters_replay_without_creating_live_transports(
                 "endpoint": request.url.removesuffix(suffix), "api_key": "test-key",
                 "custom_llm_provider": adapter,
                 "api_mode": {"protocol": protocol, "model_info": {}, "supports_reasoning": {}},
+                "proxy_routes": ProxyRoutes.from_configuration(
+                    proxy, environment=proxy_environment,
+                ),
             }, runtime_config={}, invocation_purpose="tool_test",
         )
         if asynchronous:

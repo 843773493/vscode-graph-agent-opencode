@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
 
 
-PROVIDER_REQUEST_OPTION_KEYS = {"parameters", "default_headers", "no_proxy"}
+PROVIDER_REQUEST_OPTION_KEYS = {"parameters", "default_headers"}
 
 
 def validate_provider_configuration(
@@ -81,15 +81,17 @@ def build_model_from_provider(
     api_mode, request_options = validate_provider_configuration(provider)
     validate_extra_body(request_options["parameters"], protocol=api_mode.protocol)
     authentication = provider.get("credential_source")
+    chatgpt_auth_directory = None
     if provider["custom_llm_provider"] == "chatgpt":
         from app.runtime.chatgpt_auth import (
             configure_litellm_chatgpt_auth_directory,
-            ensure_chatgpt_oauth_ready,
             ensure_litellm_chatgpt_model_capabilities,
+            prepare_chatgpt_oauth,
         )
 
-        account_id = ensure_chatgpt_oauth_ready(configure_litellm_chatgpt_auth_directory())
-        authentication = f"oauth:chatgpt:{account_id}" if account_id else None
+        chatgpt_auth_directory = configure_litellm_chatgpt_auth_directory()
+        credential = prepare_chatgpt_oauth(chatgpt_auth_directory, routes=provider["auth_proxy_routes"])
+        authentication = f"oauth:chatgpt:{credential.account_id}" if credential.account_id else None
         ensure_litellm_chatgpt_model_capabilities(provider["model"])
 
     if api_mode.protocol == "responses":
@@ -101,6 +103,7 @@ def build_model_from_provider(
             request_options=request_options,
             prompt_cache_key=prompt_cache_key,
             invocation_purpose=invocation_purpose,
+            chatgpt_auth_directory=chatgpt_auth_directory,
         )
     else:
         from app.agents.providers.litellm_chat import build_litellm_chat_model
@@ -179,13 +182,9 @@ def _get_provider_request_options(
     if not isinstance(default_headers, dict):
         raise TypeError("provider.request_options.default_headers 必须是对象")
     normalized_headers = normalize_request_headers(default_headers)
-    no_proxy = request_options.get("no_proxy", False)
-    if not isinstance(no_proxy, bool):
-        raise TypeError("provider.request_options.no_proxy 必须是布尔值")
     return {
         "parameters": parameters,
         "default_headers": normalized_headers,
-        "no_proxy": no_proxy,
     }
 
 

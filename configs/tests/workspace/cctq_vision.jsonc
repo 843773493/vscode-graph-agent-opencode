@@ -1,9 +1,61 @@
 {
   "$schema": "../../workspace_schema.jsonc",
-  "llm": {
-    "providers": {
-      "backup_3": {
-        "defaults": {
+  "config_version": 4,
+  "extends": "builtin:workspace",
+  "settings": {
+    "workspace": {
+      "llm": {
+        "providers": {
+          "backup_3": {
+            "models": {
+              "default": {
+                "model": "gpt-6-luna",
+                "config_ref": "context:provider/backup_3"
+              }
+            },
+            "config_ref": "#/profiles/provider.backup_3"
+          }
+        }
+      },
+      "default_agent": "default",
+      "agents": {
+        "default": {
+          "name": "Vision Test Assistant",
+          "description": "只用于 e2e 图片输入识别测试的助手。",
+          "language": "zh-CN",
+          "instructions": {
+            "system_prompt": "你是一个图片识别测试助手。回答必须简短、直接，并准确描述用户提供图片中的可见几何图形和颜色。"
+          },
+          "model": {
+            "primary": {
+              "provider_id": "backup_3",
+              "model_id": "default"
+            },
+            "fallbacks": []
+          },
+          "tools": {
+            "denylist": [],
+            "confirmation_required": []
+          }
+        }
+      }
+    },
+    "network": {
+      "proxy": {
+        "mode": "environment"
+      }
+    },
+    "model_options": {
+      "api_mode": {
+        "streaming": true
+      }
+    }
+  },
+  "profiles": {
+    "provider.backup_3": {
+      "extends": "context:workspace",
+      "settings": {
+        "model_options": {
           "endpoint": "https://newapi.hyf2333.top/v1",
           "api_key": "${CCTQ_API_KEY}",
           "custom_llm_provider": "openai",
@@ -31,34 +83,7 @@
               }
             }
           }
-        },
-        "models": {
-          "default": {
-            "model": "gpt-6-luna"
-          }
         }
-      }
-    }
-  },
-  "default_agent": "default",
-  "agents": {
-    "default": {
-      "name": "Vision Test Assistant",
-      "description": "只用于 e2e 图片输入识别测试的助手。",
-      "language": "zh-CN",
-      "instructions": {
-        "system_prompt": "你是一个图片识别测试助手。回答必须简短、直接，并准确描述用户提供图片中的可见几何图形和颜色。"
-      },
-      "model": {
-        "primary": {
-          "provider_id": "backup_3",
-          "model_id": "default"
-        },
-        "fallbacks": []
-      },
-      "tools": {
-        "denylist": [],
-        "confirmation_required": []
       }
     }
   }

@@ -100,6 +100,12 @@ def configure_model_stream_from_environment(
     return ModelStreamTransportController.configure(config)
 
 
+def is_model_stream_replay() -> bool:
+    """读取 Backend lifespan 持有的显式录放 owner，不解析环境或创建 transport。"""
+    controller = _configured_controller
+    return controller is not None and not controller._closed and controller.config.transport.mode == "replay"
+
+
 def ensure_model_stream_installed() -> None:
     controller = _configured_controller
     if controller is not None:

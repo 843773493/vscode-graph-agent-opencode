@@ -79,7 +79,7 @@ async def dial_spoke_channel(
     url = channel_websocket_url(request.gateway_url)
     private_key = load_or_create_signing_key(gateway_root)
     headers = {"X-BoxTeam-Federation-Token": request.credential_token}
-    connection = await connect(url, additional_headers=headers)
+    connection = await connect(url, additional_headers=headers, proxy=None)
     try:
         await connection.send(
             FederationFrame(

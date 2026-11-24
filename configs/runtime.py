@@ -61,14 +61,23 @@ def _structural_location(document: object, path: Iterable[str | int]) -> str:
     return location
 
 
+def validate_config_document_payload(
+    config: dict[str, object], *, schema: dict[str, object],
+) -> dict[str, object]:
+    """只校验本地节点文档；可达父链与完整有效值由所属 Graph owner 校验。"""
+    if schema.get("x-boxteam-config-domain") == "workspace":
+        require_current_workspace_config(config)
+    return _validate_config_schema(config, schema=schema)
+
+
 def validate_config_payload(
     config: dict[str, object], *, schema: dict[str, object],
 ) -> dict[str, object]:
-    """运行时唯一校验入口；公开诊断不复制源文，完整细节留在原始异常链。"""
-    schema_domain = schema.get("x-boxteam-config-domain")
-    if schema_domain == "workspace":
+    """只校验业务 API 的 flat 投影，不从投影重建配置图或模型解析器。"""
+    domain = schema.get("x-boxteam-config-domain")
+    if domain == "workspace":
         require_current_workspace_config(config)
-    if schema_domain == "gateway":
+    if domain == "gateway":
         features = config.get("features")
         if isinstance(features, dict) and "session_generators" in features:
             raise ValueError("Gateway 生成器轮询配置已迁入工作区；停止服务后执行 uv run python -m configs.boxteam migrate-runtime-config，再通过 /api/gateway/migrations/session-generators 显式导入旧任务")
@@ -76,6 +85,15 @@ def validate_config_payload(
         runtime = logging.get("runtime") if isinstance(logging, dict) else None
         if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
             runtime["level"] = runtime["level"].strip().lower()
+    definition = f"{domain}Payload" if domain in {"gateway", "workspace"} else None
+    return _validate_config_schema(config, schema=schema, definition=definition)
+
+
+def _validate_config_schema(
+    config: dict[str, object], *, schema: dict[str, object], definition: str | None = None,
+) -> dict[str, object]:
+    """公开诊断不复制源文，完整细节留在原始异常链。"""
+    schema_domain = schema.get("x-boxteam-config-domain")
     try:
         if schema_domain == "workspace":
             validate_policy_manifest(schema, workspace_config_policy())
@@ -84,12 +102,9 @@ def validate_config_payload(
     except (TypeError, ValueError) as error:
         raise ValueError(f"配置策略验证失败: domain={schema_domain}") from error
     try:
-        # 源文档信封与既有业务 API 投影分别校验；调用方明确选择，不猜测输入格式。
-        payload_schema = (
-            {"$ref": "#/$defs/gatewayPayload", "$defs": schema["$defs"]}
-            if schema_domain == "gateway" else schema
-        )
-        jsonschema.validate(config, payload_schema)
+        value_schema = ({"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]}
+                        if definition is not None else schema)
+        jsonschema.validate(config, value_schema)
     except Unresolvable as error:
         # 引用可能是含原生路径或凭据的 URI，不复制到普通配置状态。
         raise ValueError("配置验证失败: stage=schema_reference") from error
@@ -101,48 +116,11 @@ def validate_config_payload(
         raise ValueError(
             f"配置验证失败: stage={stage}, location={location}, rule={error.validator}"
         ) from error
-    if schema_domain == "workspace":
-        from app.services.infrastructure.config.llm_resolution import LlmResolution
-
-        resolver = LlmResolution(
-            effective_config_provider=lambda: config,
-            default_agent_id_provider=lambda: config["default_agent"],
-            schema_provider=lambda: schema,
-        )
-        validator = jsonschema.Draft202012Validator({
-            "$ref": "#/$defs/resolvedModelOptions", "$defs": schema["$defs"],
-        })
-        option_fields = schema["$defs"]["modelOptions"]["properties"]
-        for model in resolver.list_models(config):
-            options = {key: value for key, value in model.items() if key in option_fields}
-            try:
-                validator.validate(options)
-            except jsonschema.ValidationError as error:
-                raise ValueError(
-                    "模型配置验证失败: "
-                    f"provider_id={model['provider_id']}, model_id={model['model_id']}, "
-                    f"location={_structural_location(options, error.absolute_path)}, rule={error.validator}"
-                ) from error
     return config
 
 
 def require_current_workspace_config(config: dict[str, object], *, partial: bool = False) -> None:
     if "logger" in config or "logging" in config:
-        raise ValueError(
-            "Workspace 日志配置须显式迁移到 Gateway logging.runtime；停止相关服务后执行 "
-            "uv run python -m configs.boxteam migrate-runtime-config --migration-workspace <工作区>"
-        )
-    if config.get("config_version", 3 if partial else None) != 3:
-        raise ValueError("Workspace 配置版本不受支持；当前版本为 3，模型选择须使用完整 ModelReference，原件保持不变")
-
-
-def load_validated_config(
-    *,
-    config_path: Path,
-    schema_path: Path,
-) -> dict[str, object]:
-    config = read_jsonc_object(config_path)
-    return validate_config(
-        config,
-        schema_path=schema_path,
-    )
+        raise ValueError("Workspace 不允许日志配置；旧来源缺少已验收升级基线，原件保持不变")
+    if config.get("config_version", 4 if partial else None) != 4:
+        raise ValueError("Workspace 配置版本不受支持；当前版本为 4，旧来源缺少已验收升级基线，原件保持不变")

@@ -7,12 +7,17 @@ import tempfile
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
-from app.core.failures import failure_detail, mark_public_failure
+import httpx
+
+from app.core.failures import failure_detail, mark_provider_failure, mark_public_failure
 from app.core.file_permissions import restrict_private_path_access
 from app.core.path_utils import get_boxteam_home
+from app.runtime.network_proxy import ProxyRoutes
 
 CHATGPT_TOKEN_DIR_ENV = "CHATGPT_TOKEN_DIR"
 CHATGPT_AUTH_FILE_ENV = "CHATGPT_AUTH_FILE"
@@ -20,6 +25,7 @@ DEFAULT_CHATGPT_AUTH_FILE = "auth.json"
 CHATGPT_OAUTH_TYPE = "oauth"
 CHATGPT_OAUTH_METHOD = "chatgpt"
 TOKEN_EXPIRY_SKEW_SECONDS = 60
+_auth_refresh_lock = Lock()
 
 
 def is_chatgpt_oauth_provider(provider: Mapping[str, object]) -> bool:
@@ -51,8 +57,25 @@ def configure_litellm_chatgpt_auth_directory() -> Path:
     return token_directory
 
 
+@dataclass(frozen=True, slots=True)
+class ChatGPTCredential:
+    access_token: str = field(repr=False)
+    account_id: str | None
+
+
 def ensure_chatgpt_oauth_ready(token_directory: Path) -> str | None:
-    """确保服务请求只使用现成凭据，绝不进入交互式 device-code 登录。"""
+    """普通配置检查只使用现成凭据，不刷新或进入交互式登录。"""
+    return _ready_chatgpt_credential(token_directory, routes=None).account_id
+
+
+def prepare_chatgpt_oauth(token_directory: Path, *, routes: ProxyRoutes) -> ChatGPTCredential:
+    """正式调用沿认证 Provider 的路由刷新凭据，绝不触发设备登录。"""
+    # 同一凭据文件中的 refresh token 会轮换；先重读再刷新，避免并发消费旧 token。
+    with _auth_refresh_lock:
+        return _ready_chatgpt_credential(token_directory, routes=routes)
+
+
+def _ready_chatgpt_credential(token_directory: Path, *, routes: ProxyRoutes | None) -> ChatGPTCredential:
     auth_file = _resolve_litellm_auth_file(token_directory)
     if not auth_file.is_file():
         raise RuntimeError(
@@ -73,24 +96,67 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> str | None:
     expires_at = auth_data.get("expires_at")
     if not isinstance(expires_at, int):
         expires_at = _jwt_exp(access_token)
-    if time.time() < expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
-        account_id = auth_data.get("account_id")
-        return account_id if isinstance(account_id, str) and account_id else None
+    if time.time() >= expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
+        codex_auth_file = Path("~/.codex/auth.json").expanduser().resolve()
+        source_record = _build_litellm_auth_record(codex_auth_file) if codex_auth_file.is_file() else None
+        if source_record is not None and time.time() < source_record["expires_at"] - TOKEN_EXPIRY_SKEW_SECONDS:
+            auth_data = source_record
+        elif routes is not None and isinstance(auth_data.get("refresh_token"), str) and auth_data["refresh_token"]:
+            auth_data = _refresh_chatgpt_tokens(auth_data, routes=routes)
+        else:
+            raise RuntimeError(
+                "ChatGPT OAuth 凭据已过期，且未找到有效的 Codex 凭据。"
+                "请先执行 codex login，再重试请求。"
+            )
+        _publish_auth_record(auth_file, auth_data, replace_existing=True)
+    account_id = auth_data.get("account_id")
+    return ChatGPTCredential(
+        access_token=auth_data["access_token"],
+        account_id=account_id if isinstance(account_id, str) and account_id else None,
+    )
 
-    codex_auth_file = Path("~/.codex/auth.json").expanduser().resolve()
-    if not codex_auth_file.is_file():
-        raise RuntimeError(
-            "ChatGPT OAuth 凭据已过期，且未找到可同步的 Codex 凭据。"
-            "请先执行 codex login，再重试请求。"
-        )
-    source_record = _build_litellm_auth_record(codex_auth_file)
-    source_expires_at = source_record["expires_at"]
-    if time.time() >= source_expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
-        raise RuntimeError(
-            "ChatGPT OAuth 与 Codex 凭据均已过期。请先执行 codex login，再重试请求。"
-        )
-    _publish_auth_record(auth_file, source_record, replace_existing=True)
-    return source_record.get("account_id")
+
+def _refresh_chatgpt_tokens(auth_data: Mapping[str, Any], *, routes: ProxyRoutes) -> dict[str, Any]:
+    from app.runtime.model_stream import is_model_stream_replay
+
+    if is_model_stream_replay():
+        raise RuntimeError("模型回放禁止刷新已过期的 ChatGPT OAuth 凭据；请先在真实模式更新凭据")
+    # 只复用 SDK 的认证协议常量；不借用其进程级 HTTP client 或 authenticator 缓存。
+    from app.runtime.litellm_runtime import load_litellm
+
+    load_litellm()
+    from litellm.llms.chatgpt.common_utils import (
+        CHATGPT_CLIENT_ID,
+        CHATGPT_OAUTH_TOKEN_URL,
+    )
+
+    verify = httpx.create_ssl_context(trust_env=True)
+    try:
+        with httpx.Client(verify=verify, trust_env=False, mounts=routes.sync_mounts(verify=verify), timeout=30) as client:
+            response = client.post(CHATGPT_OAUTH_TOKEN_URL, json={
+                "client_id": CHATGPT_CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": auth_data["refresh_token"],
+                "scope": "openid profile email",
+            })
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as error:
+        proxy_secrets = tuple(part.decode() for _pattern, proxy in routes.routes if proxy is not None and proxy.raw_auth
+                              for part in proxy.raw_auth)
+        mark_provider_failure(error, secrets=(auth_data["refresh_token"], auth_data["access_token"], *proxy_secrets))
+        raise
+    required = ("access_token", "id_token")
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) or not data[key] for key in required):
+        raise ValueError("ChatGPT OAuth 刷新响应缺少 access_token 或 id_token")
+    access_token = data["access_token"]
+    return {
+        "access_token": access_token,
+        "refresh_token": data.get("refresh_token") or auth_data["refresh_token"],
+        "id_token": data["id_token"],
+        "expires_at": _jwt_exp(access_token),
+        "account_id": _jwt_account_id(data["id_token"]) or _jwt_account_id(access_token) or auth_data.get("account_id"),
+    }
 
 
 def ensure_litellm_chatgpt_model_capabilities(model: str) -> bool:

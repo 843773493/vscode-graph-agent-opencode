@@ -29,6 +29,7 @@ from app.schemas.gateway.plugin_private_inputs import (
 from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import (
+    ConfigActiveOptionsInspectionDTO,
     ConfigDTO,
     ConfigEventDTO,
     ConfigEventsDTO,
@@ -65,6 +66,9 @@ from app.services.infrastructure.config.plugin_private_inputs import (
     validate_private_input,
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
+from app.services.infrastructure.config.source_document import (
+    source_validation_error_detail,
+)
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
@@ -75,12 +79,34 @@ from configs.plugin_parameters import plugin_parameters
 router = APIRouter(prefix="/config", tags=["config"])
 
 
+@router.get("/llm/inspection", response_model=APIResponse[ConfigActiveOptionsInspectionDTO], summary="读取已发布模型选项及冻结来源")
+async def get_active_llm_options_inspection(
+    provider_id: Annotated[str, Query(min_length=1)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    response: Response,
+    model_id: Annotated[str | None, Query(min_length=1)] = None,
+) -> APIResponse[ConfigActiveOptionsInspectionDTO]:
+    try:
+        result = await asyncio.to_thread(config_service.get_active_options_inspection,
+            gateway_id=require_current_gateway_id("已发布模型选项检查"), provider_id=provider_id, model_id=model_id,
+        )
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.get("/llm/providers", response_model=APIResponse[LlmProvidersDTO], summary="读取 LiteLLM 完整 Provider 目录及现有连接模板")
 async def get_llm_providers(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
 ) -> APIResponse[LlmProvidersDTO]:
-    return APIResponse(data=await asyncio.to_thread(list_catalog_providers), request_id=request_id)
+    return APIResponse(data=await asyncio.to_thread(list_catalog_providers, owner_key=config_service.get_snapshot().graph.owner_id), request_id=request_id)
 
 
 @router.get("/llm/catalog", response_model=APIResponse[LlmModelCatalogDTO], summary="读取 LiteLLM 本地模型能力目录")
@@ -88,8 +114,9 @@ async def get_llm_catalog(
     provider: Annotated[str, Query(min_length=1, max_length=64)],
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
 ) -> APIResponse[LlmModelCatalogDTO]:
-    return APIResponse(data=await asyncio.to_thread(list_catalog_models, provider), request_id=request_id)
+    return APIResponse(data=await asyncio.to_thread(list_catalog_models, provider, owner_key=config_service.get_snapshot().graph.owner_id), request_id=request_id)
 
 
 @router.post("/llm/discover", response_model=APIResponse[LlmDiscoverResultDTO], summary="发现当前模型连接的上游目录")
@@ -270,7 +297,7 @@ async def get_config_sources(
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,
-                    source_key=config_service.get_source_document_key(layer=source.layer, precedence=source.precedence),
+                    source_key=source.source_key,
                     presence=source.presence,
                     layer_revision=source.layer_revision,
                     layer_digest=source.layer_digest,
@@ -314,15 +341,16 @@ async def preflight_config_source(
     request_id: str = Depends(get_request_id),
 ):
     try:
-        if (provider_id is None) != (model_id is None):
-            raise ValueError("模型选项预检须同时提供 provider_id 和 model_id")
-        model_ref = ModelReferenceDTO(provider_id=provider_id, model_id=model_id) if provider_id is not None else None
+        if model_id is not None and provider_id is None:
+            raise ValueError("模型选项预检须提供所属 provider_id")
+        model_ref = ModelReferenceDTO(provider_id=provider_id, model_id=model_id) if model_id is not None else None
         result = await config_service.preflight_source_edit(source_key=source_key,
-            gateway_id=require_current_gateway_id("配置来源预检"), request=payload, model_ref=model_ref)
+            gateway_id=require_current_gateway_id("配置来源预检"), request=payload, model_ref=model_ref,
+            provider_id=provider_id)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (ValueError, TypeError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        raise HTTPException(status_code=422, detail=source_validation_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -344,7 +372,7 @@ async def save_config_source(
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (ValueError, TypeError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        raise HTTPException(status_code=422, detail=source_validation_error_detail(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

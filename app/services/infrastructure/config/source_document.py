@@ -3,24 +3,56 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import cast
 
+from boxteam_plugin_sdk.failures import PUBLIC_ERROR_BYTES, PublicError, public_error
 from commentjson.commentjson import parser
 from lark import Token, Tree
 from pydantic import ValidationError
 
 from app.core.config_sources import StableConfigFile, parse_stable_config_file
+from app.schemas.config_nodes import ConfigNodeInspectionDTO
 from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
 from app.services.infrastructure.config.state import (
     normalize_secret_reference,
     redact_config_payload,
 )
-from configs.inheritance.merge import SettingsMerger
-from configs.inheritance.values import ConfigValue, FieldOrigin, OriginTree, freeze
+from configs.inheritance import ConfigGraph
+from configs.inheritance.resolver import ConfigNodeValidationError
+from configs.inheritance.values import ResolvedNode
 
 _MASK_PREFIX = "boxteam-redacted:"
+
+
+def source_validation_error_detail(error: Exception) -> PublicError | str:
+    """来源编辑只交付 owner 核定的问题，不猜测合并路径的文档坐标。"""
+    if not isinstance(error, ConfigNodeValidationError):
+        return str(error)
+    details: dict[str, object] = {"issues": error.issues}
+    issue_bytes = len(json.dumps(details, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    # owner URI 已经通过 ASCII grammar；预算放不下时省略，不能裁出另一个地址。
+    if len(error.source_uri) <= PUBLIC_ERROR_BYTES - 1024 - issue_bytes - 32:
+        details["source_uri"] = error.source_uri
+    else:
+        details["truncated"] = True
+    reserved = len(json.dumps(details, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    result = public_error(error, max_bytes=PUBLIC_ERROR_BYTES - reserved)
+    # 原生 cause 留在服务端诊断，避免重复公开未经 owner 判定的合并路径。
+    result["details"].pop("cause", None)
+    result["details"].update(details)
+    return result
+
+
+def inspect_config_nodes(graph: ConfigGraph, nodes: Iterable[ResolvedNode]) -> list[ConfigNodeInspectionDTO]:
+    """Settings 与 Model 共用原配置图的节点、父边和可重开引用。"""
+    return [ConfigNodeInspectionDTO(
+        node_id=node.node_id, parent_id=node.parent.node_id if node.parent is not None else None,
+        source_key=graph.source_keys[node.origins.origin.source_uri],
+        source_uri=node.origins.origin.source_uri or None,
+        definition_path=node.location.pointer, reference=graph.node_reference(node),
+    ) for node in nodes]
 
 
 def parse_source_text(text: str) -> dict[str, object]:
@@ -99,24 +131,21 @@ def _strings(node: Tree, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str
 def _secret(path: tuple[str, ...], value: str) -> bool:
     if not path:
         return False
-    model_key = path[:2] == ("llm", "providers") and (
-        len(path) == 5 and path[3:] == ("defaults", "api_key")
-        or len(path) == 7 and path[3] == "models" and path[5:] == ("overrides", "api_key")
-    )
-    # 模型配置保存的是公开引用；不能把环境引用误当正文秘密，再因地址编辑拒绝还原。
+    model_key = path[-3:] == ("settings", "model_options", "api_key")
+    # 模型来源保留公开引用；真实值只在执行凭据作用域展开。
     if model_key and (not value or normalize_secret_reference(value).startswith(("env:", "secret:"))):
         return False
     if redact_config_payload({path[-1]: value}) != {path[-1]: value}:
         return True
-    # 原 MCP env/headers 和 Provider headers 是任意键的秘密输入，不能只识别 password 等键名。
-    return ((len(path) >= 5 and path[:2] == ("mcp", "servers") and path[3] in {"env", "headers"})
-            or (len(path) >= 7 and path[:2] == ("llm", "providers")
-                and path[-3:-1] == ("request_options", "default_headers")))
+    logical = path[2:] if path[:2] in {("settings", "workspace"), ("settings", "gateway")} else path
+    return ((len(logical) >= 5 and logical[:2] == ("mcp", "servers") and logical[3] in {"env", "headers"})
+            or path[-4:-1] == ("model_options", "request_options", "default_headers"))
 
 
 def redact_source_payload(value: object, path: tuple[str, ...] = ()) -> object:
     if isinstance(value, dict):
-        if len(path) == 5 and path[:2] == ("mcp", "servers") and path[3] == "headers":
+        logical = path[2:] if path[:2] in {("settings", "workspace"), ("settings", "gateway")} else path
+        if len(logical) == 5 and logical[:2] == ("mcp", "servers") and logical[3] == "headers":
             try:
                 reference = McpPrivateHeaderRefDTO.model_validate(value)
             except ValidationError:
@@ -187,45 +216,3 @@ def restore_source_text(text: str, original: str) -> str:
                 raise ValueError("秘密所属对象结构已改变，不能沿用原脱敏占位")
         replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), old[1]))
     return _replace_tokens(text, replacements)
-
-
-def source_origins(
-    layers: dict[str, dict[str, object]], effective: dict[str, object],
-    *, schema: Mapping[str, object] | None = None,
-) -> list[dict[str, object]]:
-    """投影同一 schema 合并出的定义来源；数组仍作为一个替换单元。"""
-    merger = SettingsMerger(schema if schema is not None else {})
-    layer_origins: list[OriginTree] = []
-    merged: ConfigValue = None
-    merged_origins: OriginTree | None = None
-    for key, payload in layers.items():
-        merged, merged_origins = merger.merge(merged, freeze(payload), origin=FieldOrigin(key, "", ()),
-                                             inherited_origins=merged_origins)
-        layer_origins.append(merged_origins)
-    normalized, effective_origins = merger.merge(None, freeze(effective), origin=FieldOrigin("effective", "", ()))
-    result: list[dict[str, object]] = []
-
-    def visit(value: ConfigValue, path: tuple[str, ...], position: OriginTree) -> None:
-        if isinstance(value, Mapping) and value:
-            for key, child in value.items():
-                visit(child, (*path, key), position.children[key])
-            return
-        if merged_origins is None:
-            return
-        try:
-            winner = merged_origins.locate(path)
-        except KeyError:
-            return  # bound projection 可含派生字段；它们没有源文定义。
-        sources = []
-        for origins in layer_origins:
-            try:
-                source = origins.locate(path).node_id
-            except KeyError:
-                continue
-            if not sources or sources[-1] != source:
-                sources.append(source)
-        result.append({"path": position.origin.pointer, "source_key": winner.node_id,
-                       "shadowed_sources": sources[:sources.index(winner.node_id)]})
-
-    visit(normalized, (), effective_origins)
-    return result

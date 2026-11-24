@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event
@@ -15,6 +15,7 @@ from uuid import UUID
 import commentjson
 import httpx
 import pytest
+import uvicorn
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import main
@@ -35,8 +36,9 @@ from app.domain.itemized.identity.model_source import MODEL_SOURCE_EXTENSION
 from app.domain.itemized.serialization import normalize_wire_request
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.secrets.vault import SecretVault
+from app.runtime.network_proxy import ProxyRoutes
 from app.runtime.provider_model import build_model_from_provider
-from app.services.infrastructure.config.llm_resolution import LlmResolution
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -44,6 +46,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.testing.model_stream import responses_frames
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.config.test_llm_discovery import ProbeCase
 from tests.integration.backend.config.test_llm_discovery import (
@@ -193,7 +196,7 @@ async def test_quick_probe_rejects_streaming_then_explicit_nonstream_uses_job_up
     endpoint, requests = nonstream_upstream
     request = probe_case.model_test(protocol=protocol, streaming=True)
     payload = json.loads(request["jsonc"])
-    defaults = payload["llm"]["providers"]["team"]["defaults"]
+    defaults = payload["profiles"]["team"]["settings"]["model_options"]
     defaults["endpoint"] = endpoint.removesuffix("/v1") if protocol == "anthropic_messages" else endpoint
     defaults["api_mode"].update({"model_info": {"supports_function_calling": True, "supports_reasoning": True},
         "supports_reasoning": {
@@ -204,13 +207,14 @@ async def test_quick_probe_rejects_streaming_then_explicit_nonstream_uses_job_up
     defaults["request_options"]["parameters"] = {"max_output_tokens": 128}
     request["jsonc"] = json.dumps(payload)
     source_before, rows_before = probe_case.source.read_bytes(), probe_case.rows()
-    rejected = await probe_case.client.post("/api/v1/config/llm/test", json=request)
+    # 首次 SDK 导入也属于产品 60 秒期限；调用方不能先以 HTTPX 默认 5 秒截断。
+    rejected = await probe_case.client.post("/api/v1/config/llm/test", json=request, timeout=65)
     assert rejected.status_code == 200 and rejected.text.startswith("event: start\n"), rejected.text
     assert rejected.text.count("event: result\n") == 1
     failure = json.loads(rejected.text.strip().split("\n\n")[-1].split("data: ", 1)[1])
     assert failure["status"] == "failed" and failure["error"]["status_code"] == 400, failure
     assert len(requests) == 1 and requests[0]["stream"] is True, "不能自动切换模式或重试"
-    accepted = await probe_case.client.post("/api/v1/config/llm/test", json={**request, "streaming": False})
+    accepted = await probe_case.client.post("/api/v1/config/llm/test", json={**request, "streaming": False}, timeout=65)
     assert accepted.status_code == 200 and accepted.text.startswith("event: start\n"), accepted.text
     terminal = json.loads(accepted.text.strip().split("\n\n")[-1].split("data: ", 1)[1])
     assert terminal["status"] == "passed" and terminal["preview"] == "完整回复", terminal
@@ -235,6 +239,7 @@ async def test_configured_nonstream_uses_real_http_and_preserves_complete_messag
         "custom_llm_provider": "anthropic" if protocol == "anthropic_messages" else "openai",
         "endpoint": endpoint.removesuffix("/v1") if protocol == "anthropic_messages" else endpoint,
         "api_key": "fixture-key",
+        "proxy_routes": ProxyRoutes(()),
         "api_mode": {"protocol": protocol, "streaming": False,
                      "supports_reasoning": reasoning,
                      "model_info": {"supports_reasoning": True, "supports_function_calling": True}},
@@ -301,6 +306,7 @@ async def test_explicit_no_auth_does_not_use_process_credentials_over_real_http(
         "provider_id": "anonymous", "model_id": "local", "model": "test-model",
         "endpoint": endpoint.removesuffix("/v1") if protocol == "anthropic_messages" else endpoint,
         "api_key": "", "custom_llm_provider": "anthropic" if protocol == "anthropic_messages" else "openai",
+        "proxy_routes": ProxyRoutes(()),
         "api_mode": {"protocol": protocol, "streaming": False,
                      "model_info": {"supports_reasoning": True, "supports_function_calling": True},
                      "supports_reasoning": reasoning},
@@ -328,6 +334,7 @@ async def test_turn_cancel_closes_nonstream_http_before_first_content(
         "endpoint": endpoint.removesuffix("/v1") if protocol == "anthropic_messages" else endpoint,
         "api_key": "fixture-key", "api_mode": {"protocol": protocol, "streaming": False,
                                                  "model_info": {"supports_reasoning": False}, "supports_reasoning": {}},
+        "proxy_routes": ProxyRoutes(()),
         "request_options": {"parameters": {"max_output_tokens": 128}},
     }, runtime_config={}, invocation_purpose="tool_test")
     model.max_retries = 0
@@ -355,15 +362,19 @@ async def test_turn_cancel_closes_nonstream_http_before_first_content(
 @pytest.mark.parametrize("protocol", ["responses", "anthropic_messages"])
 async def test_canonical_history_replays_private_blocks_only_to_same_model_over_real_http(
     nonstream_upstream: tuple[str, list[dict[str, object]]], nonstream_workspace: str,
-    monkeypatch: pytest.MonkeyPatch, protocol: Protocol, workspace_config_schema: dict,
+    monkeypatch: pytest.MonkeyPatch, protocol: Protocol, tmp_path: Path,
 ) -> None:
     endpoint, requests = nonstream_upstream
     monkeypatch.setenv("NONSTREAM_MODEL_KEY", "fixture-only-value")
     reasoning = {"reasoning_items": {"summary": True, "encrypted_content": True}} if protocol == "responses" else {
         "thinking_blocks": {"thinking": True, "redacted_thinking": True},
     }
-    config = {"llm": {"providers": {"service": {
-        "defaults": {
+    config = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+        "llm": {"providers": {"service": {"config_ref": "#/profiles/service", "models": {
+            model_id: {"model": "test-model", "config_ref": "context:provider/service"}
+            for model_id in ("main", "fallback")
+        }}}}}}, "profiles": {"service": {"extends": "context:workspace", "settings": {
+        "network": {"proxy": {"mode": "direct"}}, "model_options": {
             "endpoint": endpoint if protocol == "responses" else endpoint.removesuffix("/v1"),
             "custom_llm_provider": "openai" if protocol == "responses" else "anthropic",
             "api_key": "${NONSTREAM_MODEL_KEY}",
@@ -371,12 +382,15 @@ async def test_canonical_history_replays_private_blocks_only_to_same_model_over_
                          "model_info": {"supports_reasoning": True, "supports_function_calling": True}},
             "request_options": {"parameters": {"max_output_tokens": 128}},
         },
-        "models": {"main": {"model": "test-model"}, "fallback": {"model": "test-model"}},
     }}}}
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    with resolver.use_secrets({}):
+    install_user_configuration(config_root=tmp_path, profile="default")
+    source = tmp_path / "workspace.jsonc"
+    source.write_text(json.dumps(config), encoding="utf-8")
+    service = ConfigService(config_dir=tmp_path, config_path=source)
+    service.validate_workspace_config()
+    with service.use_llm_credentials({}):
         models = [build_model_from_provider(
-            resolver.get_model({"provider_id": "service", "model_id": model_id}), {},
+            service.get_llm_model({"provider_id": "service", "model_id": model_id}), {},
             gateway_id="gateway-fixture", invocation_purpose="tool_test",
         ) for model_id in ("main", "fallback")]
     for model in models:
@@ -408,7 +422,7 @@ async def test_canonical_history_replays_private_blocks_only_to_same_model_over_
 async def nonstream_job_backend(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
     nonstream_upstream: tuple[str, list[dict[str, object]]],
-    unused_tcp_port: int,
+    unused_tcp_port_factory: Callable[[], int],
 ) -> AsyncIterator[tuple[httpx.AsyncClient, Path, list[dict[str, object]], TestRunContext, Protocol, str]]:
     """正式消息入口建立全部执行事实；保留真实 HTTP 验证 SDK 与封存请求的一致性。"""
     protocol: Protocol = request.param
@@ -425,18 +439,20 @@ async def nonstream_job_backend(
         "responses": {"reasoning_items": {"summary": True, "encrypted_content": True}},
         "anthropic_messages": {"thinking_blocks": {"thinking": True, "redacted_thinking": True}},
     }[protocol]
-    provider = config["llm"]["providers"]["primary"]
-    provider["defaults"] = {
+    provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["network"] = {"proxy": {"mode": "direct"}}
+    config["profiles"]["provider.primary"]["settings"]["model_options"] = {
         "endpoint": endpoint.removesuffix("/v1") if protocol == "anthropic_messages" else endpoint,
         "custom_llm_provider": "anthropic" if protocol == "anthropic_messages" else "openai",
         "api_key": "${NONSTREAM_JOB_KEY}",
         "api_mode": {"protocol": protocol, "streaming": False, "supports_reasoning": reasoning,
                      "model_info": {"supports_function_calling": True, "supports_reasoning": True}},
-        "request_options": {"no_proxy": True, "parameters": {"max_output_tokens": 128,
+        "request_options": {"parameters": {"max_output_tokens": 128,
             "temperature": 0, "top_p": None, "extra_body": {"vendor_nullable": None}}},
     }
-    provider["models"] = {"default": {"model": "test-model"}, "alternate": {"model": "test-model"}}
-    for agent in config["agents"].values():
+    provider["models"] = {model_id: {"model": "test-model", "config_ref": "context:provider/primary"}
+        for model_id in ("default", "alternate")}
+    for agent in config["settings"]["workspace"]["agents"].values():
         agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"},
                           "fallbacks": [{"provider_id": "primary", "model_id": "alternate"}]}
     config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
@@ -445,6 +461,7 @@ async def nonstream_job_backend(
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     home = context.boxteam_home_for_node(request.node.nodeid)
     monkeypatch.setenv("BOXTEAM_HOME", str(home))
+    install_user_configuration(config_root=home / "config", profile="default", workspace_root=workspace)
     monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
     monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
     monkeypatch.delenv("BOXTEAM_TEST_MODEL_STREAM_CONFIG", raising=False)
@@ -453,17 +470,30 @@ async def nonstream_job_backend(
         "workspace_id": workspace_id, "workspace_root": str(workspace),
         "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
     }]))
-    port = unused_tcp_port
+    port, backend_port = unused_tcp_port_factory(), unused_tcp_port_factory()
+    backend_url = f"http://127.0.0.1:{backend_port}"
     async with _managed_gateway_skill_source(workspace=workspace, workspace_id=workspace_id,
-        boxteam_home=home, port=port, artifacts_dir=context.artifacts_dir) as (gateway_id, _owner):
+        boxteam_home=home, port=port, artifacts_dir=context.artifacts_dir,
+        backend_url=backend_url) as (gateway_id, _owner):
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{port}")
-        async with main.lifespan(main.app) as lifespan, httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
-            headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id,
-                     "X-BoxTeam-Gateway-Id": gateway_id}, timeout=30,
-        ) as client:
-            await lifespan["after_http_startup"]()
-            yield client, workspace, requests, context, protocol, gateway_id
+        async with main.lifespan(main.app) as lifespan:
+            server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=backend_port,
+                log_level="error", access_log=False, log_config=None, lifespan="off"))
+            serving = asyncio.create_task(server.serve())
+            try:
+                async with asyncio.timeout(10):
+                    while not server.started:
+                        if serving.done():
+                            await serving
+                        await asyncio.sleep(0.01)
+                await lifespan["after_http_startup"]()
+                async with httpx.AsyncClient(base_url=backend_url,
+                    headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id,
+                             "X-BoxTeam-Gateway-Id": gateway_id}, timeout=30) as client:
+                    yield client, workspace, requests, context, protocol, gateway_id
+            finally:
+                server.should_exit = True
+                await asyncio.wait_for(serving, timeout=10)
 
 
 @pytest.mark.parametrize("nonstream_job_backend", ["chat_completions", "responses", "anthropic_messages"], indirect=True)
@@ -538,7 +568,7 @@ async def test_product_job_nonstream_tool_loop_and_model_source_match_sealed_wir
 @pytest.mark.parametrize("nonstream_job_backend", ["chat_completions"], indirect=True)
 async def test_product_jobs_freeze_credentials_and_rotate_only_new_execution(
     nonstream_job_backend, nonstream_auth_headers: list[dict[str, str]], nonstream_response_gate: tuple[Event, Event],
-    monkeypatch: pytest.MonkeyPatch, workspace_config_schema: dict,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """真实密钥 writer、配置 CAS、Job、SDK 与 TCP；只观测 vault 读取，不替代其实现。"""
     client, workspace, requests, context, _protocol, gateway_id = nonstream_job_backend
@@ -547,9 +577,9 @@ async def test_product_jobs_freeze_credentials_and_rotate_only_new_execution(
     resolved_ids: list[list[str]] = []
     resolve = SecretVault.resolve
 
-    def observe_resolve(vault: SecretVault, ids: list[str], workspace_config_schema: dict):
+    def observe_resolve(vault: SecretVault, ids: list[str]):
         resolved_ids.append(list(ids))
-        return resolve(vault, ids, workspace_config_schema=workspace_config_schema)
+        return resolve(vault, ids)
 
     monkeypatch.setattr(SecretVault, "resolve", observe_resolve)
 
@@ -586,12 +616,14 @@ async def test_product_jobs_freeze_credentials_and_rotate_only_new_execution(
         assert document_response.status_code == 200, document_response.text
         document = document_response.json()["data"]
         source = commentjson.loads(document["jsonc"])
-        primary = source["llm"]["providers"]["primary"]
-        primary["defaults"]["api_key"] = "secret:" + secret_id
+        primary = source["profiles"]["provider.primary"]["settings"]["model_options"]
+        primary["api_key"] = "secret:" + secret_id
         # 未使用的失效引用不能阻断列表、保存或实际 Agent 的密钥准备。
-        source["llm"]["providers"]["unused"] = {"defaults": {
-            **primary["defaults"], "api_key": "secret:sec_00000000000040008000000000000099",
-        }, "models": {"unused": {"model": "unused-model"}}}
+        source["settings"]["workspace"]["llm"]["providers"]["unused"] = {"config_ref": "#/profiles/unused",
+            "models": {"unused": {"model": "unused-model", "config_ref": "context:provider/unused"}}}
+        source["profiles"]["unused"] = {"extends": "context:workspace", "settings": {"model_options": {
+            **primary, "api_key": "secret:sec_00000000000040008000000000000099",
+        }}}
         saved = await client.put(source_url, json={
             "gateway_id": gateway_id, "workspace_id": document["workspace_id"], "source_key": source_key,
             "jsonc": json.dumps(source, ensure_ascii=False), "base_file_digest": document["file_digest"],

@@ -1,5 +1,4 @@
 import { t } from '../../../shared/core/i18n/index.js';
-import type { ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { settingsGroupLabel } from './categories.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
@@ -27,6 +26,7 @@ import { workspaceContext } from '../workspaceContext.js';
 import { configSourceFiles, configSourceEditorUri } from './sourceEditor.js';
 import { ConfigurationSourceOwner, sourceDocumentPath, type SourceDocument } from './sourceOwner.js';
 import { ITargetSettingsContext, type TargetSettingsLocation } from './scope.js';
+import { inspectActiveConfigOptions } from '../../../web/src/api/configSources.js';
 
 type Schema = Record<string, unknown>;
 interface SourceSetting { path: string[]; schema: Schema }
@@ -154,8 +154,27 @@ export class SourceSettings extends Disposable {
   }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
   get pendingSubmission(): string | undefined { return configSourceFiles(this.files).pendingSubmission(this.resource); }
-  preflightDraft(signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+  preflightDraft(signal?: AbortSignal, modelRef?: { provider_id: string; model_id?: string }) {
     return configSourceFiles(this.files).preflight(this.resource, this.model.textEditorModel!.getValue(), signal, modelRef);
+  }
+  async inspectOptions(signal: AbortSignal, selector: { provider_id: string; model_id?: string }) {
+    if (!this.location.workspace_id) throw new Error(t('configuration.entities.workspaceRequired'));
+    if (this.model.isDirty()) return this.preflightDraft(signal, selector);
+    const version = this.model.textEditorModel!.getVersionId();
+    const result = await inspectActiveConfigOptions({ ...this.location, workspace_id: this.location.workspace_id }, selector, signal);
+    signal.throwIfAborted();
+    if (version !== this.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', selector.provider_id));
+    const document = this.document;
+    if (!('source_baseline' in document)) throw new Error(t('configuration.entities.workspaceRequired'));
+    const keys = ['uri', 'presence', 'layer_revision', 'layer_digest', 'source_generation'] as const;
+    const baselineMatches = Object.keys(document.source_baseline).length === Object.keys(result.source_baseline).length
+      && Object.entries(document.source_baseline).every(([key, source]) => {
+        const active = result.source_baseline[key];
+        return active && keys.every(field => source[field] === active[field]);
+      });
+    // 来源已保存但尚未生效时仍检查真实来源草稿，不能用 active 冒充其选项。
+    return !this.model.isDirty() && result.active_revision === document.active_revision && result.active_digest === document.active_digest && baselineMatches
+      ? result : this.preflightDraft(signal, selector);
   }
   /** 用真实 JSON 路径定位来源字段，不能把展示用的点分键当作 JSON 属性。 */
   settingSelection(key: string, edit: boolean) {
@@ -207,17 +226,9 @@ export class SourceSettings extends Disposable {
     const document = this.document;
     const local = at(payload, sourceDocumentPath(this.location, field.path)), effective = at(document.source_effective, field.path);
     let inherited = field.schema.default;
-    if ('workspace_id' in document) {
-      const selected = document.layers.find(layer => layer.source_key === this.location.source_key);
-      for (const layer of document.layers.filter(layer => selected && layer.precedence < selected.precedence).sort((a, b) => a.precedence - b.precedence)) {
-        const value = at(layer.payload, field.path);
-        if (value !== undefined) inherited = value;
-      }
-    } else {
-      if (!document.source_inherited) throw new Error(t('settings.editor.inheritedMissing'));
-      const value = at(document.source_inherited, field.path);
-      if (value !== undefined) inherited = value;
-    }
+    if (!document.source_inherited) throw new Error(t('settings.editor.inheritedMissing'));
+    const inheritedValue = at(document.source_inherited, field.path);
+    if (inheritedValue !== undefined) inherited = inheritedValue;
     return { defaultValue: inherited, userRemoteValue: local, userRemote: { value: local },
       value: local !== undefined ? local : effective, default: { value: inherited } };
   }
@@ -236,18 +247,24 @@ export class SourceSettings extends Disposable {
   }
   /** 实体表单与原设置控件只修改同一 JSONC 文本模型，保存继续交原来源 writer。 */
   editPath(path: (string | number)[], value: unknown): void {
+    this.editDocumentPaths([{ path: sourceDocumentPath(this.location, path), value }]);
+  }
+  /** 目录与 profile 同时修改完整来源正文，作为一次可撤销编辑，不创建第二份草稿。 */
+  editDocumentPaths(edits: { path: (string | number)[]; value: unknown }[]): void {
     if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
     this.readDraft();
-    const text = this.model.textEditorModel!, source = text.getValue();
-    const edits = setProperty(source, sourceDocumentPath(this.location, path), value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
-    text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
+    const text = this.model.textEditorModel!;
+    let source = text.getValue();
+    const options = { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' };
+    for (const edit of edits) source = applyEdits(source, setProperty(source, edit.path, edit.value, options));
+    text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: source }], () => null);
   }
   private buildFields(): void {
     this.fields.clear();
     this.groups.length = 0;
     const schema = this.document.json_schema;
     if (!schema) throw new Error(t('settings.editor.schemaMissing'));
-    const businessSchema = this.location.workspace_id ? schema : at(schema, ['$defs', 'gatewayPayload']);
+    const businessSchema = at(schema, ['$defs', this.location.workspace_id ? 'workspacePayload' : 'gatewayPayload']);
     if (!businessSchema) throw new Error(t('settings.editor.schemaMissing'));
     const root = object(businessSchema);
     const visit = (schema: Schema, path: string[], fields: ISetting[], schemaRoot: Schema) => {
@@ -261,7 +278,8 @@ export class SourceSettings extends Disposable {
       // 点分键只作原设置树身份；保留真实 JSON 路径，避免包 ID 中的点与层级碰撞。
       const key = path.map(part => encodeURIComponent(part).replaceAll('.', '%2E')).join('.'), secret = schema.writeOnly === true;
       const setting: ISetting = { key, title: typeof schema.title === 'string' ? schema.title : path.at(-1), value: schema.default,
-        description: [typeof schema.description === 'string' ? schema.description : '', ...(secret ? [t('settings.editor.secretInputDescription')] : [])],
+        description: [typeof schema.description === 'string' ? schema.description : '', ...(secret ? [t('settings.editor.secretInputDescription')] : []),
+          ...(path[0] === 'network' ? [t('configuration.node.networkScope')] : [])],
         descriptionRanges: [], range: nullRange, keyRange: nullRange, valueRange: nullRange, overrides: [], scope: ConfigurationScope.MACHINE,
         type: secret ? undefined : schema.type as string | string[] | undefined, enum: schema.enum as string[] | undefined,
         arrayItemType: typeof object(schema.items).type === 'string' ? object(schema.items).type as string : undefined };

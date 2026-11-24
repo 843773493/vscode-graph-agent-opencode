@@ -11,18 +11,25 @@ import { ITargetSettingsContext } from './scope.js';
 import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
 import { createManagementTargetLifecycle } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { createElement, type ChangeEvent } from 'react';
+import { ReactSurface } from '../react/surface.js';
+import { ConfigurationProxyFields } from '../../../web/src/components/settings/ConfigurationProxyFields.js';
+import { definitionObject, definitionValue } from '../../../web/src/components/settings/ConfigurationEntities.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 
 /** 原设置树之外只补充业务来源与保存状态；窗口设置不渲染此区域。 */
 export class SettingsContextHeader extends Disposable {
   private readonly statusDetail = document.createElement('div');
   private readonly warning = document.createElement('div');
   private readonly sourceSelector?: SelectBox;
+  private readonly inheritance?: ReactSurface;
   constructor(private readonly element: HTMLElement, private readonly layout: () => void,
     private readonly selectSource: (sourceKey: string) => Promise<void>,
     @ITargetSettingsContext private readonly context: ITargetSettingsContext,
     @INotificationService private readonly notifications: INotificationService,
     @IQuickInputService private readonly quick: IQuickInputService,
     @IContextViewService contextView: IContextViewService,
+    @ICommandService private readonly commands: ICommandService,
     @IInstantiationService private readonly instantiation: IInstantiationService) {
     super();
     this.element.className = 'settings-context-label';
@@ -59,6 +66,11 @@ export class SettingsContextHeader extends Disposable {
         this.layout();
       });
       status.append(summary, controls, this.statusDetail);
+      const inheritance = document.createElement('div');
+      status.append(inheritance);
+      this.inheritance = this._register(new ReactSurface(inheritance, [
+        '.configuration-entity-field{display:flex;flex-direction:column;gap:4px;margin:8px 0;min-width:0} input,select{max-width:100%;box-sizing:border-box} p{overflow-wrap:anywhere}',
+      ]));
       const location = { ...source.location };
       this._register(this.instantiation.createInstance(Link, status, { label: t('settings.editor.sourceLocations'), href: '#' }, {
         opener: () => this.run(async () => {
@@ -104,6 +116,42 @@ export class SettingsContextHeader extends Disposable {
       : unbound.length ? t('settings.editor.unboundEditHint', unbound.join(t('settings.source.observationSeparator'))) : '';
     this.warning.textContent = warning;
     this.warning.hidden = !warning;
+    let draft: Record<string, unknown>;
+    try { draft = source.readDraft(); } catch (error) {
+      this.inheritance?.render(createElement('p', { role: 'alert' }, error instanceof Error ? error.message : String(error)));
+      this.layout(); return;
+    }
+    const local = definitionValue(draft, ['settings', 'network', 'proxy']);
+    const inherited = definitionValue(source.document.source_inherited, ['network', 'proxy']);
+    const writable = source.document.writable;
+    const nodes = source.document.nodes;
+    const children = new Map<string | undefined, typeof nodes>();
+    for (const node of nodes) {
+      const parent = node.parent_id ?? undefined;
+      const siblings = children.get(parent);
+      if (siblings) siblings.push(node); else children.set(parent, [node]);
+    }
+    const tree = (parentId: string | undefined): ReturnType<typeof createElement> => createElement('ul', {},
+      ...(children.get(parentId) ?? []).map(node => createElement('li', { key: node.node_id },
+        createElement('button', { type: 'button', disabled: !node.source_uri, title: node.reference,
+          'aria-current': node.source_key === source.location.source_key ? 'true' : undefined,
+          onClick: () => this.run(() => this.commands.executeCommand('boxteam.settings.openSource', {
+            location: { ...source.location, source_key: node.source_key }, definitionPath: node.definition_path,
+          })) }, node.source_key + node.definition_path),
+        children.has(node.node_id) ? tree(node.node_id) : null)));
+    this.inheritance?.render(createElement('div', {},
+      createElement('details', { onToggle: () => this.layout() }, createElement('summary', {}, t('configuration.node.tree')), tree(undefined)),
+      createElement('label', { className: 'configuration-entity-field' }, t('configuration.node.parent'),
+        createElement('input', { value: typeof draft.extends === 'string' ? draft.extends : '', disabled: !writable,
+          onChange: (event: ChangeEvent<HTMLInputElement>) => source.editDocumentPaths([
+            { path: ['extends'], value: event.target.value || undefined },
+          ]) })),
+      createElement(ConfigurationProxyFields, {
+        local: local === undefined ? undefined : definitionObject(local),
+        inherited: inherited === undefined ? undefined : definitionObject(inherited),
+        disabled: !writable, allowInherit: typeof draft.extends === 'string',
+        onChange: value => source.editDocumentPaths([{ path: ['settings', 'network', 'proxy'], value }]),
+      })));
     this.layout();
   }
 }

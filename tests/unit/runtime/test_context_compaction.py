@@ -16,9 +16,7 @@ from app.agents.summarization.planning import build_safe_compaction_partition
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.workspace_backend import build_workspace_backend
 from app.runtime.context_compaction import AgentSummarizationCompactor
-from app.schemas.gateway.secrets import ResolvedSecret
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
-from app.services.infrastructure.config import build_config_snapshot
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -102,29 +100,35 @@ async def test_cancelled_check_settles_worker_before_closing_model(compaction_ca
 
 @pytest.mark.parametrize("fallback_key", ["secret:sec_22222222222222222222222222222222", "${BOXTEAM_TEST_UNUSED_FALLBACK_KEY}"])
 async def test_compaction_does_not_expand_unused_fallback_credentials(
-    tmp_path, empty_workspace_scope, monkeypatch, fallback_key,
+    tmp_path, empty_workspace_scope, monkeypatch, fallback_key, workspace_config_snapshots,
 ):
-    from copy import deepcopy
-    from pathlib import Path
-
-    config = ConfigService(config_dir=Path.cwd() / "configs", config_path=tmp_path / "workspace.jsonc")
-    payload = config.get_snapshot().to_dict()
-    provider_id = "compaction_test"
-    payload["llm"]["providers"][provider_id] = {
-        "defaults": {
-            "endpoint": "http://model.invalid/v1", "api_key": "secret:sec_11111111111111111111111111111111",
-            "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions"},
+    document = {
+        "config_version": 4,
+        "extends": "builtin:workspace",
+        "settings": {"workspace": {"llm": {"providers": {
+            "primary": {"config_ref": "#/profiles/selected"},
+            "backup_1": {"config_ref": "#/profiles/fallback"},
+        }}, "agents": {"default": {"model": {
+            "primary": {"provider_id": "primary", "model_id": "default"},
+            "fallbacks": [{"provider_id": "backup_1", "model_id": "default"}],
+        }}}}},
+        "profiles": {
+            "selected": {
+                "extends": "builtin:workspace#/profiles/provider.primary",
+                "settings": {"model_options": {"api_key": "secret:sec_11111111111111111111111111111111"}},
+            },
+            "fallback": {
+                "extends": "builtin:workspace#/profiles/provider.backup_1",
+                "settings": {"model_options": {"api_key": fallback_key}},
+            },
         },
-        "models": {"primary": {"model": "test-model"}},
     }
-    fallback_provider = deepcopy(payload["llm"]["providers"][provider_id])
-    fallback_provider["defaults"]["api_key"] = fallback_key
-    payload["llm"]["providers"]["unused_fallback"] = fallback_provider
-    payload["agents"]["default"]["model"] = {
-        "primary": {"provider_id": provider_id, "model_id": "primary"},
-        "fallbacks": [{"provider_id": "unused_fallback", "model_id": "primary"}],
-    }
-    config._snapshot_store.initialize(build_config_snapshot(payload, source_paths=()))
+    config = workspace_config_snapshots.service_for_document(document, "compaction_workspace.jsonc")
+    payload = config.get_snapshot().to_dict()
+    provider_id = "primary"
+    config._snapshot_store.initialize(
+        workspace_config_snapshots.build(payload, graph=config.get_snapshot().graph)
+    )
     monkeypatch.delenv("BOXTEAM_TEST_UNUSED_FALLBACK_KEY", raising=False)
     credentials = AsyncMock(return_value={
         "sec_11111111111111111111111111111111": ResolvedSecret(revision=1, value="test-primary-key"),

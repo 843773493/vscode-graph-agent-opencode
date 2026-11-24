@@ -30,6 +30,8 @@ import type { DefinitionEditorOptions } from './entities.js';
 import { manageSecrets } from './secrets.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { IStorageService } from '../../upstream/src/vs/platform/storage/common/storage.js';
+import { findNodeAtLocation, parseTree } from '../../upstream/src/vs/base/common/json.js';
+import { ITextModelService } from '../../upstream/src/vs/editor/common/services/resolverService.js';
 import './gatewayCommands.js';
 
 registerAction2(class extends Action2 {
@@ -63,6 +65,7 @@ export interface ConfigurationSourceOpenRequest {
   groupId?: number;
   openToSide?: boolean;
   editorOptions?: ITextEditorOptions;
+  definitionPath?: string;
 }
 
 registerAction2(class extends Action2 {
@@ -152,6 +155,19 @@ registerAction2(class extends Action2 {
       if (!source) throw new Error(t('workbench.settings.originGroupClosed'));
       const group = openToSide ? SIDE_GROUP : request?.groupId ?? ACTIVE_GROUP;
       const resource = configSourceFiles(files).prepareEditor(location, location.source_key, document);
+      if (request?.definitionPath) {
+        const reference = await accessor.get(ITextModelService).createModelReference(resource);
+        try {
+          lifecycle.check();
+          const model = reference.object.textEditorModel;
+          const path = request.definitionPath.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+          const node = findNodeAtLocation(parseTree(model.getValue()), path);
+          if (!node) throw new Error(t('settings.editor.definitionMissing', request.definitionPath));
+          const start = model.getPositionAt(node.offset), end = model.getPositionAt(node.offset + node.length);
+          editorOptions.selection = { startLineNumber: start.lineNumber, startColumn: start.column,
+            endLineNumber: end.lineNumber, endColumn: end.column };
+        } finally { reference.dispose(); }
+      }
       const input = { resource,
         options: editorOptions, languageId: 'jsonc', forceFile: true } satisfies IUntypedFileEditorInput;
       await editors.openEditor(input, group);

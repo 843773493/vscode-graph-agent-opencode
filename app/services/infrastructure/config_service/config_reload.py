@@ -43,7 +43,7 @@ from app.services.infrastructure.config.state import (
     ConfigLifecycleState,
     ConfigPendingCandidateRecord,
     ConfigResult,
-    build_secret_binding_summary,
+    build_snapshot_secret_binding_summary,
     changed_json_paths,
     new_config_id,
     prepare_config_for_persistence,
@@ -56,10 +56,8 @@ from app.services.infrastructure.config_service.config_service_common import (
     ConfigCandidateApplier,
     logger,
 )
-from app.services.infrastructure.config_service.config_snapshot import (
-    ConfigSnapshotMixin,
-)
 from app.services.infrastructure.mcp.config import parse_mcp_server_configs
+from configs.inheritance.values import thaw
 from configs.plugin_parameters import PluginParameters, plugin_parameters
 from configs.runtime import validate_config_payload
 
@@ -220,27 +218,31 @@ class ConfigReloadMixin:
                             active = self._workspace_state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
                             if active is None:
                                 raise ConfigConflictError("刷新来源缺少原 active 配置")
+                            self._verify_snapshot_sources(candidate)
                             baseline, generation, revisions, digests = self._source_baseline(candidate)
                             if pending is not None or active.source_baseline != baseline:
                                 self._workspace_state_store.refresh_unchanged_config_sources(
                                     config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id if pending else None,
                                     effective_digest=candidate.revision, expected_active_revision=active.active_revision,
                                     source_baseline=baseline, source_generation=generation,
+                                    expected_source_baseline=active.source_baseline,
                                     layer_revisions=revisions, layer_digests=digests,
+                                    payload=prepare_config_for_persistence(candidate.to_dict(), resolve_environment=False),
                                 )
                         publish_snapshot()
                         publish_shadow()
 
-                await self._shadow_lifecycle.apply_candidate(
-                    candidate.to_dict(),
-                    expected_generation=self._shadow_lifecycle.generation,
-                    publish_hook=refresh_sources,
-                )
+                with cast("ConfigService", self).use_snapshot(candidate):
+                    await self._shadow_lifecycle.apply_candidate(
+                        candidate.to_dict(),
+                        expected_generation=self._shadow_lifecycle.generation,
+                        publish_hook=refresh_sources,
+                    )
                 cast("ConfigService", self)._record_shared_source_application(sources=candidate.source_details, result="unchanged")
                 return
 
             pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key, source_edit=source_edit)
-            changed_paths = changed_json_paths(previous.to_dict(), candidate.to_dict())
+            changed_paths = changed_json_paths(thaw(previous.effective_values), thaw(candidate.effective_values))
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")
             active = (
@@ -357,6 +359,7 @@ class ConfigReloadMixin:
                 # 网络准备及旧 scope 排空均在锁外；SQLite CAS 到全部内存切换
                 # 之间不让配置读取、目录捕获或调用准入观察到半发布。
                 with self._snapshot_store.publication_lock:
+                    self._verify_snapshot_sources(candidate)
                     pending_layer_revisions = {
                         str(key): int(detail["layer_revision"])
                         for key, detail in pending.source_baseline.items()
@@ -416,12 +419,13 @@ class ConfigReloadMixin:
                     candidate_id=pending.candidate_id,
                     gateway_id=str(source_edit["gateway_id"]) if source_edit is not None else None,
                 )
-                await self._shadow_lifecycle.apply_candidate(
-                    candidate.to_dict(),
-                    expected_generation=self._shadow_lifecycle.generation,
-                    publish_hook=publish_candidate,
-                    prepare=prepare_runtime,
-                )
+                with cast("ConfigService", self).use_snapshot(candidate):
+                    await self._shadow_lifecycle.apply_candidate(
+                        candidate.to_dict(),
+                        expected_generation=self._shadow_lifecycle.generation,
+                        publish_hook=publish_candidate,
+                        prepare=prepare_runtime,
+                    )
             except BaseException as error:
                 # 提交后的激活或旧 scope 清理失败不能重写已应用的持久事实。
                 if committed:
@@ -498,11 +502,14 @@ class ConfigReloadMixin:
                             )
 
         try:
-            return await self._snapshot_store.reload(
+            changed = await self._snapshot_store.reload(
                 candidate_applier=apply_through_shadow,
                 apply_unchanged=True,
                 before_build=before_build,
             )
+            if self._watcher is not None:
+                await self._refresh_model_metadata()
+            return changed
         finally:
             if self._watcher is not None:
                 self._update_config_watch_paths(self._watcher)
@@ -873,7 +880,7 @@ class ConfigReloadMixin:
         layer_revisions: dict[str, int] = {}
         layer_digests: dict[str, str | None] = {}
         source_generation = 0
-        # 与原来源基线一同提交字段归属；正文仍只由快照 payload 持有。
+        # 与原来源基线一同冻结定义与字段归属，重启不读当前父文件解释旧 active。
         origins_by_source: dict[str, dict[str, object]] = {}
         for origin in snapshot.source_origins():
             origins_by_source.setdefault(str(origin["source_key"]), {})[str(origin["path"])] = origin["shadowed_sources"]
@@ -881,10 +888,13 @@ class ConfigReloadMixin:
             layer_key = source.source_key or f"{source.layer}:{source.precedence}"
             # 持久化键 MUST 可由权威表逐字还原（见 `_resolve_persisted_layer`）：
             # 否则恢复路径会退化成有损兜底。这里 fail-closed，绝不写入无法还原的键。
-            ConfigSnapshotMixin._resolve_persisted_layer(layer_key)
             # 只持久化 URI（可为 None），绝不持久化 real path。
             detail: dict[str, object] = {
                 "uri": source.uri,
+                "layer": source.layer,
+                "precedence": source.precedence,
+                "document": (thaw(snapshot.graph.source_documents[source.uri]) if source.uri is not None else
+                    {"settings": thaw(snapshot.graph.local_settings(snapshot.graph.resolve_scope()))}),
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,
@@ -918,8 +928,8 @@ class ConfigReloadMixin:
             layer_revisions=layer_revisions,
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
-            secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=3,
+            secret_bindings=build_snapshot_secret_binding_summary(snapshot.to_dict(), self._source_baseline(snapshot)[0]),
+            schema_version=4,
             promoted_generation="bootstrap",
         )
         cast("ConfigService", self)._record_shared_source_application(sources=snapshot.source_details, result="applied")
@@ -957,8 +967,8 @@ class ConfigReloadMixin:
             layer_revisions=layer_revisions,
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
-            secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=3,
+            secret_bindings=build_snapshot_secret_binding_summary(snapshot.to_dict(), self._source_baseline(snapshot)[0]),
+            schema_version=4,
             promoted_generation="workspace-runtime",
             promoted_apply_id=apply_id,
             expected_active_revision=expected_active_revision,
@@ -997,6 +1007,7 @@ class ConfigReloadMixin:
                 raise RuntimeError("配置资源 reconciler 必须在 bootstrap 前绑定")
             self._shadow_reconcile = shadow_reconcile
         await self._ensure_shadow_started()
+        await self._refresh_model_metadata()
         self._candidate_applier = candidate_applier
         directories, candidate_paths = self._config_watch_paths()
         watcher = ConfigFileWatcher(
@@ -1025,6 +1036,17 @@ class ConfigReloadMixin:
         if not task.cancelled() and (error := task.exception()) is not None:
             report_failure(error, detail="workspace 配置启动对账失败", diagnostic_logger=logger)
 
+    async def _refresh_model_metadata(self) -> None:
+        """可选目录刷新有独立失败诊断，不改写已经发布的业务配置结果。"""
+        from app.runtime.litellm_runtime import refresh_model_metadata
+
+        service = cast("ConfigService", self)
+        try:
+            routes = await service.resolve_workspace_proxy_routes()
+            refresh_model_metadata(owner_key=service.get_snapshot().graph.owner_id, routes=routes)
+        except Exception as error:  # noqa: BLE001 —— 可选下载失败单独报告，不反向改变已发布配置。
+            report_failure(error, detail="Workspace 模型元数据刷新准备失败；保留本地目录", diagnostic_logger=logger)
+
     async def _recover_startup_apply(
         self, *, candidate_applier: ConfigCandidateApplier | None,
     ) -> None:
@@ -1044,21 +1066,17 @@ class ConfigReloadMixin:
         await self._reload_from_watcher(candidate_applier=candidate_applier)
 
     def _config_watch_paths(self) -> tuple[set[Path], set[Path]]:
-        directories = {self._get_workspace_config_path().parent}
-        candidate_paths = {
-            self._get_workspace_config_path(),
-            self._get_workspace_local_config_path(),
-        }
-        if self._workspace_root is not None:
-            workspace_config_dir = self._workspace_root / ".boxteam"
-            directories.add(workspace_config_dir)
-            candidate_paths.add(workspace_config_dir / "workspace.jsonc")
+        directories: set[Path] = set()
+        candidate_paths = set(self._snapshot_store.current().graph.source_locations.values())
+        candidate_graph = getattr(self, "_candidate_source_graph", None)
+        if candidate_graph is not None:
+            candidate_paths.update(candidate_graph.dependencies)
         instruction_paths = self._instruction_inputs.watch_paths(
             self._snapshot_store.current().to_dict(),
             include_candidate=not self._snapshot_store.status().healthy,
         )
         candidate_paths.update(instruction_paths)
-        for path in instruction_paths:
+        for path in tuple(candidate_paths):
             parent = path.parent
             while not parent.is_dir():
                 candidate_paths.add(parent)
@@ -1088,8 +1106,14 @@ class ConfigReloadMixin:
 
     async def close(self) -> None:
         """停止文件监听并关闭 workspace 配置 shadow generation。"""
-        await self.stop_watching()
-        await self._shadow_lifecycle.close()
+        try:
+            await self.stop_watching()
+            await self._shadow_lifecycle.close()
+        finally:
+            if self._snapshot_store.has_snapshot():
+                from app.runtime.litellm_runtime import release_model_metadata
+
+                await release_model_metadata(self._snapshot_store.current().graph.owner_id)
 
     async def _reload_from_watcher(
         self,

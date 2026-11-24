@@ -9,7 +9,7 @@ from app.services.infrastructure.config import llm_catalog
 
 @pytest.fixture
 def catalog(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_catalog, "local_model_catalog", lambda: {
+    monkeypatch.setattr(llm_catalog, "local_model_catalog", lambda **_kwargs: {
         "sample_spec": {"litellm_provider": "文档示例，不是 Provider"},
         "fallback_generalizations": {},
         "known": {"litellm_provider": "openai", "mode": "chat"},

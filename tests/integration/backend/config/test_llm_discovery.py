@@ -29,6 +29,7 @@ from app.testing.model_stream import (
     get_protocol_codec,
     responses_frames,
 )
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -175,7 +176,7 @@ class ProbeCase:
     def model_test(self, *, protocol: str = "chat_completions", **changes) -> dict:
         request = self.draft()
         payload = json.loads(request["jsonc"])
-        defaults = payload["llm"]["providers"]["team"]["defaults"]
+        defaults = payload["profiles"]["team"]["settings"]["model_options"]
         defaults["api_mode"]["protocol"] = protocol
         defaults["custom_llm_provider"] = "anthropic" if protocol == "anthropic_messages" else "openai"
         if protocol == "anthropic_messages":
@@ -195,16 +196,19 @@ async def probe_case(request: pytest.FixtureRequest, catalog: Catalog, tmp_path:
     workspace = prepare_default_test_workspace(workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace")
     workspace_id = load_or_create_workspace_id(workspace)
-    payload = {"config_version": 3, "llm": {"providers": {"team": {
-        "defaults": {"endpoint": catalog.endpoint, "api_key": "", "custom_llm_provider": "openai",
-                     "api_mode": {"protocol": "chat_completions", "model_info": {}, "supports_reasoning": {}},
-                     "request_options": {"no_proxy": True}},
-        "models": {"main": {"model": "configured-main"}},
-    }}}}
+    payload = {"config_version": 4, "extends": "user:workspace_local", "settings": {"workspace": {
+        "llm": {"providers": {"team": {"config_ref": "#/profiles/team",
+            "models": {"main": {"model": "configured-main", "config_ref": "context:provider/team"}},
+        }}}}}, "profiles": {"team": {"extends": "context:workspace", "settings": {
+            "network": {"proxy": {"mode": "direct"}},
+            "model_options": {"endpoint": catalog.endpoint, "api_key": "", "custom_llm_provider": "openai",
+                "api_mode": {"protocol": "chat_completions", "model_info": {}, "supports_reasoning": {}},
+                "request_options": {}},
+        }}}}
+    install_user_configuration(config_root=tmp_path, profile="default", workspace_root=workspace)
     source = workspace / ".boxteam/workspace.jsonc"
     source.write_text(json.dumps(payload), encoding="utf-8")
     user_source = tmp_path / "workspace.jsonc"
-    user_source.write_text("{}\n", encoding="utf-8")
     store = WorkspaceStateStore(workspace_root=workspace)
     with workspace_context(workspace_id, workspace):
         service = ConfigService(config_dir=Path.cwd() / "configs", config_path=user_source,
@@ -241,10 +245,15 @@ async def probe_case(request: pytest.FixtureRequest, catalog: Catalog, tmp_path:
 @pytest.mark.parametrize("protocol", ["chat_completions", "responses", "anthropic_messages"])
 async def test_new_provider_without_models_uses_real_directory_and_never_saves(probe_case: ProbeCase, catalog: Catalog, protocol: str) -> None:
     request = probe_case.draft(provider_id="new-provider")
-    defaults = probe_case.payload["llm"]["providers"]["team"]["defaults"].copy()
+    defaults = probe_case.payload["profiles"]["team"]["settings"]["model_options"].copy()
     defaults.update(api_mode={"protocol": protocol, "model_info": {}, "supports_reasoning": {}},
                     custom_llm_provider="anthropic" if protocol == "anthropic_messages" else "openai")
-    request["jsonc"] = json.dumps({"llm": {"providers": {"new-provider": {"defaults": defaults}}}})
+    request["jsonc"] = json.dumps({"config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"llm": {"providers": {"new-provider": {
+            "config_ref": "#/profiles/new-provider", "models": {},
+        }}}}}, "profiles": {"new-provider": {"extends": "context:workspace", "settings": {
+            "network": {"proxy": {"mode": "direct"}}, "model_options": defaults,
+        }}}})
     before, original = probe_case.rows(), probe_case.source.read_bytes()
     response = await probe_case.client.post(URL, json=request)
     assert response.status_code == 200, response.text
@@ -287,7 +296,7 @@ async def test_directory_capabilities_keep_field_sources_and_provider_priority(
 ) -> None:
     from app.runtime import model_metadata
 
-    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda: {"same-name": {
+    monkeypatch.setattr(model_metadata, "local_model_catalog", lambda **_kwargs: {"same-name": {
         "litellm_provider": "openai", "mode": "chat", "max_input_tokens": 922000,
         "supports_vision": True, "supports_function_calling": True,
     }})
@@ -295,7 +304,7 @@ async def test_directory_capabilities_keep_field_sources_and_provider_priority(
         "max_output_tokens": 999}, {"id": "unknown", "context_length": 1000000}]}]
     request = probe_case.draft()
     payload = json.loads(request["jsonc"])
-    payload["llm"]["providers"]["team"]["defaults"]["api_mode"]["model_info"] = {"max_input_tokens": 32000}
+    payload["profiles"]["team"]["settings"]["model_options"]["api_mode"]["model_info"] = {"max_input_tokens": 32000}
     request["jsonc"] = json.dumps(payload)
     before, original = probe_case.rows(), probe_case.source.read_bytes()
     response = await probe_case.client.post(URL, json=request)
@@ -348,9 +357,10 @@ async def test_full_provider_catalog_is_read_only_and_preserves_connection_gaps(
 async def test_other_saved_source_changes_reject_stale_baseline_then_uses_pending_file(probe_case: ProbeCase, catalog: Catalog) -> None:
     request = probe_case.draft()
     # 用户级来源已保存但没有 reload／active；当前来源编辑计数保持 3。
-    probe_case.user_source.write_text(json.dumps({"llm": {"providers": {"team": {
-        "defaults": {"request_options": {"default_headers": {"X-Pending-Source": "saved-file"}}},
-    }}}}), encoding="utf-8")
+    probe_case.user_source.write_text(json.dumps({"config_version": 4, "extends": "builtin:workspace",
+        "settings": {"model_options": {"request_options": {
+            "default_headers": {"X-Pending-Source": "saved-file"},
+        }}}}), encoding="utf-8")
     rejected = await probe_case.client.post(URL, json=request)
     assert rejected.status_code == 409 and catalog.requests == []
     request = probe_case.draft()
@@ -364,14 +374,17 @@ async def test_other_saved_source_changes_reject_stale_baseline_then_uses_pendin
 async def test_temporary_key_replaces_invalid_reference_without_resolving_old_secret(probe_case: ProbeCase, catalog: Catalog, monkeypatch: pytest.MonkeyPatch) -> None:
     request = probe_case.draft()
     payload = json.loads(request["jsonc"])
-    payload["llm"]["providers"]["team"]["defaults"]["api_key"] = "secret:" + SECRET_ID
+    payload["profiles"]["team"]["settings"]["model_options"]["api_key"] = "secret:" + SECRET_ID
     request["jsonc"] = json.dumps(payload)
     request["credential_input"] = {"scope": "provider", "provider_id": "team", "value": "temporary-test-key"}
 
-    async def forbidden(_self, _providers):
-        pytest.fail("被临时输入替换的旧引用不能被读取")
+    async def prepare(_self, providers):
+        assert len(providers) == 1
+        assert providers[0]["api_key"] == "temporary-test-key"
+        assert "secret:" + SECRET_ID not in json.dumps(providers[0], default=str)
+        return {}
 
-    monkeypatch.setattr(ConfigService, "prepare_llm_credentials", forbidden)
+    monkeypatch.setattr(ConfigService, "prepare_llm_credentials", prepare)
     before = probe_case.rows()
     response = await probe_case.client.post(URL, json=request)
     assert response.status_code == 200, response.text
@@ -384,7 +397,7 @@ async def test_temporary_key_replaces_invalid_reference_without_resolving_old_se
 async def test_selected_secret_resolves_once_and_freezes_actual_revision(probe_case: ProbeCase, catalog: Catalog, monkeypatch: pytest.MonkeyPatch) -> None:
     request = probe_case.draft()
     payload = json.loads(request["jsonc"])
-    payload["llm"]["providers"]["team"]["defaults"]["api_key"] = "secret:" + SECRET_ID
+    payload["profiles"]["team"]["settings"]["model_options"]["api_key"] = "secret:" + SECRET_ID
     request["jsonc"] = json.dumps(payload)
     calls = []
 
@@ -427,7 +440,7 @@ async def test_invalid_target_scope_and_active_versions_send_no_upstream(probe_c
 async def test_anthropic_pages_share_limits_and_keep_completed_pages(probe_case: ProbeCase, catalog: Catalog, second_page: object, category: str) -> None:
     request = probe_case.draft()
     payload = json.loads(request["jsonc"])
-    defaults = payload["llm"]["providers"]["team"]["defaults"]
+    defaults = payload["profiles"]["team"]["settings"]["model_options"]
     defaults["custom_llm_provider"] = "anthropic"
     defaults["api_mode"]["protocol"] = "anthropic_messages"
     request["jsonc"] = json.dumps(payload)
@@ -467,7 +480,7 @@ async def test_model_probe_uses_real_adapter_and_single_request(
         "scope": "provider", "provider_id": "team", "value": api_key,
     } if api_key else None)
     payload = json.loads(request["jsonc"])
-    defaults = payload["llm"]["providers"]["team"]["defaults"]
+    defaults = payload["profiles"]["team"]["settings"]["model_options"]
     defaults["request_options"]["parameters"] = {"temperature": 0, "top_p": None}
     request["jsonc"] = json.dumps(payload)
     before, original = probe_case.rows(), probe_case.source.read_bytes()
@@ -565,7 +578,9 @@ async def test_model_probe_preview_limit_keeps_real_terminal_and_never_saves_tem
 
 async def test_model_probe_rejects_stale_baseline_before_sse_headers(probe_case: ProbeCase, catalog: Catalog) -> None:
     request = {**probe_case.draft(), "model_id": "main"}
-    probe_case.user_source.write_text('{"llm":{"providers":{}}}', encoding="utf-8")
+    probe_case.user_source.write_text(json.dumps({"config_version": 4, "extends": "builtin:workspace",
+        "settings": {"model_options": {"request_options": {"parameters": {"temperature": 0.25}}}}}),
+        encoding="utf-8")
     response = await probe_case.client.post("/api/v1/config/llm/test", json=request)
     assert response.status_code == 409 and "event-stream" not in response.headers["Content-Type"]
     assert catalog.requests == []
@@ -596,10 +611,12 @@ async def test_model_probe_deadline_closes_upstream_after_failed_terminal(probe_
 async def test_model_probe_provider_key_cannot_override_model_credential(probe_case: ProbeCase, catalog: Catalog) -> None:
     request = probe_case.model_test()
     payload = json.loads(request["jsonc"])
-    payload["llm"]["providers"]["team"]["models"]["main"]["overrides"] = {"api_key": "secret:" + SECRET_ID}
+    payload["settings"]["workspace"]["llm"]["providers"]["team"]["models"]["main"]["config_ref"] = "#/profiles/private-model"
+    payload["profiles"]["private-model"] = {"extends": "context:provider/team",
+        "settings": {"model_options": {"api_key": "secret:" + SECRET_ID}}}
     request["jsonc"] = json.dumps(payload)
     response = await probe_case.client.post("/api/v1/config/llm/test", json=request)
-    assert response.status_code == 422 and "Model overrides.api_key" in response.text
+    assert response.status_code == 422 and "实际 Model 的凭据定义不同" in response.text
     assert catalog.requests == []
 
 

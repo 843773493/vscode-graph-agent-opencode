@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from app.services.infrastructure.config.llm_resolution import LlmResolution
-from configs.runtime import validate_config
+from app.services.infrastructure.config_service import ConfigService
+from configs.installer import install_user_configuration
+from configs.runtime import validate_config_document_payload
 from tests.support import workspaces
 
 
@@ -15,40 +16,52 @@ def test_render_preserves_config_values_and_normalizes_local_schema() -> None:
     source = '''{
         // 测试配置可以包含注释、中文与嵌套值。
         "$schema": "../../workspace_schema.jsonc",
-        "config_version": 0,
-        "model": {"name": "测试模型", "options": [1, 2]}
+        "config_version": 4,
+        "settings": {"model_options": {"name": "测试模型", "options": [1, 2]}}
     }'''
 
     rendered = workspaces.render_test_workspace_config(source)
 
     assert json.loads(rendered) == {
         "$schema": "./workspace_schema.jsonc",
-        "config_version": 3,
-        "model": {"name": "测试模型", "options": [1, 2]},
+        "config_version": 4,
+        "settings": {"model_options": {"name": "测试模型", "options": [1, 2]}},
     }
     assert "测试模型" in rendered
     assert rendered.endswith("\n")
 
 
 @pytest.mark.parametrize("endpoint", [None, "http://127.0.0.1:1/v1"])
-def test_isolated_provider_keys_pass_schema_and_resolve_without_secrets(endpoint: str | None, workspace_config_schema: dict) -> None:
+def test_isolated_provider_keys_pass_schema_and_resolve_without_secrets(
+    endpoint: str | None, workspace_config_schema: dict, tmp_path: Path,
+) -> None:
     config = json.loads(workspaces.render_test_workspace_config(
-        Path("configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
+        Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8"),
     ))
-    config["llm"]["providers"]["primary"]["models"]["default"]["overrides"] = {
-        "api_key": "${UNRESOLVED_TEST_MODEL_OVERRIDE}",
-    }
-    original_llm = json.loads(json.dumps(config["llm"]))
+    config["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]["config_ref"] = "#/profiles/private-model"
+    config["profiles"]["private-model"] = {"extends": "context:provider/primary", "settings": {
+        "model_options": {"api_key": "${UNRESOLVED_TEST_MODEL_OVERRIDE}"},
+    }}
+    original_profiles = json.loads(json.dumps(config["profiles"]))
     workspaces.clear_test_provider_api_keys(config, endpoint=endpoint)
-    validate_config(config, schema_path=Path("configs/workspace_schema.jsonc"))
-    resolver = LlmResolution(effective_config_provider=lambda: config, default_agent_id_provider=lambda: "default", schema_provider=lambda: workspace_config_schema)
-    with resolver.use_secrets({}):
-        models = resolver.list_models(config)
+    validate_config_document_payload(config, schema=workspace_config_schema)
+    install_user_configuration(config_root=tmp_path, profile="default")
+    source = tmp_path / "workspace.jsonc"
+    source.write_text(json.dumps(config), encoding="utf-8")
+    service = ConfigService(config_dir=tmp_path, config_path=source)
+    service.validate_workspace_config()
+    with service.use_llm_credentials({}):
+        models = service.list_llm_models()
     assert models and all(model["api_key"] == "" for model in models)
     for model in models:
-        original = original_llm["providers"][model["provider_id"]]["defaults"]
+        original = original_profiles[f"provider.{model['provider_id']}"]["settings"]["model_options"]
         assert model["endpoint"] == (endpoint or original["endpoint"])
-        assert model["api_mode"] == original["api_mode"]
+        for key, value in original["api_mode"].items():
+            if key == "model_info":
+                assert model["api_mode"][key].items() >= value.items()
+            else:
+                assert model["api_mode"][key] == value
+        assert model["api_mode"]["streaming"] is True
         assert model.get("auth") == original.get("auth")
 
 
@@ -63,16 +76,22 @@ def test_unchanged_source_is_parsed_once_and_changed_source_is_not_stale(
         return parse(source)
 
     monkeypatch.setattr(workspaces.commentjson, "loads", observe_parse)
-    original = '{"cache_probe": "original"}'
-    changed = '{"cache_probe": "changed"}'
+    original = '{"config_version":4,"settings":{"cache_probe":"original"}}'
+    changed = '{"config_version":4,"settings":{"cache_probe":"changed"}}'
 
     first = workspaces.render_test_workspace_config(original)
     assert workspaces.render_test_workspace_config(original) == first
     updated = workspaces.render_test_workspace_config(changed)
 
     assert parsed_sources == [original, changed]
-    assert json.loads(first)["cache_probe"] == "original"
-    assert json.loads(updated)["cache_probe"] == "changed"
+    assert json.loads(first)["settings"]["cache_probe"] == "original"
+    assert json.loads(updated)["settings"]["cache_probe"] == "changed"
+
+
+@pytest.mark.parametrize("source", ['{}', '{"config_version":3,"llm":{}}', '{"config_version":4}'])
+def test_render_rejects_old_or_incomplete_documents(source: str) -> None:
+    with pytest.raises(ValueError, match="v4"):
+        workspaces.render_test_workspace_config(source)
 
 
 @pytest.mark.parametrize("case", ["first", "second"])

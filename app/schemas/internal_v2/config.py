@@ -5,6 +5,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.config_sources import ConfigSourceLayer, ConfigSourceURI
+from app.schemas.config_nodes import ConfigNodeInspectionDTO
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
@@ -203,7 +204,9 @@ class ConfigSourceDocumentDTO(BaseModel):
     json_schema: dict[str, object]
     effective: dict[str, object]
     source_effective: dict[str, object]
+    source_inherited: dict[str, object]
     layers: list[ConfigSourceLayerViewDTO]
+    nodes: list[ConfigNodeInspectionDTO]
     origins: list[ConfigSourceOriginDTO]
     source_baseline: dict[str, ConfigSourceBaselineDTO]
     active_origins: list[ConfigSourceOriginDTO]
@@ -215,17 +218,42 @@ class ConfigSourceDocumentDTO(BaseModel):
 class ConfigModelOptionOriginDTO(BaseModel):
     path: str
     source_key: str
-    definition: Literal["defaults", "overrides", "catalog", "builtin"]
+    definition: Literal["node", "catalog", "builtin"]
     definition_path: str
+    node_id: str | None = None
 
 
-class ConfigModelInspectionDTO(BaseModel):
-    model_ref: ModelReferenceDTO
-    model: str
+class ConfigOptionsInspectionDTO(BaseModel):
+    config_ref: str
+    node_id: str
+    chain: list[ConfigNodeInspectionDTO]
+    local_settings: dict[str, object]
+    inherited_settings: dict[str, object]
+    network: dict[str, object]
+    shared: bool
     options: dict[str, object]
     origins: list[ConfigModelOptionOriginDTO]
-    request_url: str
     catalog_url: str | None = None
+
+
+class ConfigModelInspectionDTO(ConfigOptionsInspectionDTO):
+    model_ref: ModelReferenceDTO
+    model: str
+    request_url: str
+
+
+class ConfigProviderInspectionDTO(ConfigOptionsInspectionDTO):
+    provider_id: str
+
+
+class ConfigActiveOptionsInspectionDTO(BaseModel):
+    gateway_id: str
+    workspace_id: str
+    active_revision: int
+    active_digest: str
+    source_baseline: dict[str, ConfigSourceBaselineDTO]
+    provider_options: ConfigProviderInspectionDTO | None = None
+    model_options: ConfigModelInspectionDTO | None = None
 
 
 class ConfigSourcePreflightDTO(BaseModel):
@@ -235,6 +263,8 @@ class ConfigSourcePreflightDTO(BaseModel):
     changed_paths: list[str]
     model_options: ConfigModelInspectionDTO | None = None
     active_model_options: ConfigModelInspectionDTO | None = None
+    provider_options: ConfigProviderInspectionDTO | None = None
+    active_provider_options: ConfigProviderInspectionDTO | None = None
 
 
 class ConfigStartupContractDTO(BaseModel):

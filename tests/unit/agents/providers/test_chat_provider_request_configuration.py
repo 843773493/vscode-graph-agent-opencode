@@ -96,6 +96,7 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
 async def test_nonstream_call_keeps_nonstream_request_parameters(
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
+    direct_proxy_routes,
 ) -> None:
     """共享参数转换不得把同步或异步的非流式调用改成流式请求。"""
     captured: dict[str, object] = {}
@@ -141,6 +142,7 @@ async def test_nonstream_call_keeps_nonstream_request_parameters(
         streaming=False,
         max_retries=0,
         invocation_purpose="tool_test",
+        proxy_routes=direct_proxy_routes,
     )
     messages = [HumanMessage(content="hi")]
     if mode == "sync":
@@ -209,8 +211,8 @@ def test_agent_parameters_override_model_defaults_and_preserve_extension_null():
     assert "top_p" not in model.model_kwargs
 
 
-def test_build_model_defaults_no_proxy_to_false():
-    """未显式配置 no_proxy 时，模型默认走系统代理（保持原有行为）。"""
+def test_build_model_resolves_direct_proxy_routes(provider_with_direct_network):
+    """Provider 网络声明解析为模型实际使用的直连路由。"""
     model = build_model_from_provider(
         provider={
             "id": "backup_3",
@@ -219,16 +221,17 @@ def test_build_model_defaults_no_proxy_to_false():
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
             "api_mode": _chat_api_mode(),
+            **provider_with_direct_network,
         },
         runtime_config={},
     )
 
     assert isinstance(model, BoxteamLiteLLMChatModel)
-    assert model.no_proxy is False
+    assert model.proxy_routes is provider_with_direct_network["proxy_routes"]
 
 
-def test_build_model_passes_no_proxy_to_chat_model():
-    """provider.request_options.no_proxy=true 应透传到 chat 模型。"""
+def test_build_model_uses_provider_network_policy(provider_with_direct_network):
+    """模型实例接收已解析的 Provider 网络策略。"""
     model = build_model_from_provider(
         provider={
             "id": "backup_3",
@@ -237,39 +240,22 @@ def test_build_model_passes_no_proxy_to_chat_model():
             "api_key": "test-key",
             "endpoint": "http://100.64.0.58:8079/v1",
             "api_mode": _chat_api_mode(),
-            "request_options": {"no_proxy": True},
+            **provider_with_direct_network,
         },
         runtime_config={},
     )
 
     assert isinstance(model, BoxteamLiteLLMChatModel)
-    assert model.no_proxy is True
+    assert model.proxy_routes is provider_with_direct_network["proxy_routes"]
 
 
-def test_build_model_rejects_non_boolean_no_proxy():
-    """provider.request_options.no_proxy 必须是布尔值。"""
-    with pytest.raises(TypeError, match="no_proxy"):
-        build_model_from_provider(
-            provider={
-                "id": "backup_3",
-                "custom_llm_provider": "openai",
-                "model": "gpt-5.4-mini",
-                "api_key": "test-key",
-                "endpoint": "https://example.com/v1",
-                "api_mode": _chat_api_mode(),
-                "request_options": {"no_proxy": "true"},
-            },
-            runtime_config={},
-        )
-
-
-def test_no_proxy_injects_trust_env_false_client():
-    """no_proxy=true 时应注入 trust_env=False 的 HTTP 客户端。"""
+def test_direct_route_injects_trust_env_false_client(direct_proxy_routes):
+    """显式路由策略创建不读取环境代理的 HTTP 客户端。"""
     model = BoxteamLiteLLMChatModel(
         model="openai/DeepSeek-V4.1-Flash",
         api_key="test-key",
         api_base="http://100.64.0.58:8079/v1",
-        no_proxy=True,
+        proxy_routes=direct_proxy_routes,
     )
 
     client = model._provider_http_client(is_async=False)
@@ -305,6 +291,7 @@ def test_build_model_rejects_unknown_provider_request_options():
 async def test_litellm_stream_sends_extra_body(
     monkeypatch: pytest.MonkeyPatch,
     empty_chat_completion_stream: _EmptyChatCompletionStream,
+    direct_proxy_routes,
 ) -> None:
     """LiteLLM 流式调用保留正式参数和独立扩展正文。"""
     captured: dict[str, object] = {}
@@ -329,6 +316,7 @@ async def test_litellm_stream_sends_extra_body(
             "extra_body": {"vendor_feature": "low"},
         },
         invocation_purpose="tool_test",
+        proxy_routes=direct_proxy_routes,
     )
 
     async def fake_acompletion_with_retry(self, **kwargs):

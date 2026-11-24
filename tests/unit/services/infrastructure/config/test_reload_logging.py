@@ -7,18 +7,18 @@ import pytest
 
 from app.services.infrastructure.config import (
     ConfigSnapshotStore,
-    build_config_snapshot,
 )
 
 
 @pytest.mark.asyncio
 async def test_config_reload_success_emits_info_log(
     caplog: pytest.LogCaptureFixture,
+    workspace_config_snapshots,
 ) -> None:
     candidates = iter(
         (
-            build_config_snapshot({"value": "before"}, source_paths=()),
-            build_config_snapshot({"value": "after"}, source_paths=()),
+            workspace_config_snapshots.base,
+            workspace_config_snapshots.changed(),
         )
     )
     store = ConfigSnapshotStore(candidate_builder=lambda: next(candidates))
@@ -32,13 +32,15 @@ async def test_config_reload_success_emits_info_log(
 
     assert "配置热重载成功" in caplog.text
     assert store.current().revision in caplog.text
+    assert store.current().to_dict()["context"]["source_messages"]["grouping"] == "separate"
 
 
 @pytest.mark.asyncio
 async def test_config_reload_failure_emits_exception_log(
     caplog: pytest.LogCaptureFixture,
+    workspace_config_snapshots,
 ) -> None:
-    initial = build_config_snapshot({"value": "before"}, source_paths=())
+    initial = workspace_config_snapshots.base
 
     def build_candidate():
         raise ValueError("配置内容无效")
@@ -58,8 +60,8 @@ async def test_config_reload_failure_emits_exception_log(
 
 
 @pytest.mark.asyncio
-async def test_snapshot_publication_precedes_drain_and_survives_cancellation() -> None:
-    candidates = iter(build_config_snapshot({"version": value}, source_paths=()) for value in (1, 2))
+async def test_snapshot_publication_precedes_drain_and_survives_cancellation(workspace_config_snapshots) -> None:
+    candidates = iter((workspace_config_snapshots.base, workspace_config_snapshots.changed()))
     store = ConfigSnapshotStore(candidate_builder=lambda: next(candidates))
     previous = store.current()
     entered = asyncio.Event()
@@ -78,12 +80,12 @@ async def test_snapshot_publication_precedes_drain_and_survives_cancellation() -
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-    assert store.current().to_dict() == {"version": 2}
+    assert store.current() is not previous
 
 
 @pytest.mark.asyncio
-async def test_snapshot_publisher_returning_without_commit_is_explicit_failure() -> None:
-    candidates = iter(build_config_snapshot({"version": value}, source_paths=()) for value in (1, 2))
+async def test_snapshot_publisher_returning_without_commit_is_explicit_failure(workspace_config_snapshots) -> None:
+    candidates = iter((workspace_config_snapshots.base, workspace_config_snapshots.changed()))
     store = ConfigSnapshotStore(candidate_builder=lambda: next(candidates))
     previous = store.current()
 
@@ -96,8 +98,8 @@ async def test_snapshot_publisher_returning_without_commit_is_explicit_failure()
 
 
 @pytest.mark.asyncio
-async def test_cancelled_cleanup_group_is_recorded_without_publishing_candidate() -> None:
-    candidates = iter(build_config_snapshot({"version": value}, source_paths=()) for value in (1, 2))
+async def test_cancelled_cleanup_group_is_recorded_without_publishing_candidate(workspace_config_snapshots) -> None:
+    candidates = iter((workspace_config_snapshots.base, workspace_config_snapshots.changed()))
     store = ConfigSnapshotStore(candidate_builder=lambda: next(candidates))
     previous = store.current()
 
@@ -114,12 +116,12 @@ async def test_cancelled_cleanup_group_is_recorded_without_publishing_candidate(
 @pytest.mark.parametrize("native_path", ["/private-config/source.jsonc", r"C:\private-config\source.jsonc", r"\\server\private-config\source.jsonc"])
 @pytest.mark.parametrize("phase", ["build", "prepare", "drain", "cancel"])
 async def test_reload_failure_state_uses_facts_and_preserves_original_exception(
-    native_path: str, phase: str, caplog: pytest.LogCaptureFixture,
+    native_path: str, phase: str, caplog: pytest.LogCaptureFixture, workspace_config_snapshots,
 ) -> None:
     error = asyncio.CancelledError(native_path) if phase == "cancel" else PermissionError(13, native_path, native_path)
     failed = True
-    before = build_config_snapshot({"value": "before"}, source_paths=())
-    after = build_config_snapshot({"value": "after"}, source_paths=())
+    before = workspace_config_snapshots.base
+    after = workspace_config_snapshots.changed()
 
     def build_candidate():
         if failed and phase == "build":

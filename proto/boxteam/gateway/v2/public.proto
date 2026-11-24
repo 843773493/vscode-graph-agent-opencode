@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package boxteam.gateway.v2;
 
+import "boxteam/common/v1/config.proto";
 import "boxteam/gateway/v2/service_plugin.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
@@ -260,6 +261,7 @@ message GatewayConfigSourceDocumentDTO {
   GatewayConfigReloadStatusDTO status = 18;
   optional GatewayConfigSourceEditDTO edit = 19;
   google.protobuf.Struct source_inherited = 20;
+  repeated boxteam.common.v1.ConfigNodeInspectionDTO nodes = 21;
 }
 
 message GatewayConfigSourcePreflightDTO {

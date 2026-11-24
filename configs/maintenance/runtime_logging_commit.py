@@ -39,7 +39,7 @@ from configs.maintenance.runtime_logging_storage import (
 from configs.runtime import (
     merge_json_objects,
     read_jsonc_object,
-    validate_config,
+    validate_config_document_payload,
     validate_config_payload,
 )
 
@@ -179,20 +179,15 @@ def validate_runtime_logging_plan(
             },
             persist_migrations=False,
         )
-    effective = {"workspace": inline["workspace"]}
     for item in plan.inputs:
-        if item.kind == "file" and item.domain == "workspace" and item.path in files and item.path.parent.name != ".boxteam":
-            effective[item.domain] = merge_json_objects(effective[item.domain], files[item.path], schema=schemas[item.domain])
-    validate_config(effective["workspace"], schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
-    for path, payload in files.items():
-        if path.name == "workspace.jsonc" and path.parent.name == ".boxteam":
-            validate_config(merge_json_objects(effective["workspace"], payload, schema=schemas["workspace"]), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
+        if item.domain == "workspace" and item.kind in {"file", "source_layer"} and item.payload is not None:
+            validate_config_document_payload(item.payload, schema=schemas["workspace"])
     for item in plan.inputs:
         if item.kind in {"active", "pending"} and item.payload is not None:
-            candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries, schema=schemas[item.domain])
+            candidate = migrated_active_payload(item.payload, item.domain, plan)
             if item.domain == "workspace":
                 candidate = cast(dict[str, object], restore_environment_secret_references(candidate))
-                validate_config(candidate, schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
+                validate_config_payload(candidate, schema=schemas["workspace"])
             else:
                 validate_config_payload(candidate, schema=schemas["gateway"])
 
@@ -238,9 +233,7 @@ def _prepare(
             target.execute("BEGIN IMMEDIATE")
             migrate_database(
                 target, domain=domain, source_path=path, plan=plan, file_digests=digests,
-                inline_config=read_jsonc_object(resolve_config_resource_source(f"{domain}_inline.jsonc", project_root=project_root)),
                 connection_entries=connection_entries,
-                schema=read_jsonc_object(resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root)),
             )
             target.commit()
             after_digest = _database_digest(target)

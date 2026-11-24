@@ -163,6 +163,8 @@ def test_development_templates_enable_development_capabilities_and_docker_gatewa
     workspace_dev = _load_jsonc_object(Path("configs/workspace_dev.jsonc"))
     gateway = gateway["settings"]["gateway"]
     gateway_dev = gateway_dev["settings"]["gateway"]
+    workspace = workspace["settings"]["workspace"]
+    workspace_dev = workspace_dev["settings"]["workspace"]
 
     assert gateway["workspaces"] == []
     assert gateway_dev["workspaces"][0]["enabled"] is True  # type: ignore[index]
@@ -213,7 +215,7 @@ def test_initialize_user_configuration_only_creates_missing_configs(
 
     assert existing.read_text(encoding="utf-8") == '{"owned_by_user": true}\n'
     assert result.created_config_paths == (
-        config_root / "gateway_local.jsonc", config_root / "workspace.jsonc",
+        config_root / "gateway_local.jsonc", config_root / "workspace.jsonc", config_root / "workspace_local.jsonc",
     )
     assert (config_root / "gateway_schema.jsonc").is_file()
     assert (config_root / "workspace_schema.jsonc").is_file()
@@ -236,6 +238,7 @@ def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
         config_root / "gateway.jsonc",
         config_root / "gateway_local.jsonc",
         config_root / "workspace.jsonc",
+        config_root / "workspace_local.jsonc",
     }
     assert "stale" not in _load_jsonc_object(config_root / "gateway.jsonc")
     assert "stale" not in _load_jsonc_object(config_root / "workspace.jsonc")
@@ -264,6 +267,32 @@ def test_repeated_install_does_not_revalidate_or_rewrite_unchanged_resources(
     write.assert_not_called()
 
 
+def test_explicit_workspace_initialization_writes_only_its_default_parent_chain(tmp_path: Path) -> None:
+    config_root = tmp_path / "home/config"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    other = tmp_path / "unselected-workspace"
+    other.mkdir()
+    install_user_configuration(config_root=config_root, profile="default", workspace_root=workspace)
+    assert _load_jsonc_object(config_root / "workspace.jsonc") == {
+        "$schema": "./workspace_schema.jsonc", "config_version": 4,
+        "extends": "builtin:workspace", "settings": {},
+    }
+    assert _load_jsonc_object(config_root / "workspace_local.jsonc") == {
+        "$schema": "./workspace_schema.jsonc", "config_version": 4,
+        "extends": "user:workspace", "settings": {},
+    }
+    path = workspace / ".boxteam/workspace.jsonc"
+    assert _load_jsonc_object(path) == {
+        "config_version": 4, "extends": "user:workspace_local", "settings": {},
+    }
+    assert not (other / ".boxteam").exists()
+    custom = '{"config_version":4,"extends":"custom.jsonc","settings":{}}\n'
+    path.write_text(custom)
+    install_user_configuration(config_root=config_root, profile="default", workspace_root=workspace)
+    assert path.read_text() == custom
+
+
 def test_changed_schema_is_validated_before_replacing_installed_resources(
     tmp_path: Path,
 ) -> None:
@@ -272,7 +301,7 @@ def test_changed_schema_is_validated_before_replacing_installed_resources(
     sources.mkdir(parents=True)
     for domain in ("gateway", "workspace"):
         source = ('{"config_version": 6, "settings": {}}'
-                  if domain == "gateway" else '{"enabled": true}')
+                  if domain == "gateway" else '{"config_version":4,"settings":{}}')
         (sources / f"{domain}_inline.jsonc").write_text(source)
         (sources / f"{domain}_schema.jsonc").write_text('{"type": "object"}')
     config_root = tmp_path / "config"
@@ -319,7 +348,7 @@ def test_source_development_install_uses_dev_profiles_and_source_env(
     assert result.env_path is not None
     assert result.env_path.read_text(encoding="utf-8") == "BOXTEAM_TEST=source\n"
     assert _load_jsonc_object(config_root / "gateway.jsonc")["settings"]["gateway"]["workspaces"][0]["enabled"] is True  # type: ignore[index]
-    assert _load_jsonc_object(config_root / "workspace.jsonc")["development"] == {"test_tools": True}
+    assert _load_jsonc_object(config_root / "workspace.jsonc")["settings"]["workspace"]["development"] == {"test_tools": True}
 
 
 def test_install_source_development_configuration_requires_source_env(
@@ -349,12 +378,12 @@ def test_generator_main_installs_both_domains(
     main()
 
     output = json.loads(capsys.readouterr().out)
-    assert len(output["config_paths"]) == 3
+    assert len(output["config_paths"]) == 4
     assert (boxteam_home / "config" / "gateway.jsonc").is_file()
     assert (boxteam_home / "config" / "workspace.jsonc").is_file()
 
 
-def test_cli_migrate_splits_legacy_user_configuration(
+def test_cli_migrate_preserves_legacy_user_configuration_without_release_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -382,17 +411,13 @@ def test_cli_migrate_splits_legacy_user_configuration(
 
     from configs.boxteam import main
 
-    main()
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["valid"] is True
-    assert output["migrated_user_layout"] is True
-    assert (config_root / "gateway.jsonc").is_file()
-    assert (config_root / "workspace.jsonc").is_file()
-    assert not (config_root / "boxteam.jsonc").exists()
+    before = {path: path.read_bytes() for path in config_root.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        main()
+    assert {path: path.read_bytes() for path in config_root.rglob("*") if path.is_file()} == before
 
 
-def test_cli_initialize_automatically_migrates_supported_legacy_layout(
+def test_cli_initialize_preserves_legacy_layout_without_release_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -418,12 +443,10 @@ def test_cli_initialize_automatically_migrates_supported_legacy_layout(
 
     from configs.boxteam import main
 
-    main()
-
-    assert not legacy_path.exists()
-    assert (config_root / "boxteam.jsonc.migrated.bak").read_bytes() == original
-    assert _load_jsonc_object(config_root / "gateway.jsonc")["config_version"] == 6
-    assert _load_jsonc_object(config_root / "workspace.jsonc")["config_version"] == 3
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
+        main()
+    assert list(config_root.iterdir()) == [legacy_path]
+    assert legacy_path.read_bytes() == original
 
 
 def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(
@@ -458,7 +481,7 @@ def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(
 
     from configs.boxteam import main
 
-    with pytest.raises(ValueError, match="旧配置拆分后的候选无效"):
+    with pytest.raises(ValueError, match="缺少已验收升级基线"):
         main()
 
     assert {path: path.read_bytes() for path in original_files} == original_files

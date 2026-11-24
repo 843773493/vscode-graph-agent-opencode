@@ -5,6 +5,7 @@
 // source: boxteam/gateway/v2/public.proto
 
 /* eslint-disable */
+import { ConfigNodeInspectionDTO } from "../../common/v1/config.js";
 import { PluginInstanceView } from "./service_plugin.js";
 
 export const protobufPackage = "boxteam.gateway.v2";
@@ -268,6 +269,7 @@ export interface GatewayConfigSourceDocumentDTO {
   status: GatewayConfigReloadStatusDTO | undefined;
   edit?: GatewayConfigSourceEditDTO | undefined;
   source_inherited: { [key: string]: any } | undefined;
+  nodes: ConfigNodeInspectionDTO[];
 }
 
 export interface GatewayConfigSourcePreflightDTO {
@@ -2615,6 +2617,7 @@ function createBaseGatewayConfigSourceDocumentDTO(): GatewayConfigSourceDocument
     status: undefined,
     edit: undefined,
     source_inherited: undefined,
+    nodes: [],
   };
 }
 
@@ -2645,6 +2648,9 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
       status: isSet(object.status) ? GatewayConfigReloadStatusDTO.fromJSON(object.status) : undefined,
       edit: isSet(object.edit) ? GatewayConfigSourceEditDTO.fromJSON(object.edit) : undefined,
       source_inherited: isObject(object.source_inherited) ? object.source_inherited : undefined,
+      nodes: globalThis.Array.isArray(object?.nodes)
+        ? object.nodes.map((e: any) => ConfigNodeInspectionDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -2710,6 +2716,9 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
     if (message.source_inherited !== undefined) {
       obj.source_inherited = message.source_inherited;
     }
+    if (message.nodes?.length) {
+      obj.nodes = message.nodes.map((e) => ConfigNodeInspectionDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -2744,6 +2753,7 @@ export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocum
       ? GatewayConfigSourceEditDTO.fromPartial(object.edit)
       : undefined;
     message.source_inherited = object.source_inherited ?? undefined;
+    message.nodes = object.nodes?.map((e) => ConfigNodeInspectionDTO.fromPartial(e)) || [];
     return message;
   },
 };

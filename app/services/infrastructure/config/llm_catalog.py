@@ -25,13 +25,13 @@ CATALOG_MAX_MODELS = 5000
 
 
 def discovered_model_metadata(
-    provider: str, model: str, *, upstream: Mapping[str, Any], configured: Mapping[str, Any],
+    provider: str, model: str, *, upstream: Mapping[str, Any], configured: Mapping[str, Any], owner_key: str | None = None,
 ) -> LlmModelMetadataDTO | None:
     """仅投影本次目录观察；显式配置优先，不保存或冒充已经实测的能力。"""
     fields = LlmModelMetadataDTO.model_fields.keys() - {"sources", "catalog_provider"}
     values: dict[str, Any] = {}
     sources: dict[str, str] = {}
-    for source, candidate in (("litellm", model_metadata(provider, model) or {}), ("upstream", upstream), ("provider", configured)):
+    for source, candidate in (("litellm", model_metadata(provider, model, owner_key=owner_key) or {}), ("upstream", upstream), ("provider", configured)):
         # 只消费同名显式字段；总上下文 context_length 不能推导成输入容量。
         selected = {key: candidate[key] for key in fields if key in candidate and candidate[key] is not None}
         values.update(selected)
@@ -48,10 +48,10 @@ _PROVIDER_TEMPLATES = {
 }
 
 
-def list_catalog_providers() -> LlmProvidersDTO:
+def list_catalog_providers(*, owner_key: str | None = None) -> LlmProvidersDTO:
     """直接枚举完整目录，不把目录收录等同于连接、认证或上游发现已适配。"""
     providers: dict[str, LlmProviderDTO] = {}
-    for key, entry in local_model_catalog().items():
+    for key, entry in local_model_catalog(owner_key=owner_key).items():
         if key in {"sample_spec", "fallback_generalizations"} or not isinstance(entry, Mapping):
             continue
         provider = entry.get("litellm_provider")
@@ -67,14 +67,14 @@ def list_catalog_providers() -> LlmProvidersDTO:
     return LlmProvidersDTO(providers=sorted(providers.values(), key=lambda item: item.provider))
 
 
-def list_catalog_models(provider: str) -> LlmModelCatalogDTO:
+def list_catalog_models(provider: str, *, owner_key: str | None = None) -> LlmModelCatalogDTO:
     """目录名称仅作候选；用户仍可发现上游或手工输入未收录模型。"""
     models: dict[str, LlmDiscoveredModelDTO] = {}
-    for key, entry in local_model_catalog().items():
+    for key, entry in local_model_catalog(owner_key=owner_key).items():
         if not isinstance(entry, Mapping) or entry.get("litellm_provider") != provider or entry.get("mode") not in {"chat", "responses"}:
             continue
         model = key.removeprefix(provider + "/")
-        models[model] = LlmDiscoveredModelDTO(model=model, metadata=discovered_model_metadata(provider, model, upstream={}, configured={}))
+        models[model] = LlmDiscoveredModelDTO(model=model, metadata=discovered_model_metadata(provider, model, upstream={}, configured={}, owner_key=owner_key))
     return LlmModelCatalogDTO(provider=provider, models=sorted(models.values(), key=lambda item: item.model))
 
 
@@ -102,11 +102,14 @@ def probe_secret_values(connection: Mapping[str, Any]) -> tuple[str, ...]:
     ) if value}
     if endpoint.userinfo or endpoint.query:
         values.add(str(endpoint))
+    for _, proxy in connection["proxy_routes"].routes:
+        if proxy is not None and proxy.raw_auth is not None:
+            values.update(part.decode() for part in proxy.raw_auth if part)
     return tuple(sorted(values, key=len, reverse=True))
 
 
 async def read_model_catalog(
-    connection: Mapping[str, Any], *, deadline: float,
+    connection: Mapping[str, Any], *, deadline: float, owner_key: str | None = None,
 ) -> tuple[list[LlmDiscoveredModelDTO], bool, LlmProbeErrorDTO | None]:
     protocol = connection["api_mode"]["protocol"]
     endpoint = model_catalog_url(connection)
@@ -134,9 +137,13 @@ async def read_model_catalog(
     models: list[LlmDiscoveredModelDTO] = []
     total_bytes = 0
     cursor: str | None = None
+    routes = connection["proxy_routes"]
+    verify = httpx.create_ssl_context(trust_env=True)
     try:
         async with asyncio.timeout_at(deadline), httpx.AsyncClient(
-            timeout=None, trust_env=not options.get("no_proxy", False), follow_redirects=False,
+            timeout=None, trust_env=False, follow_redirects=False, verify=verify,
+            transport=httpx.AsyncHTTPTransport(verify=verify, trust_env=False),
+            mounts=routes.async_mounts(verify=verify),
         ) as client:
             while True:
                 page_url = endpoint.copy_merge_params({"after_id": cursor}) if cursor is not None else endpoint
@@ -166,7 +173,7 @@ async def read_model_catalog(
                     name = item.get("display_name", item.get("name"))
                     page.append(LlmDiscoveredModelDTO(model=item["id"], name=name if isinstance(name, str) else None,
                         metadata=discovered_model_metadata(connection["custom_llm_provider"], item["id"],
-                            upstream=item, configured=connection["api_mode"].get("model_info", {}))))
+                            upstream=item, configured=connection["api_mode"].get("model_info", {}), owner_key=owner_key)))
                 has_more = payload.get("has_more", False)
                 if not isinstance(has_more, bool):
                     return fail("protocol", "上游 has_more 必须是布尔值")

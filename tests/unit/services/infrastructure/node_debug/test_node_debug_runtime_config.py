@@ -306,7 +306,7 @@ def test_debug_runtime_schema_rejects_unknown_fields(tmp_path: Path) -> None:
         config_path=_write_config(tmp_path, {"unexpected": True}),
     )
 
-    with pytest.raises(ValueError, match="rule=additionalProperties") as failure:
+    with pytest.raises(ValueError, match="JSON schema additionalProperties") as failure:
         service.validate_workspace_config()
     assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
     assert "unexpected" in str(failure.value.__cause__)
