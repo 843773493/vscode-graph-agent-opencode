@@ -30,6 +30,8 @@ from app.agents.upstream_request_trace import (
     record_upstream_response,
 )
 from app.core.failures import is_provider_failure
+from app.core.path_utils import workspace_context
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.runtime.agent_runtime import prepare_agent_model
 from app.runtime.chatgpt_auth import ChatGPTCredential
 from app.runtime.network_proxy import ProxyRoutes
@@ -41,7 +43,14 @@ from app.services.orchestration.event_stream.model_events import (
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
-def _provider(api_mode: str) -> dict[str, object]:
+@pytest.fixture
+def provider_workspace_scope(tmp_path):
+    """来源回放只需明确工作区身份，不创建会话或加载项目模板。"""
+    with workspace_context(load_or_create_workspace_id(tmp_path), tmp_path):
+        yield
+
+
+def _provider(api_mode: str, direct_proxy_routes: ProxyRoutes) -> dict[str, object]:
     if api_mode == "responses":
         structured_api_mode: dict[str, object] = {
             "protocol": "responses",
@@ -66,6 +75,7 @@ def _provider(api_mode: str) -> dict[str, object]:
             "supports_reasoning": {"reasoning_content": True},
         }
     return {
+        "proxy_routes": direct_proxy_routes,
         "provider_id": "provider-test",
         "model_id": "general",
         "endpoint": "https://example.com/v1",
@@ -77,14 +87,14 @@ def _provider(api_mode: str) -> dict[str, object]:
     }
 
 
-def test_chat_completions_mode_uses_litellm_chat_model():
-    model = build_model_from_provider(_provider("chat_completions"), {})
+def test_chat_completions_mode_uses_litellm_chat_model(direct_proxy_routes):
+    model = build_model_from_provider(_provider("chat_completions", direct_proxy_routes), {})
     assert isinstance(model, BoxteamLiteLLMChatModel)
 
 
 @pytest.mark.parametrize("protocol", ["chat_completions", "responses", "anthropic_messages"])
-def test_input_context_capacity_sets_profile_without_changing_wire(protocol):
-    provider = _provider(protocol)
+def test_input_context_capacity_sets_profile_without_changing_wire(direct_proxy_routes, protocol):
+    provider = _provider(protocol, direct_proxy_routes)
     if protocol == "anthropic_messages":
         provider["custom_llm_provider"] = "anthropic"
         provider["api_mode"] = {
@@ -148,8 +158,9 @@ def test_litellm_output_projection_preserves_redacted_reasoning_payload_marker()
     ]
 
 
-def test_litellm_unified_reasoning_fields_use_ordered_carrier_blocks():
+def test_litellm_unified_reasoning_fields_use_ordered_carrier_blocks(direct_proxy_routes):
     model = BoxteamLiteLLMChatModel(
+        proxy_routes=direct_proxy_routes,
         model="openai/test-model",
         api_key="test-key",
         api_base="https://example.com/v1",
@@ -220,8 +231,8 @@ def test_litellm_unified_reasoning_fields_use_ordered_carrier_blocks():
     assert "reasoning_items" not in message.additional_kwargs
 
 
-def test_chat_completions_mode_forwards_stable_prompt_cache_key():
-    provider = _provider("chat_completions")
+def test_chat_completions_mode_forwards_stable_prompt_cache_key(direct_proxy_routes):
+    provider = _provider("chat_completions", direct_proxy_routes)
     api_mode = provider["api_mode"]
     assert isinstance(api_mode, dict)
     api_mode["request_features"] = {"prompt_cache_key": True}
@@ -235,9 +246,9 @@ def test_chat_completions_mode_forwards_stable_prompt_cache_key():
     assert model._client_params["prompt_cache_key"] == "session-chat-cache"
 
 
-def test_chat_completions_mode_omits_cache_key_without_capability():
+def test_chat_completions_mode_omits_cache_key_without_capability(direct_proxy_routes):
     model = build_model_from_provider(
-        _provider("chat_completions"),
+        _provider("chat_completions", direct_proxy_routes),
         {},
         prompt_cache_key="session-chat-cache",
     )
@@ -246,8 +257,8 @@ def test_chat_completions_mode_omits_cache_key_without_capability():
     assert "extra_body" not in model._client_params
 
 
-def test_chat_completions_reasoning_replay_capability_configures_model():
-    provider = _provider("chat_completions")
+def test_chat_completions_reasoning_replay_capability_configures_model(direct_proxy_routes):
+    provider = _provider("chat_completions", direct_proxy_routes)
 
     model = build_model_from_provider(provider, {})
 
@@ -255,8 +266,8 @@ def test_chat_completions_reasoning_replay_capability_configures_model():
     assert model.reasoning_content_replay is True
 
 
-def test_chat_completions_thinking_blocks_configures_model_projection():
-    provider = _provider("chat_completions")
+def test_chat_completions_thinking_blocks_configures_model_projection(direct_proxy_routes):
+    provider = _provider("chat_completions", direct_proxy_routes)
     provider["api_mode"] = {
         "protocol": "chat_completions",
         "model_info": {"supports_function_calling": True, "supports_reasoning": True},
@@ -270,8 +281,9 @@ def test_chat_completions_thinking_blocks_configures_model_projection():
     assert model.thinking_blocks_replay is True
 
 
-def test_anthropic_messages_mode_uses_litellm_chat_model():
+def test_anthropic_messages_mode_uses_litellm_chat_model(direct_proxy_routes):
     provider = {
+        "proxy_routes": direct_proxy_routes,
         "provider_id": "anthropic-test",
         "model_id": "general",
         "endpoint": "https://example.com/anthropic",
@@ -297,12 +309,12 @@ def test_anthropic_messages_mode_uses_litellm_chat_model():
     assert model.thinking_blocks_replay is True
 
 
-def test_anthropic_history_projects_direct_content_to_thinking_blocks(workspace_scope):
+def test_anthropic_history_projects_direct_content_to_thinking_blocks(direct_proxy_routes, provider_workspace_scope):
     from langchain_core.messages import AIMessage
 
     from app.agents.providers.output_normalization import build_ai_message_content
 
-    provider = _provider("chat_completions")
+    provider = _provider("chat_completions", direct_proxy_routes)
     provider.update(model="claude-test", endpoint="https://example.com/anthropic",
                     custom_llm_provider="anthropic", provider_id="anthropic-test")
     provider["api_mode"] = {"protocol": "anthropic_messages", "model_info": {"supports_reasoning": True},
@@ -329,10 +341,11 @@ def test_anthropic_history_projects_direct_content_to_thinking_blocks(workspace_
     ]
 
 
-def test_anthropic_history_keeps_public_thinking_text_without_replaying_private_blocks():
+def test_anthropic_history_keeps_public_thinking_text_without_replaying_private_blocks(direct_proxy_routes):
     from langchain_core.messages import AIMessage
 
     model = BoxteamLiteLLMChatModel(
+        proxy_routes=direct_proxy_routes,
         model="claude-test",
         api_key="test-key",
         api_base="https://example.com/anthropic",
@@ -375,9 +388,9 @@ def test_anthropic_history_keeps_public_thinking_text_without_replaying_private_
     ]
 
 
-def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
+def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key(direct_proxy_routes):
     model = build_model_from_provider(
-        _provider("responses"),
+        _provider("responses", direct_proxy_routes),
         {},
         prompt_cache_key="session-123",
     )
@@ -389,7 +402,7 @@ def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
     assert model._client_params["prompt_cache_key"] == "session-123"
 
 
-def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
+def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(direct_proxy_routes, monkeypatch):
     monkeypatch.setattr(
         "app.runtime.chatgpt_auth.configure_litellm_chatgpt_auth_directory",
         lambda: None,
@@ -403,13 +416,14 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         lambda _: False,
     )
     provider = {
+        "proxy_routes": direct_proxy_routes,
         "provider_id": "backup_4",
         "auth_proxy_routes": ProxyRoutes(()),
         "model_id": "general",
         "endpoint": "https://chatgpt.com/backend-api/codex",
         "model": "gpt-5.6-luna",
         "custom_llm_provider": "chatgpt",
-        "api_mode": _provider("responses")["api_mode"],
+        "api_mode": _provider("responses", direct_proxy_routes)["api_mode"],
         "auth": {"type": "oauth", "method": "chatgpt"},
     }
 
@@ -436,10 +450,10 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
 
 
 def test_runtime_skips_invalid_fallback_without_blocking_selected_model(
-    monkeypatch,
+    direct_proxy_routes, monkeypatch,
 ):
     primary_model = MagicMock(spec=BaseChatModel)
-    providers = [_provider("responses"), _provider("responses")]
+    providers = [_provider("responses", direct_proxy_routes), _provider("responses", direct_proxy_routes)]
     providers[0]["model_id"] = "selected"
     providers[1]["model_id"] = "broken-fallback"
     selected = ModelReferenceDTO(provider_id="provider-test", model_id="selected")
@@ -473,8 +487,8 @@ def test_runtime_skips_invalid_fallback_without_blocking_selected_model(
     assert len(model_setup.routing_middleware._candidates) == 1
 
 
-def test_runtime_reports_invalid_selected_model(monkeypatch):
-    providers = [_provider("responses")]
+def test_runtime_reports_invalid_selected_model(direct_proxy_routes, monkeypatch):
+    providers = [_provider("responses", direct_proxy_routes)]
     providers[0]["model_id"] = "broken-selected"
     selected = ModelReferenceDTO(provider_id="provider-test", model_id="broken-selected")
 
@@ -502,16 +516,16 @@ def test_runtime_reports_invalid_selected_model(monkeypatch):
         )
 
 
-def test_chatgpt_provider_rejects_missing_oauth_config():
-    provider = _provider("responses")
+def test_chatgpt_provider_rejects_missing_oauth_config(direct_proxy_routes):
+    provider = _provider("responses", direct_proxy_routes)
     provider["custom_llm_provider"] = "chatgpt"
 
     with pytest.raises(ValueError, match="auth.type='oauth'"):
         build_model_from_provider(provider, {})
 
 
-def test_chatgpt_nonstream_is_rejected_before_loading_oauth_credentials(monkeypatch):
-    provider = _provider("responses")
+def test_chatgpt_nonstream_is_rejected_before_loading_oauth_credentials(direct_proxy_routes, monkeypatch):
+    provider = _provider("responses", direct_proxy_routes)
     provider.update(custom_llm_provider="chatgpt", auth={"type": "oauth", "method": "chatgpt"})
     provider["api_mode"]["streaming"] = False
     monkeypatch.setattr("app.runtime.chatgpt_auth.ensure_chatgpt_oauth_ready",
@@ -520,10 +534,10 @@ def test_chatgpt_nonstream_is_rejected_before_loading_oauth_credentials(monkeypa
         build_model_from_provider(provider, {})
 
 
-def test_responses_history_replays_encrypted_reasoning_without_server_id(workspace_scope):
+def test_responses_history_replays_encrypted_reasoning_without_server_id(direct_proxy_routes, provider_workspace_scope):
     from langchain_core.messages import AIMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
     assert model.model_source is not None
     message = AIMessage(
         content=[
@@ -548,10 +562,10 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id(workspa
     ]
 
 
-def test_responses_attachment_history_drops_reasoning_output_content(workspace_scope):
+def test_responses_attachment_history_drops_reasoning_output_content(direct_proxy_routes, provider_workspace_scope):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
     assert model.model_source is not None
     payload = model._responses_payload(
         [
@@ -602,11 +616,11 @@ def test_responses_attachment_history_drops_reasoning_output_content(workspace_s
 
 
 def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
-    monkeypatch,
+    direct_proxy_routes, monkeypatch,
 ):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     legacy_history = [
         AIMessage(
             content=[
@@ -636,10 +650,10 @@ def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
     assert "content" not in payload["input"][0]
 
 
-def test_responses_history_drops_unportable_provider_reasoning_id():
+def test_responses_history_drops_unportable_provider_reasoning_id(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="执行任务"),
         AIMessage(
@@ -669,10 +683,10 @@ def test_responses_history_drops_unportable_provider_reasoning_id():
     assert "provider_part_id" not in str(payload)
 
 
-def test_responses_history_drops_encrypted_reasoning_from_another_provider():
+def test_responses_history_drops_encrypted_reasoning_from_another_provider(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="跨模型继续"),
         AIMessage(
@@ -721,10 +735,10 @@ def test_responses_native_projection_rejects_unknown_system_block():
         _text_blocks([{"type": "provider_private_extension"}], role="system")
 
 
-def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
+def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="读取 README"),
         AIMessage(
@@ -762,10 +776,10 @@ def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
     )
 
 
-def test_responses_history_reconstructs_content_function_call_before_result():
+def test_responses_history_reconstructs_content_function_call_before_result(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="读取 README"),
@@ -801,10 +815,10 @@ def test_responses_history_reconstructs_content_function_call_before_result():
     )
 
 
-def test_responses_history_drops_unpaired_tool_result_and_allows_continuation():
+def test_responses_history_drops_unpaired_tool_result_and_allows_continuation(direct_proxy_routes):
     from langchain_core.messages import HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -824,11 +838,11 @@ def test_responses_history_drops_unpaired_tool_result_and_allows_continuation():
     )
 
 
-def test_responses_history_drops_stale_unfinished_tool_segment_at_new_job_boundary():
+def test_responses_history_drops_stale_unfinished_tool_segment_at_new_job_boundary(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage
 
     stale_call_id = "call_mnM0tiEs03n5IxxaST3"
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="旧 job 的任务"),
@@ -857,11 +871,11 @@ def test_responses_history_drops_stale_unfinished_tool_segment_at_new_job_bounda
     )
 
 
-def test_responses_history_drops_late_tool_result_after_job_boundary():
+def test_responses_history_drops_late_tool_result_after_job_boundary(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     stale_call_id = "call_mnM0tiEs03n5IxxaST3"
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -888,7 +902,7 @@ def test_responses_history_drops_late_tool_result_after_job_boundary():
     assert "新 job 的用户消息" in serialized
 
 
-def test_responses_history_isolates_previous_tool_transactions_and_internal_reminder():
+def test_responses_history_isolates_previous_tool_transactions_and_internal_reminder(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     from app.prompting import internal_message_factory
@@ -898,7 +912,7 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
     )
 
     stale_call_id = "call_QWLcaGAtSpzygm4gaup0JyJS"
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="旧任务"),
@@ -933,25 +947,25 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
     )
 
 
-def test_responses_payload_preserves_user_literal_tag_and_tool_retry():
+def test_responses_payload_preserves_user_literal_tag_and_tool_retry(direct_proxy_routes):
     from langchain_core.messages import HumanMessage
 
     from app.prompting import internal_message_factory
 
     user = "<system_reminder>请解释这个标签</system_reminder>"
     retry = internal_message_factory.build(kind="tool_test_retry", control="继续调用测试工具。")
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     payload = model._responses_payload([
         HumanMessage(content=user), HumanMessage(content=retry.content, response_metadata=retry.metadata),
     ], None, {})
     assert [item["content"] for item in payload["input"]] == [user, retry.content]
 
 
-def test_responses_history_recovers_from_persisted_orphan_tool_result():
+def test_responses_history_recovers_from_persisted_orphan_tool_result(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     orphan_call_id = "call_EgMF1XbUORJwSX5TTOXTBmBg"
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -976,11 +990,11 @@ def test_responses_history_recovers_from_persisted_orphan_tool_result():
     assert "新 job 继续执行" in serialized
 
 
-def test_responses_history_replays_image_tool_result_as_portable_text_pair():
+def test_responses_history_replays_image_tool_result_as_portable_text_pair(direct_proxy_routes):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     call_id = "call_UDf0yQNxKcvfzQMU265h0Egf"
-    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="继续处理附件任务"),
@@ -1028,10 +1042,10 @@ def test_responses_history_replays_image_tool_result_as_portable_text_pair():
     )
 
 
-def test_responses_payload_converts_image_and_replays_encrypted_reasoning(workspace_scope):
+def test_responses_payload_converts_image_and_replays_encrypted_reasoning(direct_proxy_routes, provider_workspace_scope):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
+    model = build_model_from_provider(_provider("responses", direct_proxy_routes), {}, gateway_id="gateway-test", invocation_purpose="tool_test")
     assert model.model_source is not None
     history = [
         HumanMessage(
@@ -1135,8 +1149,9 @@ def test_responses_output_text_only_normalizes_type_without_dropping_fields():
     }
 
 
-def test_responses_stream_keeps_one_portable_reasoning_item() -> None:
+def test_responses_stream_keeps_one_portable_reasoning_item(direct_proxy_routes) -> None:
     model = BoxteamOpenAIResponsesModel(
+        proxy_routes=direct_proxy_routes,
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
@@ -1190,8 +1205,9 @@ def test_responses_stream_keeps_one_portable_reasoning_item() -> None:
     }
 
 
-def test_responses_summary_delta_emits_reasoning_text_block() -> None:
+def test_responses_summary_delta_emits_reasoning_text_block(direct_proxy_routes) -> None:
     model = BoxteamOpenAIResponsesModel(
+        proxy_routes=direct_proxy_routes,
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
@@ -1226,8 +1242,9 @@ def test_responses_summary_delta_emits_reasoning_text_block() -> None:
     assert block["extras"] == {"provider_part_id": "rs_summary"}
 
 
-def test_responses_empty_added_summary_does_not_emit_empty_reasoning_block() -> None:
+def test_responses_empty_added_summary_does_not_emit_empty_reasoning_block(direct_proxy_routes) -> None:
     model = BoxteamOpenAIResponsesModel(
+        proxy_routes=direct_proxy_routes,
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
@@ -1254,8 +1271,9 @@ def test_responses_empty_added_summary_does_not_emit_empty_reasoning_block() -> 
     assert chunk is None
 
 
-def test_responses_interleaved_function_call_deltas_keep_call_identity() -> None:
+def test_responses_interleaved_function_call_deltas_keep_call_identity(direct_proxy_routes) -> None:
     model = BoxteamOpenAIResponsesModel(
+        proxy_routes=direct_proxy_routes,
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
@@ -1353,8 +1371,9 @@ def test_responses_interleaved_function_call_deltas_keep_call_identity() -> None
 
 
 @pytest.mark.asyncio
-async def test_responses_empty_function_call_arguments_remain_incomplete_after_model_finish() -> None:
+async def test_responses_empty_function_call_arguments_remain_incomplete_after_model_finish(direct_proxy_routes) -> None:
     model = BoxteamOpenAIResponsesModel(
+        proxy_routes=direct_proxy_routes,
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",

@@ -54,7 +54,8 @@ async def enable_developer_tools_plugins(
     loaded.raise_for_status()
     document = loaded.json()["data"]
     config = commentjson.loads(document["jsonc"])
-    entries = config.setdefault("plugins", {}).setdefault("runtime", {}).setdefault("entries", [])
+    workspace = config["settings"]["workspace"]
+    entries = workspace.setdefault("plugins", {}).setdefault("runtime", {}).setdefault("entries", [])
     selected = set(plugin_ids)
     entries[:] = [entry for entry in entries if entry["package_id"] != "boxteam.developer-tools"
                   or entry["plugin_id"] not in selected]
