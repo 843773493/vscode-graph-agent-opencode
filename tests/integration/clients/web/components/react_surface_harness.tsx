@@ -7,6 +7,7 @@ import { OverlayRootContext } from "../../../../../src/clients/web/src/component
 import { useAppState } from "../../../../../src/clients/web/src/hooks/app/appContext";
 import WorkspaceAuxiliaryPanel, { type WorkspaceAuxiliaryTab } from "../../../../../src/clients/web/src/components/workspace/WorkspaceAuxiliaryPanel";
 import { copyTextToClipboard } from "../../../../../src/clients/web/src/utils/clipboard";
+import ChatTurnErrorBoundary from "../../../../../src/clients/web/src/components/chat/turn/ChatTurnErrorBoundary";
 
 const events: string[] = [];
 const diagnostics: string[] = [];
@@ -41,7 +42,7 @@ function Content({ name }: { name: string }): ReactNode {
       sessionChangesLoading={false} sessionChangesError={null} sessionChangesLoadedAt={null}
       searchOpen={false} collapseVersion={0} expandedFileTreePaths={[]}
       onExpandedFileTreePathsChange={() => {}} resourcePanel={null} attachmentPreview={null}
-      runtimePreview={null} debugPanel={null} taskPanel={null}
+      runtimePreview={null} debugPanel={null} taskPanel={null} threadPanel={null}
       onToggleSearch={() => {}} onCollapseAll={() => {}} onSelectSessionChangeset={() => {}}
       onRefreshSessionChanges={() => {}} onOpenSessionChangeFile={() => {}}
       onReviewSessionChangeFile={async () => {}} onOpenFile={() => {}} onStatusChange={() => {}} />
@@ -54,7 +55,7 @@ function ProviderLessConsumer(): ReactNode {
 }
 
 function FailingProvider(): ReactNode {
-  useState(() => { throw new Error("fixture-provider-initialization-failed"); });
+  useState(() => { throw new Error(`fixture-provider-initialization-failed：${"完整原因保留在诊断中，窄窗口只显示短摘要。".repeat(20)}`); });
   return null;
 }
 
@@ -77,6 +78,7 @@ window.reactSurfaceHarness = {
   mount: () => { for (const name of ["first", "second"]) mount(name, <Content name={name} />); },
   failContext: () => { surfaces.get("first")!.render(<ProviderLessConsumer />); },
   failProvider: () => { surfaces.get("first")!.render(<FailingProvider />); },
+  failTurn: () => { surfaces.get("first")!.render(<ChatTurnErrorBoundary conversationId="conversation-original"><FailingProvider /></ChatTurnErrorBoundary>); },
   recover: () => { mount("first", <Content name="first" />); },
   focus: () => { surfaces.get("first")!.focus("input"); },
   dispose: () => { surfaces.get("first")!.dispose(); surfaces.delete("first"); },
@@ -91,6 +93,7 @@ declare global {
       mount: () => void;
       failContext: () => void;
       failProvider: () => void;
+      failTurn: () => void;
       recover: () => void;
       focus: () => void;
       dispose: () => void;

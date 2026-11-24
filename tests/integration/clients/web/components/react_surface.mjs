@@ -135,6 +135,20 @@ try {
   }
 
   let classifiedErrorCount = 0;
+  const turnStart = observations.errors.length;
+  await page.evaluate(() => window.reactSurfaceHarness.failTurn());
+  await expect(first.locator('.chat-turn-error')).toContainText('fixture-provider-initialization-failed');
+  await expect(first.locator('.app-fatal-error')).toHaveCount(0);
+  const turnDiagnostic = (await page.evaluate(() => window.reactSurfaceHarness.diagnostics)).at(-1);
+  assert.ok(turnDiagnostic.includes('conversation_id=conversation-original'));
+  assert.ok(turnDiagnostic.includes('完整原因保留在诊断中'));
+  await expect(second.getByRole('button', { name: 'second 计数 1', exact: true })).toBeVisible();
+  for (const error of observations.errors.slice(turnStart)) assert.ok(error.message.includes('fixture-provider-initialization-failed')
+    || (error.kind === 'console' && error.message.startsWith('The above error occurred in the <FailingProvider> component:')), JSON.stringify(error));
+  classifiedErrorCount += observations.errors.length - turnStart;
+  observations.turnBoundary = { conversation_id: 'conversation-original', local: true, windowDiagnostic: turnDiagnostic };
+  await page.evaluate(() => window.reactSurfaceHarness.recover());
+  await expect(first.getByRole('button', { name: 'first 计数 0', exact: true })).toBeVisible();
   for (const [method, expected, component, count] of [
     ["failContext", "useAppState must be used within AppProvider", "ProviderLessConsumer", 1],
     ["failProvider", "fixture-provider-initialization-failed", "FailingProvider", 2],
@@ -144,6 +158,18 @@ try {
     await page.evaluate(method => window.reactSurfaceHarness[method](), method);
     await expect(first.getByRole("alert")).toContainText(expected);
     await expect(first.getByRole("button", { name: "刷新页面", exact: true })).toBeVisible();
+    observations.failureSummary ??= [];
+    for (const width of [1200, 360]) {
+      await page.setViewportSize({ width, height: 800 });
+      const summary = await first.locator('.app-fatal-error-summary').evaluate(element => ({
+        height: element.getBoundingClientRect().height, lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        text: element.textContent, title: element.getAttribute('title'),
+      }));
+      assert.ok(summary.height <= summary.lineHeight * 2 + 1, `故障摘要超过两行：${JSON.stringify(summary)}`);
+      assert.equal(summary.title, null);
+      observations.failureSummary.push({ method, width, ...summary });
+    }
+    await page.setViewportSize({ width: 1200, height: 800 });
     const details = first.locator('details');
     assert.equal(await details.getAttribute('open'), null);
     await first.getByText("安全诊断", { exact: true }).click();

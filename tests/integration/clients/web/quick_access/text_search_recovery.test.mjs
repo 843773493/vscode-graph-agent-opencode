@@ -63,13 +63,18 @@ test('原%同Gateway切换活动工作区不中止查询或改投冻结范围', 
 for (const state of ['failed', 'cancelled']) test(`原%将${state}与成功候选同时展示，按钮只重试失败根且双击不重复分发`, async () => {
   const result = await exercise('recovery', state);
   expect(result.before.matches).toHaveLength(1); expect(result.before.matches[0]).toContain('gateway-b');
-  const status = result.before.labels.find(label => label?.includes('request_id:'));
+  const status = result.before.labels.find(label => label?.includes(state === 'cancelled' ? '文件搜索已取消：' : '文件搜索失败：'));
   expect(status).toContain(state === 'cancelled' ? '文件搜索已取消：' : '文件搜索失败：');
-  expect(status).toContain('code: execution_failed'); expect(status).toContain('error_owner: workspace_files');
-  expect(status).toContain(state === 'cancelled' ? 'reason: request_cancelled' : 'reason: read_failed');
-  expect(status).toContain('http_status: 403'); expect(status).toContain('retryable: true'); expect(status).toContain(result.selectedRoot);
   expect(status).toContain('[不执行](command:close) <b>正文</b>');
-  expect(result.before.buttons).toEqual([1]); expect(result.busy).toBe(true);
+  expect(status).not.toContain('request_id:');
+  expect(result.before.diagnostics).toHaveLength(1);
+  const diagnostic = result.before.diagnostics[0];
+  expect(diagnostic).toContain('code: execution_failed'); expect(diagnostic).toContain('error_owner: workspace_files');
+  expect(diagnostic).toContain(state === 'cancelled' ? 'reason: request_cancelled' : 'reason: read_failed');
+  expect(diagnostic).toContain('http_status: 403'); expect(diagnostic).toContain('request_id: picker-request-0');
+  expect(diagnostic).toContain('retryable: true'); expect(diagnostic).toContain(result.selectedRoot);
+  expect(diagnostic).toContain('[不执行](command:close) <b>正文</b>');
+  expect(result.before.buttons).toEqual([2]); expect(result.busy).toBe(true);
   expect(result.requests).toHaveLength(2);
   const [initial, retry] = result.requests;
   expect(retry.scope.mode).toBe('resume'); expect(retry.scope.scope.owners).toEqual(initial.scope.owners);
@@ -78,15 +83,19 @@ for (const state of ['failed', 'cancelled']) test(`原%将${state}与成功候�
   expect(retry.continuations).toEqual([{ branch: { owner: initial.scope.owners[0], category: 'file', operation: 'content', resource_uri: result.selectedRoot } }]);
   expect(result.matches).toHaveLength(2); expect(result.matches.filter(resource => resource.endsWith('/recovered.txt'))).toHaveLength(1);
   expect(result.labels.some(label => label?.includes('request_id:'))).toBe(false);
+  expect(result.diagnostics).toEqual([]);
 });
 
 test('原%多分支错误不合并状态；重试成功后仍保留另一不可重试的远端取消', async () => {
   const result = await exercise('recovery', 'failed', true);
-  expect(result.before.matches).toEqual([]); expect(result.before.buttons).toEqual([1, 0]);
-  expect(result.before.labels.filter(label => label?.includes('request_id:'))).toHaveLength(2);
-  const remaining = result.labels.filter(label => label?.includes('request_id:'));
-  expect(remaining).toHaveLength(1); expect(remaining[0]).toContain('文件搜索已取消：');
-  expect(remaining[0]).toContain(result.successfulRoot); expect(remaining[0]).toContain('retryable: false');
+  expect(result.before.matches).toEqual([]); expect(result.before.buttons).toEqual([2, 1]);
+  expect(result.before.diagnostics).toHaveLength(2);
+  expect(result.before.diagnostics[0]).toContain(result.selectedRoot);
+  expect(result.before.diagnostics[1]).toContain(result.successfulRoot);
+  expect(result.labels.filter(label => label?.includes('文件搜索已取消：'))).toHaveLength(1);
+  expect(result.labels.some(label => label?.includes('request_id:'))).toBe(false);
+  expect(result.diagnostics).toHaveLength(1); expect(result.diagnostics[0]).toContain('文件搜索已取消：');
+  expect(result.diagnostics[0]).toContain(result.successfulRoot); expect(result.diagnostics[0]).toContain('retryable: false');
   expect(result.matches).toHaveLength(1); expect(result.requests).toHaveLength(2);
 });
 
@@ -101,20 +110,26 @@ for (const mode of ['hide', 'value']) test(`原%重试中${mode}取消实际请�
 for (const kind of ['http', 'incomplete', 'empty-failure']) test(`原%零匹配${kind}保持具名失败且无未处理拒绝`, async () => {
   const result = await exercise('requestFailure', kind);
   expect(result.requests).toBe(1); expect(result.labels.some(label => label?.includes('无匹配结果'))).toBe(false);
+  expect(result.labels.some(label => label?.includes('request_id:'))).toBe(false);
+  const diagnostic = result.diagnostics.join('\n');
   if (kind === 'http') {
-    expect(result.labels.join('\n')).toContain('http_status: 409'); expect(result.labels.join('\n')).toContain('source_changed');
-    expect(result.labels.join('\n')).toContain('request_id: picker-request-0');
+    expect(diagnostic).toContain('HTTP: 409'); expect(diagnostic).toContain('source_changed');
+    expect(diagnostic).toContain('request_id: picker-request-0');
   } else if (kind === 'incomplete') {
-    expect(result.labels.join('\n')).toContain('code: incomplete_stream'); expect(result.labels.join('\n')).toContain('request_id: picker-request-0');
-    expect(result.labels.join('\n')).not.toContain('http_status:');
-  } else expect(result.labels.filter(label => label?.includes('retryable: false'))).toHaveLength(2);
+    expect(diagnostic).toContain('code: incomplete_stream'); expect(diagnostic).toContain('request_id: picker-request-0');
+    expect(diagnostic).not.toContain('http_status:');
+  } else {
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics.every(text => text.includes('retryable: false'))).toBe(true);
+  }
 });
 
 test('原%超过同步展示上限仍消费同一次异步错误，原30文件候选不重复', async () => {
   const result = await exercise('synchronousLimit');
   expect(result.requests).toBe(0); expect(result.files).toBe(30); expect(result.matches).toHaveLength(30);
   expect(new Set(result.matches).size).toBe(30);
-  expect(result.labels.filter(label => label?.includes('sync-limit-request'))).toHaveLength(1);
+  expect(result.labels.some(label => label?.includes('sync-limit-request'))).toBe(false);
+  expect(result.diagnostics).toHaveLength(1); expect(result.diagnostics[0]).toContain('request_id: sync-limit-request');
 });
 
 test('原结果计数只计正文候选，诊断／重试／活动项与默认QuickPick行为保持', async () => {

@@ -44,13 +44,16 @@ export function errorDiagnostic(error: unknown): string {
     seen.add(current);
     if (current instanceof Error && remaining > 128) {
       const fields: string[] = [];
+      // 原 adapter 的机器代码和请求身份独立于 message，默认摘要不携带这些字段。
+      if ("code" in current && typeof current.code === "string") fields.push(`code: ${boundedFailureText(current.code, { maxBytes: 256 })}`);
+      if ("requestId" in current && typeof current.requestId === "string" && current.requestId) {
+        fields.push(`request_id: ${boundedFailureText(current.requestId, { maxBytes: 256 })}`);
+      }
       if (current instanceof RealtimeTransportError) {
-        if (current.requestId) fields.push(`request_id: ${boundedFailureText(current.requestId, { maxBytes: 256 })}`);
         if (current.subscriptionId !== undefined) fields.push(`subscription_id: ${current.subscriptionId}`);
         if (current.path) fields.push(`path: ${boundedFailureText(current.path, { maxBytes: 2048 })}`);
       }
       if (current instanceof HttpRequestError) {
-        if (current.requestId) fields.push(`request_id: ${boundedFailureText(current.requestId, { maxBytes: 256 })}`);
         fields.push(`HTTP: ${current.status} ${boundedFailureText(current.statusText, { maxBytes: 128 })}`,
           `path: ${boundedFailureText(current.path, { maxBytes: 2048 })}`);
         if (current.detail && typeof current.detail === "object") {

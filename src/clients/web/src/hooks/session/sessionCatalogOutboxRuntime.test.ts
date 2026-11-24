@@ -1105,7 +1105,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
       await pendingError;
       expect(mirror.current().currentSession).toEqual(fresh);
       expect(errors.some((message) => message.includes("会话日期目录正在隔离"))).toBe(true);
-      expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : 会话日期目录正在隔离；请求=/api/v1/sessions/ses_catalog_owner；request_id=request-catalog-owner-409 [request_id=request-catalog-owner-409]`);
+      expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 会话日期目录正在隔离 [request_id=request-catalog-owner-409]`);
       status = 404; revision = 9;
       await notifications.send();
       await removed;
@@ -1166,7 +1166,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
         responses[attempt - 1]!.release(response);
         await flushReactEffects();
         expect(errors).toEqual(Array.from({ length: attempt }, (_, index) =>
-          `对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : session_deletion_pending；请求=/api/v1/sessions/ses_catalog_owner；request_id=request-owner-pending-${index + 1} [request_id=request-owner-pending-${index + 1}]`));
+          `对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): session_deletion_pending [request_id=request-owner-pending-${index + 1}]`));
         expect(mirror.current().currentSession).toEqual(owner);
       }
       tick();

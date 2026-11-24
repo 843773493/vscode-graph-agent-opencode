@@ -327,9 +327,8 @@ export function getGatewayToken(port: number): Promise<string> {
           body.detail, path, response.headers.get("X-Request-ID"),
           response.headers.get("X-BoxTeam-Error-Context"), { body: body.diagnostic });
       }
-      const payload = await awaitWithAbort(
-        response.json() as Promise<APIResponse<{ token: string }>>,
-        abortState.signal,
+      const payload = await parseJsonResponseOrThrowDiagnostic<APIResponse<{ token: string }>>(
+        response, path, abortState.signal,
       );
       const token = payload.data?.token;
       if (!token) throw new Error("Gateway 本地凭据响应缺少 token");
@@ -493,10 +492,10 @@ async function parseJsonResponseOrThrowDiagnostic<T>(
     text = await awaitWithAbort(response.text(), signal);
     if (signal?.aborted) throw abortReason(signal);
   } catch (error) {
-    if (signal?.aborted) throw abortReason(signal);
     throw new HttpRequestError(response.status, response.statusText, undefined, path,
       response.headers.get("X-Request-ID"), response.headers.get("X-BoxTeam-Error-Context"),
-      { message: "响应正文无法读取", body: failureMessage(error) });
+      { message: signal?.reason instanceof DOMException && signal.reason.name === "TimeoutError"
+        ? "响应正文读取超时" : "响应正文无法读取", body: failureMessage(error) });
   }
   try {
     return JSON.parse(text) as T;

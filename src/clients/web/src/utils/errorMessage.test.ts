@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { HttpRequestError } from "../api/http";
+import { IncompleteSearchStreamError, SearchStreamReadError } from "../api/stream/federatedSearch";
 import { errorDiagnostic, errorMessage, errorSummary, isErrorReported, ReportedError } from "./errorMessage";
 import { RealtimeTransportError } from "../../../../shared/realtime.js";
 
@@ -62,4 +63,17 @@ test("常驻订阅只把原订阅关联投影到安全诊断，默认摘要不�
   expect(errorDiagnostic(failure)).toContain('/api/v1/events?token=[redacted]');
   expect(errorDiagnostic(failure)).not.toContain('private-token');
   expect(failure.cause).toBe(transport);
+});
+
+test("有限搜索未完成和正文失败沿原异常保留机器代码、请求身份及cause", () => {
+  const cause = new Error("正文中断 token=private-token");
+  const failures = [new IncompleteSearchStreamError("original-request"), new SearchStreamReadError("original-request", cause)];
+  for (const failure of failures) {
+    const diagnostic = errorDiagnostic(new ReportedError(failure.message, failure));
+    expect(diagnostic).toContain(`code: ${failure.code}`);
+    expect(diagnostic).toContain("request_id: original-request");
+    expect(errorSummary(failure)).not.toContain("original-request");
+    expect(diagnostic).not.toContain("private-token");
+  }
+  expect(failures[1]!.cause).toBe(cause);
 });

@@ -135,6 +135,17 @@ test("错误来源响应头损坏时显式说明，仍保留原状态、正文�
   expect(new HttpRequestError(409, "Conflict", "目录版本冲突", "/catalog", null).contextDiagnostic).toBeUndefined();
 });
 
+test("来源组件与目标身份保留各自角色，不要求目标重复来源组件", () => {
+  const context = { source: { component: "workspace_backend", backend_id: "backend-original" },
+    target: { gateway_id: "gateway-route", workspace_id: "workspace-route" }, stage: "upstream_request" };
+  const failure = new HttpRequestError(503, "Unavailable", "原业务失败", "/resource", "request-role", JSON.stringify(context));
+  expect(failure.context).toEqual(context);
+  expect(failure.contextDiagnostic).toBeUndefined();
+  expect(errorSummary(failure)).toBe("原业务失败");
+  expect(errorDiagnostic(failure)).toContain("source.backend_id: backend-original");
+  expect(errorDiagnostic(failure)).toContain("target.gateway_id: gateway-route");
+});
+
 describe("requestJson 请求取消", () => {
 
   test("Gateway 重启轮换本地凭据后会刷新 token 并重试一次", async () => {
@@ -255,7 +266,7 @@ describe("requestJson 请求取消", () => {
         start(controller) {
           bodyController = controller;
         },
-      })),
+      }), { headers: { "X-Request-ID": "credential-body-timeout" } }),
     );
 
     try {
@@ -268,8 +279,10 @@ describe("requestJson 请求取消", () => {
       );
 
       expect(result).toBeInstanceOf(Error);
-      expect((result as Error).message).toBe("请求超时: /api/gateway/auth/local-credential");
-      invalidateGatewayToken(port);
+      expect(result).toMatchObject({ status: 200, requestId: "credential-body-timeout",
+        path: "/api/gateway/auth/local-credential", message: "响应正文读取超时" });
+      globalThis.fetch = withFetchPreconnect(async () => tokenResponse());
+      await expect(getGatewayToken(port)).resolves.toBe("http-test-token");
     } finally {
       globalThis.setTimeout = originalSetTimeout;
     }
@@ -319,6 +332,44 @@ describe("requestJson 请求取消", () => {
 });
 
 describe("HttpRequestError 错误体诊断", () => {
+  test.each([401, 409, 200])("%s 正文中断保留原响应关联，不按 AbortError 名称视为用户取消", async status => {
+    const port = 49_410 + status;
+    let requests = 0;
+    const context = { source: { component: "gateway", gateway_id: "gateway-original" }, stage: "http_request" };
+    globalThis.fetch = withFetchPreconnect(async input => {
+      if (resolveTestUrl(input, port).pathname === "/api/gateway/auth/local-credential") return tokenResponse();
+      requests += 1;
+      return new Response(new ReadableStream({ start(controller) {
+        controller.error(new DOMException("正文连接中断 api_key=private-body-key", "AbortError"));
+      } }), { status, headers: { "Content-Type": "application/json", "X-Request-ID": `body-interrupted-${status}`,
+        "X-BoxTeam-Error-Context": JSON.stringify(context) } });
+    });
+    const failure = await requestJson(port, "/interrupted-body").catch(error => error) as HttpRequestError;
+    expect(failure).toBeInstanceOf(HttpRequestError);
+    expect(failure).toMatchObject({ status, requestId: `body-interrupted-${status}`, path: "/interrupted-body", context });
+    expect(failure.message).toBe(status === 200 ? "响应正文无法读取" : "未提供错误原因");
+    expect(errorDiagnostic(failure)).toContain("正文连接中断 api_key=[redacted]");
+    expect(errorDiagnostic(failure)).not.toContain("private-body-key");
+    expect(requests).toBe(1);
+  });
+
+  test.each(["<html>api_key=private-credential-key</html>", '{"data":'])("本机凭据解包失败也保留响应关联且清除失败缓存：%s", async body => {
+    const port = 49_999;
+    invalidateGatewayToken(port);
+    let requests = 0;
+    globalThis.fetch = withFetchPreconnect(async () => ++requests === 1
+      ? new Response(body, { headers: { "X-Request-ID": "credential-parse-original" } }) : tokenResponse());
+    const failure = await getGatewayToken(port).catch(error => error) as HttpRequestError;
+    expect(failure).toBeInstanceOf(HttpRequestError);
+    expect(failure).toMatchObject({ status: 200, requestId: "credential-parse-original",
+      path: "/api/gateway/auth/local-credential", message: "响应无法按 JSON 解包" });
+    expect(errorSummary(failure)).not.toMatch(/html|private-credential-key/);
+    expect(errorDiagnostic(failure)).toContain("credential-parse-original");
+    expect(errorDiagnostic(failure)).not.toContain("private-credential-key");
+    await expect(getGatewayToken(port)).resolves.toBe("http-test-token");
+    expect(requests).toBe(2);
+  });
+
   test("已收到409后正文期限失败仍保留响应身份，读取故障不是业务原因", async () => {
     const port = 49_348;
     installWindow(port);

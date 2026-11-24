@@ -46,7 +46,7 @@ export default class AppErrorBoundary extends Component<
         <div className="app-fatal-error-card">
           <h1>{t("shell.renderFailed")}</h1>
           <p>{t("shell.renderFailedDetail")}</p>
-          <p>{errorSummary(this.state.error)}</p>
+          <p className="app-fatal-error-summary">{errorSummary(this.state.error)}</p>
           <details>
             <summary>{t("shell.diagnostic")}</summary>
             <pre>{errorDiagnostic(this.state.error)}</pre>

@@ -553,8 +553,8 @@ describe("上下文分支候选与冻结重试", () => {
 
   test("首次消息点击使用展示快照与来源 owner，409 不改取活动 head", async () => {
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
-      .mockRejectedValue(new HttpRequestError(409, "source-mismatch: 展示快照已失效",
-        { reason: "source-mismatch" }, "/api/v1/sessions/ses-source/fork-source-point", null));
+      .mockRejectedValue(new HttpRequestError(409, "Conflict",
+        { message: "展示快照已失效", reason: "source-mismatch" }, "/api/v1/sessions/ses-source/fork-source-point", null));
     spies.push(read);
     const mounted = mountHook({ activeSessionId: "ses-other", activeGatewayWorkspaceId: workspaceKey("ws-other") });
     await mounted.mount();

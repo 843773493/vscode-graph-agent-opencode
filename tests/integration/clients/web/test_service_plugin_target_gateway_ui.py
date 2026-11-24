@@ -306,6 +306,13 @@ def test_workbench_logs_open_read_locate_and_keep_original_gateway(
     assert result["replacement"]["original_log_id"] != result["replacement"]["replacement"]["log_id"]
     assert result["replacement"]["historic_reference"] == result["coordinates"]["reference"]
     assert result["localWindow"] == {"channel": "窗口", "gateway_reads": 0}
+    startup = result["startupFailure"]
+    assert startup["blocked_main"] == "/out/main.js"
+    assert startup["copy_success"] is True and startup["copy_denied"] is True
+    assert startup["temporary_nodes"] == 0 and startup["failure_api_requests"] == 0
+    assert startup["focus_preserved"] is True
+    assert startup["reload_recovered"] is True and startup["stale_memory_discarded"] is True
+    assert startup["page_errors"] == []
 
 
 @pytest.fixture

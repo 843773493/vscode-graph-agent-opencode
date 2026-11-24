@@ -9,13 +9,17 @@ import { ThemeIcon } from '../upstream/src/vs/base/common/themables.js';
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import { toDisposable, DisposableStore, Disposable, MutableDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Emitter } from '../upstream/src/vs/base/common/event.js';
-import { timeout } from '../upstream/src/vs/base/common/async.js';
+import { RunOnceScheduler, timeout } from '../upstream/src/vs/base/common/async.js';
 import { Range } from '../upstream/src/vs/editor/common/core/range.js';
 import { groupBy } from '../upstream/src/vs/base/common/arrays.js';
 import { compare } from '../upstream/src/vs/base/common/strings.js';
 import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
+import { t } from '../../shared/core/i18n/index.js';
+import { failureSummary } from '../../shared/core/failurePresentation.js';
+import { errorDiagnostic, errorMessage, errorSummary } from '../../web/src/utils/errorMessage.js';
+import { copyTextToClipboard } from '../../web/src/utils/clipboard.js';
 
 const root = resolve('src/clients/workbench');
 const path = join(root, 'upstream/src/vs/workbench/contrib/search/common/search.ts');
@@ -53,13 +57,22 @@ const scopePath = join(root, 'src/search/symbolsQuickAccess.ts');
 const scopeSource = ts.createSourceFile(scopePath, await readFile(scopePath, 'utf8'), ts.ScriptTarget.Latest, true);
 const owner = scopeSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'WorkspaceSymbolsQuickAccess')! as ts.ClassDeclaration;
 const javascript = ts.transpile(owner.getText(scopeSource).replace('export class', 'class'));
-const Scope = new Function('SymbolsQuickAccessProvider', 'WorkspaceSymbolProviderRegistry', 'gatewayWorkspaceKey', 'workspaceFileSource', 'toDisposable', 'prepareQuery', 'pieceToQuery', 'coalesceWorkspaceSymbols', 'getWorkspaceSymbols', 'ThemeIcon', 'Codicon', 'TriggerAction', 'CancellationTokenSource', javascript + '\nreturn WorkspaceSymbolsQuickAccess;')(
+const Scope = new Function('SymbolsQuickAccessProvider', 'WorkspaceSymbolProviderRegistry', 'gatewayWorkspaceKey', 'workspaceFileSource', 'toDisposable', 'prepareQuery', 'pieceToQuery', 'coalesceWorkspaceSymbols', 'getWorkspaceSymbols', 'ThemeIcon', 'Codicon', 'TriggerAction', 'CancellationTokenSource', 't', 'failureSummary', 'errorDiagnostic', 'errorMessage', 'errorSummary', 'copyTextToClipboard', javascript + '\nreturn WorkspaceSymbolsQuickAccess;')(
   Base, original.WorkspaceSymbolProviderRegistry, gatewayWorkspaceKey,
   (uri: URI) => { const [, workspaceId] = uri.path.split('/'); return { gatewayId: uri.authority, workspaceId }; },
   toDisposable, prepareQuery, pieceToQuery, original.coalesceWorkspaceSymbols, original.getWorkspaceSymbols, ThemeIcon, Codicon, { NO_ACTION: 0 }, CancellationTokenSource,
+  t, failureSummary, errorDiagnostic, errorMessage, errorSummary, copyTextToClipboard,
 ) as new () => { workspaceContextService: object; delayer: object; configurationService: object; labelService: object;
+  editorGroupService: object;
   picker: { items: Pick[]; activeItems: Pick[]; busy: boolean }; settled: Promise<void>; getScopedSymbolPicks(query: string, options: object, token: CancellationToken, progress: (picks: Pick[], busy: boolean) => void, pickOptions?: object): Promise<void>; provide(picker: object, token: CancellationToken, options: object): { dispose(): void }; _getPicks(query: string, disposable: DisposableStore, token: CancellationToken, options: object): Promise<Pick[]> };
 const a = { gatewayId: 'g', workspaceId: 'a' }, b = { gatewayId: 'g', workspaceId: 'b' };
+async function until(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('原符号查询未在期限内达到预期状态');
+    await timeout(1);
+  }
+}
 function fixture() {
   const scope = new Scope();
   scope.workspaceContextService = { getWorkspace: () => ({ folders: ['a', 'b'].map(id => ({ uri: URI.parse(`boxteam-file://g/${id}/root`) })) }) };
@@ -67,6 +80,7 @@ function fixture() {
   scope.delayer = { trigger: (callback: () => Promise<void>) => { scope.settled = Promise.resolve().then(callback); return scope.settled; } };
   scope.configurationService = { getValue: () => ({ workbench: { editor: {} } }) };
   scope.labelService = { getUriLabel: (uri: URI) => uri.path };
+  scope.editorGroupService = { activeGroup: { id: 7 } };
   return scope;
 }
 
@@ -99,7 +113,7 @@ test('原聚合保留成功候选及Provider关联，失败可见，取消不发
     scope._getPicks('', new DisposableStore(), CancellationToken.None, { searchOwners: [a, b] });
     await scope.settled;
     const picks = scope.picker.items;
-    expect(picks.map(pick => pick.label)).toEqual(['good', '工作区符号不可用：Error: language server failed']);
+    expect(picks.map(pick => pick.label)).toEqual(['good', '工作区符号不可用：language server failed']);
     expect(picks[1]!.description).toContain(gatewayWorkspaceKey(a));
     const cancelled = new CancellationTokenSource(); cancelled.cancel();
     expect(await fixture()._getPicks('', new DisposableStore(), cancelled.token, { searchOwners: [a, b] })).toEqual([]);
@@ -124,7 +138,7 @@ test('快分支先发布原评分候选，单分支重试保留兄弟与活动�
     scope._getPicks('sh', lifetime, CancellationToken.None, { searchOwners: [a, b] });
     const finished = scope.settled;
     await Promise.resolve(); await Promise.resolve();
-    expect(scope.picker.items.map(pick => pick.label)).toEqual(['shared', '工作区符号不可用：Error: original failure']);
+    expect(scope.picker.items.map(pick => pick.label)).toEqual(['shared', '工作区符号不可用：original failure']);
     expect(scope.picker.busy).toBe(true);
     scope.picker.activeItems = [scope.picker.items[0]!];
     await scope.picker.items[1]!.trigger!();
@@ -254,6 +268,7 @@ function mixedFixture(options: object = {}, includeSymbols = true) {
   const Mixed = new Function('PickerQuickAccessProvider', 'DisposableStore', 'MutableDisposable', 'CancellationTokenSource', 'toDisposable',
     'workspaceContext', 'PickerEditorState', 'extractRangeFromFilter', 'rankResourcePicks', 'WorkspaceSymbolsQuickAccess',
     'queryFederatedSearchBranches', 'QuickInputHideReason', 'getCodeEditor', 'TriggerAction', 'Codicon', 'ThemeIcon', 'GroupDirection',
+    'createSearchRootLoader', 't', 'searchCategoryLabel', 'isEditorInput', 'RunOnceScheduler',
     accessScript + '\nreturn WorkspaceQuickAccess;')(
     Picker, DisposableStore, MutableDisposable, CancellationTokenSource, toDisposable,
     { getSnapshot: () => ({ gatewayId: 'g' }), subscribe: () => () => {} }, class {},
@@ -266,6 +281,7 @@ function mixedFixture(options: object = {}, includeSymbols = true) {
       busy(true);
       return [];
     }, { Gesture: 1 }, () => undefined, { NO_ACTION: 0 }, Codicon, ThemeIcon, { RIGHT: 1, DOWN: 2 },
+    () => () => { throw new Error('符号生命周期不应读取文件根'); }, t, (category: string) => category, () => false, RunOnceScheduler,
   );
   const scope = new Mixed();
   const group = { id: 7 };
@@ -274,6 +290,7 @@ function mixedFixture(options: object = {}, includeSymbols = true) {
   scope.history = { getHistory: () => [] };
   scope.configuration = { getValue: (key: string) => key === 'search.quickOpen.includeSymbols' ? includeSymbols : undefined };
   scope.editors = { openEditor: async (input: object, editorGroup: number) => { opened.push({ input, group: editorGroup }); } };
+  scope.editorState = { reset() {}, restore: async () => {} };
   let symbols: ReturnType<typeof fixture> | undefined;
   scope.instantiation = { createInstance: (ctor: object) => {
     if (ctor === Scope) {
@@ -321,7 +338,9 @@ test('默认列表沿同一符号链增量合并，保留原文件与活动身�
   const f = mixedFixture();
   try {
     f.input('needle');
+    await until(() => !!f.symbols);
     await f.symbols!.settled;
+    await until(() => f.picker.items.some(pick => pick.label.includes('slow failed')));
     expect(f.picker.items.filter(pick => pick.symbol).map(pick => pick.label)).toEqual(['needle']);
     f.branches('needle file', false);
     expect(f.picker.busy).toBe(false);
@@ -333,12 +352,14 @@ test('默认列表沿同一符号链增量合并，保留原文件与活动身�
     expect(f.picker.items.some(pick => pick.id === 'file')).toBe(true);
     expect(f.picker.activeItems[0]?.symbol).toBe(symbol.symbol);
     release([]); await retry;
+    await until(() => !f.picker.busy);
     expect(f.picker.busy).toBe(false);
     expect(successes).toBe(1); expect(retries).toBe(2);
     const current = f.picker.items.find(pick => pick.symbol)!;
     await current.accept!({ alt: true, ctrlCmd: false }, { inBackground: true });
+    // 原符号 Provider 将来源组与 SIDE_GROUP 交给 EditorService 决定相邻组。
     expect(f.opened).toEqual([{ input: { resource: symbol.symbol!.location.uri,
-      options: { preserveFocus: true, pinned: true, selection: new Range(3, 2, 3, 2) } }, group: 8 }]);
+      options: { preserveFocus: true, pinned: true, sourceGroup: 7, selection: new Range(3, 2, 3, 2) } }, group: -2 }]);
     f.input('needle:4');
     expect(f.picker.items.some(pick => pick.symbol)).toBe(false);
     expect(f.picker.items.some(pick => pick.id === 'file')).toBe(true);
@@ -355,11 +376,11 @@ test('默认列表两组busy独立结算，新输入与关闭取消原查询并�
     new Promise<Symbol[]>(resolve => { queries.push({ token, resolve }); }) });
   const f = mixedFixture();
   try {
-    f.input('old'); await Promise.resolve(); await Promise.resolve();
+    f.input('old'); await until(() => queries.length === 1);
     const oldBranch = f.branchToken;
     f.branches('old file', false);
     expect(f.picker.busy).toBe(true);
-    f.input('new'); await Promise.resolve(); await Promise.resolve();
+    f.input('new'); await until(() => queries.length === 2);
     expect(oldBranch.isCancellationRequested).toBe(true);
     expect(queries[0]!.token.isCancellationRequested).toBe(true);
     queries[0]!.resolve([{ name: 'late', kind: SymbolKind.Class, location: { uri: URI.parse('boxteam-file://g/a/root/late.ts') } }]);
@@ -382,7 +403,9 @@ test('文件限定、接收回调、行列定位、关闭设置均零符号查�
       const f = mixedFixture(options, !('off' in options));
       try {
         f.input('range' in options ? 'needle:4' : 'needle');
+        await until(() => !!f.branchToken);
         await f.symbols?.settled;
+        if ('searchOwners' in options) await until(() => f.picker.items.some(pick => pick.label.includes('完整窗口工作区')));
         expect(calls).toBe(0);
         expect(f.picker.items.some(pick => pick.label.includes('完整窗口工作区'))).toBe('searchOwners' in options);
       } finally { f.dispose(); }
@@ -401,7 +424,8 @@ test('默认符号确认关闭后原resolve仍完成，新查询和关闭取消�
   const registration = original.WorkspaceSymbolProviderRegistry.register(provider);
   const f = mixedFixture();
   try {
-    f.input('needle'); await f.symbols!.settled;
+    f.input('needle'); await until(() => !!f.symbols); await f.symbols!.settled;
+    await until(() => f.picker.items.some(pick => !!pick.symbol));
     const pick = f.picker.items.find(pick => pick.symbol)!;
     f.accept(pick); f.dispose();
     const opening = pick.accept!({ alt: false, ctrlCmd: false }, { inBackground: false });

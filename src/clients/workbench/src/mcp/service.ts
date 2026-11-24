@@ -9,7 +9,7 @@ import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
-import { errorDiagnostic, errorMessage, errorSummary, ReportedError } from '../../../web/src/utils/errorMessage.js';
+import { errorDiagnostic, errorMessage, errorSummary, isErrorReported, ReportedError } from '../../../web/src/utils/errorMessage.js';
 import { ContributionEnablementState, type IEnablementModel } from '../../upstream/src/vs/workbench/contrib/chat/common/enablement.js';
 import {
   IMcpService, IMcpWorkbenchService, IWorkbenchMcpServer,
@@ -331,7 +331,11 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     await this.editors.openEditor(new McpServerEditorInput(model), options);
   }
   async activateCollections(): Promise<void> { await this.queryLocal(); }
-  resetCaches(): void { void this.queryLocal({ refresh: true }).catch(error => this.notifications.error(error)); }
+  resetCaches(): void {
+    void this.queryLocal({ refresh: true }).catch(error => {
+      if (!(error instanceof CancellationError) && !isErrorReported(error)) this.notifications.error(error);
+    });
+  }
   resetTrust(): void { throw new Error(t('workbench.mcp.trustOwnedByWorkspace')); }
   autostart(): ReturnType<IMcpService['autostart']> { throw new Error(t('workbench.mcp.noAutostart')); }
   cancelAutostart(): void { throw new Error(t('workbench.mcp.noAutostartToCancel')); }

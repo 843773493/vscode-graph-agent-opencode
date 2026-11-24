@@ -998,6 +998,14 @@ div.composer-agent-menu-item {
   color: var(--bt-text-muted);
 }
 
+.app-fatal-error-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
 .app-fatal-error-card pre {
   max-height: 180px;
   margin: 0 0 16px;

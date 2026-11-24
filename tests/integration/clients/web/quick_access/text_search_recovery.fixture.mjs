@@ -46,6 +46,21 @@ const page = (target, name) => ({ node: { uri: target, resource_shape: 'director
   entries: [], matches: [hit(target, name)], contexts: [], truncated: false, view: 'live' });
 const labels = picker => picker.items.map(item => item.label);
 const matched = picker => picker.items.filter(item => item.match).map(item => item.match.parent().resource.toString());
+const diagnosticItems = picker => picker.items.filter(item => item.buttons?.some(button => button.tooltip === '复制安全诊断'));
+async function copyDiagnostics(picker) {
+  const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard'), diagnostics = [];
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { diagnostics.push(text); } } });
+  try {
+    for (const item of diagnosticItems(picker)) {
+      const count = diagnostics.length;
+      picker.press(item, item.buttons.findIndex(button => button.tooltip === '复制安全诊断'));
+      await until(() => diagnostics.length === count + 1);
+    }
+    return diagnostics;
+  } finally {
+    if (original) Object.defineProperty(navigator, 'clipboard', original); else delete navigator.clipboard;
+  }
+}
 
 /** 宿主事件及 HTTP 页是明确替身；原 Controller、TextQuickAccess、QueryBuilder、SearchModel 和 Provider 实际运行。 */
 async function fixture(asset, searchOverride) {
@@ -54,7 +69,7 @@ async function fixture(asset, searchOverride) {
   host.createQuickPick = () => {
     const picker = create(), pressed = lifetime.add(new Emitter());
     picker.onWillHide = q.Event.None; picker.onDidTriggerItemButton = pressed.event;
-    picker.press = item => { buttons.push(item); pressed.fire({ item, button: item.buttons[0] }); };
+    picker.press = (item, index = 0) => { buttons.push(item); pressed.fire({ item, button: item.buttons[index] }); };
     return picker;
   };
   const context = lifetime.add(new q.SearchWorkspaceContext({ version: 1, workspaces: owners.map((owner, index) => ({ ...owner, rootUri: root(owner), label: String(index) })) }));
@@ -189,14 +204,14 @@ export async function recovery(state, multiple = false) {
       ...(multiple ? [{ owner: owners[1].gatewayId, state: 'cancelled', retryable: false }] : [])] };
   });
   try {
-    const picker = f.show(); await until(() => !picker.busy && labels(picker).some(label => label?.includes('request_id:')), () => ({ labels: labels(picker), busy: picker.busy, calls: f.calls.length }));
-    const before = { labels: labels(picker), matches: matched(picker), icons: picker.items.filter(item => item.label?.includes('request_id:')).map(item => item.iconClass),
-      buttons: picker.items.filter(item => item.label?.includes('request_id:')).map(item => item.buttons?.length ?? 0) };
+    const picker = f.show(); await until(() => !picker.busy && diagnosticItems(picker).length > 0, () => ({ labels: labels(picker), busy: picker.busy, calls: f.calls.length }));
+    const before = { labels: labels(picker), matches: matched(picker), icons: diagnosticItems(picker).map(item => item.iconClass),
+      buttons: diagnosticItems(picker).map(item => item.buttons.length), diagnostics: await copyDiagnostics(picker) };
     const failed = picker.items.find(item => item.buttons?.[0]?.tooltip === '重新查询此文件分支');
     picker.press(failed); picker.press(failed); await until(() => f.calls.length === 2);
     const busy = picker.busy; release();
     await until(() => !picker.busy && matched(picker).some(resource => resource.endsWith('/recovered.txt')));
-    return { before, busy, labels: labels(picker), matches: matched(picker), requests: f.calls.map(call => call.request),
+    return { before, busy, labels: labels(picker), diagnostics: await copyDiagnostics(picker), matches: matched(picker), requests: f.calls.map(call => call.request),
       selectedRoot: root(owners[0]), successfulRoot: root(owners[1]) };
   } finally { release(); f.close(); }
 }
@@ -277,7 +292,7 @@ export async function requestFailure(kind) {
     : kind === 'incomplete' ? { incomplete: true } : { failures: owners.map(owner => ({ owner: owner.gatewayId, state: 'failed', retryable: false })) });
   try {
     const picker = f.show(); await until(() => !picker.busy && labels(picker).some(label => label?.includes('失败')));
-    return { labels: labels(picker), details: picker.items.map(item => item.detail), requests: f.calls.length };
+    return { labels: labels(picker), diagnostics: await copyDiagnostics(picker), details: picker.items.map(item => item.detail), requests: f.calls.length };
   } finally { f.close(); }
 }
 
@@ -288,8 +303,8 @@ export async function synchronousLimit() {
   const f = await fixture(async () => { throw new Error('同步展示合同不应查询HTTP'); }, { getAIName: async () => undefined,
     textSearchSplitSyncAsync: () => ({ syncResults: { results, messages: [] }, asyncResults: Promise.reject(new s.WorkspaceSearchBranchError(event, [], false)) }) });
   try {
-    const picker = f.show(); await until(() => !picker.busy && labels(picker).some(label => label?.includes('sync-limit-request')));
-    return { labels: labels(picker), matches: matched(picker), files: picker.items.filter(item => item.type === 'separator' && item.label).length,
+    const picker = f.show(); await until(() => !picker.busy && diagnosticItems(picker).length > 0);
+    return { labels: labels(picker), diagnostics: await copyDiagnostics(picker), matches: matched(picker), files: picker.items.filter(item => item.type === 'separator' && item.label).length,
       requests: f.calls.length };
   } finally { f.close(); }
 }

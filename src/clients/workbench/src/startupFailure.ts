@@ -19,6 +19,7 @@ export function renderStartupFailure(title: string, detail: unknown, labels: Sta
   error.replaceChildren();
   if (diagnostic) {
     const summary = document.createElement('p');
+    summary.className = 'startup-failure-summary';
     summary.textContent = failureSummary(failureMessage(detail));
     const details = document.createElement('details');
     const label = document.createElement('summary');

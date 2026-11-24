@@ -436,6 +436,66 @@ try {
   await page.screenshot({ path: `${input.artifacts}/log-navigation-ui.png`, fullPage: true });
   assert.deepEqual(result.pageErrors, []);
   assert.deepEqual(result.externalRequests, []);
+
+  result.phase = 'startup-failure-local-diagnostic';
+  result.boundaries.push('启动故障只阻断该浏览器页面的 /out/main.js；HTML、内联故障入口和后续恢复仍经真实 Gateway，故障期间不允许任何 API 请求');
+  const failedStartup = await context.newPage();
+  const startupRequests = [], startupErrors = [];
+  failedStartup.on('request', request => startupRequests.push(new URL(request.url()).pathname));
+  failedStartup.on('pageerror', error => startupErrors.push(error.message));
+  const blockMain = async route => route.abort('failed');
+  const mainUrl = new URL('/out/main.js', input.baseUrl).href;
+  await failedStartup.route(mainUrl, blockMain);
+  await failedStartup.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  const startup = failedStartup.locator('#startup-error');
+  await expect(startup).toBeVisible();
+  await expect(failedStartup.locator('.monaco-workbench')).toHaveCount(0);
+  await expect(startup.getByRole('button', { name: '查看日志', exact: true })).toHaveCount(0);
+  assert.equal(await startup.locator('details').getAttribute('open'), null);
+  await startup.getByText('安全诊断', { exact: true }).click();
+  await expect(startup.locator('pre')).toContainText('/out/main.js');
+  const startupDiagnostic = await startup.locator('pre').textContent();
+  await startup.getByRole('button', { name: '复制安全诊断', exact: true }).click();
+  await expect(startup.getByRole('status')).toHaveText('已复制');
+  assert.equal(await failedStartup.evaluate(() => navigator.clipboard.readText()), startupDiagnostic);
+  await failedStartup.evaluate(() => {
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard'), exec = document.execCommand;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('fixture-clipboard-denied'); } } });
+    document.execCommand = () => false;
+    window.restoreStartupClipboard = () => {
+      if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard); else delete navigator.clipboard;
+      document.execCommand = exec;
+    };
+  });
+  const copy = startup.getByRole('button', { name: '复制安全诊断', exact: true });
+  await copy.click();
+  await expect(startup.getByRole('status')).toContainText('浏览器拒绝复制文本');
+  await expect(startup.getByRole('status')).not.toHaveText('已复制');
+  await expect(copy).toBeFocused();
+  await expect(startup.locator('pre')).toHaveText(startupDiagnostic);
+  assert.equal(await failedStartup.locator('body > textarea').count(), 0);
+  await failedStartup.evaluate(() => window.restoreStartupClipboard());
+  const startupSummary = [];
+  for (const width of [1500, 360]) {
+    await failedStartup.setViewportSize({ width, height: 800 });
+    const size = await startup.locator('.startup-failure-summary').evaluate(element => ({
+      height: element.getBoundingClientRect().height, lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+    }));
+    assert.ok(size.height <= size.lineHeight * 2 + 1);
+    startupSummary.push({ width, ...size });
+  }
+  assert.deepEqual(startupRequests.filter(path => path.startsWith('/api/')), []);
+  assert.deepEqual(startupErrors, []);
+  await failedStartup.screenshot({ path: `${input.artifacts}/startup-local-failure.png`, fullPage: true });
+  await failedStartup.unroute(mainUrl, blockMain);
+  await Promise.all([failedStartup.waitForNavigation({ waitUntil: 'domcontentloaded' }), startup.getByRole('button', { name: '重试', exact: true }).click()]);
+  await expect(failedStartup.locator('.monaco-workbench')).toBeVisible();
+  await expect(failedStartup.locator('#startup-error')).toBeEmpty();
+  assert.deepEqual(startupErrors, []);
+  result.startupFailure = { blocked_main: '/out/main.js', diagnostic: startupDiagnostic, summary: startupSummary,
+    copy_success: true, copy_denied: true, temporary_nodes: 0, focus_preserved: true, failure_api_requests: 0,
+    reload_recovered: true, stale_memory_discarded: true, page_errors: startupErrors };
+  await failedStartup.close();
   result.phase = result.copyFailure ? 'navigation-complete-copy-failed' : 'complete';
 } catch (error) {
   result.error = { message: error.message, stack: error.stack };

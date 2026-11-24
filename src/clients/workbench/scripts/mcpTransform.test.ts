@@ -9,6 +9,7 @@ import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancella
 import { CancellationError, isCancellationError, getErrorMessage } from '../upstream/src/vs/base/common/errors.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 import { localize } from '../upstream/src/vs/nls.js';
+import { isErrorReported, ReportedError } from '../../web/src/utils/errorMessage.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
@@ -47,6 +48,30 @@ function methodBody(name: string, kind: string, method: string) {
   if (!node || !ts.isMethodDeclaration(node) || !node.body) throw new Error(`原方法缺失：${kind}.${method}`);
   return node.body.getText();
 }
+
+test('原缓存刷新只通知尚未展示的失败，保留混合失败及非用户取消的 AbortError', async () => {
+  const text = await readFile(join(root, 'src/mcp/service.ts'), 'utf8');
+  const parsed = ts.createSourceFile('service.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'WorkspaceMcpService');
+  if (!owner || !ts.isClassDeclaration(owner)) throw new Error('缺少原 MCP service');
+  const method = owner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === 'resetCaches');
+  if (!method || !ts.isMethodDeclaration(method)) throw new Error('缺少原 resetCaches');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Owner { ${method.getText(parsed)} }`);
+  const reset = new Function('CancellationError', 'isErrorReported', `${javascript}; return Owner.prototype.resetCaches;`)(
+    CancellationError, isErrorReported,
+  ) as (this: { queryLocal(options: { refresh: boolean }): Promise<never>; notifications: { error(error: unknown): void } }) => void;
+  const original = new Error('原刷新失败');
+  const reported = new ReportedError(original.message, original);
+  for (const failure of [reported, new AggregateError([reported]), new CancellationError(), original,
+    new AggregateError([reported, original]), new DOMException('正文期限失败', 'AbortError')]) {
+    const options: unknown[] = [], notified: unknown[] = [];
+    const pending = Promise.reject(failure);
+    reset.call({ queryLocal(value) { options.push(value); return pending; }, notifications: { error(error) { notified.push(error); } } });
+    await pending.catch(() => undefined);
+    expect(options).toEqual([{ refresh: true }]);
+    expect(notified).toEqual(failure instanceof CancellationError || isErrorReported(failure) ? [] : [failure]);
+  }
+});
 
 test('实际插件管理注册只提供自有入口，搜索和安装回执仍沿原服务', async () => {
   const parsed = source('extensions.contribution.ts');

@@ -49,6 +49,12 @@ html,body,#workbench{width:100%;height:100%;margin:0;overflow:hidden}
   cursor: pointer;
 }
 #startup-error button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+#startup-error .startup-failure-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 #startup-error:empty,body:has(.monaco-workbench) #startup-status{display:none}
 </style>
 <script>globalThis._VSCODE_FILE_ROOT = new URL('/out/', location.href).href;</script>
