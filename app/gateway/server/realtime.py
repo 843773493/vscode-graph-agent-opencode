@@ -9,12 +9,14 @@ import struct
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from boxteam_plugin_sdk.failures import public_error
 from boxteam_plugin_sdk.http import get_request_id
 from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from starlette.types import Message
 
+from app.core.failures import report_failure
 from app.gateway.auth import verify_gateway_token
 from app.schemas.gateway.realtime import RealtimeRequest
 
@@ -110,9 +112,12 @@ async def realtime(websocket: WebSocket) -> None:
 
             await websocket.app(scope, receive, forward)
             await send({"type": "end", "subscription_id": identity})
-        except Exception as error:
-            logger.exception("实时订阅失败: subscription=%s request_id=%s", identity, request_id)
-            await send({"type": "error", "subscription_id": identity, "message": f"实时订阅失败: {type(error).__name__}", "request_id": request_id})
+        except Exception as error:  # noqa: BLE001 — 原订阅异常交付后结束本流，不中断兄弟订阅。
+            detail = public_error(error, stage="realtime-subscription", secrets=(token,))
+            report_failure(error, detail=f"实时订阅失败: subscription={identity} request_id={request_id}",
+                           diagnostic_logger=logger, secrets=(token,))
+            await send({"type": "error", "subscription_id": identity, "message": detail["message"],
+                        "detail": detail, "path": command.path, "request_id": request_id})
 
     try:
         async with asyncio.timeout(15):
@@ -150,8 +155,9 @@ async def realtime(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     except (HTTPException, ValidationError, ValueError, TimeoutError) as error:
+        detail = public_error(error, stage="realtime-connection")
         await send({"type": "error", "status": error.status_code if isinstance(error, HTTPException) else 400,
-                    "message": str(error), "request_id": get_request_id(websocket)})
+                    "message": detail["message"], "detail": detail, "request_id": get_request_id(websocket)})
         await websocket.close(code=1008, reason="realtime_protocol_error")
     finally:
         tasks = [state.task for state in subscriptions.values() if state.task is not None]

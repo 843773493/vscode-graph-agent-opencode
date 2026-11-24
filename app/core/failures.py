@@ -126,7 +126,7 @@ def execution_failure_message(error: BaseException) -> str:
     return failure_message(error)
 
 
-def failure_detail(error: BaseException, *, stage: str, label: str) -> str:
+def failure_detail(error: BaseException, *, stage: str, label: str, secrets: tuple[str, ...] = ()) -> str:
     """原阶段和分类附带安全原因，日志故障也不能阻止原失败结算。"""
     detail = f"{label}: stage={stage}, error={type(error).__name__}"
     if isinstance(error, OSError):
@@ -138,8 +138,8 @@ def failure_detail(error: BaseException, *, stage: str, label: str) -> str:
     for coordinate in ("lineno", "colno", "pos"):
         if isinstance(value := getattr(error, coordinate, None), int):
             detail += f", {coordinate}={value}"
-    detail += ", reason=" + (public_failure_message(error) or failure_message(error))
-    return report_failure(error, detail=detail)
+    detail += ", reason=" + (public_failure_message(error) or failure_message(error, secrets=secrets))
+    return report_failure(error, detail=detail, secrets=secrets)
 
 
 def report_failure(

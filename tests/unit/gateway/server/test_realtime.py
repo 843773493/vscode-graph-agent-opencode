@@ -35,7 +35,7 @@ def realtime_client(monkeypatch):
         async def generate():
             try:
                 if after == 500:
-                    raise RuntimeError("owner-failed")
+                    raise RuntimeError("owner-failed credential test-token")
                 if after == 999:
                     yield b'x' * (2 * 1024 * 1024)
                 else:
@@ -107,6 +107,33 @@ def test_http_failure_preserves_status_and_other_subscription(realtime_client):
         subscribe(socket, 2, 2)
         assert socket.receive_json()['status'] == 200
         socket.receive_bytes()
+
+
+def test_stream_failure_preserves_safe_reason_and_exact_request_without_closing_sibling(realtime_client, caplog):
+    client, calls, closed = realtime_client
+    with authenticate(client) as socket:
+        socket.send_json({'type': 'auth', 'token': 'test-token'})
+        connection_id = socket.receive_json()['request_id']
+        subscribe(socket, 1, 7, 'healthy')
+        socket.receive_json()
+        socket.receive_bytes()
+        subscribe(socket, 2, 500, 'failed')
+        headers = socket.receive_json()
+        error = socket.receive_json()
+        assert headers['type'] == 'headers' and headers['status'] == 200
+        assert error['type'] == 'error' and error['subscription_id'] == 2
+        assert error['path'] == '/api/v1/session-catalog/events/stream?after=500'
+        assert error['request_id'] == headers['headers']['x-request-id'] == calls[1][2]
+        assert error['request_id'] != connection_id
+        assert 'owner-failed' in error['message']
+        assert error['detail']['details']['error_type'] == 'RuntimeError'
+        assert error['detail']['details']['stage'] == 'realtime-subscription'
+        assert 'test-token' not in json.dumps(error) and 'test-token' not in caplog.text
+        assert 7 not in closed
+        subscribe(socket, 3, 8, 'later')
+        assert socket.receive_json()['subscription_id'] == 3
+        assert struct.unpack('!I', socket.receive_bytes()[:4]) == (3,)
+    assert set(closed) == {7, 500, 8}
 
 
 def test_slow_large_subscription_does_not_block_control_or_other_stream(realtime_client):

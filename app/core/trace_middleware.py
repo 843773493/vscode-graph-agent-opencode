@@ -231,6 +231,7 @@ class TraceMiddleware:
             if message is None:
                 message = failure_detail(
                     error, stage="http_response_stream" if response_started else "http_request", label="请求处理失败",
+                    secrets=(request.headers["X-Local-Token"],) if "X-Local-Token" in request.headers else (),
                 )
             if response_started:
                 raise
