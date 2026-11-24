@@ -32,11 +32,11 @@ Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来�
 - [x] 5.1 将有效 proxy 和凭据 revision 纳入原模型客户端身份，接入所有现有协议、同步／异步及流式／非流式请求；覆盖目录使用 Provider、草稿使用原草稿、正式执行／回退／embedding 使用真实 Model 节点，不改进程环境。
 - [x] 5.2 将现有网页抓取、Web 搜索及其他第一方外部 HTTP 出口按消费者清单接入 Workspace 策略；对第三方 SDK 使用其真实客户端／代理注入能力，不以修改全局环境替代。复核内部 Gateway、文件、MCP 控制和调试请求仍直连。
 - [x] 5.3 沿原 owner 生命周期切换／释放客户端，验证代理热变更时旧流存活、新调用使用新策略、相同有效路由不无谓重建；失败使用原期限和取消，不加探测、直连 fallback 或代理专用重试链。
-- [ ] 5.4 用隔离真实 HTTP 上游／代理捕获验证 environment、explicit、direct、NO_PROXY／bypass、认证脱敏、远端 localhost 语义、多工作区并发和模型回退；验证现有 TLS／CA 行为不因禁用隐式代理读取而丢失。
+- [x] 5.4 用隔离真实 HTTP 上游／代理捕获验证 environment、explicit、direct、NO_PROXY／bypass、认证脱敏、远端 localhost 语义、多工作区并发和模型回退；验证现有 TLS／CA 行为不因禁用隐式代理读取而丢失。
 - [x] 5.5 接入 OAuth 登录／设备轮询／刷新真实 HTTP 路径的 Provider 策略，以及 SDK 模型元数据的 Workspace 默认策略；复核全局 SDK 客户端不串 owner／路由。扩展原必要凭据批次到代理 password，并验证配置未变时秘密轮换／删除影响后续调用，旧流保持，不扫描全库。
 - [x] 5.6 复用原 record／replay owner，防止 HTTPX proxy mounts 绕过回放 transport；同步／异步及现有 adapter 验 replay 零真实代理／上游连接，record 记录真实有效路由，live 代理命中验收与回放分开。
 - [x] 5.7 环境捕获仅输入标准大小写环境变量，覆盖冲突优先级和 NO_PROXY；验证 Windows／macOS 系统代理存在而环境为空时不隐式回退，不新增 PAC 或系统代理读取。
-- [ ] 5.8 按插件实例范围绑定 Gateway／Workspace 父节点与可选插件覆盖，复用已有实例配置与凭据能力，不让 Gateway 读工作区文件；未具备注入能力的出口标未支持。验证终端控制直连、Shell 只继承原启动环境，JSONC 不重写用户命令环境，不改 python_exec／条件脚本／ffmpeg。
+- [x] 5.8 按插件实例范围绑定 Gateway／Workspace 父节点与可选插件覆盖，复用已有实例配置与凭据能力，不让 Gateway 读工作区文件；未具备注入能力的出口标未支持。验证终端控制直连、Shell 只继承原启动环境，JSONC 不重写用户命令环境，不改 python_exec／条件脚本／ffmpeg。
 
 实施进度：有效路由、owner snapshot generation 和秘密 revision 已接入正式模型／回退身份，真实 Thread 验证 API 与代理秘密轮换、删除及旧 lease 排空。OAuth 同步／异步刷新与 owner 隔离 metadata、Embedding 的真实 SDK 注入已验证；未具备注入能力的专用 SDK 明确拒绝。录放定向验证 replay 30 项和 record 22 项通过，覆盖五种 adapter 的同步／异步、环境／显式及 bypass，回放禁止构造真实 transport，录制有受控代理 socket 证据。内部 HTTP／WebSocket 显式直连定向通过。上述证据不替代第7组真实 UI／10809 live 验收。
 
@@ -58,10 +58,12 @@ Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来�
 
 当前实施进度：Workspace v4 schema／模板／安装与真实 ConfigService 来源 owner 已迁齐；双工作区共享来源、停止后追赶、依赖移除、provenance-only 更新、CAS 父变更及带特殊字符的来源引用均有真实入口验证。维护链路 122 项通过，正式非流式产品测试 30 项分别已有通过证据。没有可核验 release 发布基线，本轮不为开发 Home 新增猜测迁移，保留既有历史支持链。
 
-原生 Settings 的节点树、原文精确跳转及代理原子块已实施。正式浏览器节点验收第7轮通过（1 passed，93.01s，exit 0）：保持 Apply 后立即保存，Provider／Model 同批创建私有节点并只写局部参数，外部共享原件与 peer／sibling 不变；config_ref／extends 非法值 422 后可修正；Provider 副本的模型节点独立且不改原件；Gateway／托管 Backend 重启与新浏览器上下文读回原值和副本值，720px 窄布局可操作。页面及清理错误为空，8项源码指纹前后一致。原件为 `out/tests/integration/clients/web/test_configuration_node_persistence/runs/run-aa60e5b29519/`，命令、原始输出及退出码见 `out/tests/temp/2026/11/24/workspace_external_http/artifacts/node-persistence-007.*`。4.3 的真实外网发现／测试、6.3 的远端与双工作区浏览器冲突仍由各原验收门继续覆盖，未提前勾选。4.4 已补真实 Provider→Agent→调用参数→Saver→SDK/TCP 验收4项，以及协议原子块等4项；完整 wire body、preimage 与 request_hash 一致。5.2 的第一方 Web／DDGS／HTTP Skill 出口已接通，文件／MCP 直连结论以源码复核与现有回归为限。5.8 当前第一方插件没有已接通的自有外部 HTTP 消费者，不新增无消费者代理 SDK／字段；终端用户命令继续继承原启动环境，待 live PTY 验证其边界。
+原生 Settings 的节点树、原文精确跳转及代理原子块已实施。正式浏览器节点验收第7轮通过（1 passed，93.01s，exit 0）：保持 Apply 后立即保存，Provider／Model 同批创建私有节点并只写局部参数，外部共享原件与 peer／sibling 不变；config_ref／extends 非法值 422 后可修正；Provider 副本的模型节点独立且不改原件；Gateway／托管 Backend 重启与新浏览器上下文读回原值和副本值，720px 窄布局可操作。页面及清理错误为空，8项源码指纹前后一致。原件为 `out/tests/integration/clients/web/test_configuration_node_persistence/runs/run-aa60e5b29519/`，命令、原始输出及退出码见 `out/tests/temp/2026/11/24/workspace_external_http/artifacts/node-persistence-007.*`。4.3 的真实外网发现／测试、6.3 的远端与双工作区浏览器冲突仍由各原验收门继续覆盖，未提前勾选。4.4 已补真实 Provider→Agent→调用参数→Saver→SDK/TCP 验收4项，以及协议原子块等4项；完整 wire body、preimage 与 request_hash 一致。5.2 的第一方 Web／DDGS／HTTP Skill 出口已接通，文件／MCP 直连结论以源码复核与现有回归为限。5.8 当前第一方插件没有已接通的自有外部 HTTP 消费者，不新增无消费者代理 SDK／字段；终端用户命令继续继承原启动环境，真实 PTY 验收已通过，证据如下。
 
 7.4 保持未完成：20 次暖 inspection p95=135.3ms、max=137.7ms、请求窗口父文件读取为0；20次模型设置 max=1618.8ms。冷 inspection=3766.4ms，首次 Settings 完整可操作=5155.6ms，均超过预算；瓶颈证据为 LiteLLM 首次导入，未以预热或挑选样本掩盖。原样本、request_id、命令／退出码及指纹保存在 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/`。7.6／7.7 的真实外网产品验收继续独立推进。
 
 冷路径复审补充：当前 LiteLLM 1.110.2 的官方 URL 计算与正式参数声明均触发完整 SDK 初始化；官方 CLI 延迟入口仅覆盖 CLI client，providers.json 不足以计算任意配置 endpoint。TODO：在依赖层具备可复用轻量 API 后重新验证冷 inspection／首次 Settings；本轮不自建 URL 规则、元数据副本或预热掩盖超时，7.4 保持未完成。
 
 2026-11-24 Settings 收口补验：独立 dist09 经真实双 Gateway／双 Workspace 浏览器完成远端对象打开后切导航仍保存原 B，以及共享父来源 A 保存、B 旧 CAS 409 保留草稿，原件 `out/tests/integration/clients/web/test_settings_source_ownership/`，受保护命令与退出码见 `out/tests/temp/2026/11/24/workspace_model_inheritance/artifacts/source-owner-ui-06.*`（1 passed，198.92s 含独占名额等待）。原文件服务丢 cause 的真实展示缺口已沿原保存通知修复，不修改 CAS 预期。无父根和未定义字段不提供可执行恢复继承；继承 Agent 判定改为消费唯一 source_inherited，相关组件18项、设置合同43项通过。Workbench 219份真实转换源码类型检查、Web全量类型检查04与完整构建09通过。4.3及7.6／7.7尚未完成：实际Home与根.env的 OPENCODE_ZEN_API_KEY 相同，上游模型发现返回401 api_key_expired；终端HTTPS已成功，未据此声称模型测试或生成通过。
+
+5.4／5.8 补验：隔离 HTTP／HTTPS／CONNECT 捕获覆盖 NO_PROXY、同步 SSL_CERT_FILE、异步 SSL_CERT_DIR、两真实 ConfigService 并发，以及正式消息 API 的主模型失败后备用模型成功。26项回归通过；测试清理栈语法修正后，该场景另行1项通过，不表述为同一次27项全绿。远端 docker-debian 与控制机同时监听各自 localhost 同端口，目标实际 Provider client 仅命中目标代理1次、控制机0次，exit 0；原件 `out/tests/temp/2026/11/24/proxy_contract_acceptance/artifacts/run-evidence.txt`。真实 Gateway／Workbench 新建 PTY 后，将 Workspace JSONC 的代理从 environment 保存为 direct；原 PTY 与新 PTY 的六种代理变量摘要均保持原启动值，PTY 身份不同。105次连接全为 loopback，无模型调用、页面错误或清理错误；1项通过（63.76s，exit 0），原件 `out/tests/e2e/clients/web/test_configuration_live_proxy/runs/run-945a103b40a6/`。不以这些受控场景替代7.6／7.7的真实外网模型验收。

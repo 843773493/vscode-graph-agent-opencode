@@ -7,9 +7,10 @@ import { expect } from 'playwright/test';
 import { webSelectors } from '../../../clients/selectors/web-selectors.mjs';
 
 const fixture = JSON.parse(process.env.BOXTEAM_LIVE_FIXTURE);
+const shellOnly = fixture.scenario === 'shell-environment';
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
 assert(artifacts, '必须显式设置正式测试产物目录');
-const result = { phase: 'initialization', pageErrors: [], initialization: [], probes: [], sessions: [], receipts: [] };
+const result = { phase: 'initialization', scenario: fixture.scenario, pageErrors: [], initialization: [], probes: [], sessions: [], receipts: [] };
 let browser, context, page, failure;
 const cleanup = [];
 try {
@@ -72,6 +73,8 @@ try {
     return expected.exec(await targetFrame.locator('.xterm-rows').innerText())[1];
   };
   const baselineEnvironmentDigest = await terminalDigest(frame, 'BASELINE');
+  assert.equal(baselineEnvironmentDigest, fixture.environmentDigest, '首个PTY必须继承原启动环境，不能用全部空值冒充');
+  if (!shellOnly) {
   await input.focus();
   // 没有 export 或 --proxy；分段 marker 排除命令回显造成的假通过。
   const shell = "curl --fail --silent --show-error --head --max-time 40 https://example.com >/dev/null; code=$?; printf 'BOXTEAM_%s_%s_%s\\n' 'PTY' 'HTTPS' \"$code\"";
@@ -221,6 +224,7 @@ try {
     requestId: rejectedResponse.headers()['x-request-id'], error: await rejectedObservation.getByRole('alert').innerText(),
     internalHealth: await api('/api/gateway/health'), internalWorkspace: await api('/api/v1/workspace') };
   assert.equal(result.proxyFailure.internalWorkspace.data.workspace_id, fixture.workspaceId);
+  }
   result.phase = 'workspace-jsonc-does-not-rewrite-shell-environment';
   const sourceUrl = '/api/v1/config/sources/workspace_root_mutable_override';
   const loadedSource = (await api(sourceUrl)).data;
@@ -248,7 +252,7 @@ try {
     newDigest: newEnvironmentDigest, previousWorkspaceProxy, savedWorkspaceProxy: workspaceDocument.settings.network.proxy,
     requestId: savedWorkspace.requestId, originalTerminalId: terminal.resource_id, newTerminalId: secondTerminal.resource_id,
     boundary: '只打印六种标准代理变量的SHA256，不打印变量值；未改变插件自有外部HTTP支持范围' };
-  assert.deepEqual(result.probes.map(item => item.streaming), [true, false]);
+  if (!shellOnly) assert.deepEqual(result.probes.map(item => item.streaming), [true, false]);
   result.phase = 'completed';
   await page.screenshot({ path: path.join(artifacts, 'live-completed.png'), fullPage: true });
 } catch (error) {

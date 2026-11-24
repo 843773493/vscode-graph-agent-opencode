@@ -34,20 +34,34 @@ from tests.support.workspaces import (
     prepare_test_workspace,
 )
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("BOXTEAM_CONFIGURATION_LIVE") != "1",
-    reason="真实模型请求须显式设置 BOXTEAM_CONFIGURATION_LIVE=1",
-)
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 # autouse 装具随后会改写 BOXTEAM_HOME；在收集阶段冻结真实验收来源。
 LIVE_SOURCE_HOME = Path(os.getenv("BOXTEAM_HOME", str(Path.home() / ".boxteams"))).expanduser()
 
 
+@pytest.mark.skipif(os.getenv("BOXTEAM_CONFIGURATION_LIVE") != "1",
+    reason="真实模型请求须显式设置 BOXTEAM_CONFIGURATION_LIVE=1")
 async def test_configuration_live_proxy_pty_and_formal_model_entry(
     request: pytest.FixtureRequest,
     prepared_developer_tools_package: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, scenario="live")
+
+
+@pytest.mark.skipif(os.getenv("BOXTEAM_CONFIGURATION_SHELL") != "1",
+    reason="真实启动环境验收须显式设置 BOXTEAM_CONFIGURATION_SHELL=1")
+async def test_configuration_jsonc_preserves_pty_environment(
+    request: pytest.FixtureRequest,
+    prepared_developer_tools_package: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, scenario="shell-environment")
+
+
+async def _run_configuration_live_proxy(request: pytest.FixtureRequest, prepared_developer_tools_package: Path,
+    monkeypatch: pytest.MonkeyPatch, *, scenario: str) -> None:
+    shell_only = scenario == "shell-environment"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     project = context.project_root
     assets = Path(os.environ["BOXTEAM_CONFIGURATION_LIVE_WEB_ASSETS"]).resolve(strict=True)
@@ -64,7 +78,10 @@ async def test_configuration_live_proxy_pty_and_formal_model_entry(
     proxy = values.get("HTTPS_PROXY") or values.get("https_proxy")
     assert proxy, "验收来源必须显式提供标准 HTTPS 代理"
     secret_name = os.getenv("BOXTEAM_CONFIGURATION_LIVE_SECRET", "OPENCODE_ZEN_API_KEY")
-    assert values.get(secret_name), "真实模型所需凭据在已授权来源中缺失"
+    if not shell_only:
+        assert values.get(secret_name), "真实模型所需凭据在已授权来源中缺失"
+    environment_digest = hashlib.sha256(json.dumps([[name, values.get(name)] for name in PROXY_VARIABLES],
+        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
     home = context.boxteam_home_for_node(request.node.nodeid)
     install_user_configuration(config_root=home / "config", profile="default", project_root=project)
     copied_env = home / "config/.env"
@@ -106,7 +123,9 @@ async def test_configuration_live_proxy_pty_and_formal_model_entry(
         "env_copied_without_changes": True, "proxy": {"scheme": proxy_url.scheme,
             "host": proxy_url.hostname, "port": proxy_url.port}, "secret_environment_name": secret_name,
         "assets": str(assets), "main_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
-        "model_responses": "真实外部Provider，无重放或替身", "socket_trace": "strace connect-only，包含Gateway新建后代"}
+        "scenario": scenario,
+        "model_responses": "不调用模型" if shell_only else "真实外部Provider，无重放或替身",
+        "socket_trace": "strace connect-only，包含Gateway新建后代"}
     evidence_path = context.artifacts_dir / "live-environment.json"
     evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     original_popen = subprocess.Popen
@@ -129,6 +148,7 @@ async def test_configuration_live_proxy_pty_and_formal_model_entry(
             response.raise_for_status()
             owner = response.json()["data"]["active_workspace"]
         fixture = {"baseUrl": base_url, "gatewayId": owner["gateway_id"], "workspaceId": owner["workspace_id"],
+            "scenario": scenario, "environmentDigest": environment_digest,
             "endpoint": os.getenv("BOXTEAM_CONFIGURATION_LIVE_ENDPOINT", "https://opencode.ai/zen/v1"),
             "model": os.getenv("BOXTEAM_CONFIGURATION_LIVE_MODEL", "big-pickle"), "secretName": secret_name,
             "failureProxy": f"http://127.0.0.1:{failure_port}"}
@@ -156,11 +176,21 @@ async def test_configuration_live_proxy_pty_and_formal_model_entry(
                 assert "sa_family=AF_INET6" not in line, "当前IPv4验收出现IPv6连接，须核对原始trace后扩展证据"
         proxy_connections = [item for item in connections if (item["host"], item["port"]) == (proxy_url.hostname, proxy_url.port)]
         external = [item for item in connections if not ipaddress.ip_address(item["host"]).is_loopback]
-        assert proxy_connections, "PTY和模型调用必须真实连接到所选环境代理"
-        assert all(item in proxy_connections for item in external), external
-        rejected = [item for item in connections if item["at"] >= result["proxyFailure"]["startedAt"] / 1000]
-        assert any(item["port"] == failure_port for item in rejected), "故障阶段必须真实尝试指定的拒绝代理"
-        assert all(ipaddress.ip_address(item["host"]).is_loopback for item in rejected), "拒绝代理后不得改走真实代理或外网直连"
+        if shell_only:
+            assert not proxy_connections, "终端控制不得连接环境代理"
+            assert not external, "无外网用户命令的终端场景只能直连本地控制面"
+            assert connections, "必须保留实际控制连接证据"
+            assert result["shellEnvironment"]["baselineDigest"] == environment_digest
+            assert result["shellEnvironment"]["oldDigest"] == environment_digest
+            assert result["shellEnvironment"]["newDigest"] == environment_digest
+            assert result["probes"] == [] and result["sessions"] == []
+            rejected = []
+        else:
+            assert proxy_connections, "PTY和模型调用必须真实连接到所选环境代理"
+            assert all(item in proxy_connections for item in external), external
+            rejected = [item for item in connections if item["at"] >= result["proxyFailure"]["startedAt"] / 1000]
+            assert any(item["port"] == failure_port for item in rejected), "故障阶段必须真实尝试指定的拒绝代理"
+            assert all(ipaddress.ip_address(item["host"]).is_loopback for item in rejected), "拒绝代理后不得改走真实代理或外网直连"
         (context.artifacts_dir / "socket-targets.json").write_text(json.dumps({
             "connections": connections, "external": external, "failure_phase": rejected,
             "boundary": "connect-only系统调用，不采集CONNECT报文；真实Home环境代理未改写",

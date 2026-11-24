@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
+import select
 import socket
+import ssl
+import subprocess
+from contextlib import AsyncExitStack, ExitStack
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Barrier
 
 import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from app.agents.providers.provider_http_client import build_provider_openai_client
 from app.runtime.model_stream import ModelStreamTransportController
 from app.runtime.network_proxy import ProxyRoutes
 from app.runtime.provider_model import build_model_from_provider
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+from app.services.infrastructure.config_service import ConfigService
 from app.testing.model_stream import (
     get_protocol_codec,
     load_cassette,
@@ -22,14 +36,20 @@ from app.testing.model_stream import (
     load_scenario,
 )
 from configs.network import DirectProxy, EnvironmentProxy, ExplicitProxy
+from tests.harness.python.run_context import TestRunContext
 from tests.support.http_server import running_http_server
+from tests.support.ports import integration_ports_for_file
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 
 @pytest.fixture
-def proxy_endpoint():
+def proxy_endpoint(request: pytest.FixtureRequest):
     requests = []
     stream_payloads = {}
-    for suffix, scenario_id in (("/responses", "responses-basic-text"), ("/messages", "anthropic-reasoning-stream")):
+    for suffix, scenario_id in (("/chat/completions", "basic-text"), ("/responses", "responses-basic-text"), ("/messages", "anthropic-reasoning-stream")):
         scenario = load_scenario(Path.cwd() / "tests/fixtures/model_stream", scenario_id)
         interaction = scenario.cassette.interactions[0]
         codec = get_protocol_codec(interaction.protocol)
@@ -41,8 +61,7 @@ def proxy_endpoint():
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             streaming = body.get("stream", False)
             if streaming:
-                payload = next((value for suffix, value in stream_payloads.items() if self.path.endswith(suffix)),
-                               b'data: {"id":"recorded","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+                payload = next(value for suffix, value in stream_payloads.items() if self.path.endswith(suffix))
             elif self.path.endswith("/responses"):
                 payload = json.dumps({
                     "id": "resp-test", "object": "response", "created_at": 1, "model": "test-model", "status": "completed",
@@ -80,7 +99,8 @@ def proxy_endpoint():
         def log_message(self, _format, *args):
             pass
 
-    with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
+    port = integration_ports_for_file(Path(request.node.path)).port("proxy-endpoint")
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Handler)) as server:
         yield f"http://127.0.0.1:{server.server_address[1]}", requests
 
 
@@ -152,6 +172,212 @@ async def test_direct_policy_does_not_use_environment_proxy(proxy_environment, p
         await client.close()
 
 
+@pytest.mark.asyncio
+async def test_environment_no_proxy_bypasses_real_proxy_socket(
+    request: pytest.FixtureRequest, proxy_environment, monkeypatch: pytest.MonkeyPatch,
+):
+    upstream_requests = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_GET(self):
+            upstream_requests.append(self.path)
+            payload = b'{"data":[{"id":"upstream-model"}]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format, *args):
+            pass
+
+    port = integration_ports_for_file(Path(request.node.path)).port("no-proxy-upstream")
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Upstream)) as server:
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+        monkeypatch.setenv("no_proxy", "127.0.0.1")
+        client = build_provider_openai_client(
+            is_async=True, base_url=f"http://127.0.0.1:{server.server_port}/v1", api_key="",
+            routes=ProxyRoutes.from_configuration(EnvironmentProxy()),
+        )
+        try:
+            assert [item.id for item in (await client.models.list(timeout=2)).data] == ["upstream-model"]
+        finally:
+            await client.close()
+    assert upstream_requests == ["/v1/models"]
+    assert proxy_environment == []
+
+
+@pytest.fixture
+def https_origin_and_proxy(request: pytest.FixtureRequest):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_ports_for_file(Path(request.node.path))
+    certificates = context.artifacts_dir / "tls"
+    certificates.mkdir()
+    now = datetime.now(UTC)
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Boxteam test CA")])
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
+          .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
+          .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+          .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+          .sign(ca_key, hashes.SHA256()))
+    server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    server_certificate = (x509.CertificateBuilder().subject_name(server_name).issuer_name(ca_name)
+                          .public_key(server_key.public_key()).serial_number(x509.random_serial_number())
+                          .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+                          .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                          .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                          .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                          .sign(ca_key, hashes.SHA256()))
+    ca_file = certificates / "ca.pem"
+    certificate_file = certificates / "server.pem"
+    key_file = certificates / "server.key"
+    ca_file.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    certificate_file.write_bytes(server_certificate.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(server_key.private_bytes(serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+    ca_directory = certificates / "capath"
+    ca_directory.mkdir()
+    (ca_directory / "ca.pem").write_bytes(ca_file.read_bytes())
+    subprocess.run(["openssl", "rehash", str(ca_directory)], check=True, timeout=5)
+    upstream_requests = []
+    connect_requests = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_GET(self):
+            upstream_requests.append(self.path)
+            payload = b'{"data":[{"id":"upstream-model"}]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format, *args):
+            pass
+
+    class Proxy(BaseHTTPRequestHandler):
+        def do_CONNECT(self):
+            connect_requests.append(self.path)
+            host, port = self.path.rsplit(":", 1)
+            with socket.create_connection((host, int(port)), timeout=5) as upstream:
+                self.send_response(200, "Connection Established")
+                self.end_headers()
+                pair = (self.connection, upstream)
+                while ready := select.select(pair, (), (), 5)[0]:
+                    for source in ready:
+                        data = source.recv(65536)
+                        if not data:
+                            return
+                        (upstream if source is self.connection else self.connection).sendall(data)
+                raise TimeoutError("TLS CONNECT 隧道等待超时")
+
+        def log_message(self, _format, *args):
+            pass
+
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(certificate_file, key_file)
+    origin = ThreadingHTTPServer(("127.0.0.1", ports.port("https-origin")), Upstream)
+    origin.socket = tls.wrap_socket(origin.socket, server_side=True)
+    with ExitStack() as stack:
+        stack.enter_context(running_http_server(origin))
+        proxy = stack.enter_context(running_http_server(ThreadingHTTPServer(("127.0.0.1", ports.port("https-proxy")), Proxy)))
+        yield f"https://127.0.0.1:{origin.server_port}/v1", f"http://127.0.0.1:{proxy.server_port}", ca_file, ca_directory, upstream_requests, connect_requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,asynchronous", [("SSL_CERT_FILE", False), ("SSL_CERT_DIR", True)])
+async def test_provider_https_preserves_ssl_ca_environment(
+    https_origin_and_proxy, monkeypatch: pytest.MonkeyPatch, source: str, asynchronous: bool,
+):
+    origin, proxy, ca_file, ca_directory, upstream_requests, connect_requests = https_origin_and_proxy
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setenv(source, str(ca_file if source == "SSL_CERT_FILE" else ca_directory))
+    client = build_provider_openai_client(
+        is_async=asynchronous, base_url=origin, api_key="",
+        routes=ProxyRoutes.from_configuration(ExplicitProxy(url=proxy)),
+    )
+    try:
+        result = client.models.list(timeout=5)
+        models = await result if asynchronous else result
+        assert [item.id for item in models.data] == ["upstream-model"]
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+    assert upstream_requests == ["/v1/models"]
+    assert connect_requests == [origin.removeprefix("https://").removesuffix("/v1")]
+
+
+@pytest.mark.asyncio
+async def test_two_workspace_models_use_separate_proxy_sockets_concurrently(
+    request: pytest.FixtureRequest,
+):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    scenario = load_scenario(Path.cwd() / "tests/fixtures/model_stream", "basic-text")
+    interaction = scenario.cassette.interactions[0]
+    codec = get_protocol_codec(interaction.protocol)
+    payload = b"".join(codec.encode(frame) for frame in interaction.response.frames)
+    rendezvous = Barrier(2)
+    observations: list[list[str]] = [[], []]
+    models = []
+    ports = integration_ports_for_file(Path(request.node.path))
+    async with AsyncExitStack() as cleanup:
+        stack = cleanup.enter_context(ExitStack())
+        for index in range(2):
+            class Proxy(BaseHTTPRequestHandler):
+                def do_POST(self):
+                    self.server.observations.append(self.path)
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                    rendezvous.wait(timeout=10)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+                def log_message(self, _format, *args):
+                    pass
+
+            proxy = ThreadingHTTPServer(("127.0.0.1", ports.port(f"workspace-proxy-{index}")), Proxy)
+            proxy.observations = observations[index]
+            stack.enter_context(running_http_server(proxy))
+            workspace = prepare_default_test_workspace(
+                workspace_root=context.workspace_root / f"workspace-{index}",
+                template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+            )
+            source = install_test_workspace_config(
+                workspace_root=workspace,
+                config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+                schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+            )
+            configuration = json.loads(source.read_text(encoding="utf-8"))
+            business = configuration["settings"]["workspace"]
+            provider = business["llm"]["providers"]["primary"]
+            provider["models"]["default"]["model"] = "openai/gpt-4.1"
+            profile = configuration["profiles"][provider["config_ref"].removeprefix("#/profiles/")]
+            profile["settings"]["model_options"].update(endpoint="http://upstream.invalid/v1", api_key="")
+            profile["settings"]["network"] = {"proxy": {"mode": "explicit", "url": f"http://127.0.0.1:{proxy.server_port}"}}
+            business["agents"]["default"]["model"]["fallbacks"] = []
+            source.write_text(json.dumps(configuration, ensure_ascii=False), encoding="utf-8")
+            service = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=workspace)
+            cleanup.push_async_callback(service.close)
+            service.validate_workspace_config()
+            model = build_model_from_provider(
+                await service.resolve_llm_model(ModelReferenceDTO(provider_id="primary", model_id="default")),
+                {}, invocation_purpose="model_test",
+            )
+            cleanup.push_async_callback(model.aclose)
+            models.append(model)
+        outputs = await asyncio.gather(*(model.ainvoke("hi") for model in models))
+        assert [output.text for output in outputs] == ["基础回放", "基础回放"]
+        assert observations == [["http://upstream.invalid/v1/chat/completions"]] * 2
+        assert models[0].proxy_routes.revision != models[1].proxy_routes.revision
+
+
 def test_unreachable_explicit_proxy_does_not_fall_back_to_reachable_upstream(proxy_endpoint):
     endpoint, requests = proxy_endpoint
     # 绑定但不 listen，固定本次拒绝连接的地址，避免借用可能被其他进程抢占的空闲端口。
@@ -187,7 +413,7 @@ async def test_record_wraps_the_actual_proxy_route_and_keeps_owner_alive(proxy_e
             )
             stream = await result if asynchronous else result
             content = [chunk.choices[0].delta.content async for chunk in stream] if asynchronous else [chunk.choices[0].delta.content for chunk in stream]
-            assert content == ["ok"]
+            assert "".join(part or "" for part in content) == "基础回放"
             if asynchronous:
                 await client.close()
             else:
@@ -255,9 +481,9 @@ async def test_authenticated_model_requests_use_instance_proxy_without_model_tes
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("proxy_policy", ["environment", "explicit"])
 @pytest.mark.parametrize("protocol,adapter,scenario_id,suffix,expected", [
-    ("chat_completions", "openai", "basic-text", "/v1/chat/completions", "ok"),
-    ("chat_completions", "openrouter", "basic-text", "/v1/chat/completions", "ok"),
-    ("chat_completions", "deepseek", "basic-text", "/v1/chat/completions", "ok"),
+    ("chat_completions", "openai", "basic-text", "/v1/chat/completions", "基础回放"),
+    ("chat_completions", "openrouter", "basic-text", "/v1/chat/completions", "基础回放"),
+    ("chat_completions", "deepseek", "basic-text", "/v1/chat/completions", "基础回放"),
     ("responses", "openai", "responses-basic-text", "/v1/responses", "响应文本"),
     ("anthropic_messages", "anthropic", "anthropic-reasoning-stream", "/v1/messages", "Anthropic Messages 验证结论。"),
 ])
