@@ -270,6 +270,8 @@ class MessageService:
             return saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
+        if binding.compaction_reference is not None:
+            raise ValueError("摘要派生 execution 不得作为普通 Agent Job 提交")
         if binding.input_reference_json is not None and job.attachments:
             raise ValueError("seed/reference 准入不得携带未登记的附件")
         if "canonical_item_manifests" in job.message_metadata:

@@ -81,7 +81,7 @@ class RolloutExecutionAdmissionReadMixin:
         committed_items = read_committed_item_identities(connection, commit_id=commit.commit_id)
         if not is_notice:
             if committed_items:
-                raise RuntimeError("fork source seed/reference admission 不得含 canonical item")
+                raise RuntimeError("fork source 引用型 internal admission 不得含 canonical item")
             return preimage
         storage_session, storage_thread = current_scope(connection)
         notice = self._storage._read_canonical_item_from_catalog(

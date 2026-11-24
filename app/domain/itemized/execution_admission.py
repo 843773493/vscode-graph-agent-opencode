@@ -30,13 +30,38 @@ class UserExecutionIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionExecutionReference:
+    """摘要任务中一次块／合并调用，只引用原 owner 冻结的请求计划。"""
+
+    task_id: str
+    candidate_id: str
+    plan_id: str
+    stage: Literal["chunk", "merge"]
+    ordinal: int
+    attempt: int
+
+    def __post_init__(self) -> None:
+        for name in ("task_id", "candidate_id", "plan_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"CompactionExecutionReference.{name} 必须是非空字符串")
+        if self.stage not in {"chunk", "merge"}:
+            raise ValueError("摘要派生请求必须明确为 chunk 或 merge")
+        if type(self.ordinal) is not int or self.ordinal < 0:
+            raise ValueError("摘要派生请求 ordinal 必须是非负整数")
+        if type(self.attempt) is not int or self.attempt < 1:
+            raise ValueError("摘要派生请求 attempt 必须是正整数")
+
+
+@dataclass(frozen=True, slots=True)
 class InternalExecutionIntent:
-    """Turn-less 请求身份；初始输入只引用 creation owner 冻结的 seed/reference。"""
+    """Turn-less 请求身份；通知、初始 seed 与摘要派生输入明确区分。"""
 
     message_id: str
     execution_id: str
     admission_idempotency_key: str
     input_reference_json: str | None = None
+    compaction_reference: CompactionExecutionReference | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -54,6 +79,11 @@ class InternalExecutionIntent:
             != 3
         ):
             raise ValueError("message、execution 与 admission identity 必须彼此独立")
+        if self.compaction_reference is not None:
+            if not isinstance(self.compaction_reference, CompactionExecutionReference):
+                raise TypeError("摘要派生输入必须是 CompactionExecutionReference")
+            if self.input_reference_json is not None:
+                raise ValueError("摘要派生输入不得同时绑定 seed/reference")
         if self.input_reference_json is not None:
             reference = json.loads(self.input_reference_json)
             if not isinstance(reference, dict) or set(reference) != {
@@ -80,16 +110,22 @@ def internal_execution_request_preimage(
     admission_idempotency_key: str,
     request_input: Mapping[str, object],
 ) -> dict[str, object]:
-    """notice 与 seed/reference 共用的唯一 canonical request preimage。"""
+    """所有 internal 输入共用的唯一 canonical request preimage。"""
     kind = request_input.get("kind")
     if kind == "runtime_notice":
         expected = {"kind", "payload"}
-    elif kind == "seed_reference":
+    elif kind in {"seed_reference", "compaction_reference"}:
         expected = {"kind", "reference"}
     else:
         raise ValueError(f"未知 internal execution input kind: {kind!r}")
     if set(request_input) != expected:
         raise ValueError("internal execution input 缺失字段或包含未知字段")
+    if kind == "compaction_reference":
+        reference = request_input["reference"]
+        if not isinstance(reference, Mapping):
+            raise TypeError("摘要派生输入 reference 必须是结构化引用")
+        # 冷恢复与写入沿同一类型检查，不从当前任务或文件补造历史输入。
+        CompactionExecutionReference(**reference)
     preimage = {
         "session_id": session_id,
         "thread_id": thread_id,
@@ -201,6 +237,7 @@ class InternalExecutionInterrupt:
 
 
 __all__ = [
+    "CompactionExecutionReference",
     "ExecutionAdmission",
     "ExecutionAdmissionCursor",
     "ExecutionBinding",

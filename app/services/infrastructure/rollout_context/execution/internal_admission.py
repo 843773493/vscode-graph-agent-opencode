@@ -44,7 +44,7 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
         checkpoint_ns: str = "",
         queue_input: ExecutionQueueInput | None = None,
     ) -> ExecutionAdmission:
-        """原子接受唯一 canonical request；seed/reference 不产生 notice。"""
+        """原子接受唯一 canonical request；引用型输入不产生 notice。"""
         owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         with self._execution_input_transaction(session_id, owner_thread_id, checkpoint_ns) as connection:
             admission = self._admit_internal_execution_transaction(
@@ -108,8 +108,8 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
                 raise ValueError("internal admission 首条 item 必须是 pending_next_turn runtime_notice")
             if dict(request_input) != {"kind": "runtime_notice", "payload": notice_item.payload}:
                 raise ValueError("internal admission request preimage 与实际 notice 不一致")
-        elif request_input.get("kind") != "seed_reference":
-            raise ValueError("无 notice 的 internal admission 只允许冻结 seed/reference")
+        elif request_input.get("kind") not in {"seed_reference", "compaction_reference"}:
+            raise ValueError("无 notice 的 internal admission 只允许冻结 seed 或摘要引用")
         payload_hash = sha256_jcs(internal_execution_request_preimage(
             session_id=session_id,
             thread_id=owner_thread_id,
@@ -184,7 +184,7 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
                     subject_id=execution_id, idempotency_key=commit_key,
                     commit_mode="metadata_only", outcome=None, metadata=commit_metadata, item_count=0,
                 ) is None:
-                    raise RuntimeError("seed/reference admission 缺少 durable request commit")
+                    raise RuntimeError("引用型 internal admission 缺少 durable request commit")
                 return ExecutionAdmission(
                     session_id=session_id, thread_id=owner_thread_id,
                     execution_id=execution_id, job_id=job_id,

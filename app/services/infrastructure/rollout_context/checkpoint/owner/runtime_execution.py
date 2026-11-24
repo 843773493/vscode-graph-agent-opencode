@@ -17,6 +17,7 @@ from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
 from app.domain.itemized.execution_admission import (
+    CompactionExecutionReference,
     ExecutionAdmission,
     ExecutionTerminalResult,
     InternalExecutionIntent,
@@ -254,7 +255,9 @@ class RuntimeExecutionOwnerMixin:
         intent: InternalExecutionIntent,
         checkpoint_ns: str = "",
     ) -> HumanMessage:
-        """notice 与 seed/reference 统一从已提交准入投影，不从 pending 正文恢复。"""
+        """聊天输入只从 notice 或 seed 准入投影；摘要不伪造 HumanMessage。"""
+        if intent.compaction_reference is not None:
+            raise ValueError("摘要派生 execution 不是普通 Agent 聊天输入")
         admission = self._storage.executions.execution_admission_for_job(
             session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
         )
@@ -265,6 +268,8 @@ class RuntimeExecutionOwnerMixin:
         request_input = self._storage.executions.internal_execution_request_input(
             session_id, thread_id, admission.execution_id,
         )
+        if request_input["kind"] == "compaction_reference":
+            raise ValueError("摘要派生 execution 不是普通 Agent 聊天输入")
         supplied_reference = json.loads(intent.input_reference_json) if intent.input_reference_json is not None else None
         if supplied_reference != request_input.get("reference"):
             raise ValueError("内部输入 reader 的 seed/reference 与已接受 preimage 不一致")
@@ -303,12 +308,32 @@ class RuntimeExecutionOwnerMixin:
             ),
         })
 
+    def compaction_execution_reference(
+        self, session_id: str, *, thread_id: str, execution_id: str,
+    ) -> CompactionExecutionReference:
+        """从原 admission commit 冷读摘要输入，不依赖 Graph 或当前任务状态。"""
+        # TODO: 唯一 model-call 准备入口接入冻结 plan 的读取／封存；准入本身不授权发送。
+        request = self._storage.executions.internal_execution_request_input(
+            session_id, thread_id, execution_id,
+        )
+        if request["kind"] != "compaction_reference":
+            raise ValueError("execution 未绑定摘要派生输入")
+        return CompactionExecutionReference(**request["reference"])
+
     def _internal_execution_input(
         self, intent: InternalExecutionIntent, message: HumanMessage | None,
     ) -> tuple[CanonicalItemRecord | None, dict[str, object]]:
         if not isinstance(intent, InternalExecutionIntent):
             raise TypeError("internal execution admission 必须使用 typed intent")
-        if intent.input_reference_json is not None:
+        if intent.compaction_reference is not None:
+            if message is not None:
+                raise ValueError("摘要派生 admission 不得伪造 runtime notice")
+            notice = None
+            request_input = {
+                "kind": "compaction_reference",
+                "reference": asdict(intent.compaction_reference),
+            }
+        elif intent.input_reference_json is not None:
             if message is not None:
                 raise ValueError("seed/reference admission 不得伪造 runtime notice")
             notice = None

@@ -156,6 +156,14 @@ class RolloutExecutionQueueMixin:
         elif isinstance(binding, InternalExecutionIntent):
             if admission.execution_origin != "internal" or binding.execution_id != admission.execution_id:
                 raise ValueError("队列输入与 internal admission identity 不一致")
+            # 以原准入事实隔离派生请求，不能仅相信调用方换掉 reference 后的 binding。
+            kind = connection.execute(
+                "SELECT json_extract(metadata_json,'$.request_input.kind') FROM storage_commits "
+                "WHERE commit_kind='execution_admission' AND subject_id=? AND idempotency_key=?",
+                (admission.execution_id, f"internal-admission:{admission.admission_idempotency_key}"),
+            ).fetchone()
+            if kind == ("compaction_reference",):
+                raise ValueError("摘要派生 execution 不得进入普通 Agent Job 队列")
 
     def _execution_queue_record(
         self, connection: sqlite3.Connection, session_id: str, thread_id: str,
