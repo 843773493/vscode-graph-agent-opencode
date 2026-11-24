@@ -20,7 +20,8 @@ describe("ChatHistoryPageHeader", () => {
   test("失败保留原始错误和重试入口，不叠加普通进度文案", () => {
     const retry = mock(() => undefined);
     const renderer = create(<ChatHistoryPageHeader loadingOlderMessages error="同步失败：HTTP 503" onRetry={retry} />);
-    expect(renderer.root.findByProps({ role: "alert" }).props.title).toBe("同步失败：HTTP 503");
+    expect(renderer.root.findByProps({ role: "alert" }).props.title).toBeUndefined();
+    expect(renderer.root.findByProps({ className: "chat-history-page-error-message" }).children).toEqual(["同步失败：HTTP 503"]);
     expect(renderer.root.findAllByProps({ role: "status" })).toHaveLength(0);
     act(() => { renderer.root.findByType("button").props.onClick(); });
     expect(retry).toHaveBeenCalledTimes(1);

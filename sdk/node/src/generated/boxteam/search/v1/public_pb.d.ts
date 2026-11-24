@@ -46,6 +46,11 @@ export declare type FederatedDiagnosticLogTargetDTO = Message<"boxteam.search.v1
    * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 2;
    */
   scope?: GatewayDiagnosticLogQueryScopeDTO | undefined;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 3;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**

@@ -14,6 +14,7 @@ from app.gateway.control.diagnostic_logs import (
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.log_query import RuntimeLogQueryError
+from app.gateway.runtime.process_logs import runtime_log_id
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogLocateRequest,
     GatewayDiagnosticLogQueryRequest,
@@ -40,7 +41,7 @@ async def test_workspace_sources_are_explicit_and_shared_backend_is_read_once(di
     assert page.items[0].source.source == "workspace" and "only-a" in page.items[0].preview
     assert page.scanned_lines == 1
     assert all(WORKSPACE_B not in source.workspace_ids and source.source != "gateway" for source in page.sources)
-    assert not page.complete and page.limited_reason == "source_unavailable"
+    assert page.complete and page.limited_reason is None
     other = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_B), gateway_id=GATEWAY_ID)
     assert len(other.items) == 1 and "only-b" in other.items[0].preview
 
@@ -52,11 +53,27 @@ async def test_gateway_query_excludes_registered_workspace_files(diagnostic_regi
     assert page.complete and page.cursor is None
 
 
+async def test_workspace_bound_plugin_log_keeps_gateway_descriptor_source(diagnostic_registry: GatewayWorkspaceRegistry) -> None:
+    path = load_runtime_log_contract().path_for(get_runtime_log_root(), "service-plugin", "workspace-bound-instance")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("workspace-bound-plugin-proof\n", encoding="utf-8")
+    gateway = await query_diagnostic_logs(diagnostic_registry, request_for(query="workspace-bound-plugin-proof"), gateway_id=GATEWAY_ID)
+    hit, = gateway.items
+    assert hit.reference.log_id == runtime_log_id(path)
+    assert hit.source.source == "gateway" and hit.source.workspace_ids == []
+    workspace = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_A, query="workspace-bound-plugin-proof"), gateway_id=GATEWAY_ID)
+    assert workspace.items == []
+
+
 async def test_unavailable_source_before_continuation_prevents_false_complete(diagnostic_registry: GatewayWorkspaceRegistry) -> None:
-    first = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_A, query="needle", limit=1), gateway_id=GATEWAY_ID)
+    contract, root = load_runtime_log_contract(), get_runtime_log_root()
+    missing = contract.path_for(root, "backend", 41001)
+    missing.unlink()
+    contract.path_for(root, "backend", 41002).write_text("needle needle\n", encoding="utf-8")
+    first = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_A, WORKSPACE_B, query="needle", limit=1), gateway_id=GATEWAY_ID)
     assert any(source.status == "unavailable" for source in first.sources)
     while first.cursor is not None:
-        first = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_A, query="needle", limit=1, cursor=first.cursor), gateway_id=GATEWAY_ID)
+        first = await query_diagnostic_logs(diagnostic_registry, request_for(WORKSPACE_A, WORKSPACE_B, query="needle", limit=1, cursor=first.cursor), gateway_id=GATEWAY_ID)
     assert not first.complete and first.limited_reason == "source_unavailable"
 
 

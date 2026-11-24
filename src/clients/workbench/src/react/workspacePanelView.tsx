@@ -250,11 +250,11 @@ export class WorkspacePanelSurface {
   private readonly selectionListener: IDisposable;
   constructor(container: HTMLElement, private readonly editors: IEditorService, id: string, visible: boolean,
     private readonly notifications: INotificationService, private readonly commands: ICommandService,
-    private readonly menus: IContextMenuService, private theme: IColorTheme) {
+    private readonly menus: IContextMenuService, private theme: IColorTheme, onDiagnostic?: (message: string) => void) {
     const kind = panelKinds[id];
     if (!kind) throw new Error(t('workbench.panel.unregistered', id));
     this.kind = kind;
-    this.surface = new ReactSurface(container, [...productStyles, panelStyle, style]);
+    this.surface = new ReactSurface(container, [...productStyles, panelStyle, style], onDiagnostic);
     this.selectionListener = onDidChangePanelManagementTarget(() => {
         this.reveal = undefined;
         this.render();

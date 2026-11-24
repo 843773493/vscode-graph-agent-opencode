@@ -46,12 +46,15 @@ class SearchTransport:
             assert isinstance(job.request, GatewayDiagnosticLogQueryRequest)
             try:
                 return SearchPage(await read_diagnostic_log_target(self.registry, job.request,
-                    gateway_id=job.key.diagnostics.gateway_id, request_id=self.request_id, max_bytes=job.max_bytes))
+                    gateway_id=job.key.diagnostics.gateway_id, request_id=self.request_id,
+                    gateway_connection_id=job.key.diagnostics.gateway_connection_id, max_bytes=job.max_bytes))
             except RuntimeLogQueryError as error:
                 raise SearchBranchError(error.code, str(error), retryable=True, error_owner="runtime_log",
                                         reason=error.reason, http_status=error.http_status) from error
             except LookupError as error:
                 raise SearchBranchError("owner_unavailable", str(error), retryable=True) from error
+            except ValueError as error:
+                raise SearchBranchError("owner_mismatch", str(error)) from error
             except httpx.HTTPStatusError as error:
                 self._raise_owner_error(error.response.status_code, bytearray(error.response.content))
             except httpx.RequestError as error:

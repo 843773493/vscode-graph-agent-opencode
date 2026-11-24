@@ -1,6 +1,8 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
+import { copyItemAction, useChatItemMenu } from "../chat/itemContextMenu";
 
 export default function ComposerAttachmentTray({
   attachments,
@@ -15,6 +17,7 @@ export default function ComposerAttachmentTray({
   onRemove: (fileId: string) => void;
   onRetry: (fileId: string) => void;
 }): React.ReactNode {
+  const menu = useChatItemMenu(() => error ? [copyItemAction(error)] : [], Boolean(error));
   return (
     <>
       {attachments.length > 0 && (
@@ -66,7 +69,7 @@ export default function ComposerAttachmentTray({
         </div>
       )}
       {notice && <div className="composer-attachment-notice">{notice}</div>}
-      {error && <div className="composer-attachment-error" role="alert">{error}</div>}
+      {error && <div className="composer-attachment-error" role="alert" {...menu}>{failureSummary(error)}</div>}
     </>
   );
 }

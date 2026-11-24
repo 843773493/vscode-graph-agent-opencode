@@ -37,6 +37,7 @@ export const actionTitleKeys = [
 export const bootstrapMessageKeys = [
   'bootstrap.loading', 'bootstrap.readLocaleFailed', 'bootstrap.unsupportedLocale', 'bootstrap.clearLocale',
   'bootstrap.loadChineseFailed', 'bootstrap.loadEnglishFailed', 'bootstrap.retry', 'bootstrap.workbenchLoadFailed',
+  'bootstrap.diagnostic', 'bootstrap.copyDiagnostic', 'bootstrap.copied',
 ];
 
 export function parseUniqueJson(path, source) {

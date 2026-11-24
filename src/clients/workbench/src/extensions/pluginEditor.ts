@@ -25,11 +25,11 @@ import { Button } from '../../upstream/src/vs/base/browser/ui/button/button.js';
 import { defaultButtonStyles } from '../../upstream/src/vs/platform/theme/browser/defaultStyles.js';
 import type { PluginInventoryResultDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import type { Scope } from '../settings/pluginConfiguration.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { PluginScope, pluginActions, pluginStateLabel, pluginError, pluginIcon, pluginDescription } from './pluginScope.js';
+import { PluginScope, pluginActions, pluginStateLabel, pluginIcon, pluginDescription } from './pluginScope.js';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionEditor.css';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionsWidgets.css';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionActions.css';
@@ -60,22 +60,6 @@ export class PluginEditorInput extends EditorInput {
   }
 }
 
-export async function readPluginInstanceLog(target: PluginTarget, logId: string, signal: AbortSignal): Promise<string> {
-  const query = new URLSearchParams({ log_id: logId, tail_lines: '300' });
-  if (target.gateway_connection_id) query.set('gateway_connection_id', target.gateway_connection_id);
-  const diagnostics = await gateway.request<GatewayDiagnosticsDTO>(`/api/gateway/diagnostics?${query}`, {
-    headers: { 'X-BoxTeam-Target-Gateway-Id': target.gateway_id },
-    signal,
-  });
-  signal.throwIfAborted();
-  if (diagnostics.gateway_id !== target.gateway_id || diagnostics.selected_log_id !== logId) throw new Error(t('plugins.logOwnerMismatch'));
-  const log = diagnostics.logs.find(item => item.log_id === logId);
-  if (!log) throw new Error(t('plugins.logMissing'));
-  if (log.status === 'empty') return t('plugins.logEmpty');
-  if (log.status !== 'available') throw new Error(log.error ?? t('plugins.logUnreadable'));
-  return `${log.truncated ? t('plugins.logTruncated') : ''}${log.tail}`;
-}
-
 class PluginEditorPane extends EditorPane {
   static readonly ID = 'boxteam.editor.servicePluginPane';
   private container!: HTMLElement;
@@ -84,7 +68,8 @@ class PluginEditorPane extends EditorPane {
     @IThemeService themes: IThemeService, @IStorageService storage: IStorageService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
     @INotificationService private readonly notifications: INotificationService,
-    @IContextMenuService private readonly menus: IContextMenuService) {
+    @IContextMenuService private readonly menus: IContextMenuService,
+    @ICommandService private readonly commands: ICommandService) {
     super(PluginEditorPane.ID, group, telemetry, themes, storage);
   }
   protected override createEditor(parent: HTMLElement): void {
@@ -182,22 +167,15 @@ class PluginEditorPane extends EditorPane {
       const logActions = append(diagnostics, $('div'));
       const logButton = this.presentation.add(new Button(logActions, { ...defaultButtonStyles, secondary: true }));
       logButton.label = t('plugins.viewInstanceLog');
-      const log = append(diagnostics, $('pre'));
-      log.hidden = true;
-      log.setAttribute('aria-label', t('plugins.instanceLogAria'));
       this.presentation.add(logButton.onDidClick(() => {
         const logId = state.slot(input.packageId, input.pluginId)?.log_id;
         if (!logId) return;
         logButton.enabled = false;
-        log.hidden = false;
-        void readPluginInstanceLog(state.target, logId, state.lifecycle.signal).then(text => {
-          if (state.slot(input.packageId, input.pluginId)?.log_id === logId) log.textContent = text;
-        })
-          .catch(error => { if (!state.lifecycle.signal.aborted) { log.textContent = pluginError(error); this.notifications.error(pluginError(error)); } })
-          .finally(() => { logButton.enabled = true; });
+        void this.commands.executeCommand('boxteam.output.openLog', { ...state.target, log_id: logId })
+          .catch(error => { if (!state.lifecycle.signal.aborted) this.notifications.error(error instanceof Error ? error : String(error)); })
+          .finally(() => { if (!state.lifecycle.signal.aborted) logButton.enabled = true; });
       }));
       let actionKey: string | undefined;
-      let displayedLogId: string | undefined;
       const update = () => {
         const status = state.slot(input.packageId, input.pluginId), binding = state.binding(input.packageId, input.pluginId);
         technicalIdentity.textContent = `${input.target.gateway_id} · ${input.workspace?.workspace_id ?? input.scope}${status?.instance ? t('plugins.instanceSuffix', status.instance.instance_id) : ''}`;
@@ -210,7 +188,6 @@ class PluginEditorPane extends EditorPane {
         failure.hidden = !(status?.error || state.error);
         failure.textContent = status?.error ?? state.error ?? '';
         logActions.hidden = !status?.log_id;
-        if (displayedLogId !== status?.log_id) { displayedLogId = status?.log_id; log.textContent = ''; log.hidden = true; }
         const handoffState = state.runtime?.workspace_configurations.find(item => item.workspace_id === input.workspace?.workspace_id);
         handoff.textContent = input.workspace ? t('plugins.workspaceHandoff', input.workspace.workspace_id,
           handoffState ? pluginStateLabel(handoffState.state) : t('plugins.notReceived'), handoffState?.error ? ` · ${handoffState.error}` : '') : '';

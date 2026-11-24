@@ -21,6 +21,36 @@ function menuEvent(selectedText = "") {
 }
 
 describe("Item 原生菜单接线", () => {
+  test("持久失败的短摘要仍通过原菜单复制完整安全原因，不依赖内存异常", async () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const writeText = mock(async (_text: string) => {});
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText } } });
+    const value = conversation("error");
+    const message = `配置失败 password=private-value\n${"完整原因😀".repeat(50)}末尾证据`;
+    const failure = { code: "execution_error", message, details: {} };
+    value.turnFailure = failure;
+    value.responseParts = [];
+    let menu: ChatItemMenuRequest | undefined;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ChatItemMenuContext.Provider value={request => { menu = request; }}>
+      <ChatTurn {...chatTurnProps(JSON.parse(JSON.stringify(value)))} />
+    </ChatItemMenuContext.Provider>); });
+    try {
+      const status = renderer.root.findByProps({ className: "chat-working-detail" });
+      const summary = status.children.join("");
+      expect(Array.from(summary).length).toBeLessThanOrEqual(160);
+      expect(summary).not.toContain("private-value");
+      status.props.onKeyDown(menuEvent());
+      await menu!.actions.find(action => action.id === "copyItem")!.run();
+      expect(writeText.mock.calls[0][0]).toContain("末尾证据");
+      expect(writeText.mock.calls[0][0]).not.toContain("private-value");
+      expect(failure.message).toBe(message);
+    } finally {
+      act(() => renderer.unmount());
+      if (previous) Object.defineProperty(globalThis, "navigator", previous); else Reflect.deleteProperty(globalThis, "navigator");
+    }
+  });
+
   test("工具卡片从合并结果末尾分支，携带所属历史快照且没有独立 fork 按钮", async () => {
     const value = conversation("done");
     Object.assign(value, { turnId: "turn-tools", threadId: "thread-tools", sourceViewId: "view-tools", sourceViewRevision: 17 });

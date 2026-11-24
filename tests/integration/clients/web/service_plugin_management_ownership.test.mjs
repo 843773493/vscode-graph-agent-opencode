@@ -32,7 +32,7 @@ const mcpCommandSource = await readFile(mcpCommandPath, 'utf8');
 
 function declaration(name) {
   const scopeOwner = ['pluginStateLabel', 'pluginActions', 'PluginScope'].includes(name);
-  const parsed = ts.createSourceFile(scopeOwner ? scopePath : name === 'readPluginInstanceLog' ? editorPath : sourcePath, scopeOwner ? scopeSource : name === 'readPluginInstanceLog' ? editorSource : source, ts.ScriptTarget.Latest, true);
+  const parsed = ts.createSourceFile(scopeOwner ? scopePath : sourcePath, scopeOwner ? scopeSource : source, ts.ScriptTarget.Latest, true);
   const node = parsed.statements.find(statement => statement.name?.text === name
     || (ts.isVariableStatement(statement)
       && statement.declarationList.declarations.some(declaration => declaration.name.getText(parsed) === name)));
@@ -437,7 +437,7 @@ test('View 安装按钮委派原安装命令，与 F1 对同一 Gateway 制品�
     expect(target).toEqual(frozenTarget);
     viewCommand = installCommand();
     return viewCommand;
-  } }, notifications, async refresh() { refreshCount += 1; } };
+  } }, notifications, runOperation: operation => operation(), async refresh() { refreshCount += 1; } };
   onInstallClick.call(view);
   await duplicate.promise;
 
@@ -518,6 +518,7 @@ test('批量开关保留各插件绑定版本，未绑定项采用所选版本�
       const batches = [], confirmations = [], batchButtons = [{ enabled: true }, { enabled: true }];
       const click = classCallback('ServicePluginPackagesView', 'renderPackages', 'setPluginBindings', {
         target, workspace, scope, pluginScope, matching, manifest, enabled, batchButtons,
+        group: { plugins: matching.map(plugin => ({ plugin, manifest })) },
         pluginTarget: target, entryGatewayId: target.gateway_id,
         state: { binding: (_packageId, pluginId) => pluginId === 'bound' ? { package_version: '1.0.0' } : undefined },
         async setPluginBindings(...args) { batches.push(args[4]); return undefined; },
@@ -543,6 +544,7 @@ test('卸载菜单在发起确认与请求流程前立即禁用，结算后恢�
   const click = classCallback('ServicePluginPackagesView', 'renderPackages', 'uninstallPackageFromView', {
     uninstall, entryGatewayId: 'entry-gateway', pluginTarget: { gateway_id: 'gateway-original' },
     manifest: { package_id: 'sample', version: '1.0.0' }, uninstallPackageFromView: async () => {},
+    group: { versions: [{ package_id: 'sample', version: '1.0.0' }] }, state: { lifecycle: { token: {} } },
   });
   const pending = click.call({ runTargetOperation() { operationStarted = !uninstall.enabled; return release.promise; } });
   expect(uninstall.enabled).toBe(false); expect(operationStarted).toBe(true);
@@ -810,45 +812,6 @@ test('秘密写入已返回原 owner 回执后，入口失效仍提交该回执�
   expect(notifications.some(message => message.includes('来源已保存'))).toBe(true);
 });
 
-test('实例日志只读取原 Gateway 回执的精确日志，保留限长及不可用错误', async () => {
-  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
-  const calls = [];
-  const signal = new AbortController().signal;
-  let receipt = { gateway_id: target.gateway_id, selected_log_id: 'opaque-log-id',
-    logs: [{ log_id: 'opaque-log-id', status: 'available', truncated: true, tail: 'probe stdout\nprobe stderr' }] };
-  const read = localizedFunction('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({
-    request: async (path, options) => { calls.push({ path, options }); return receipt; },
-  });
-  expect(await read(target, 'opaque-log-id', signal)).toBe('仅显示最近的日志尾部。\nprobe stdout\nprobe stderr');
-  const query = new URL(calls[0].path, 'http://local.invalid');
-  expect(query.pathname).toBe('/api/gateway/diagnostics');
-  expect(query.searchParams.get('log_id')).toBe('opaque-log-id');
-  expect(query.searchParams.get('gateway_connection_id')).toBe('route-original');
-  expect(calls[0].options.headers).toEqual({ 'X-BoxTeam-Target-Gateway-Id': target.gateway_id });
-  expect(calls[0].options.signal).toBe(signal);
-  receipt = { ...receipt, gateway_id: 'other' };
-  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('不属于原 Gateway 或日志');
-  receipt = { ...receipt, gateway_id: target.gateway_id, selected_log_id: 'other' };
-  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('不属于原 Gateway 或日志');
-  receipt = { ...receipt, selected_log_id: 'opaque-log-id', logs: [] };
-  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('原实例日志不在目标诊断回执中');
-  receipt.logs = [{ log_id: 'opaque-log-id', status: 'empty' }];
-  expect(await read(target, 'opaque-log-id', signal)).toBe('当前实例日志为空。');
-  receipt.logs = [{ log_id: 'opaque-log-id', status: 'unavailable', error: '原日志已删除' }];
-  await expect(read(target, 'opaque-log-id', signal)).rejects.toThrow('原日志已删除');
-  expect(calls).toHaveLength(6);
-});
-
-test('关闭原插件范围后，迟到日志不再交付正文', async () => {
-  const pending = Promise.withResolvers(), controller = new AbortController();
-  const read = localizedFunction('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({ request: () => pending.promise });
-  const reading = read({ gateway_id: 'gateway-original' }, 'opaque-log-id', controller.signal);
-  controller.abort(new Error('原插件范围已关闭'));
-  pending.resolve({ gateway_id: 'gateway-original', selected_log_id: 'opaque-log-id',
-    logs: [{ log_id: 'opaque-log-id', status: 'available', tail: '迟到正文' }] });
-  await expect(reading).rejects.toThrow('原插件范围已关闭');
-});
-
 test('精确插件参数入口在首次等待前冻结 owner 与版本，不再询问范围或工作区', async () => {
   const waiting = Promise.withResolvers(), calls = [], notifications = [];
   const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original', workspace_id: 'workspace-a',
@@ -906,7 +869,7 @@ test('下载源入口冻结 Gateway 路由与发起组，只打开同一正式�
   expect(calls[0]).toEqual({ target: { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
     name: 'gateway-original', connection_kind: 'remote_gateway' }, scope: {} });
   expect(calls.find(call => call.created).created).toEqual([Input, captured.location, captured.document]);
-  expect(calls.find(call => call.opened).opened).toEqual([captured, { pinned: true, query: 'plugins.sources.entries' }, 17]);
+  expect(calls.find(call => call.opened).opened).toEqual([captured, { pinned: true, query: 'plugins.sources.entries', sourceGroup: 17 }]);
   expect(calls.at(-1)).toBe('disposed');
 });
 
@@ -925,15 +888,15 @@ test('MCP 配置和插件私有参数交给各自原命令，Gateway 插件不�
   const accessor = { get: token => token === serviceToken ? service : { async executeCommand(...args) { commands.push(args); } } };
   await run(accessor, server);
   expect(commands[0]).toEqual(['boxteam.settings.openTarget', { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
-    name: 'gateway-original', connection_kind: 'remote_gateway' }, { workspace_id: 'workspace-a' }]);
+    name: 'gateway-original', connection_kind: 'remote_gateway' }, { workspace_id: 'workspace-a', source_layer: 'workspace' }, { settingsCategory: 'tools' }]);
   await run(accessor, server, true);
   expect(commands[1]).toEqual(['boxteam.settings.pluginParameters', { gateway_id: 'gateway-original', gateway_connection_id: 'route-original',
     workspace_id: undefined, package_id: 'sample', package_version: '1.0.0', plugin_id: 'probe' }]);
   server.data.service.workspace_id = 'workspace-a';
   await run(accessor, server, true);
   expect(commands[2][1].workspace_id).toBe('workspace-a');
-  server.catalog.snapshot.error = '原工作区已移除';
-  await expect(run(accessor, server, true)).rejects.toThrow('原工作区已移除');
+  service.servers.get = () => [];
+  await expect(run(accessor, server, true)).rejects.toThrow(t('workbench.mcp.serverRemoved'));
   expect(commands).toHaveLength(3);
 });
 

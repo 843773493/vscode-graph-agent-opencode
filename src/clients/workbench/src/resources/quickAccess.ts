@@ -19,7 +19,10 @@ import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platf
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
 import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { errorDiagnostic, errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO, SessionChangesetListDTO, ThreadAttachmentListDTO, ThreadToolResultListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
@@ -203,8 +206,10 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       '终端': t('quickAccess.sources.terminalKind'), '浏览器': t('quickAccess.sources.browserKind'),
     };
     const failed = (owner: WorkspaceOwner, kind: keyof typeof sourceKindLabels, cause: unknown): SourcePick[] => [{
-      id: `${gatewayWorkspaceKey(owner)}/${kind}/failed`, label: t('quickAccess.sources.unavailable', sourceKindLabels[kind], cause instanceof Error ? cause.message : String(cause)),
-      detail: cause instanceof HttpRequestError && cause.requestId ? `request_id: ${cause.requestId}` : gatewayWorkspaceKey(owner),
+      id: `${gatewayWorkspaceKey(owner)}/${kind}/failed`, label: failureSummary(t('quickAccess.sources.unavailable', sourceKindLabels[kind], errorMessage(cause))),
+      description: gatewayWorkspaceKey(owner),
+      buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+      trigger: () => { this.report(copyTextToClipboard(`${gatewayWorkspaceKey(owner)}\n${errorDiagnostic(cause)}`)); return TriggerAction.NO_ACTION; },
     }];
     const pick = (owner: WorkspaceOwner, uri: string, label: string, description: string, available = true, errorCode?: string): SourcePick => {
       const item: SourcePick = { id: `${gatewayWorkspaceKey(owner)}/${uri}`, label: available ? label : t('quickAccess.sources.unavailableLabel', label),
@@ -245,7 +250,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             return TriggerAction.REFRESH_PICKER;
           } catch (cause) {
             nextPage = undefined;
-            if (!run.signal.aborted) this.notifications.error(cause instanceof Error ? cause.message : String(cause));
+            if (!run.signal.aborted) this.notifications.error(cause instanceof Error ? cause : errorMessage(cause));
             return TriggerAction.NO_ACTION;
           }
         })(),

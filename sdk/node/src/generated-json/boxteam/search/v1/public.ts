@@ -30,6 +30,7 @@ export interface FederatedFileSearchTargetDTO {
 export interface FederatedDiagnosticLogTargetDTO {
   gateway_id: string;
   scope: GatewayDiagnosticLogQueryScopeDTO | undefined;
+  gateway_connection_id?: string | undefined;
 }
 
 export interface FederatedSearchQueryDTO {
@@ -166,7 +167,7 @@ export const FederatedFileSearchTargetDTO: MessageFns<FederatedFileSearchTargetD
 };
 
 function createBaseFederatedDiagnosticLogTargetDTO(): FederatedDiagnosticLogTargetDTO {
-  return { gateway_id: "", scope: undefined };
+  return { gateway_id: "", scope: undefined, gateway_connection_id: undefined };
 }
 
 export const FederatedDiagnosticLogTargetDTO: MessageFns<FederatedDiagnosticLogTargetDTO> = {
@@ -174,6 +175,9 @@ export const FederatedDiagnosticLogTargetDTO: MessageFns<FederatedDiagnosticLogT
     return {
       gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
       scope: isSet(object.scope) ? GatewayDiagnosticLogQueryScopeDTO.fromJSON(object.scope) : undefined,
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
     };
   },
 
@@ -184,6 +188,9 @@ export const FederatedDiagnosticLogTargetDTO: MessageFns<FederatedDiagnosticLogT
     }
     if (message.scope !== undefined) {
       obj.scope = GatewayDiagnosticLogQueryScopeDTO.toJSON(message.scope);
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
     }
     return obj;
   },
@@ -199,6 +206,7 @@ export const FederatedDiagnosticLogTargetDTO: MessageFns<FederatedDiagnosticLogT
     message.scope = (object.scope !== undefined && object.scope !== null)
       ? GatewayDiagnosticLogQueryScopeDTO.fromPartial(object.scope)
       : undefined;
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
   },
 };

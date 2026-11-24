@@ -2,6 +2,7 @@ import { t } from "../../../../shared/core/i18n/index.js";
 import { useState, type ReactNode } from "react";
 import type { Agent, ModelReference } from "../../types/backend";
 import { sameModel } from "../../utils/modelReference";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 
 /** 日常选择锚定输入区；Shift 点击仍进入宿主 Quick Input。 */
 export default function ComposerModelControl({ models, currentModel, onOpen }: {
@@ -16,9 +17,9 @@ export default function ComposerModelControl({ models, currentModel, onOpen }: {
   const error = current?.configuration_error?.trim() || (currentModel && !current ? t("composer.model.unavailable") : undefined);
   return <div className="composer-model-control"><button type="button"
     className={`composer-model-pill${error ? " configuration-error" : ""}`}
-    title={error ? t("composer.model.currentError", error) : t("composer.model.selectWithId",
+    title={error ? failureSummary(t("composer.model.currentError", error)) : t("composer.model.selectWithId",
       current?.name ? `${label} · ${current.model}` : label, identity)}
-    aria-label={error ? t("composer.model.selectError", label, error) : t("composer.model.select", label)}
+    aria-label={error ? failureSummary(t("composer.model.selectError", label, error)) : t("composer.model.select", label)}
     aria-haspopup="listbox" aria-expanded={open} onClick={async event => {
       setOpen(true);
       try { await onOpen(event.shiftKey ? undefined : event.currentTarget); }

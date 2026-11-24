@@ -6,6 +6,7 @@ import { IContextMenuService } from '../../upstream/src/vs/platform/contextview/
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IConfigurationService, ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
+import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { ReactSurface } from '../react/surface.js';
 import { productStyles } from '../react/productStyles.js';
@@ -50,7 +51,8 @@ export class SettingsManagementView extends Disposable {
     @IConfigurationService private readonly configuration: IConfigurationService,
     @INotificationService private readonly notifications: INotificationService,
     @IViewsService private readonly views: IViewsService,
-    @IContextMenuService menus: IContextMenuService) {
+    @IContextMenuService menus: IContextMenuService,
+    @ILogService log: ILogService) {
     super();
     element.className = 'settings-management-view';
     this.heading.className = 'settings-group-title-label settings-group-level-1';
@@ -58,7 +60,7 @@ export class SettingsManagementView extends Disposable {
     element.append(this.heading, body);
     toolbarContainer.className = 'settings-management-actions';
     this.toolbar = this._register(new ToolBar(toolbarContainer, menus));
-    this.surface = this._register(new ReactSurface(body, [...productStyles, styles]));
+    this.surface = this._register(new ReactSurface(body, [...productStyles, styles], message => log.error(message)));
     this._register({ dispose: workspaceContext.subscribe(() => { if (this.page) this.render(); }) });
     this._register(configuration.onDidChangeConfiguration(event => { if (this.page === 'theme' && event.affectsConfiguration(BACKGROUND_SETTING)) this.render(); }));
     this.ready = workspaceContext.ensureReady().then(() => {
@@ -143,10 +145,10 @@ export class SettingsManagementView extends Disposable {
     const location = this.source?.location;
     const snapshot = workspaceContext.getSnapshot();
     const workspaces = this.page === 'runtime' ? snapshot.workspaces.filter(workspace => workspace.gateway_id === location?.gateway_id) : snapshot.workspaces;
-    this.surface.render(<WarmConfirmProvider><GatewaySettingsContent key={JSON.stringify([this.page, location?.gateway_id, location?.workspace_id, this.request.diagnosticLocation])}
+    this.surface.render(<WarmConfirmProvider><GatewaySettingsContent key={JSON.stringify([this.page, location?.gateway_id, location?.workspace_id])}
       page={this.page} entryGatewayId={this.lifetime.entryGatewayId} workspaces={workspaces} revision={this.revision}
       target={location ?? { gateway_id: this.lifetime.entryGatewayId }}
-      diagnosticLocation={this.request.diagnosticLocation} dialog={this.dialog} onCloseDialog={() => { this.dialog = undefined; this.render(); }}
+      dialog={this.dialog} onCloseDialog={() => { this.dialog = undefined; this.render(); }}
       onChanged={() => { this.revision++; this.render(); }}
       onAddRemoteGatewayConnection={payload => this.navigation(payload)} onRefresh={() => this.navigation('refresh')}
       onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
@@ -163,7 +165,6 @@ export class SettingsManagementView extends Disposable {
         if (!target) throw new Error(t('gateway.connections.ownerUnavailable'));
         await this.commands.executeCommand('boxteam.gateway.diagnostics', target);
       })}
-      onCloseLocation={() => { this.request = {}; this.render(); }}
       onOpenLog={target => this.commands.executeCommand('boxteam.output.openLog', target)}
       onStart={id => this.commands.executeCommand(workspaceActionCommands.start, workspaceOwnerFromKey(id))}
       onStop={id => this.commands.executeCommand(workspaceActionCommands.stop, workspaceOwnerFromKey(id))}

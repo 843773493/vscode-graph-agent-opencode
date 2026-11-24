@@ -17,7 +17,7 @@ import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBr
 import { mountReactTestHarness } from "../../tests/fixtures/session/reactHarness";
 import { mountSessionRunActions } from "../../tests/fixtures/session/sessionRunActions";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorDiagnostic, errorMessage } from "../../utils/errorMessage";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
@@ -36,6 +36,7 @@ const businessRequests: string[] = [];
 function installGatewayFetch(...[handler, options]: Parameters<typeof installGatewayFetchMock>): void {
   expectsBusinessRequest = true;
   installGatewayFetchMock(async (request) => {
+    if (request.url.startsWith("data:")) return handler(request);
     expect(request.path.startsWith("/api/v1/")).toBe(true);
     const headers = new Headers(request.init?.headers);
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER_A.gatewayId);
@@ -202,14 +203,30 @@ describe("发送消息状态更新", () => {
     let resolveSend!: (response: Response) => void;
     const sent = new Promise<Response>((resolve) => { resolveSend = resolve; });
     const attachment: AttachmentRef = {
-      file_id: "attachment_same_id", name: "当前附件.txt", data_url: "data:text/plain;base64,QQ==",
+      file_id: "attachment_same_id", name: "当前附件.txt", content_type: "text/plain", data_url: "data:text/plain;base64,QQ==",
     };
     const initial = state(session());
     const otherScope = sessionScopeKey(WORKSPACE_B, SESSION_ID);
     initial.sessionAttachmentSummaries.set(otherScope, { count: 1, names: ["其它工作区.txt"], latestAt: null });
+    const uploaded = { file_id: attachment.file_id, name: attachment.name, content_type: "text/plain", size: 1 };
+    let uploads = 0;
     installGatewayFetch(async (request) => {
+      if (request.url === attachment.data_url) {
+        expect(request.method).toBe("GET");
+        expect(request.init).toBeUndefined();
+        return new Response(new Uint8Array([0x41]), { headers: { "Content-Type": "text/plain" } });
+      }
+      if (request.path === `/api/v1/sessions/${SESSION_ID}/threads/thr_run_actions/attachments`) {
+        expect(request.method).toBe("POST");
+        expect(new URL(request.url, "http://localhost").searchParams.get("name")).toBe(attachment.name!);
+        expect(new Headers(request.init?.headers).get("Content-Type")).toBe("text/plain");
+        expect(await (request.init!.body as Blob).text()).toBe("A");
+        uploads += 1;
+        return apiSuccessResponse(uploaded);
+      }
       if (request.path !== MESSAGES_PATH || request.method !== "POST") return undefined;
       const body = JSON.parse(String(request.init?.body)) as MessageRunRequest;
+      expect(body.message.attachments).toEqual([uploaded]);
       const records = await loadMessageSubmissions({
         workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions",
       });
@@ -230,6 +247,7 @@ describe("发送消息状态更新", () => {
       turn_id: "turn_owner_accepted", thread_id: "thr_run_actions", status: "running",
       dispatch: dispatchFacts({ job_id: "job_owner_accepted", active_job_id: "job_owner_accepted" }) }));
     await sending;
+    expect(uploads).toBe(1);
     const accepted = mounted.state().pendingConversations.get(CACHE_KEY)?.[0];
     expect(accepted?.threadId).toBe("thr_run_actions");
     expect(accepted?.userMessage?.thread_id).toBe("thr_run_actions");
@@ -490,10 +508,13 @@ describe("发送消息状态更新", () => {
 
     const mounted = runActions(currentSession);
 
-    await expect(mounted.actions.sendMessage("你好")).rejects.toBeInstanceOf(MessageSubmissionUnknownError);
+    const sending = mounted.actions.sendMessage("你好");
+    await expect(sending).rejects.toBeInstanceOf(MessageSubmissionUnknownError);
+    await expect(sending).rejects.toMatchObject({ cause: { status: 502, path: MESSAGES_PATH } });
+    expect(errorDiagnostic(await sending.catch(error => error))).toContain("HTTP: 502");
 
     expect(mounted.state().status).toContain("发送失败: 消息接收结果尚未确认");
-    expect(mounted.state().status).toContain("请求失败 502 : 模型网关拒绝");
+    expect(mounted.state().status).toContain("模型网关拒绝");
     expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.pending).toBe(true);
     expect((await loadMessageSubmissions({ workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" }))
       .map(record => record.request.message.content)).toEqual(["你好"]);
@@ -508,13 +529,14 @@ describe("发送消息状态更新", () => {
 
     const mounted = runActions(currentSession);
 
-    await expect(
-      mounted.actions.replayTurn("msg_original", "regenerate", "原始回复"),
-    ).rejects.toThrow("上下文窗口已失效");
+    const replay = mounted.actions.replayTurn("msg_original", "regenerate", "原始回复");
+    await expect(replay).rejects.toThrow("上下文窗口已失效");
+    await expect(replay).rejects.toMatchObject({ status: 409, path: REPLAY_PATH });
+    expect(errorDiagnostic(await replay.catch(error => error))).toContain("HTTP: 409");
 
     // 轮次回放失败会改动后端历史投影，必须触发一次历史 bootstrap 重载。
     expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
-    expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
+    expect(mounted.state().status).toBe("轮次操作失败: 上下文窗口已失效");
     // 此错误属于单次轮次操作，不能写入工作区初始化失败通道并替换整个聊天区。
     expect(mounted.state().error).toBeNull();
   });
@@ -548,7 +570,7 @@ describe("发送消息状态更新", () => {
       "job_still_running",
     );
     // 失败侧显式可见：状态串带原始原因，且触发一次历史 bootstrap 承接权威收敛。
-    expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
+    expect(mounted.state().status).toBe("轮次操作失败: 上下文窗口已失效");
     expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
     expect(mounted.state().error).toBeNull();
     // replay 失败不在此 hook 内做本地待处理队列重取（无乐观态可失配）；

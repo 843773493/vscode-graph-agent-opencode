@@ -661,7 +661,7 @@ if (extension instanceof WorkspaceMcpServer) {
     contents = replaceOnce(contents, '\t\treturn this.input.model;\n\t}\n\n\tprivate renderInput()', '\t\treturn this.input.model;\n\t\t} catch (error) { this.workspaceMcpQueryFailed = true; throw error; }\n\t}\n\n\tprivate renderInput()');
     contents = replaceOnce(contents, '\t\tthis._register(this.list.onContextMenu(e => this.onContextMenu(e), this));', `\t\tthis._register(this.list.onContextMenu(e => this.onContextMenu(e), this));
 if (this.id === 'boxteam.mcp.view') void this.show('').catch(error => {
-  if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+  if (!isCancellationError(error)) this.updateBody({ text: errorSummary(error), severity: Severity.Error });
 });`);
     contents = replaceOnce(contents, '"MCP Servers - Installed"', '"MCP Servers - Configured"');
     contents = replaceOnce(contents, '\t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {', `\t\tthis._register(observeWorkspaceMcpView(this, this.mcpWorkbenchService));
@@ -669,20 +669,20 @@ this._register(this.mcpWorkbenchService.onChange(() => {
   if (this.workspaceMcpQueryFailed && this.currentQuery === '' && this.isBodyVisible()
     && this.mcpWorkbenchService instanceof WorkspaceMcpWorkbenchService && this.mcpWorkbenchService.isLocalCatalogAvailable) {
     void this.show('').catch(error => {
-      if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+      if (!isCancellationError(error)) this.updateBody({ text: errorSummary(error), severity: Severity.Error });
     });
   }
 }));
 this._register(this.mcpWorkbenchService.onReset(() => {
   if (this.currentQuery === '' && this.isBodyVisible()) { this.input?.disposables.dispose(); this.input = undefined; this.updateBody(); void this.show('').catch(error => {
-    if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+    if (!isCancellationError(error)) this.updateBody({ text: errorSummary(error), severity: Severity.Error });
   }); }
 }));
 \t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {`);
     contents = replaceOnce(contents, '\t\t\t\tupdateEnablement();', '\t\t\t\tdata.description.textContent = mcpServer.description;\n\t\t\t\tupdateEnablement();');
     contents = replaceOnce(contents, 'if (newMcpServers.every(r => r.id !== oldMcpServer.id) && newMcpServers.some(r => r.name === oldMcpServer.name)) {', 'if (newMcpServers.every(r => r.id !== oldMcpServer.id)) {');
     contents = replaceOnce(contents, 'disposables.add(this.mcpWorkbenchService.onReset(() => onDidChangeModel.fire(new PagedModel([...this.mcpWorkbenchService.local]))));', 'disposables.add(this.mcpWorkbenchService.onReset(() => { servers = [...this.mcpWorkbenchService.local]; onDidChangeModel.fire(new PagedModel(servers)); }));');
-    contents = `import { observeWorkspaceMcpView, WorkspaceMcpWorkbenchService } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\n` + contents;
+    contents = `import { errorSummary } from ${JSON.stringify(join(root, '../web/src/utils/errorMessage.js'))};\nimport { observeWorkspaceMcpView, WorkspaceMcpWorkbenchService } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\n` + contents;
   }
   contents = transformRetiredMcpGallery(relative, contents, replaceOnce);
   return transformMcpWorkbenchView(relative, contents, replaceOnce, replaceSection);

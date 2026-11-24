@@ -2,10 +2,13 @@ import { SseProtocolError } from "./sse.js";
 
 export class RealtimeDisconnectedError extends TypeError {}
 export class RealtimeTransportError extends Error {
-  constructor(status, message, requestId) {
-    super(message);
+  constructor(status, message, requestId, context = {}) {
+    super(message, { cause: context.cause });
     this.status = status;
     this.requestId = requestId;
+    this.detail = context.detail;
+    this.subscriptionId = context.subscriptionId;
+    this.path = context.path;
   }
 }
 const channels = new Map();
@@ -85,6 +88,7 @@ class RealtimeChannel {
           frame.status ?? 500,
           frame.message ?? "实时连接失败",
           frame.request_id ?? null,
+          { detail: frame.detail },
         );
       throw new SseProtocolError("实时控制帧缺少订阅 ID");
     }
@@ -110,8 +114,11 @@ class RealtimeChannel {
       pending.controller.close();
       this.release(frame.subscription_id);
     } else if (frame.type === "error") {
-      const error = new Error(
-        `${frame.message ?? "实时订阅失败"} (${frame.request_id ?? ""})`,
+      const error = new RealtimeTransportError(
+        frame.status ?? 500,
+        frame.message ?? "实时订阅失败",
+        frame.request_id ?? null,
+        { detail: frame.detail, subscriptionId: frame.subscription_id, path: pending.path },
       );
       pending.reject(error);
       pending.controller.error(error);
@@ -164,6 +171,7 @@ class RealtimeChannel {
       );
       const abort = () => cancel();
       const pending = {
+        path: request.path,
         resolve,
         reject,
         controller,
@@ -222,8 +230,13 @@ class RealtimeChannel {
     if (this.closed) return;
     this.rejectReady(error);
     for (const [identity, pending] of this.pending) {
-      pending.reject(error);
-      pending.controller.error(error);
+      // 共享连接失败沿各自发起路径交付，不能改写同一个异常的订阅归属。
+      const failure = error instanceof RealtimeTransportError
+        ? new RealtimeTransportError(error.status, error.message, error.requestId,
+          { detail: error.detail, path: pending.path, subscriptionId: identity, cause: error })
+        : error;
+      pending.reject(failure);
+      pending.controller.error(failure);
       this.release(identity);
     }
     this.close();

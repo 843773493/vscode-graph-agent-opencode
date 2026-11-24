@@ -15,7 +15,10 @@ import { DefaultQuickAccessFilterValue, Extensions, type IQuickAccessRegistry } 
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
 import { discoverGatewayWorkspaces } from '../../../web/src/api/gateway/catalogSearch.js';
-import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { errorDiagnostic, errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { chooseSearchOwners } from './quickAccessScope.js';
@@ -117,9 +120,10 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
         return items;
       } catch (error) {
         if (!alive()) return [];
-        return [...rows.values(), { id: 'workspace-discovery-failed', label: t('quickAccess.workspace.failed', error instanceof Error ? error.message : String(error)),
-          detail: error instanceof HttpRequestError && error.requestId ? `request_id: ${error.requestId}` : undefined,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.workspace.retry') }], trigger: () => publish(cursor) }];
+        return [...rows.values(), { id: 'workspace-discovery-failed', label: failureSummary(t('quickAccess.workspace.failed', errorMessage(error))),
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.workspace.retry') },
+            { iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+          trigger: index => { if (index === 0) return publish(cursor); this.report(copyTextToClipboard(errorDiagnostic(error))); return TriggerAction.NO_ACTION; } }];
       } finally { loading = false; }
     };
     return load().then(items => ({ items, active: run.options.workspaceRestore?.value === run.picker.value

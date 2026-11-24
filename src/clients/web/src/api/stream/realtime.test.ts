@@ -206,3 +206,48 @@ test('六个订阅同时认证失败只刷新一次，不互相撤销新凭据�
     try { await finished; } finally { globalThis.WebSocket = originalSocket; }
   }
 });
+
+test('响应开始后的订阅失败保留安全原因和自身关联，不中断共享连接的其它订阅', async () => {
+  const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+  backend(url => new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.set(url.pathname, controller); } }),
+    { headers: { 'Content-Type': 'text/event-stream' } }));
+  const controller = new AbortController(), received: string[] = [];
+  const first = consumeRealtimeSubscription(49960, () => ({ path: '/failed-owner' }), { events: {} });
+  const rejected = first.catch(error => error);
+  const second = consumeRealtimeSubscription(49960, () => ({ path: '/healthy-owner' }), {
+    signal: controller.signal, events: { changed: defineSseEvent(value => value, value => received.push(value)) },
+  });
+  try {
+    await until(() => streams.size === 2);
+    const socket = RealtimeTestSocket.sockets[0]!;
+    const identity = Number(socket.commands.find(command => command.path === '/failed-owner')!.subscription_id);
+    socket.control({ type: 'error', subscription_id: identity, request_id: 'failed-request',
+      message: '原owner拒绝操作', detail: { code: 'unknown_error', message: '原owner拒绝操作', details: { stage: 'realtime-subscription' } } });
+    const error = await rejected;
+    expect(error).toBeInstanceOf(HttpRequestError);
+    expect(error).toMatchObject({ message: '原owner拒绝操作', path: '/failed-owner', requestId: 'failed-request',
+      cause: { subscriptionId: identity, path: '/failed-owner', requestId: 'failed-request' } });
+    expect(error.message).not.toContain('failed-request');
+    expect(socket.readyState).toBe(1);
+    streams.get('/healthy-owner')!.enqueue(new TextEncoder().encode('event: changed\ndata: alive\n\n'));
+    await until(() => received.length === 1);
+    expect(received).toEqual(['alive']);
+  } finally { controller.abort(); await second; }
+});
+
+test('共享连接错误按各自订阅包装，不变异共享异常或交错目标路径', async () => {
+  backend(() => new Response(new ReadableStream(), { headers: { 'Content-Type': 'text/event-stream' } }));
+  const first = consumeRealtimeSubscription(49961, () => ({ path: '/owner-a' }), { events: {} }).catch(error => error);
+  const second = consumeRealtimeSubscription(49961, () => ({ path: '/owner-b' }), { events: {} }).catch(error => error);
+  await until(() => RealtimeTestSocket.sockets[0]?.commands.filter(command => command.type === 'subscribe').length === 2);
+  RealtimeTestSocket.sockets[0]!.control({ type: 'error', status: 403, request_id: 'connection-request',
+    message: '共享入口拒绝', detail: { code: 'access_denied', message: '共享入口拒绝' } });
+  const [a, b] = await Promise.all([first, second]);
+  expect(a).not.toBe(b);
+  expect(a).toMatchObject({ path: '/owner-a', requestId: 'connection-request', cause: { path: '/owner-a' } });
+  expect(b).toMatchObject({ path: '/owner-b', requestId: 'connection-request', cause: { path: '/owner-b' } });
+  expect(a.cause).not.toBe(b.cause);
+  expect(a.cause.cause).toBe(b.cause.cause);
+  expect(a.cause.cause.path).toBeUndefined();
+  expect(a.cause.cause.subscriptionId).toBeUndefined();
+});

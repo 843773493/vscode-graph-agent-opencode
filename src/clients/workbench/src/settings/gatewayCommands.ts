@@ -7,7 +7,6 @@ import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platfo
 import { getGatewayHealth, restartDevelopmentRuntime } from '../../../web/src/gatewayApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { createManagementTargetLifecycle, managementGateway, listManagementTargets, type ManagementTarget } from '../managementTarget.js';
-import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import messages from '../../../shared/core/i18n/messages/en.json';
 
@@ -15,7 +14,7 @@ for (const [page, title] of [['connections', 'gateway.control.connections'], ['c
   ['runtime', 'gateway.control.runtime'], ['diagnostics', 'gateway.control.diagnostics']] as const) registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.gateway.' + page, title: { value: t(title), original: messages[title] }, f1: true,
     menu: page === 'credentials' ? [{ id: MenuId.AccountsContext, group: '2_boxteam', order: 1 }] : undefined }); }
-  async run(accessor: ServicesAccessor, explicit?: ManagementTarget | string, workspaceId?: string, diagnosticLocation?: GatewayDiagnosticLogLocateRequest): Promise<void> {
+  async run(accessor: ServicesAccessor, explicit?: ManagementTarget | string, workspaceId?: string): Promise<void> {
     const commands = accessor.get(ICommandService);
     await workspaceContext.ensureReady();
     const entry = workspaceContext.getSnapshot().gatewayId!;
@@ -28,7 +27,7 @@ for (const [page, title] of [['connections', 'gateway.control.connections'], ['c
     }
     await commands.executeCommand('boxteam.settings.openTarget', target, { workspace_id: workspaceId, source_layer: 'user' },
       { settingsCategory: page === 'connections' || page === 'credentials' ? 'connections' : page === 'runtime' ? 'runtime' : 'observability',
-        managementPage: page, diagnosticLocation });
+        managementPage: page });
   }
 });
 

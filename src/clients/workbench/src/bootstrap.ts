@@ -2,23 +2,16 @@ import './typography.css';
 import { setLocaleResources, t, type DisplayLocale, type MessageCatalog } from '../../shared/core/i18n/index.js';
 import bootstrapMessages from '../../shared/core/i18n/bootstrapMessages.json';
 import { loadWorkbenchNlsMessages } from './nlsResources.js';
+import { renderStartupFailure } from './startupFailure.js';
 
 declare const __BOXTEAM_NLS_MANIFEST__: string;
 
 const localeKey = 'vscode.nls.locale';
 
-function showError(key: string, detail?: string, recover?: { labelKey: string; run: () => void }): void {
-  const status = document.getElementById('startup-status');
-  const error = document.getElementById('startup-error');
-  if (!status || !error) throw new Error(t(key));
-  status.textContent = t(key);
-  error.textContent = detail ?? '';
-  if (recover) {
-    const button = document.createElement('button');
-    button.textContent = t(recover.labelKey);
-    button.addEventListener('click', recover.run, { once: true });
-    error.append(button);
-  }
+function showError(key: string, detail?: unknown, recover?: { labelKey: string; run: () => void }): void {
+  renderStartupFailure(t(key), detail, {
+    diagnostic: t('bootstrap.diagnostic'), copyDiagnostic: t('bootstrap.copyDiagnostic'), copied: t('bootstrap.copied'),
+  }, recover && { label: t(recover.labelKey), run: recover.run });
 }
 
 async function start(): Promise<void> {
@@ -38,13 +31,13 @@ async function start(): Promise<void> {
   setLocaleResources(locale, bootstrapMessages[locale]);
   if (locale === 'en') document.documentElement.lang = 'en';
   if (storageError !== undefined) {
-    showError('bootstrap.readLocaleFailed', storageError instanceof Error ? storageError.stack ?? storageError.message : String(storageError));
+    showError('bootstrap.readLocaleFailed', storageError);
     return;
   }
   if (unsupportedLocale) {
     showError('bootstrap.unsupportedLocale', `vscode.nls.locale=${stored}`, { labelKey: 'bootstrap.clearLocale', run: () => {
       try { localStorage.removeItem(localeKey); location.reload(); }
-      catch (error) { showError('bootstrap.readLocaleFailed', error instanceof Error ? error.stack ?? error.message : String(error)); }
+      catch (error) { showError('bootstrap.readLocaleFailed', error); }
     } });
     return;
   }
@@ -55,7 +48,7 @@ async function start(): Promise<void> {
       ? (await import('../../shared/core/i18n/messages/zh-cn.json')).default
       : (await import('../../shared/core/i18n/messages/en.json')).default;
   } catch (error) {
-    showError(locale === 'zh-cn' ? 'bootstrap.loadChineseFailed' : 'bootstrap.loadEnglishFailed', error instanceof Error ? error.stack ?? error.message : String(error), {
+    showError(locale === 'zh-cn' ? 'bootstrap.loadChineseFailed' : 'bootstrap.loadEnglishFailed', error, {
       labelKey: 'bootstrap.retry', run: () => location.reload(),
     });
     return;
@@ -69,13 +62,13 @@ async function start(): Promise<void> {
     nlsMessages = await loadWorkbenchNlsMessages(locale, fetch, __BOXTEAM_NLS_MANIFEST__);
   } catch (error) {
     showError(locale === 'zh-cn' ? 'bootstrap.loadChineseFailed' : 'bootstrap.loadEnglishFailed',
-      error instanceof Error ? error.stack ?? error.message : String(error), {
+      error, {
         labelKey: 'bootstrap.clearLocale', run: () => {
           try {
             localStorage.removeItem(localeKey);
             location.reload();
           } catch (cause) {
-            showError('bootstrap.readLocaleFailed', cause instanceof Error ? cause.stack ?? cause.message : String(cause));
+            showError('bootstrap.readLocaleFailed', cause);
           }
         },
       });
@@ -86,7 +79,7 @@ async function start(): Promise<void> {
     await import('./main.js');
   } catch (error) {
     showError('bootstrap.workbenchLoadFailed',
-      error instanceof Error ? error.stack ?? error.message : String(error), {
+      error, {
         labelKey: 'bootstrap.retry', run: () => location.reload(),
       });
   }

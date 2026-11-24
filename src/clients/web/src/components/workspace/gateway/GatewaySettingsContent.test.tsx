@@ -10,7 +10,7 @@ afterEach(restoreGatewayTestEnvironment);
 const noop = async () => {};
 const props: GatewaySettingsContentProps = { page: 'connections', entryGatewayId: 'gateway_local', target: { gateway_id: 'gateway_local' }, workspaces: [], revision: 0,
   onCloseDialog: noop, onChanged: noop, onAddRemoteGatewayConnection: noop, onRefresh: noop, onRemoteGatewayReconnected: noop,
-  onOpenConfiguration: noop, onOpenLogs: noop, onCloseLocation: noop, onOpenLog: noop, background: DEFAULT_BACKGROUND,
+  onOpenConfiguration: noop, onOpenLogs: noop, onOpenLog: noop, background: DEFAULT_BACKGROUND,
   onUpdateBackground: noop, onStart: noop, onStop: noop, onSafeRestart: noop, onForceRestart: noop };
 async function mount(overrides: Partial<GatewaySettingsContentProps> = {}) {
   let renderer!: ReactTestRenderer;
@@ -22,7 +22,7 @@ async function mount(overrides: Partial<GatewaySettingsContentProps> = {}) {
   return renderer;
 }
 
-test('健康读取失败仍使用冻结入口读取连接目录，保留 request_id', async () => {
+test('健康读取失败仍使用冻结入口读取连接目录，默认仅显示原因', async () => {
   const paths: string[] = [];
   installGatewayFetch(({ path }) => {
     paths.push(path);
@@ -33,7 +33,8 @@ test('健康读取失败仍使用冻结入口读取连接目录，保留 request
   });
   const renderer = await mount();
   try {
-    expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('req_denied');
+    expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('健康读取被拒绝');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('req_denied');
     expect(paths).toContain('/api/gateway/management/gateways');
     expect(paths).not.toContain('/api/gateway/device-connections');
     expect(JSON.stringify(renderer.toJSON())).toContain('gateway_local');

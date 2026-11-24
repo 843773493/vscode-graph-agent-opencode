@@ -164,6 +164,7 @@ async def federation_diagnostics(
     workspace_id: str | None = Query(default=None),
     log_id: str | None = Query(default=None),
     tail_lines: int = Query(default=300, ge=20, le=1000),
+    include_tail: bool = Query(default=True),
     _: object = Depends(verify_federation_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -173,7 +174,7 @@ async def federation_diagnostics(
             registry,
             selected_workspace_id=workspace_id,
             selected_log_id=log_id,
-            tail_lines=tail_lines,
+            tail_lines=tail_lines, include_tail=include_tail,
             service_plugins=getattr(request.app.state, "service_plugins", None),
             observation=getattr(request.app.state, "runtime_observation", None),
         )

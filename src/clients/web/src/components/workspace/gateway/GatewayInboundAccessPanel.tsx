@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   listGatewayDeviceConnections,
@@ -11,13 +11,9 @@ import type {
 } from "../../../types/backend";
 import { formatLocalDateTime } from "../../../utils/format";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
-import { errorMessage } from "../../../utils/errorMessage";
-import { HttpRequestError } from "../../../api/http";
-
-function accessError(error: unknown): string {
-  return error instanceof HttpRequestError && error.requestId
-    ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error);
-}
+import { errorDiagnostic, errorMessage } from "../../../utils/errorMessage";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
+import { ComposerDiagnosticsContext } from "../../composer/ComposerDiagnosticsContext";
 
 interface GatewayInboundAccessPanelProps {
   apiPort: number;
@@ -29,6 +25,7 @@ export default function GatewayInboundAccessPanel({
   revision = 0,
 }: GatewayInboundAccessPanelProps) {
   const confirm = useWarmConfirm();
+  const diagnostics = useContext(ComposerDiagnosticsContext);
   const [inbound, setInbound] = useState<GatewayInboundAccessList | null>(null);
   const [devices, setDevices] = useState<GatewayDeviceConnection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,11 +43,11 @@ export default function GatewayInboundAccessPanel({
       setInbound(nextInbound);
       setDevices(nextDevices.items);
     } catch (loadError) {
-      setError(accessError(loadError));
+      setError(errorMessage(loadError)); diagnostics(errorDiagnostic(loadError));
     } finally {
       setLoading(false);
     }
-  }, [apiPort]);
+  }, [apiPort, diagnostics]);
 
   useEffect(() => {
     void load();
@@ -77,7 +74,8 @@ export default function GatewayInboundAccessPanel({
       await load();
     } catch (revokeError) {
       await load();
-      setError((readError) => [accessError(revokeError), readError].filter(Boolean).join("\n"));
+      setError((readError) => [errorMessage(revokeError), readError].filter(Boolean).join("\n"));
+      diagnostics(errorDiagnostic(revokeError));
     } finally {
       setRevokingId(null);
     }
@@ -93,7 +91,7 @@ export default function GatewayInboundAccessPanel({
 
       </div>
 
-      {error ? <div className="panel-feedback" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.operationFailed")}</strong><span>{error}</span></div></div> : null}
+      {error ? <div className="panel-feedback" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.operationFailed")}</strong><span className="failure-summary">{failureSummary(error)}</span></div></div> : null}
 
       {inbound ? <div className="gateway-federation-peers" aria-label={t("gateway.inbound.scope")}>
         <h3>{t("gateway.inbound.owner")}</h3>

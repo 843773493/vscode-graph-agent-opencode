@@ -22,6 +22,7 @@ import { workspaceContext } from '../workspaceContext.js';
 import { parseSearchEditorScope, searchEditorScopeKey, type SearchEditorScope } from './editorScope.js';
 import { SearchWorkspaceContext, type SearchScope } from './scope.js';
 import { captureSearchOwner, loadSearchScope } from './target.js';
+import { errorMessage, errorSummary, isErrorReported } from '../../../web/src/utils/errorMessage.js';
 
 /** 发起时捕获，恢复／factory 入口不得调用它来猜历史范围。 */
 export function captureNewSearchEditorScope(editors: IEditorService, supplied?: SearchEditorScope): Promise<SearchEditorScope> {
@@ -57,7 +58,8 @@ export class ScopedSearchEditor extends SearchEditor {
   }
 
   private reportFailure(error: unknown): void {
-    if (!isCancellationError(error)) this.instantiationService.invokeFunction(accessor => accessor.get(INotificationService).error(error instanceof Error ? error : String(error)));
+    if (!isCancellationError(error) && !isErrorReported(error)) this.instantiationService.invokeFunction(accessor =>
+      accessor.get(INotificationService).error(error instanceof Error ? error : errorMessage(error)));
   }
 
   protected override getReadonlyConfiguration(isReadonly: boolean | IMarkdownString | undefined) {
@@ -99,7 +101,7 @@ export class ScopedSearchEditor extends SearchEditor {
       controller.abort();
       this.scopeFailure = error;
       if (this.input) this.updateReadonly(this.input);
-      if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.history', error instanceof Error ? error.message : String(error));
+      if (this.scopeButton) this.scopeButton.label = errorSummary(error);
     });
     return this.pendingScope;
   }
@@ -180,7 +182,7 @@ export class ScopedSearchEditor extends SearchEditor {
       controller.abort();
       if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
       this.scopeFailure = error;
-      if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.unavailable', error instanceof Error ? error.message : String(error));
+      if (this.scopeButton) this.scopeButton.label = errorSummary(error);
       throw error;
     }
     if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;

@@ -3,6 +3,14 @@ import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/s
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { ThreadPane } from '../../../../../src/clients/workbench/src/threadPane.js';
 import { InMemoryStorageService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/storage/common/storage.js';
+import { NotificationService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/notification/common/notificationService.js';
+import { FileService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/files/common/fileService.js';
+import { FileOperationError, FileOperationResult } from '../../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
+import { TextFileSaveErrorHandler } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.js';
+import { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
+import { VSBuffer } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/buffer.js';
+import { ReportedError, ReportedAggregateError } from '../../../../../src/clients/web/src/utils/errorMessage.js';
+import { HttpRequestError } from '../../../../../src/clients/web/src/api/http.js';
 import { CancellationToken } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { EditorPaneSelectionChangeReason } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/common/editor.js';
 import { ChatSurface } from '../../../../../src/clients/workbench/src/react/chatView.js';
@@ -23,6 +31,66 @@ export { contentSelectionContract } from './content_selection.fixture.mjs';
 export { quickAccessControllerContract } from './quick_access_controller.fixture.mjs';
 export { typingSearchContract } from './typing_performance.fixture.mjs';
 export { canonicalSearchContract } from './canonical_search.fixture.mjs';
+
+/** 原生通知模型与真实转换出口；仅窗口日志collector为显式宿主边界。 */
+export async function notificationFailureContract() {
+  const storage = new InMemoryStorageService(), logs = [];
+  const service = new NotificationService(storage, { error: message => logs.push(message) });
+  try {
+    const cause = new HttpRequestError(409, 'Conflict', { message: `主操作拒绝 token=private-test-token ${'长原因'.repeat(100)}` }, '/original/operation', 'original-request');
+    const reported = new ReportedError('已有行内反馈', cause);
+    service.error(reported);
+    const afterReported = service.model.notifications.length;
+    service.error(new AggregateError([reported, new Error('状态重读拒绝')], '操作与状态重读部分失败'));
+    const item = service.model.notifications[0];
+    const visible = { count: service.model.notifications.length, message: item.message.raw,
+      actions: item.actions.secondary.map(action => action.id) };
+    await item.actions.secondary.find(action => action.id === 'boxteam.notification.copyDiagnostic').run();
+    const copied = await navigator.clipboard.readText();
+    service.error(new ReportedAggregateError([reported, cause], '整体已展示'));
+    const afterAggregate = service.model.notifications.length;
+    service.error(cause);
+    const independent = service.model.notifications[0].message.raw;
+    return { afterReported, visible, copied, afterAggregate, independent, count: service.model.notifications.length, logs,
+      originalMessage: cause.message, originalDetail: cause.detail.message, retainedCause: reported.cause === cause };
+  } finally { service.dispose(); storage.dispose(); }
+}
+
+/** 编译后的原FileService与保存handler；provider和宿主动作创建为显式边界。 */
+export async function configurationSaveFailureContract() {
+  const storage = new InMemoryStorageService(), logs = [], closes = [];
+  const service = new NotificationService(storage, { error: message => logs.push(message) });
+  const resource = URI.parse('boxteam-config-source://original-gateway/workspace/original-workspace/source.jsonc');
+  const http = new HttpRequestError(422, 'Unprocessable Content', { message: '原配置字段拒绝',
+    details: { source_uri: 'boxteam://workspace/original/resources/config/source', issues: [{ path: ['field'], message: '必须是字符串', path_exact: true }] } },
+    '/api/v1/config/sources/source/preflight', 'original-source-request');
+  const source = new Error('配置修改失败，草稿已保留。原配置字段拒绝', { cause: http });
+  const provider = { capabilities: 2, writeFile: async () => { throw source; } };
+  const options = { create: true, overwrite: true };
+  const files = Object.assign(Object.create(FileService.prototype), {
+    withWriteProvider: async () => provider, throwIfFileSystemIsReadonly: value => value,
+    getExtUri: () => ({ providerExtUri: {} }), validateWriteFile: async () => ({ stat: {} }),
+    writeQueue: { queueFor: (_resource, operation) => operation() },
+    resourceForError: uri => uri.toString(), _onDidRunOperation: { fire() { throw new Error('失败不能发布写成功事件'); } },
+  });
+  try {
+    let failure;
+    try { await files.writeFile(resource, VSBuffer.fromString('{}'), options); } catch (error) { failure = error; }
+    if (!(failure instanceof FileOperationError)) throw new Error('原FileService未返回文件操作错误');
+    const actions = [];
+    const handler = Object.assign(Object.create(TextFileSaveErrorHandler.prototype), {
+      notificationService: service, messages: { set(uri, handle) { closes.push({ uri: uri.toString(), handle: Boolean(handle) }); } },
+      instantiationService: { createInstance(ctor) { const action = { id: ctor.name, dispose() {} }; actions.push(action); return action; } },
+    });
+    handler.onSaveError(failure, { resource }, {});
+    const item = service.model.notifications[0];
+    const visible = { count: service.model.notifications.length, message: item.message.raw,
+      actions: item.actions.primary.map(action => action.id) };
+    await item.actions.secondary.find(action => action.id === 'boxteam.notification.copyDiagnostic').run();
+    return { visible, copied: await navigator.clipboard.readText(), logs, closes, causePreserved: failure.cause === source,
+      originalOptions: failure.options === options, result: failure.fileOperationResult, expectedResult: FileOperationResult.FILE_OTHER_ERROR };
+  } finally { service.dispose(); storage.dispose(); }
+}
 
 /** 真实恢复入口与具名阅读控制器；原生恢复不得成为主动展示切换。 */
 export function viewportRestoreContract(ready) {

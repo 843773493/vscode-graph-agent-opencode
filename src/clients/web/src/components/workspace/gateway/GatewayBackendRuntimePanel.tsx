@@ -1,9 +1,10 @@
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../../types/backend";
-import { errorMessage } from "../../../utils/errorMessage";
-import { HttpRequestError } from "../../../api/http";
+import { errorDiagnostic, errorMessage } from "../../../utils/errorMessage";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
+import { ComposerDiagnosticsContext } from "../../composer/ComposerDiagnosticsContext";
 
 export interface GatewayBackendRuntimeActions {
   onStart: (id: string) => Promise<void>;
@@ -15,6 +16,7 @@ export interface GatewayBackendRuntimeActions {
 export default function GatewayBackendRuntimePanel({
   workspaces, workspaceKey, onStart, onStop, onSafeRestart, onForceRestart,
 }: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[]; workspaceKey?: string }) {
+  const diagnostics = useContext(ComposerDiagnosticsContext);
   const [memberSelection, setMemberSelection] = useState<{
     backendGeneration: string;
     targetWorkspaceId: string;
@@ -72,15 +74,14 @@ export default function GatewayBackendRuntimePanel({
     setActionError(null);
     try { await runtimeAction(); setMemberSelection(null); }
     catch (failure) {
-      const detail = failure instanceof HttpRequestError && failure.requestId
-        ? `${errorMessage(failure)} · request_id=${failure.requestId}` : errorMessage(failure);
-      setActionError(t("gateway.runtime.actionFailedForGroup", target.gateway_id, target.workspace_id, detail));
+      setActionError(errorMessage(failure));
+      diagnostics(`Gateway=${target.gateway_id} workspace=${target.workspace_id}\n${errorDiagnostic(failure)}`);
     }
     finally { setActionBusy(false); }
   };
   return <section aria-label={t("gateway.runtime.section")}>
     <p>{t("gateway.runtime.lifecycleImpact")}</p>
-    {actionError ? <div className="gateway-console-alert" role="alert">{actionError}</div> : null}
+    {actionError ? <div className="gateway-console-alert failure-summary" role="alert">{failureSummary(actionError)}</div> : null}
     {visibleGroups.map((runtimeGroup) => {
       const {
         groupKey,

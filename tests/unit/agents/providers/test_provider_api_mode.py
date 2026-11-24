@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,7 +31,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_request,
     record_upstream_response,
 )
-from app.core.failures import is_provider_failure
+from app.core.failures import is_provider_failure, public_error
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.runtime.agent_runtime import prepare_agent_model
@@ -1494,23 +1496,23 @@ def test_responses_stream_terminal_event_records_complete_upstream_response():
 
 
 @pytest.mark.parametrize("event_type", ["response.failed", "error"])
-def test_responses_failure_events_are_marked_as_provider_failures(event_type: str):
+def test_responses_failure_events_are_marked_as_provider_failures(event_type: str, monkeypatch):
     model = BoxteamOpenAIResponsesModel(
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
         invocation_purpose="tool_test",
         proxy_routes=ProxyRoutes(()),
+        streaming=True,
     )
-
-    with pytest.raises(RuntimeError, match="LiteLLM Responses 请求失败") as raised:
-        model._convert_response_event(
-            SimpleNamespace(type=event_type),
-            current_index=-1,
-            current_output_index=-1,
-            current_sub_index=-1,
-            part_state=_StreamPartState(),
-            original_schema=None,
-        )
-
-    assert is_provider_failure(raised.value)
+    monkeypatch.setattr(
+        "app.agents.providers.openai_responses.litellm.responses",
+        lambda **_kwargs: iter([SimpleNamespace(type=event_type, message="upstream exposed test-key")]),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="LiteLLM Responses 请求失败") as raised:
+            list(model.stream("hi"))
+        assert is_provider_failure(raised.value)
+        assert "test-key" not in json.dumps(public_error(raised.value))
+    finally:
+        asyncio.run(model.aclose())

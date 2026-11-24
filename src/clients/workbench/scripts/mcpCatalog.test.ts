@@ -14,6 +14,9 @@ import { workspaceContext } from '../src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { PluginRuntimeStatusDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { McpConnectionState } from '../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
+import { CancellationError } from '../upstream/src/vs/base/common/errors.js';
+import { HttpRequestError } from '../../web/src/api/http.js';
+import { errorDiagnostic, isErrorReported, ReportedError } from '../../web/src/utils/errorMessage.js';
 
 const target = { gateway_id: 'gateway-a', workspace_id: '00000000-0000-4000-8000-000000000001' };
 const other = { gateway_id: 'gateway-b', workspace_id: '00000000-0000-4000-8000-000000000002' };
@@ -242,8 +245,8 @@ test('提交失败与状态重读失败均保留，不把原错误替换成重�
   const failure = await catalog.act('secure', 'connect').catch(error => error);
   expect(failure).toBeInstanceOf(AggregateError);
   expect(failure.errors).toEqual([submitFailure, readFailure]);
-  expect(catalog.snapshot.actionError).toBe(submitFailure.message);
-  expect(catalog.snapshot.error).toBe(readFailure.message);
+  expect(catalog.snapshot.actionError).toBe(submitFailure);
+  expect(catalog.snapshot.error).toBe(readFailure);
   expect(catalog.isBusy).toBe(false);
   expect(mocks.submit).toHaveBeenCalledTimes(1);
 });
@@ -259,7 +262,8 @@ test('提交回执未知时只重读真实状态，OAuth 拒绝错误同样保�
   catalog.snapshot = { ...catalog.snapshot, operations: [operation] };
   mocks.authorize.mockRejectedValueOnce(new Error('authorization denied'));
   await expect(catalog.act('secure', 'authorize')).rejects.toThrow('authorization denied');
-  expect(catalog.snapshot.actionError).toBe('authorization denied');
+  expect(catalog.snapshot.actionError).toBeInstanceOf(Error);
+  expect((catalog.snapshot.actionError as Error).message).toBe('authorization denied');
   expect(await model(catalog).getReadme(CancellationToken.None)).toContain('authorization&nbsp;denied');
 });
 
@@ -328,6 +332,51 @@ test('移除目标中止原请求，迟到结果不发布，也不改投当前�
   expect(catalog.snapshot.catalog?.catalog_generation).toBe(1);
   await expect(catalog.act('secure', 'connect')).rejects.toThrow('目标已移除');
   expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+test('原操作失败只交付一次并保留原 HTTP 异常，后续独立操作仍有自己的回执', async () => {
+  const catalog = create();
+  await catalog.refresh();
+  const original = new HttpRequestError(503, 'Unavailable', { message: '原连接操作失败' },
+    '/api/v1/mcp/connections/operations', 'request-original');
+  mocks.submit.mockRejectedValue(original);
+  const reports: unknown[] = [];
+  const item = new WorkspaceMcpServer(catalog, server.server_id, async () => {}, () => ({ dispose() {} }), error => {
+    reports.push(error); return new ReportedError('原连接操作失败', error);
+  });
+  for (let index = 0; index < 2; index++) {
+    const failure = await item.start().catch(error => error);
+    expect(isErrorReported(failure)).toBe(true);
+    expect(failure.cause).toBe(original);
+    expect(errorDiagnostic(failure)).toContain('request-original');
+    expect(catalog.snapshot.actionError).toBe(original);
+  }
+  expect(reports).toEqual([original, original]);
+  expect(original.message).toBe('原连接操作失败');
+});
+
+test.each(['resolve', 'reject'] as const)('目标移除后操作迟到 %s 沿原取消通道，不发布或提示到新区域', async outcome => {
+  let publications = 0;
+  const catalog = create(target, () => { ++publications; });
+  await catalog.refresh();
+  const pending = Promise.withResolvers<api.McpConnectionOperationDTO>();
+  mocks.submit.mockImplementationOnce(() => pending.promise);
+  const reports: unknown[] = [];
+  const item = new WorkspaceMcpServer(catalog, server.server_id, async () => {}, () => ({ dispose() {} }), error => {
+    reports.push(error); return new ReportedError('不应发布', error);
+  });
+  const failure = item.start().catch(error => error);
+  catalog.dispose();
+  const afterDispose = publications;
+  if (outcome === 'resolve') pending.resolve(operation);
+  else pending.reject(new Error('旧目标迟到失败'));
+  expect(await failure).toBeInstanceOf(CancellationError);
+  expect(publications).toBe(afterDispose);
+  expect(reports).toEqual([]);
+  expect(catalog.snapshot.actionError).toBeUndefined();
+  expect(catalog.snapshot.operations).toEqual([]);
+  expect(catalog.isBusy).toBe(false);
+  expect(mocks.read).toHaveBeenCalledTimes(1);
 });
 
 function workspaceList(owner = target): GatewayWorkspaceList {

@@ -70,7 +70,7 @@ async def test_shared_process_is_one_diagnostic_branch_and_one_hit(log_http: htt
     branch, = summary.branches
     assert branch.branch.diagnostics is not None
     assert branch.branch.owner is None and branch.branch.diagnostics.scope.workspace_ids == (A, SHARED)
-    assert branch.returned_results == 1 and branch.state == "limited" and branch.code == "source_unavailable"
+    assert branch.returned_results == 1 and branch.state == "complete" and branch.code is None
     assert "only-b" not in actual[1].model_dump_json() and "only-g" not in actual[1].model_dump_json()
     assert "root_path" not in actual[1].model_dump_json()
 
@@ -197,6 +197,20 @@ async def test_named_query_locate_serialize_and_preserve_unicode(log_http: httpx
     stale = await log_http.post("/api/gateway/diagnostics/locate", json=locate)
     assert stale.status_code == 409 and stale.json()["detail"] == {
         "owner": "runtime_log", "code": "stale_runtime_log_reference", "reason": "record_changed", "message": "原运行日志记录已改写"}
+
+
+async def test_named_query_and_locate_accept_connection_selector(log_http: httpx.AsyncClient) -> None:
+    query = {"scope": {"source": "workspace", "workspace_ids": [A]}, "query": "needle", "limit": 1}
+    selected_query = await log_http.post(
+        "/api/gateway/diagnostics/query?gateway_connection_id=remote-selection", json=query,
+    )
+    assert selected_query.status_code == 404
+    reference = (await log_http.post("/api/gateway/diagnostics/query", json=query)).json()["data"]["items"][0]["reference"]
+    selected_locate = await log_http.post(
+        "/api/gateway/diagnostics/locate?gateway_connection_id=remote-selection",
+        json={"scope": query["scope"], "reference": reference},
+    )
+    assert selected_locate.status_code == 404
 
 
 @pytest.mark.parametrize("path", ["/api/gateway/diagnostics/query", "/api/gateway/federation/diagnostics/query"])

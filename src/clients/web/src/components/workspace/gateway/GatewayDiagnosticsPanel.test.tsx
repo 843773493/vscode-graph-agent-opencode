@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayDiagnostics, GatewayWorkspace } from "../../../types/backend";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
@@ -12,6 +13,8 @@ import { HttpRequestError } from "../../../api/http";
 
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+const elementGlobals = ["HTMLElement", "HTMLInputElement", "HTMLTextAreaElement"] as const;
+const originalElementGlobals = elementGlobals.map(name => Object.getOwnPropertyDescriptor(globalThis, name));
 
 afterEach(() => {
   restoreGatewayTestEnvironment();
@@ -21,6 +24,7 @@ afterEach(() => {
     Reflect.deleteProperty(navigator, "clipboard");
   }
   restoreGlobalDescriptor("document", originalDocument);
+  elementGlobals.forEach((name, index) => restoreGlobalDescriptor(name, originalElementGlobals[index]));
 });
 
 const workspace: GatewayWorkspace = {
@@ -110,6 +114,7 @@ async function flush(): Promise<void> {
 /** 非安全上下文：navigator.clipboard 缺失，只能靠 document.execCommand 兼容复制。 */
 function stubLegacyClipboard(run: () => void): number {
   Reflect.deleteProperty(navigator, "clipboard");
+  for (const name of elementGlobals) Object.defineProperty(globalThis, name, { configurable: true, value: class {} });
   let execCommandCalls = 0;
   Object.defineProperty(globalThis, "document", {
     configurable: true,
@@ -133,7 +138,7 @@ function stubLegacyClipboard(run: () => void): number {
   return execCommandCalls;
 }
 
-test("非安全上下文下复制日志仍走兼容复制，而不是直接报剪贴板错误", async () => {
+test("非安全上下文下复制诊断摘要仍走原剪贴板入口", async () => {
   installGatewayFetch(({ path }) => {
     if (path === "/api/gateway/diagnostics") {
       return Response.json({ data: diagnostics(), request_id: "req_diag" });
@@ -148,7 +153,7 @@ test("非安全上下文下复制日志仍走兼容复制，而不是直接报�
   await flush();
 
   const copyButton = renderer.root.findAllByType("button").find(
-    (button) => Array.isArray(button.children) && button.children.includes("复制"),
+    (button) => Array.isArray(button.children) && button.children.includes("复制诊断摘要"),
   );
   expect(copyButton).toBeDefined();
 
@@ -214,7 +219,7 @@ test("诊断摘要不复制日志、错误正文或未知扩展字段", async ()
   renderer.unmount();
 });
 
-test("存储位置只展示原诊断归属，保留设置失败携带原 request_id", async () => {
+test("存储位置只展示原诊断归属，设置失败显示简短原因", async () => {
   const snapshot = { ...diagnostics(), control_directory: String.raw`C:\BoxTeam\control`, log_directory: String.raw`C:\BoxTeam\logs` };
   const targets: unknown[] = [];
   installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
@@ -230,7 +235,16 @@ test("存储位置只展示原诊断归属，保留设置失败携带原 request
   const open = renderer.root.findAllByType("button").find(button => button.children.includes("打开 Gateway 日志保留设置"));
   await act(async () => { open!.props.onClick(); await Promise.resolve(); });
   expect(targets).toEqual([{ gateway_id: snapshot.gateway_id, gateway_connection_id: undefined }]);
-  expect(JSON.stringify(renderer.toJSON())).toContain("request_id=req_retention_denied");
+  expect(JSON.stringify(renderer.toJSON())).toContain("configuration_read");
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("req_retention_denied");
+  let copied = "";
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied = text; } } });
+  const copy = renderer.root.findAllByType("button").find(button => button.children.includes(t('shell.copyDiagnostic')));
+  expect(copy).toBeDefined();
+  await act(async () => { copy!.props.onClick(); await Promise.resolve(); });
+  expect(copied).toContain("req_retention_denied");
+  expect(copied).toContain("/api/gateway/config/sources");
+  expect(copied).toContain("configuration_read");
   renderer.unmount();
 });
 
@@ -431,7 +445,8 @@ test("首次诊断读取失败展示空错误态并停止加载提示", async ()
   const rendered = JSON.stringify(renderer.toJSON());
   expect(rendered).toContain("日志读取失败");
   expect(rendered).toContain("当前范围没有可用的诊断快照");
-  expect(rendered).toContain("request_id=req_failed_diagnostics");
+  expect(rendered).toContain("Gateway 诊断服务暂不可用");
+  expect(rendered).not.toContain("req_failed_diagnostics");
   expect(rendered).not.toContain("正在读取 Gateway 诊断信息");
   expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" })).toBeDefined();
   renderer.unmount();

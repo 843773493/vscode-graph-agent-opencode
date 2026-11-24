@@ -1,7 +1,6 @@
 import type { APIResponse, CursorPage } from "../types/backend";
 import { gatewayWorkspaceOwner, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "./workspaceIdentity";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
-import { truncateDisplayText } from "../utils/displayText";
 import { boundedFailureText, failureMessage } from "@boxteam/plugin-sdk/failures";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
@@ -64,12 +63,6 @@ export interface HttpFailureContext {
   error_type?: string;
 }
 
-export function formatFailureContext(context: HttpFailureContext): string {
-  let location = `；来源=${Object.values(context.source).join("/")}；阶段=${context.stage}`;
-  if (context.target && Object.keys(context.target).length) location += `；目标=${JSON.stringify(context.target)}`;
-  return location;
-}
-
 function parseHttpFailureContext(raw: string): HttpFailureContext {
   const value: unknown = JSON.parse(raw);
   if (!value || typeof value !== "object") throw new Error("错误来源不是对象");
@@ -82,11 +75,15 @@ function parseHttpFailureContext(raw: string): HttpFailureContext {
       || !Object.values(context.target).every(item => typeof item === "string")))) {
     throw new Error("错误来源字段无效");
   }
-  return context as HttpFailureContext;
+  return { source: context.source, stage: context.stage,
+    ...(context.target ? { target: context.target } : {}),
+    ...(typeof context.error_type === "string" ? { error_type: context.error_type } : {}) };
 }
 
 export class HttpRequestError extends Error {
   readonly context: HttpFailureContext | null;
+  readonly contextDiagnostic?: string;
+  readonly bodyDiagnostic?: string;
 
   constructor(
     readonly status: number,
@@ -95,28 +92,23 @@ export class HttpRequestError extends Error {
     readonly path: string,
     readonly requestId: string | null,
     rawContext: string | null = null,
+    diagnostic: { body?: string; message?: string; cause?: unknown } = {},
   ) {
     let context: HttpFailureContext | null = null;
-    let location = "";
+    let contextDiagnostic: string | undefined;
     if (rawContext !== null) {
       try {
         context = parseHttpFailureContext(rawContext);
-        location = formatFailureContext(context);
-      } catch (cause) {
-        // 来源损坏也要显式报告，同时保留原 HTTP 状态与业务错误。
-        location = `；错误来源元数据无效: ${cause instanceof Error ? cause.message : String(cause)}`;
+      } catch {
+        // 不携带原响应头或 JSON 引擎的解析片段。
+        contextDiagnostic = "错误来源元数据无效";
       }
     }
-    const association = requestId ? `；request_id=${boundedFailureText(requestId, { maxBytes: 256 })}` : "";
-    const suffix = boundedFailureText(`${location}；请求=${path}`, {
-      maxBytes: 2048 - new TextEncoder().encode(association).length,
-    }) + association;
-    const prefix = `请求失败 ${status} ${boundedFailureText(statusText, { maxBytes: 128 })}: `;
-    super(prefix + boundedFailureText(httpErrorDetailMessage(detail, path), {
-      maxBytes: Math.max(0, 8192 - new TextEncoder().encode(prefix + suffix).length),
-    }) + suffix);
+    super(diagnostic.message ?? httpErrorDetailMessage(detail), { cause: diagnostic.cause });
     this.name = "HttpRequestError";
     this.context = context;
+    this.contextDiagnostic = contextDiagnostic;
+    this.bodyDiagnostic = diagnostic.body;
   }
 }
 
@@ -140,7 +132,7 @@ export function isTransientNetworkError(error: unknown): boolean {
     );
 }
 
-function httpErrorDetailMessage(detail: unknown, fallback: string): string {
+function httpErrorDetailMessage(detail: unknown): string {
   if (typeof detail === "string" && detail.trim()) return boundedFailureText(detail);
   if (detail && typeof detail === "object" && "message" in detail) {
     const message = detail.message;
@@ -165,7 +157,7 @@ function httpErrorDetailMessage(detail: unknown, fallback: string): string {
     }
     if (messages.length) return boundedFailureText(messages.join("; "));
   }
-  return boundedFailureText(fallback);
+  return "未提供错误原因";
 }
 
 /** 非 JSON 错误响应保留的原始文本片段上限：HTML 错误页可能极长，不能整段带进错误文案。 */
@@ -176,15 +168,15 @@ const ERROR_BODY_SNIPPET_LIMIT = 200;
  * JSON 时，把这件事本身作为可诊断信息返回，而不是吞成无 detail。断流与截断响应
  * 下用户才能看到真实原因。
  */
-export async function readHttpErrorDetail(response: Response): Promise<unknown> {
+export async function readHttpErrorDetail(response: Response, signal?: AbortSignal): Promise<{ detail?: unknown; diagnostic?: string }> {
   const reader = response.body?.getReader();
-  if (!reader) return "响应体为空";
+  if (!reader) return { diagnostic: "响应体为空" };
   let raw = "";
   let json = response.headers.get("Content-Type")?.includes("json") ?? false;
   const decoder = new TextDecoder();
   try {
     while (true) {
-      const chunk = await reader.read();
+      const chunk = await awaitWithAbort(reader.read(), signal);
       if (chunk.done) { raw += decoder.decode(); break; }
       if (!json) {
         const prefix = new TextDecoder().decode(chunk.value);
@@ -200,29 +192,25 @@ export async function readHttpErrorDetail(response: Response): Promise<unknown> 
       raw += decoder.decode(chunk.value, { stream: true });
     }
   } catch (error) {
-    return `响应体不可读取: ${failureMessage(error)}`;
+    void reader.cancel().catch(() => undefined);
+    return { diagnostic: `响应体不可读取: ${failureMessage(error)}` };
   } finally {
     reader.releaseLock();
   }
   const trimmed = raw.trim();
-  if (!trimmed) return "响应体为空";
+  if (!trimmed) return { diagnostic: "响应体为空" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    const safe = boundedFailureText(trimmed);
-    const snippet = safe.length > ERROR_BODY_SNIPPET_LIMIT
-      ? `${truncateDisplayText(safe, ERROR_BODY_SNIPPET_LIMIT)}…`
-      : safe;
-    return `响应体不是 JSON: ${snippet}`;
+    return { diagnostic: jsonBodyDiagnosticMessage(trimmed) };
   }
   if (parsed && typeof parsed === "object") {
     const envelope = parsed as { detail?: unknown; message?: unknown };
     // 保留业务 detail 原结构；顶层公共 Error 的 code/details 也不能在解析时丢失。
-    return envelope.detail ?? parsed;
+    return { detail: envelope.detail ?? parsed };
   }
-  const safe = boundedFailureText(trimmed);
-  return `响应体不是 JSON 对象: ${safe.length > ERROR_BODY_SNIPPET_LIMIT ? `${truncateDisplayText(safe, ERROR_BODY_SNIPPET_LIMIT)}…` : safe}`;
+  return { diagnostic: jsonBodyDiagnosticMessage(trimmed) };
 }
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
@@ -334,9 +322,10 @@ export function getGatewayToken(port: number): Promise<string> {
   })
     .then(async (response) => {
       if (!response.ok) {
+        const body = await readHttpErrorDetail(response, abortState.signal);
         throw new HttpRequestError(response.status, response.statusText,
-          await readHttpErrorDetail(response), path, response.headers.get("X-Request-ID"),
-          response.headers.get("X-BoxTeam-Error-Context"));
+          body.detail, path, response.headers.get("X-Request-ID"),
+          response.headers.get("X-BoxTeam-Error-Context"), { body: body.diagnostic });
       }
       const payload = await awaitWithAbort(
         response.json() as Promise<APIResponse<{ token: string }>>,
@@ -348,7 +337,7 @@ export function getGatewayToken(port: number): Promise<string> {
     })
     .catch((error) => {
       gatewayTokenByPort.delete(port);
-      if (abortState.didTimeout()) throw new Error(`请求超时: ${path}`);
+      if (abortState.didTimeout() && !(error instanceof HttpRequestError)) throw new Error(`请求超时: ${path}`);
       throw error;
     })
     .finally(() => abortState.cleanup());
@@ -375,12 +364,12 @@ async function runGatewayRequest<T>(
   } = init ?? {};
   const timeoutErrorMessage = `请求超时: ${path}`;
   const abortState = createRequestAbortState(signal, timeoutMs, timeoutErrorMessage);
+  let response: Response | null = null;
 
   try {
     // 本机凭据由 Gateway 持久保存；明确失效时只重新获取并重试一次。
     let tokenPromise = getGatewayToken(port);
     const requestHeaders = new Headers(normalizeHeaders(headers));
-    let response: Response | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const localToken = await awaitWithAbort(tokenPromise, abortState.signal);
       requestHeaders.set("X-Local-Token", localToken);
@@ -393,7 +382,7 @@ async function runGatewayRequest<T>(
         }),
         abortState.signal,
       );
-      if (attempt === 0 && await isInvalidGatewayToken(response)) {
+      if (attempt === 0 && await awaitWithAbort(isInvalidGatewayToken(response), abortState.signal)) {
         if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port, "refresh");
         tokenPromise = getGatewayToken(port);
         continue;
@@ -404,19 +393,28 @@ async function runGatewayRequest<T>(
       throw new Error(`请求未获得响应: ${path}`);
     }
     if (!response.ok) {
+      const body = await readHttpErrorDetail(response, abortState.signal);
+      if (signal?.aborted) throw abortReason(signal);
       throw new HttpRequestError(
         response.status,
         response.statusText,
-        await readHttpErrorDetail(response),
+        body.detail,
         path,
         response.headers.get("X-Request-ID"),
         response.headers.get("X-BoxTeam-Error-Context"),
+        { body: body.diagnostic },
       );
     }
     return await consume(response, abortState.signal);
   } catch (error) {
-    // 超时同时可能发生在响应体消费阶段，统一按既有超时文案收口。
-    if (abortState.didTimeout()) throw new Error(timeoutErrorMessage);
+    if (signal?.aborted) throw abortReason(signal);
+    // 已收到的响应不能被正文期限覆盖成无状态的网络错误。
+    if (abortState.didTimeout() && response && !(error instanceof HttpRequestError)) {
+      throw new HttpRequestError(response.status, response.statusText, undefined, path,
+        response.headers.get("X-Request-ID"), response.headers.get("X-BoxTeam-Error-Context"),
+        { message: response.ok ? "响应正文读取超时" : undefined, body: failureMessage(error) });
+    }
+    if (abortState.didTimeout() && !(error instanceof HttpRequestError)) throw new Error(timeoutErrorMessage);
     throw error;
   } finally {
     abortState.cleanup();
@@ -490,12 +488,22 @@ async function parseJsonResponseOrThrowDiagnostic<T>(
   path: string,
   signal: AbortSignal | undefined,
 ): Promise<T> {
-  const text = await awaitWithAbort(response.text(), signal);
-  if (signal?.aborted) throw abortReason(signal);
+  let text: string;
+  try {
+    text = await awaitWithAbort(response.text(), signal);
+    if (signal?.aborted) throw abortReason(signal);
+  } catch (error) {
+    if (signal?.aborted) throw abortReason(signal);
+    throw new HttpRequestError(response.status, response.statusText, undefined, path,
+      response.headers.get("X-Request-ID"), response.headers.get("X-BoxTeam-Error-Context"),
+      { message: "响应正文无法读取", body: failureMessage(error) });
+  }
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new Error(jsonBodyDiagnosticMessage(response, path, text.slice(0, 512)));
+    throw new HttpRequestError(response.status, response.statusText, undefined, path,
+      response.headers.get("X-Request-ID"), response.headers.get("X-BoxTeam-Error-Context"),
+      { message: "响应无法按 JSON 解包", body: jsonBodyDiagnosticMessage(text) });
   }
 }
 
@@ -532,21 +540,17 @@ export function unwrapApiDataOrNull<T>(response: APIResponse<T | null>): T | nul
  * 「响应体为空」这类真实原因写进错误文案，而不是把引擎的 SyntaxError 直接暴露给用户。
  * 正文只带前缀片段，绝不把巨型载荷整段带进错误。
  */
-function jsonBodyDiagnosticMessage(
-  response: Response,
-  path: string,
-  bodyPrefix: string,
-): string {
-  const trimmed = bodyPrefix.trim();
-  const snippet = trimmed.length > ERROR_BODY_SNIPPET_LIMIT
-    ? `${truncateDisplayText(trimmed, ERROR_BODY_SNIPPET_LIMIT)}…`
-    : trimmed;
+function jsonBodyDiagnosticMessage(body: string): string {
+  const trimmed = boundedFailureText(body).trim();
+  const points = Array.from(trimmed);
+  const snippet = points.length > ERROR_BODY_SNIPPET_LIMIT
+    ? `${points.slice(0, ERROR_BODY_SNIPPET_LIMIT).join("")}…` : trimmed;
   const shape = !trimmed
     ? "响应体为空"
     : trimmed.startsWith("<")
       ? "响应体看起来是 HTML"
       : "响应体不是 JSON";
-  return `${path} 返回 ${response.status} ${response.statusText}，但${shape}: ${snippet}`;
+  return `${shape}${snippet ? `: ${snippet}` : ""}`;
 }
 
 /** 描述非法值的观测形态，供协议校验错误定位用（不打印原始内容，避免巨型载荷）。 */

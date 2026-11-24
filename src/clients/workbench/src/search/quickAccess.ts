@@ -42,6 +42,8 @@ import { captureSearchOwner, createSearchRootLoader, type loadSearchRoots, type 
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
 import { searchCategoryLabel, type NameSearchCategory, type ContentSearchCategory, type SearchCategory } from './quickAccessQuery.js';
 import { queryFederatedSearchBranches } from './quickAccessFederation.js';
+import { errorDiagnostic, errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
@@ -313,7 +315,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       branches = queryFederatedSearchBranches(run.owners, categories, filter, queryDisposables, queryCancellation.token, run.cache,
         (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace, { uri: item.uri, owner })
           : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.uri, item.title, item.description, item.detail, item.requestLog)
-            : item.kind === 'log' ? this.logPick(run, item.location, item.title, item.description, item.detail)
+            : item.kind === 'log' ? this.logPick(run, item.location, item.gatewayConnectionId, item.title, item.description, item.detail)
             : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
         current => { branches = current; refresh(); },
         value => { branchesBusy = value; updateBusy(); },
@@ -384,7 +386,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private failure(category: string, label: string, error: unknown): ResourcePick {
-    return { id: `error-${category}`, label: t('quickAccess.categoryQueryFailed', label, error instanceof Error ? error.message : String(error)) };
+    return { id: `error-${category}`, label: errorSummary(error, label),
+      buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+      trigger: () => { this.report(copyTextToClipboard(errorDiagnostic(error))); return TriggerAction.NO_ACTION; } };
   }
 
   private async symbolPicks(run: AccessRun, active: ResourcePick, filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Pick<ResourcePick>[]> {
@@ -519,15 +523,16 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       })()) };
   }
 
-  private logPick(run: AccessRun, location: GatewayDiagnosticLogLocateRequest, label: string, description: string, detail: string): ResourcePick {
+  private logPick(run: AccessRun, location: GatewayDiagnosticLogLocateRequest, gatewayConnectionId: string | undefined,
+    label: string, description: string, detail: string): ResourcePick {
     const reference = location.reference!;
-    return { id: `log:${reference.gateway_id}/${reference.log_id}/${reference.device}/${reference.inode}/${reference.line_start}/${reference.content_version}/${reference.start_codepoint}`,
+    return { id: `log:${reference.gateway_id}/${gatewayConnectionId ? `${gatewayConnectionId}/` : ''}${reference.log_id}/${reference.device}/${reference.inode}/${reference.line_start}/${reference.content_version}/${reference.start_codepoint}`,
       label, description, detail, iconClass: ThemeIcon.asClassName(Codicon.output),
       accept: (_mods, event) => this.report((async () => {
         this.assertAccess(run);
-        await this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand('boxteam.gateway.diagnostics',
-          { gateway_id: reference.gateway_id, name: reference.gateway_id, connection_kind: reference.gateway_id === workspaceContext.getSnapshot().gatewayId ? 'local' : 'remote_gateway' },
-          location.scope?.workspace_ids[0], location));
+        await this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand('boxteam.output.openLog',
+          { gateway_id: reference.gateway_id, gateway_connection_id: gatewayConnectionId,
+            workspace_id: location.scope?.workspace_ids[0], log_id: reference.log_id, location }));
       })()) };
   }
 

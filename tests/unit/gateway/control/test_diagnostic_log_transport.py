@@ -130,3 +130,84 @@ async def test_ambiguous_gateway_connection_never_chooses_first(remote_logs, mon
     monkeypatch.setattr("app.gateway.control.diagnostic_log_transport.send_remote_gateway_management", unexpected)
     with pytest.raises(LookupError, match="不能唯一确定"):
         await read_diagnostic_log_target(registry, payload, gateway_id=REMOTE, request_id="req_remote_logs")
+
+
+async def test_explicit_connection_selects_matching_remote_gateway_route(remote_logs, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, payload = remote_logs
+    original = registry.remote_gateway_connection("logs-remote")
+    selected = replace(original, connection_id="logs-remote-selected")
+    registry.apply_remote_projection_snapshot(
+        connection=selected, projections=(), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://selected.test"}),
+    )
+    FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+        connection_id=selected.connection_id, peer_gateway_id=registry.gateway_id,
+    )
+    request = GatewayDiagnosticLogQueryRequest.model_validate({
+        **payload.model_dump(mode="json"), "scope": {"source": "gateway", "workspace_ids": []},
+    })
+    calls = []
+
+    async def send(**kwargs):
+        calls.append(kwargs)
+        response = httpx.Response(
+            200,
+            headers={"X-Request-ID": "req_selected"},
+            request=httpx.Request("POST", "http://selected.test/api/gateway/federation/diagnostics/query"),
+            json={"code": 0, "request_id": "req_selected", "data": {
+                "gateway_id": REMOTE, "scope": request.scope.model_dump(mode="json"), "query": request.query,
+                "items": [], "sources": [], "complete": True, "scanned_sources": 0,
+                "scanned_lines": 0, "scanned_bytes": 0,
+            }},
+        )
+        return response
+
+    monkeypatch.setattr("app.gateway.control.diagnostic_log_transport.send_remote_gateway_management", send)
+    result = await read_diagnostic_log_target(
+        registry, request, gateway_id=REMOTE, gateway_connection_id=selected.connection_id,
+        request_id="req_selected",
+    )
+
+    assert result.gateway_id == REMOTE
+    assert len(calls) == 1
+    assert calls[0]["gateway_url"] == "http://selected.test"
+    assert calls[0]["credential"].connection_id == selected.connection_id
+
+
+@pytest.mark.parametrize("connection_id", ["missing-connection", "logs-remote-wrong-owner"])
+async def test_explicit_connection_rejects_missing_or_wrong_owner_before_http(
+    remote_logs, monkeypatch: pytest.MonkeyPatch, connection_id: str,
+) -> None:
+    registry, payload = remote_logs
+    if connection_id == "logs-remote-wrong-owner":
+        original = registry.remote_gateway_connection("logs-remote")
+        wrong_owner = replace(original, connection_id=connection_id, remote_gateway_id="gateway_" + "c" * 32)
+        registry.apply_remote_projection_snapshot(connection=wrong_owner, projections=(), runtime=WorkspaceRuntime(
+            service_urls={"workspace_api": "http://wrong-owner.test"},
+        ))
+
+    async def unexpected(**kwargs):
+        raise AssertionError("失效或错属的显式连接不能发起 HTTP 请求")
+
+    monkeypatch.setattr("app.gateway.control.diagnostic_log_transport.send_remote_gateway_management", unexpected)
+    with pytest.raises(LookupError):
+        await read_diagnostic_log_target(
+            registry, payload, gateway_id=REMOTE, gateway_connection_id=connection_id, request_id="req_remote_logs",
+        )
+
+
+async def test_explicit_connection_cannot_query_unrelated_workspace(remote_logs, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, payload = remote_logs
+    selected = replace(registry.remote_gateway_connection("logs-remote"), connection_id="logs-remote-unrelated")
+    registry.apply_remote_projection_snapshot(connection=selected, projections=(), runtime=WorkspaceRuntime(
+        service_urls={"workspace_api": "http://unrelated.test"},
+    ))
+
+    async def unexpected(**kwargs):
+        raise AssertionError("明确连接不拥有目标工作区时不得读取日志")
+
+    monkeypatch.setattr("app.gateway.control.diagnostic_log_transport.send_remote_gateway_management", unexpected)
+    with pytest.raises(LookupError, match="不属于所选工作区"):
+        await read_diagnostic_log_target(
+            registry, payload, gateway_id=REMOTE, gateway_connection_id=selected.connection_id,
+            request_id="req_remote_logs",
+        )

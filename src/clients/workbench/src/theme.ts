@@ -15,6 +15,8 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, readAppearanceBackground, loadAndApplyBackground, applyBackground } from '../../web/src/theme/theme.js';
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../shared/core/failurePresentation.js';
+import { ILogService } from '../upstream/src/vs/platform/log/common/log.js';
 import type { IColorTheme } from '../upstream/src/vs/platform/theme/common/themeService.js';
 import type { ITheme } from '@xterm/xterm';
 import { ansiColorIdentifiers } from '../upstream/src/vs/workbench/contrib/terminal/common/terminalColorRegistry.js';
@@ -97,6 +99,7 @@ class AppearanceContribution extends Disposable {
     @IConfigurationService private readonly configuration: IConfigurationService,
     @IWorkbenchLayoutService private readonly layout: IWorkbenchLayoutService,
     @INotificationService private readonly notifications: INotificationService,
+    @ILogService private readonly log: ILogService,
   ) {
     super();
     this._register(configuration.onDidChangeConfiguration(event => { if (event.affectsConfiguration(BACKGROUND_SETTING)) this.apply(); }));
@@ -108,11 +111,11 @@ class AppearanceContribution extends Disposable {
     try {
       const background = readWorkbenchBackground(this.configuration.getValue(BACKGROUND_SETTING));
       void loadAndApplyBackground(background, { root: this.layout.mainContainer, signal: load.signal }).then(result => {
-        if (result.backgroundWarning) this.notifications.warn(result.backgroundWarning);
-      }, cause => { if (!load.signal.aborted) this.notifications.error(errorMessage(cause)); });
+        if (result.backgroundWarning) { this.log.warn(errorMessage(result.backgroundWarning)); this.notifications.warn(failureSummary(result.backgroundWarning)); }
+      }, cause => { if (!load.signal.aborted) this.notifications.error(cause instanceof Error ? cause : errorMessage(cause)); });
     } catch (cause) {
       applyBackground(DEFAULT_BACKGROUND, this.layout.mainContainer);
-      this.notifications.error(errorMessage(cause));
+      this.notifications.error(cause instanceof Error ? cause : errorMessage(cause));
     }
   }
   override dispose(): void { this.load?.abort(); super.dispose(); }

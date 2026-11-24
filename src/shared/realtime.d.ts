@@ -6,8 +6,14 @@ export interface RealtimeSubscriptionRequest {
 }
 export class RealtimeDisconnectedError extends TypeError {}
 export class RealtimeTransportError extends Error {
+  constructor(status: number, message: string, requestId: string | null, context?: {
+    detail?: unknown; subscriptionId?: number; path?: string; cause?: unknown;
+  });
   readonly status: number;
   readonly requestId: string | null;
+  readonly detail?: unknown;
+  readonly subscriptionId?: number;
+  readonly path?: string;
 }
 export function openRealtimeResponse(
   url: string,

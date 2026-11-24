@@ -150,45 +150,6 @@
   color: var(--vscode-errorForeground);
 }
 
-.gateway-diagnostics-viewer {
-  min-width: 0;
-  padding: 8px 12px;
-}
-
-.gateway-diagnostics-viewer > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.gateway-diagnostics-viewer > header > div {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.gateway-diagnostics-viewer > header :is(span, small) {
-  display: block;
-  color: var(--vscode-descriptionForeground);
-}
-
-.gateway-diagnostics-viewer > button {
-  margin-top: 12px;
-}
-
-.gateway-diagnostics-viewer pre {
-  max-height: 50vh;
-  padding: 8px;
-  overflow: auto;
-  background: var(--vscode-textCodeBlock-background);
-  color: var(--vscode-editor-foreground);
-  font-family: var(--vscode-editor-font-family, monospace);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .gateway-diagnostics-viewer-empty,
 .gateway-diagnostics-loading {
   padding: 16px 0;
@@ -203,9 +164,5 @@
   .gateway-diagnostics-log-list {
     border-right: 0;
     border-bottom: 1px solid var(--vscode-widget-border);
-  }
-
-  .gateway-diagnostics-viewer {
-    padding: 12px 0;
   }
 }

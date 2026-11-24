@@ -1,6 +1,7 @@
 import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform, transformedSourcePaths } from './sourceTransform.mjs';
 import { actionTitleKeys, parseUniqueJson, writeActionTitleProjection, writeBootstrapMessageProjection } from './actionTitles.mjs';
 import { buildExtensions } from './extensions.mjs';
+import { injectStartupFailure } from './startupFailure.mjs';
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -262,7 +263,7 @@ if (detectionIndex.split(cpuChunkImport).length !== 2) throw new Error('语言�
 await writeFile(join(detectionLibrary, 'index.js'), detectionIndex.replace(cpuChunkImport,
   () => `(()=>{const exports={};${cpuBackend}\nreturn exports;})()`));
 await rm(join(detectionLibrary, '979.js'));
-await cp(join(root, 'index.html'), join(dist, 'index.html'));
+await writeFile(join(dist, 'index.html'), await injectStartupFailure(root, await readFile(join(root, 'index.html'), 'utf8')));
 // 私有回调与 Web 共用唯一源文件，不加载 Workbench 或第三方资源。
 await cp(join(root, '../web/mcp-oauth-callback.html'), join(dist, 'mcp-oauth-callback.html'));
 for (const name of ['LICENSE.txt', 'ThirdPartyNotices.txt']) await cp(join(upstream, name), join(dist, name));

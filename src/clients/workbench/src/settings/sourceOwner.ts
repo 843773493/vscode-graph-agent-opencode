@@ -99,6 +99,14 @@ export function sourceStatus(document: SourceDocument): string {
     + ` · ${status?.reason ?? ''} ${status?.last_error ?? ''}` + sourceFanoutStatus(document);
 }
 
+/** 已保存和层导入是不同领域结果；关联留在诊断中，不把成功保存改成异常提交。 */
+export function sourceFailure(document: SourceDocument): Error {
+  const reason = document.status?.last_error ?? document.status?.reason;
+  return new Error(`${t('plugins.sourceSaved')} · ${t('settings.source.layerNotImported')}${reason ? `：${reason}` : ''}`, {
+    cause: new Error(`Gateway=${document.gateway_id}${'workspace_id' in document ? ` workspace=${document.workspace_id}` : ''}\n${sourceStatus(document)}`),
+  });
+}
+
 export function sourceFanoutStatus(document: SourceDocument): string {
   if (!('workspace_id' in document) || (!document.fanout && !['user', 'user_local', 'source'].includes(document.layer))) return '';
   const fanout = document.fanout;

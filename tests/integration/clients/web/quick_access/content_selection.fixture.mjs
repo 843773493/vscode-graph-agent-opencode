@@ -14,18 +14,25 @@ export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
   const owner = { gatewayId: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', workspaceId: '019a0000-0000-7000-8000-000000000001' };
   const otherOwner = { ...owner, workspaceId: '019a0000-0000-7000-8000-000000000002' };
-  const owners = mode === 'logs' ? [owner, otherOwner] : [owner];
+  const remoteLogs = mode === 'remote-logs' || mode === 'remote-ambiguous';
+  const logMode = mode === 'logs' || remoteLogs;
+  const routeId = 'remote-log-connection';
+  const owners = logMode ? [owner, otherOwner] : [owner];
   const wireOwners = owners.map(item => ({ gateway_id: item.gatewayId, workspace_id: item.workspaceId }));
-  const query = 'content 原始😀查询', categories = mode === 'logs' ? ['运行日志', 'Gateway 日志'] : ['会话消息', '工具结果'];
-  const hosts = [], choices = [], requests = [], shows = [], errors = [];
+  const query = 'content 原始😀查询', categories = logMode ? ['运行日志', 'Gateway 日志'] : ['会话消息', '工具结果'];
+  const hosts = [], choices = [], requests = [], shows = [], errors = [], commands = [];
   let current, closing = false;
   const until = async predicate => {
     for (let count = 0; count < 200; count++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
-    throw new Error('正文类别合同未收敛');
+    throw new Error(`正文类别合同未收敛：${JSON.stringify({ requests: requests.length, busy: current?.picker.busy,
+      labels: current?.picker.items.map(item => item.label), errors })}`);
   };
-  workspaceContext.publish({ ...before, gatewayId: owner.gatewayId, workspaces: [owner, otherOwner,
+  workspaceContext.publish({ ...before, gatewayId: remoteLogs ? 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' : owner.gatewayId, workspaces: [owner, otherOwner,
     { ...owner, workspaceId: '019a0000-0000-7000-8000-000000000003' }].map((item, index) => ({
-      gateway_id: item.gatewayId, workspace_id: item.workspaceId, name: `工作区 ${index}`, connection_kind: 'local', status: 'ready', remote_gateways: [],
+      gateway_id: item.gatewayId, workspace_id: item.workspaceId, name: `工作区 ${index}`,
+      connection_kind: remoteLogs ? 'remote_gateway' : 'local', status: 'ready',
+      remote_gateways: remoteLogs ? [{ gateway_id: item.gatewayId, gateway_connection_id: routeId },
+        ...(mode === 'remote-ambiguous' ? [{ gateway_id: item.gatewayId, gateway_connection_id: 'other-connection' }] : [])] : [],
     })) });
   globalThis.fetch = async (url, init) => {
     const path = new URL(String(url), location.origin).pathname;
@@ -37,7 +44,7 @@ export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
     const branches = request.queries.flatMap(item => {
       const keys = item.diagnostic_targets.length ? item.diagnostic_targets.map(diagnostics => ({ diagnostics })) : wireOwners.map(owner => ({ owner }));
       return keys.map(key => {
-        const failed = mode === 'logs' && requests.length === 1 && key.diagnostics?.scope.source === 'gateway';
+        const failed = logMode && requests.length === 1 && key.diagnostics?.scope.source === 'gateway';
         return { branch: { ...key, category: item.category, operation: item.operation },
           state: failed ? 'failed' : 'complete', retryable: failed, allocated_results: 50, returned_results: 0,
           ...(failed ? { code: 'upstream_error', message: 'Gateway 原日志读取失败' } : {}) };
@@ -77,7 +84,8 @@ export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
       hide() { if (quickInput.currentQuickInput === picker) quickInput.currentQuickInput = undefined; host.lifetime?.dispose(); } };
     const group = { id: 7 }, groups = { activeGroup: group, groups: [], getGroup: id => id === group.id ? group : undefined };
     const editors = { openEditor() { throw new Error('类别选择不应打开编辑器'); } };
-    const provider = new ContentQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
+    const provider = new ContentQuickAccess({ createInstance: () => new PickerEditorState(editors, groups),
+      invokeFunction: callback => callback({ get: () => ({ executeCommand: (...args) => { commands.push(args); } }) }) }, editors, groups,
       { getHistory: () => [] }, { getValue: () => undefined }, quickInput, {}, { lookupKeybinding: () => undefined }, {},
       { error: error => errors.push(String(error)) }, { enabled: false }, {});
     const host = { picker, buttons, accepts, provider, cancellation, changes };
@@ -98,7 +106,7 @@ export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
     if (mode === 'cancel') {
       await until(() => requests.length === 1 && !current.picker.busy);
       current.buttons.fire(current.picker.buttons.find(button => button.tooltip === '选择正文类别'));
-    } else accept(mode === 'logs' ? 'content-category-runtime-logs' : 'content-category-message');
+    } else accept(logMode ? 'content-category-runtime-logs' : 'content-category-message');
     await until(() => choices.length === 1);
     const choice = choices[0], beforeConfirm = requests.length, preset = choice.items.filter(item => item.picked).map(item => item.label);
     if (mode === 'user' || mode === 'gateway') {
@@ -108,14 +116,26 @@ export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
       return { requests, shows, errors, cancelled: choice.token.isCancellationRequested, beforeConfirm, preset };
     }
     choice.resolve(mode === 'cancel' ? undefined : choice.items.filter(item => categories.includes(item.category)));
+    if (mode === 'remote-ambiguous') {
+      await until(() => !current.picker.busy && current.picker.items.some(item => item.label.includes('不能唯一确定')));
+      return { requests, labels: current.picker.items.map(item => item.label), errors };
+    }
     await until(() => requests.length === (mode === 'cancel' ? 2 : 1) && !current.picker.busy);
     let retryLabel;
-    if (mode === 'logs') {
+    if (logMode) {
       const retry = current.picker.items.find(item => item.label.includes('Gateway 日志 · 查询失败'));
       retryLabel = retry.label; await retry.trigger();
       await until(() => requests.length === 2 && !current.picker.busy);
     }
-    return { requests, shows, errors, beforeConfirm, preset, canPickMany: choice.options.canPickMany,
+    if (remoteLogs) {
+      const location = { scope: { source: 'gateway', workspace_ids: [] }, reference: {
+        gateway_id: owner.gatewayId, log_id: 'gateway:file:plugin.log', device: '1', inode: '2',
+        line_start: 1, line_end: 2, content_version: 'a'.repeat(64), start_codepoint: 0, end_codepoint: 1 } };
+      const pick = current.provider.logPick(current.provider.run, location, routeId, '插件日志', '', '');
+      pick.accept({}, { inBackground: false });
+      await until(() => commands.length === 1);
+    }
+    return { requests, shows, errors, commands, beforeConfirm, preset, canPickMany: choice.options.canPickMany,
       choices: choice.items.map(item => item.label), choiceTitle: choice.options.title, choiceHint: choice.options.placeHolder,
       placeholder: current.picker.placeholder, query: current.picker.value, retryLabel,
       labels: current.picker.items.map(item => item.label) };

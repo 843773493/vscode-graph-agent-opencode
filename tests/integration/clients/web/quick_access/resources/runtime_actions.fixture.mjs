@@ -185,7 +185,7 @@ export async function runtimeActionContract(mode) {
     try { return CommandsRegistry.getCommand(id).handler(accessor, ...args); }
     finally { valid = false; }
   } };
-  const mcpService = new WorkspaceMcpService(editors, notifications, quick);
+  const mcpService = new WorkspaceMcpService(editors, notifications, quick, { error: cause => errors.push(String(cause)) });
   const picker = { value: mode === 'empty-title' ? 'resource browser_same' : 'resource Needle', items: [], activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: false, ctrlCmd: false },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() {} };

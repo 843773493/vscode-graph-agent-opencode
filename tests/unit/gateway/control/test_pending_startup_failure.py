@@ -112,7 +112,8 @@ async def test_startup_failure_publishes_facts_in_one_original_transaction(
     assert intent is not None and pending is not None
     assert intent.state == pending.state == "recovery_required"
     assert intent.last_error == pending.last_error
-    assert pending.last_error == "Gateway pending generation 启动失败: stage=startup, error=PermissionError, errno=13"
+    assert pending.last_error.startswith("Gateway pending generation 启动失败: stage=startup, error=PermissionError, errno=13, reason=")
+    assert str(error) in pending.last_error
     assert case.state.get_active_config_snapshot("gateway") == active
     event = case.service.list_events()[-1]
     assert event.error == pending.last_error and event.result == "recovery_required"
@@ -122,7 +123,8 @@ async def test_startup_failure_publishes_facts_in_one_original_transaction(
         assert journal is not None and journal.state == "recovery_required"
         assert journal.last_error == pending.last_error
     assert case.service.status().last_error == pending.last_error
-    assert any(record.exc_info is not None and record.exc_info[1] is error for record in caplog.records)
+    assert "stage=startup, error=PermissionError" in caplog.text
+    assert str(error.__cause__) in caplog.text
     assert error.__cause__ is not None and location in str(error.__cause__)
     # 显式重试仍消费同一候选；真正的冷启动由独立进程验收覆盖。
     retried = case.service.retry_pending_restart(candidate_ref=case.candidate_ref)
@@ -142,7 +144,8 @@ async def test_startup_failure_settles_even_when_original_log_sink_fails(
     status = pending_gateway.service.status()
     assert status.state == "recovery_required"
     assert status.last_error is not None and "diagnostic_sink_error=OSError" in status.last_error
-    assert "/private/" not in status.last_error
+    assert str(error) in status.last_error
+    assert "/private/gateway/log" not in status.last_error
     assert any("诊断日志输出失败" in note for note in error.__notes__)
 
 

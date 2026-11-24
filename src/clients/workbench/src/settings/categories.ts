@@ -1,5 +1,4 @@
 import type { GatewaySettingsPage } from '../../../web/src/components/workspace/gateway/GatewaySettingsContent.js';
-import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { t } from '../../../shared/core/i18n/index.js';
 
 export type SettingsScope = 'gateway' | 'backend' | 'workspace';
@@ -15,7 +14,7 @@ export const settingsCategories = [
   { id: 'runtime', label: 'settings.category.runtime', scopes: ['backend', 'workspace', 'gateway'], groups: [] },
 ] as const;
 export type SettingsCategory = typeof settingsCategories[number]['id'];
-export interface SettingsCategoryOptions { settingsCategory?: SettingsCategory; managementPage?: GatewaySettingsPage; diagnosticLocation?: GatewayDiagnosticLogLocateRequest }
+export interface SettingsCategoryOptions { settingsCategory?: SettingsCategory; managementPage?: GatewaySettingsPage }
 
 export function settingsCategory(id: string | undefined) {
   return settingsCategories.find(category => `boxteam.settings.category.${category.id}` === id);

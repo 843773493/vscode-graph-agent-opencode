@@ -26,6 +26,7 @@ import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/co
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
+import { ILogService } from '../upstream/src/vs/platform/log/common/log.js';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -45,12 +46,13 @@ export class SessionNavigation extends ViewPane {
     @INotificationService private readonly notifications: INotificationService,
     @IStorageService private readonly storage: IStorageService,
     @ICommandService private readonly commands: ICommandService,
+    @ILogService private readonly log: ILogService,
   ) {
     super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover);
   }
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
-    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands);
+    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands, message => this.log.error(message));
   }
   override focus(): void { super.focus(); this.surface?.focus(); }
   runNavigationAction(action: keyof SessionNavigationActions): Promise<void> {

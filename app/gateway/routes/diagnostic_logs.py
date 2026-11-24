@@ -4,7 +4,7 @@ from typing import Annotated
 
 import httpx
 from boxteam_plugin_sdk.http import get_request_id
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.core.failures import failure_detail
 from app.gateway.auth import verify_federation_token, verify_gateway_token
@@ -46,10 +46,11 @@ async def query_logs(
     request_id: Annotated[str, Depends(get_request_id)],
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     target_gateway_id: Annotated[str | None, Header(alias=TARGET_GATEWAY_ID_HEADER)] = None,
+    gateway_connection_id: Annotated[str | None, Query()] = None,
 ):
     try:
         result = await read_diagnostic_log_target(registry, payload, gateway_id=parse_target_gateway_id(target_gateway_id) or request.app.state.gateway_id,
-                                                request_id=request_id)
+                                                request_id=request_id, gateway_connection_id=gateway_connection_id)
     except RuntimeLogQueryError as error:
         raise diagnostic_log_http_error(error) from error
     except LookupError as error:
@@ -67,9 +68,11 @@ async def locate_log(
     _: Annotated[str, Depends(verify_gateway_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    gateway_connection_id: Annotated[str | None, Query()] = None,
 ):
     try:
-        result = await read_diagnostic_log_target(registry, payload, gateway_id=payload.reference.gateway_id, request_id=request_id)
+        result = await read_diagnostic_log_target(registry, payload, gateway_id=payload.reference.gateway_id,
+                                                 request_id=request_id, gateway_connection_id=gateway_connection_id)
     except RuntimeLogQueryError as error:
         raise diagnostic_log_http_error(error) from error
     except LookupError as error:

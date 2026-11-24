@@ -8,6 +8,8 @@ import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cance
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
+import { errorDiagnostic, errorMessage, errorSummary, ReportedError } from '../../../web/src/utils/errorMessage.js';
 import { ContributionEnablementState, type IEnablementModel } from '../../upstream/src/vs/workbench/contrib/chat/common/enablement.js';
 import {
   IMcpService, IMcpWorkbenchService, IWorkbenchMcpServer,
@@ -47,7 +49,6 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   private readonly authorizationController = new AbortController();
   private visibleLists = 0;
   private readonly visibleDetails = new Map<WorkspaceMcpCatalog, number>();
-  private readonly reportedErrors = new WeakMap<WorkspaceMcpCatalog, string>();
   private readonly pluginRuntimes = new Map<string, NonNullable<WorkspaceMcpCatalog['pluginRuntime']> & { controller: AbortController }>();
   readonly enablementModel: IEnablementModel = {
     readEnabled: (key, reader) => this.servers.read(reader).find(server => server.id === key)?.enablement.read(reader) ?? ContributionEnablementState.DisabledWorkspace,
@@ -61,6 +62,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     @IEditorService private readonly editors: IEditorService,
     @INotificationService private readonly notifications: INotificationService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
+    @ILogService private readonly log: ILogService,
   ) {
     super();
     this._register(toDisposable(workspaceContext.subscribe(() => this.synchronizeTargets())));
@@ -76,7 +78,6 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       for (const { catalog } of this.scopes.values()) {
         if (!catalog.isBusy && ((this.selected.has(catalog) && this.visibleLists > 0) || this.visibleDetails.has(catalog) || catalog.pending || catalog === this.authorizationCatalog)) {
           void catalog.refresh().then(async () => {
-            this.reportedErrors.delete(catalog);
             if (catalog === this.authorizationCatalog) await this.openAuthorizationCatalog(catalog);
           }).catch(error => this.report(catalog, error));
         }
@@ -96,8 +97,9 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       && [...this.selected].every(catalog => Boolean(catalog.snapshot.catalog) && !catalog.snapshot.error);
   }
   get catalogError(): string | undefined {
-    return workspaceContext.getSnapshot().error ?? this.selectionError?.message
+    const error = workspaceContext.getSnapshot().error ?? this.selectionError
       ?? [...this.selected].map(catalog => catalog.snapshot.error).find(Boolean);
+    return error === undefined ? undefined : errorSummary(error);
   }
 
   private clearPluginRuntimes(): void {
@@ -120,7 +122,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       this.pluginRuntimes.set(key, runtime);
       void watchPluginRuntimeStatus({ gateway_id: catalog.target.gateway_id, gateway_connection_id: catalog.target.gateway_connection_id }, runtime.controller.signal,
         snapshot => { if (!runtime.controller.signal.aborted) { runtime.snapshot = snapshot; runtime.error = undefined; this.publish(); } })
-        .catch(error => { if (!runtime.controller.signal.aborted) { runtime.error = error instanceof Error ? error.message : String(error); this.publish(); } });
+        .catch(error => { if (!runtime.controller.signal.aborted) { runtime.error = error; this.publish(); } });
     }
     for (const { catalog } of this.scopes.values()) catalog.pluginRuntime = this.pluginRuntimes.get(keyOf(catalog));
   }
@@ -243,7 +245,12 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       for (const data of scope.catalog.snapshot.catalog?.data ?? []) {
         let model = scope.models.get(data.server_id);
         if (!model) {
-          model = new WorkspaceMcpServer(scope.catalog, data.server_id, server => this.open(server), () => this.observe(scope.catalog));
+          model = new WorkspaceMcpServer(scope.catalog, data.server_id, server => this.open(server), () => this.observe(scope.catalog), error => {
+            if (this.scopes.get(scope.catalog.key)?.catalog !== scope.catalog) return new CancellationError();
+            if (!(this.selected.has(scope.catalog) && this.visibleLists > 0) && !this.visibleDetails.has(scope.catalog)) this.notifications.error(error instanceof Error ? error : errorMessage(error));
+            else this.report(scope.catalog, error);
+            return new ReportedError(errorMessage(error), error);
+          });
           scope.models.set(data.server_id, model);
         }
         models.push(model);
@@ -270,7 +277,13 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       this.synchronizePluginRuntimes();
     }
     const catalogs = [...this.selected];
-    await Promise.all(catalogs.map(catalog => catalog.refresh(options)));
+    try { await Promise.all(catalogs.map(catalog => catalog.refresh(options))); }
+    catch (error) {
+      const visible = catalogs.find(catalog => catalog.snapshot.error === error
+        && ((this.selected.has(catalog) && this.visibleLists > 0) || this.visibleDetails.has(catalog)));
+      if (visible) { this.report(visible, error); throw new ReportedError(errorMessage(error), error); }
+      throw error;
+    }
     if (catalogs.length !== this.selected.size || catalogs.some(catalog => !this.selected.has(catalog))) throw new CancellationError();
     return this.servers.get().filter(server => catalogs.includes(server.catalog));
   }
@@ -295,9 +308,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   }
 
   private report(catalog: WorkspaceMcpCatalog, error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
-    if (this.reportedErrors.get(catalog) !== message && !(this.selected.has(catalog) && this.visibleLists > 0) && !this.visibleDetails.has(catalog)) this.notifications.error(message);
-    this.reportedErrors.set(catalog, message);
+    this.log.error(`MCP Gateway=${catalog.target.gateway_id} workspace=${catalog.target.workspace_id}\n${errorDiagnostic(error)}`);
   }
 
   observe(catalog?: WorkspaceMcpCatalog): IDisposable {
@@ -333,11 +344,11 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   readonly whenInitialLocalMcpServersLoaded: Promise<void>;
   constructor(
     @IMcpService service: IMcpService,
-    @INotificationService notifications: INotificationService,
+    @ILogService log: ILogService,
   ) {
     if (!(service instanceof WorkspaceMcpService)) throw new Error(t('workbench.mcp.sharedOwnerRequired'));
     this.owner = service;
-    this.whenInitialLocalMcpServersLoaded = this.owner.queryLocal().then(() => {}, error => { if (!this.owner.catalogError) notifications.error(error); });
+    this.whenInitialLocalMcpServersLoaded = this.owner.queryLocal().then(() => {}, error => { log.error(errorDiagnostic(error)); });
   }
   get onChange() { return this.owner.onChange; }
   get onReset() { return this.owner.onReset; }

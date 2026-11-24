@@ -10,6 +10,7 @@ import {
   normalizePageResult,
   requestJson,
 } from "./http";
+import { errorDiagnostic, errorSummary } from "../utils/errorMessage";
 import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
@@ -118,7 +119,7 @@ test("统一请求保留远端错误来源，转成文字仍能定位请求", as
   expect(error.detail).toBe("上游连接失败");
   expect(error.requestId).toBe("req-two-hop");
   for (const fact of ["gateway-B", "W2", "upstream_request", "req-two-hop", "/api/v1/session-catalog/children"]) {
-    expect(error.message).toContain(fact);
+    expect(errorDiagnostic(error)).toContain(fact);
   }
 });
 
@@ -127,9 +128,11 @@ test("错误来源响应头损坏时显式说明，仍保留原状态、正文�
   expect(error.status).toBe(409);
   expect(error.detail).toBe("目录版本冲突");
   expect(error.context).toBeNull();
-  expect(error.message).toContain("错误来源元数据无效");
+  expect(error.contextDiagnostic).toBe("错误来源元数据无效");
   expect(error.message).toContain("目录版本冲突");
-  expect(error.message).toContain("req-conflict");
+  expect(errorDiagnostic(error)).toContain("req-conflict");
+  expect(error.message).toBe("目录版本冲突");
+  expect(new HttpRequestError(409, "Conflict", "目录版本冲突", "/catalog", null).contextDiagnostic).toBeUndefined();
 });
 
 describe("requestJson 请求取消", () => {
@@ -199,7 +202,10 @@ describe("requestJson 请求取消", () => {
     });
     await downloadStarted;
 
-    await expect(pending).rejects.toThrow("请求超时: /api/v1/slow-download");
+    const failure = await pending.catch(error => error) as HttpRequestError;
+    expect(failure.message).toBe("响应正文读取超时");
+    expect(failure.status).toBe(200);
+    expect(failure.path).toBe("/api/v1/slow-download");
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
   });
 
@@ -233,7 +239,8 @@ describe("requestJson 请求取消", () => {
 
     expect(result).not.toBe("hung");
     expect(result).toBeInstanceOf(Error);
-    expect((result as Error).message).toBe("请求超时: /api/v1/stalled-body");
+    expect((result as Error).message).toBe("响应正文读取超时");
+    expect(result).toMatchObject({ status: 200, path: "/api/v1/stalled-body" });
   });
 
   test("本地凭据响应体不结束时超时会终止 token 解析并清除缓存", async () => {
@@ -312,6 +319,36 @@ describe("requestJson 请求取消", () => {
 });
 
 describe("HttpRequestError 错误体诊断", () => {
+  test("已收到409后正文期限失败仍保留响应身份，读取故障不是业务原因", async () => {
+    const port = 49_348;
+    installWindow(port);
+    let reads = 0;
+    globalThis.fetch = withFetchPreconnect(async input => {
+      if (resolveTestUrl(input, port).pathname === "/api/gateway/auth/local-credential") return tokenResponse();
+      reads += 1;
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"detail":'));
+      } }), { status: 409, headers: { "Content-Type": "application/json", "X-Request-ID": "original-conflict" } });
+    });
+    const failure = await requestJson(port, "/catalog", { timeoutMs: 20 }).catch(error => error) as HttpRequestError;
+    expect(failure).toBeInstanceOf(HttpRequestError);
+    expect(failure).toMatchObject({ status: 409, path: "/catalog", requestId: "original-conflict" });
+    expect(failure.message).toBe("未提供错误原因");
+    expect(failure.bodyDiagnostic).toContain("请求超时");
+    expect(reads).toBe(1);
+  });
+
+  test("只有code或损坏来源头不充当原因，诊断不复制原头及任意data", () => {
+    const failure = new HttpRequestError(409, "Conflict", { code: "rejected", data: { token: "private-data" } },
+      "/private/path", "original-id", '{"secret":"private-header"');
+    expect(errorSummary(failure)).toBe("未提供错误原因");
+    const diagnostic = errorDiagnostic(failure);
+    expect(diagnostic).toContain("错误来源元数据无效");
+    expect(diagnostic).toContain("original-id");
+    expect(diagnostic).toContain("/private/path");
+    expect(diagnostic).not.toMatch(/private-header|private-data/);
+  });
+
   function installErrorResponse(port: number, body: BodyInit | null, contentType?: string, headers: Record<string, string> = {}): void {
     globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
@@ -343,8 +380,8 @@ describe("HttpRequestError 错误体诊断", () => {
     }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(HttpRequestError);
-    expect((error as Error).message).toContain("响应体不是 JSON");
-    expect((error as Error).message).toContain("上游中断");
+    expect((error as HttpRequestError).bodyDiagnostic).toContain("响应体不是 JSON");
+    expect((error as HttpRequestError).bodyDiagnostic).toContain("上游中断");
   });
 
   test("HTML 错误页保留可诊断片段且截断超长正文", async () => {
@@ -356,8 +393,9 @@ describe("HttpRequestError 错误体诊断", () => {
     const error = await requestJson(port, "/api/v1/html-error", {
     }).catch((caught: unknown) => caught);
 
-    expect((error as Error).message).toContain("响应体不是 JSON");
-    expect((error as Error).message).toContain("502 Bad Gateway");
+    expect((error as HttpRequestError).bodyDiagnostic).toContain("响应体看起来是 HTML");
+    expect((error as HttpRequestError).bodyDiagnostic).toContain("502 Bad Gateway");
+    expect(errorSummary(error)).not.toContain("<html>");
     expect((error as Error).message.length).toBeLessThan(html.length);
   });
 
@@ -369,7 +407,8 @@ describe("HttpRequestError 错误体诊断", () => {
     const error = await requestJson(port, "/api/v1/empty-error", {
     }).catch((caught: unknown) => caught);
 
-    expect((error as Error).message).toContain("响应体为空");
+    expect((error as HttpRequestError).bodyDiagnostic).toBe("响应体为空");
+    expect((error as Error).message).toBe("未提供错误原因");
   });
 
   test("合法 JSON 信封仍优先取 detail", async () => {
@@ -404,7 +443,7 @@ describe("HttpRequestError 错误体诊断", () => {
     const failure = new HttpRequestError(500, "状态".repeat(10_000), "原因".repeat(10_000), "/" + "路径".repeat(10_000), "request-original");
     expect(new TextEncoder().encode(failure.message).length).toBeLessThanOrEqual(8192);
     expect(failure.message).toContain("原因");
-    expect(failure.message).toContain("request_id=request-original");
+    expect(errorDiagnostic(failure)).toContain("request_id: request-original");
     expect(failure.requestId).toBe("request-original");
   });
 
@@ -414,8 +453,8 @@ describe("HttpRequestError 错误体诊断", () => {
     const secret = "credential".repeat(180);
     installErrorResponse(port, `连接失败 https://user:${secret}@example.invalid/path`, "text/plain");
     const failure = await requestJson(port, "/upstream").catch(error => error) as HttpRequestError;
-    expect(failure.message).toContain("[redacted]@");
-    expect(failure.message).not.toContain("credential");
+    expect(failure.bodyDiagnostic).toContain("[redacted]@");
+    expect(errorDiagnostic(failure)).not.toContain("credential");
   });
 
   test.each(["request-original", null])("HTTP 错误保留原 request_id，不从正文补造身份：%s", async (requestId) => {
@@ -431,8 +470,7 @@ describe("HttpRequestError 错误体诊断", () => {
     expect(failure.requestId).toBe(requestId);
     expect(failure.path).toBe("/api/v1/session-catalog/snapshot");
     expect(failure.detail).toBe("目录读取失败");
-    expect(failure.message).toBe("请求失败 500 Internal Server Error: 目录读取失败"
-      + `；请求=/api/v1/session-catalog/snapshot${requestId ? `；request_id=${requestId}` : ""}`);
+    expect(failure.message).toBe("目录读取失败");
     expect(failure.message).not.toContain("body-only");
   });
 });
@@ -452,7 +490,7 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
       try { await requestJson(port, "/api/v1/unicode-diagnostic"); }
       catch (error) { failure = error; }
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain(`${prefix}…`);
+      expect((failure as HttpRequestError).bodyDiagnostic).toContain(`${prefix}😀…`);
       expect((failure as Error).message).not.toMatch(/[\uD800-\uDFFF]/u);
     });
   }
@@ -499,12 +537,13 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     const error = await requestJson(port, "/api/v1/workspace", {
     }).catch((caught: unknown) => caught);
 
-    const message = (error as Error).message;
+    const message = errorDiagnostic(error);
     expect(message).toContain("/api/v1/workspace");
     expect(message).toContain("200");
     expect(message).toContain("响应体看起来是 HTML");
     expect(message).toContain("<!doctype html");
     expect(message).not.toContain("is not valid JSON");
+    expect(errorSummary(error)).toBe("响应无法按 JSON 解包");
   });
 
   test("2xx 空响应体时显式报告为空而不是 EOF 解析错误", async () => {
@@ -515,7 +554,7 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     const error = await requestJson(port, "/api/v1/workspace", {
     }).catch((caught: unknown) => caught);
 
-    const message = (error as Error).message;
+    const message = errorDiagnostic(error);
     expect(message).toContain("/api/v1/workspace");
     expect(message).toContain("响应体为空");
     expect(message).not.toContain("Unexpected end of JSON input");
@@ -529,7 +568,7 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     const error = await requestJson(port, "/api/v1/workspace", {
     }).catch((caught: unknown) => caught);
 
-    const message = (error as Error).message;
+    const message = errorDiagnostic(error);
     expect(message).toContain("响应体不是 JSON");
     expect(message).toContain("gateway is down");
   });
@@ -592,7 +631,7 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     const error = await requestJson(port, "/api/v1/workspace", {
     }).catch((caught: unknown) => caught);
 
-    const message = (error as Error).message;
+    const message = errorDiagnostic(error);
     expect(message).toContain("响应体看起来是 HTML");
     expect(message.length).toBeLessThan(huge.length);
   });

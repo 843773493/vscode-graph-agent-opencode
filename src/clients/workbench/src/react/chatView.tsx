@@ -326,7 +326,7 @@ export class ChatSurface {
     this.modelPicker = instantiation.createInstance(ComposerModelPicker);
     this.itemMenu = instantiation.createInstance(ChatItemMenu);
     this.itemActions = instantiation.createInstance(ChatItemActions);
-    this.surface = new ReactSurface(container, [...productStyles, viewStyle]);
+    this.surface = new ReactSurface(container, [...productStyles, viewStyle], message => this.log.error(message));
     this.active = visible; this.render();
   }
   captureDraft(): ComposerDraftController {

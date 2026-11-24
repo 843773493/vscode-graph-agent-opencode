@@ -15,30 +15,23 @@ import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspa
 import { MAX_FILES_SHOWN, TextSearchQuickAccess } from '../../upstream/src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { TextSearchCompleteMessageType, type ISearchComplete } from '../../upstream/src/vs/workbench/services/search/common/search.js';
-import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { IncompleteSearchStreamError, SearchStreamReadError } from '../../../web/src/api/stream/federatedSearch.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { errorDiagnostic, errorMessage, errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { WorkspaceSearchBranchError, workspaceSearchBranchErrors } from './fileProvider.js';
 import { SearchWorkspaceContext } from './scope.js';
 import { captureSearchOwner, loadSearchScope, type SearchInvocationOptions } from './target.js';
 import { workspaceContext } from '../workspaceContext.js';
 
-function failureDetail(error: unknown): string {
-  const detail = [error instanceof Error ? error.message : String(error)];
-  if (error instanceof HttpRequestError) {
-    if (error.detail !== undefined) detail.push(`detail: ${typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail)}`);
-    detail.push(`http_status: ${error.status}`);
-    if (error.requestId) detail.push(`request_id: ${error.requestId}`);
-  } else if (error instanceof IncompleteSearchStreamError || error instanceof SearchStreamReadError) {
-    detail.push(`code: ${error.code}`, `request_id: ${error.requestId}`);
-  }
-  return detail.join(' · ');
-}
-
 function searchFailure(error: unknown): IPickerQuickAccessItem[] {
   const branches = workspaceSearchBranchErrors(error);
-  return branches ? branches.map(branch => ({ label: escapeIcons(branch.message), excludeFromResultCount: true,
+  const copy = (failure: unknown) => ({ buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+    trigger: async () => { await copyTextToClipboard(errorDiagnostic(failure)); return TriggerAction.NO_ACTION; } });
+  return branches ? branches.map(branch => ({ ...copy(branch), label: escapeIcons(failureSummary(t(branch.cause.branch!.state === 'cancelled' ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed',
+    branch.cause.branch!.message ?? '未提供错误原因'))), excludeFromResultCount: true,
     iconClass: ThemeIcon.asClassName(branch.cause.branch!.state === 'cancelled' ? Codicon.info : Codicon.error) }))
-    : [{ label: escapeIcons(t(isCancellationError(error) ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed', failureDetail(error))), excludeFromResultCount: true,
+    : [{ ...copy(error), label: escapeIcons(failureSummary(t(isCancellationError(error) ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed', errorMessage(error)))), excludeFromResultCount: true,
       iconClass: ThemeIcon.asClassName(isCancellationError(error) ? Codicon.info : Codicon.error) }];
 }
 
@@ -71,9 +64,14 @@ class ScopedTextSearch extends TextSearchQuickAccess {
         for (const failure of failures) {
           const branch = failure.error instanceof WorkspaceSearchBranchError ? failure.error : undefined;
           items.push({ ...searchFailure(failure.error)[0],
-            detail: failure.retryFailure === undefined ? undefined : escapeIcons(failureDetail(failure.retryFailure)),
-            buttons: branch?.retry && !failure.retryFailure && !retrying ? [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.files.retry') }] : undefined,
-            trigger: branch?.retry ? async () => {
+            detail: failure.retryFailure === undefined ? undefined : escapeIcons(errorSummary(failure.retryFailure)),
+            buttons: [...(branch?.retry && !failure.retryFailure && !retrying ? [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.files.retry') }] : []),
+              { iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+            trigger: async (index = 0) => {
+              if (index === (branch?.retry && !failure.retryFailure && !retrying ? 1 : 0)) {
+                await copyTextToClipboard(errorDiagnostic(failure.retryFailure ?? failure.error)); return TriggerAction.NO_ACTION;
+              }
+              if (!branch?.retry) return TriggerAction.NO_ACTION;
               if (!current() || retrying || failure.retryFailure || !failures.includes(failure)) return TriggerAction.NO_ACTION;
               retrying = true; picker.busy = true; publish();
               try {
@@ -96,7 +94,7 @@ class ScopedTextSearch extends TextSearchQuickAccess {
                 if (current()) { picker.busy = false; publish(); }
               }
               return TriggerAction.NO_ACTION;
-            } : undefined,
+            },
           });
         }
         return items;

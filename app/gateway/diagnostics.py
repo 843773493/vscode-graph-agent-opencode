@@ -314,7 +314,7 @@ async def _logging_process_diagnostics(
 
 def _collect_logs(
     workspace_candidates: list[_LogCandidate], *, selected_workspace_id: str | None,
-    selected_log_id: str | None, tail_lines: int,
+    selected_log_id: str | None, tail_lines: int, include_tail: bool = True,
 ) -> tuple[list[_LogCandidate], str | None, list[GatewayDiagnosticLogDTO]]:
     """在 worker 中完成目录枚举、文件元数据及选中日志的有界读取。"""
     if selected_workspace_id is None:
@@ -359,7 +359,7 @@ def _collect_logs(
             preferred_log_candidates[0].log_id if preferred_log_candidates else None,
         )
     log_results = [
-        _read_log(candidate, tail_lines, include_tail=candidate.log_id == selected_log_id)
+        _read_log(candidate, tail_lines, include_tail=include_tail and candidate.log_id == selected_log_id)
         for candidate in candidates
     ]
     return candidates, selected_log_id, log_results
@@ -375,6 +375,7 @@ async def collect_gateway_diagnostics(
     selected_workspace_id: str | None = None,
     selected_log_id: str | None = None,
     tail_lines: int = 300,
+    include_tail: bool = True,
     service_plugins: GatewayPluginRuntime | None = None,
     observation: RuntimeObservation | None = None,
 ) -> GatewayDiagnosticsDTO:
@@ -424,7 +425,7 @@ async def collect_gateway_diagnostics(
     ]
     candidates, selected_log_id, log_results = await run_sync_shielded(
         _collect_logs, workspace_candidates, selected_workspace_id=selected_workspace_id,
-        selected_log_id=selected_log_id, tail_lines=tail_lines,
+        selected_log_id=selected_log_id, tail_lines=tail_lines, include_tail=include_tail,
     )
     processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, service_plugins)
     observed = observation.status() if observation is not None else None

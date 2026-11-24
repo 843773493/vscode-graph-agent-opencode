@@ -2,6 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ReactNode } from 'react';
 import { OverlayRootContext } from '../../../web/src/components/overlays/OverlayRootContext.js';
 import AppErrorBoundary from '../../../web/src/components/shell/AppErrorBoundary.js';
+import { ComposerDiagnosticsContext } from '../../../web/src/components/composer/ComposerDiagnosticsContext.js';
 import baseStyle from './surface.css?text';
 import themeStyle from '../../../web/src/styles/foundation/theme.css?text';
 import codiconStyle from '../../node_modules/@vscode/codicons/dist/codicon.css?text';
@@ -12,7 +13,7 @@ export class ReactSurface {
   private readonly overlay = document.createElement('div');
   private readonly host = document.createElement('div');
 
-  constructor(container: HTMLElement, styles: readonly string[]) {
+  constructor(container: HTMLElement, styles: readonly string[], private readonly onDiagnostic?: (message: string) => void) {
     this.host.className = 'boxteam-react-surface';
     this.host.style.cssText = 'display:block;position:relative;min-width:0;height:100%';
     // 上游工作台根节点会取消 wheel 默认行为；React 产品区域使用浏览器原生滚动。
@@ -31,7 +32,7 @@ export class ReactSurface {
   }
 
   render(children: ReactNode): void {
-    this.root.render(<AppErrorBoundary><OverlayRootContext.Provider value={this.overlay}>{children}</OverlayRootContext.Provider></AppErrorBoundary>);
+    this.root.render(<ComposerDiagnosticsContext.Provider value={this.onDiagnostic ?? console.error}><AppErrorBoundary onDiagnostic={this.onDiagnostic}><OverlayRootContext.Provider value={this.overlay}>{children}</OverlayRootContext.Provider></AppErrorBoundary></ComposerDiagnosticsContext.Provider>);
   }
 
   focus(selector: string): boolean {

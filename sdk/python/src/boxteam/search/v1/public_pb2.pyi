@@ -17,12 +17,14 @@ class FederatedFileSearchTargetDTO(_message.Message):
     def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target: _Optional[_Union[_public_pb2_1.WorkspaceFileSearchTargetDTO, _Mapping]] = ...) -> None: ...
 
 class FederatedDiagnosticLogTargetDTO(_message.Message):
-    __slots__ = ("gateway_id", "scope")
+    __slots__ = ("gateway_id", "scope", "gateway_connection_id")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     SCOPE_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     scope: _public_pb2.GatewayDiagnosticLogQueryScopeDTO
-    def __init__(self, gateway_id: _Optional[str] = ..., scope: _Optional[_Union[_public_pb2.GatewayDiagnosticLogQueryScopeDTO, _Mapping]] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., scope: _Optional[_Union[_public_pb2.GatewayDiagnosticLogQueryScopeDTO, _Mapping]] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class FederatedSearchQueryDTO(_message.Message):
     __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets", "allow_catalog_mirror", "context", "diagnostic_targets")

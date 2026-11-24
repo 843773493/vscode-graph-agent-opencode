@@ -13,6 +13,8 @@ import {
 } from '../../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 import { WorkspaceMcpCatalog, pendingMcpOperation } from './catalog.js';
 import { pluginStateLabel } from '../extensions/pluginScope.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { errorDiagnostic, errorSummary } from '../../../web/src/utils/errorMessage.js';
 
 const statusLabels: Readonly<Record<string, string>> = {
   ready: t('workbench.mcp.status.ready'), disabled: t('workbench.mcp.status.disabled'), failed: t('workbench.mcp.status.failed'), authorization_required: t('workbench.mcp.status.authorizationRequired'), unavailable: t('workbench.mcp.status.unavailable'),
@@ -43,10 +45,10 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   });
   readonly connectionState = derived<McpConnectionState>(this, reader => {
     this.revision.read(reader);
-    if (this.catalog.snapshot.error || !this.data) return { state: McpConnectionState.Kind.Error, message: this.catalog.snapshot.error ?? t('workbench.mcp.missingService') };
+    if (this.catalog.snapshot.error || !this.data) return { state: McpConnectionState.Kind.Error, message: errorSummary(this.catalog.snapshot.error ?? t('workbench.mcp.missingService')) };
     if (pendingMcpOperation(this.operation)) return { state: McpConnectionState.Kind.Starting };
     if (this.data.status === 'ready') return { state: McpConnectionState.Kind.Running };
-    if (this.data.status === 'failed') return { state: McpConnectionState.Kind.Error, message: this.operation?.error_message ?? this.operation?.error_code ?? this.statusLabel };
+    if (this.data.status === 'failed') return { state: McpConnectionState.Kind.Error, message: failureSummary(this.operation?.error_message ?? this.statusLabel) };
     return { state: McpConnectionState.Kind.Stopped, reason: this.data.status === 'authorization_required' ? 'needs-user-interaction' : undefined };
   });
   readonly cacheState = derived(this, reader => this.connectionState.read(reader).state === McpConnectionState.Kind.Running ? McpServerCacheState.Live : McpServerCacheState.Unknown);
@@ -54,7 +56,8 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   readonly collection: IMcpServer['collection'];
 
   constructor(readonly catalog: WorkspaceMcpCatalog, readonly name: string,
-    private readonly openDetails: (server: WorkspaceMcpServer) => Promise<void>, private readonly watch: () => IDisposable) {
+    private readonly openDetails: (server: WorkspaceMcpServer) => Promise<void>, private readonly watch: () => IDisposable,
+    private readonly reportFailure?: (error: unknown) => Error) {
     this.definition = { id: JSON.stringify([catalog.key, name]), label: name };
     this.collection = { id: catalog.key, label: `${catalog.label} · ${catalog.target.gateway_id}`, order: 0 };
   }
@@ -83,12 +86,12 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   get serviceStatusLabel(): string {
     if (!this.data?.service) return t('workbench.mcp.externallyManaged');
     const runtime = this.catalog.pluginRuntime, slot = this.pluginSlot, source = this.data.service;
-    if (runtime?.error) return t('workbench.mcp.runtimeReadFailed', runtime.error);
+    if (runtime?.error) return errorSummary(runtime.error);
     if (!runtime?.snapshot) return t('workbench.mcp.runtimeNotRead');
     if (!slot) return t('workbench.mcp.pluginNotRunning');
     if (slot.binding?.package_version !== source.package_version
       || (slot.instance && slot.instance.package_version !== source.package_version)) return t('workbench.mcp.pluginVersionMismatch', source.package_version);
-    return `${pluginStateLabel(slot.state)}${slot.error ? ' · ' + slot.error : ''}`;
+    return failureSummary(`${pluginStateLabel(slot.state)}${slot.error ? ' · ' + slot.error : ''}`);
   }
   get description(): string {
     const connection = t('workbench.mcp.connectionSummary', this.statusLabel, formatNumber(this.data?.tools.length ?? 0));
@@ -97,13 +100,16 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   get runtimeStatus() {
     return { state: this.data?.enabled ? McpServerEnablementState.Enabled : McpServerEnablementState.DisabledWorkspace,
       message: { severity: this.catalog.snapshot.error || this.catalog.snapshot.actionError || this.operation?.error_code || this.catalog.pluginRuntime?.error || this.pluginSlot?.error ? Severity.Error : Severity.Info,
-        text: new MarkdownString().appendText(this.catalog.snapshot.error ?? this.catalog.snapshot.actionError ?? this.operation?.error_message ?? this.description) } };
+        text: new MarkdownString().appendText(errorSummary(this.catalog.snapshot.actionError ?? this.catalog.snapshot.error ?? this.operation?.error_message ?? this.description)) } };
   }
   get canConnect(): boolean { return !this.catalog.isBusy && Boolean(this.data?.enabled) && !this.catalog.snapshot.error && !this.isPending && this.data?.status !== 'ready'; }
   get canStop(): boolean { return !this.catalog.isBusy && !this.catalog.snapshot.error && (this.isPending || this.data?.status === 'ready'); }
   get canAuthorize(): boolean { return !this.catalog.isBusy && !this.catalog.snapshot.error && this.operation?.status === 'waiting_user'; }
   changed(): boolean {
-    const fingerprint = JSON.stringify([this.data, this.operation, this.catalog.isBusy, this.catalog.snapshot.error, this.catalog.snapshot.actionError, this.catalog.snapshot.catalog?.catalog_revision, this.catalog.snapshot.catalog?.catalog_generation, this.serviceStatusLabel]);
+    const fingerprint = JSON.stringify([this.data, this.operation, this.catalog.isBusy,
+      this.catalog.snapshot.error === undefined ? undefined : errorDiagnostic(this.catalog.snapshot.error),
+      this.catalog.snapshot.actionError === undefined ? undefined : errorDiagnostic(this.catalog.snapshot.actionError),
+      this.catalog.snapshot.catalog?.catalog_revision, this.catalog.snapshot.catalog?.catalog_generation, this.serviceStatusLabel]);
     if (fingerprint === this.fingerprint) return false;
     this.fingerprint = fingerprint;
     this.revision.set(this.revision.get() + 1, undefined);
@@ -113,14 +119,21 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   async start(): Promise<McpConnectionState> {
     if (!this.catalog.snapshot.error && this.data?.enabled && (this.isPending || this.data.status === 'ready')) return this.connectionState.get();
     if (!this.canConnect) throw new Error(t('workbench.mcp.cannotConnect'));
-    await this.catalog.act(this.name, 'connect');
+    await this.act('connect');
     return this.connectionState.get();
   }
   async stop(): Promise<void> {
     if (!this.canStop) throw new Error(t('workbench.mcp.cannotStop'));
-    await this.catalog.act(this.name, pendingMcpOperation(this.operation) ? 'cancel' : 'disconnect');
+    await this.act(pendingMcpOperation(this.operation) ? 'cancel' : 'disconnect');
   }
-  authorize(): Promise<void> { return this.catalog.act(this.name, 'authorize'); }
+  authorize(): Promise<void> { return this.act('authorize'); }
+  private async act(action: 'connect' | 'disconnect' | 'authorize' | 'cancel'): Promise<void> {
+    try { await this.catalog.act(this.name, action); }
+    catch (error) {
+      if (error instanceof CancellationError) throw error;
+      throw this.reportFailure?.(error) ?? error;
+    }
+  }
   observe(): IDisposable { return this.watch(); }
   showOutput(): Promise<void> { return this.openDetails(this); }
   async *resources(): AsyncIterable<IMcpResource[]> { throw new Error(t('workbench.mcp.resourcesUnavailable')); }
@@ -141,8 +154,9 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     line(t('workbench.mcp.statusLabel'), this.statusLabel);
     line(t('workbench.mcp.transportLabel'), this.data?.transport ?? t('workbench.mcp.removed'));
     const snapshot = this.catalog.snapshot;
-    if (snapshot.error) line(t('workbench.mcp.catalogErrorLabel'), snapshot.error);
-    if (snapshot.actionError) line(t('workbench.mcp.managementErrorLabel'), snapshot.actionError);
+    if (snapshot.error) line(t('workbench.mcp.catalogErrorLabel'), errorDiagnostic(snapshot.error));
+    if (snapshot.actionError) line(t('workbench.mcp.managementErrorLabel'), errorDiagnostic(snapshot.actionError));
+    if (this.catalog.pluginRuntime?.error) line(t('workbench.mcp.serviceStatusLabel'), errorDiagnostic(this.catalog.pluginRuntime.error));
     if (snapshot.catalog) { line(t('workbench.mcp.catalogRevisionLabel'), snapshot.catalog.catalog_revision); line(t('workbench.mcp.catalogGenerationLabel'), String(snapshot.catalog.catalog_generation)); }
     if (this.data?.connection_ref) line(t('workbench.mcp.connectionLabel'), this.data.connection_ref);
     if (this.data?.service) {

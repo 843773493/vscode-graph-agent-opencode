@@ -16,6 +16,7 @@ import { ReactSurface } from '../react/surface.js';
 import { ConfigurationProxyFields } from '../../../web/src/components/settings/ConfigurationProxyFields.js';
 import { definitionObject, definitionValue } from '../../../web/src/components/settings/ConfigurationEntities.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
+import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 
 /** 原设置树之外只补充业务来源与保存状态；窗口设置不渲染此区域。 */
 export class SettingsContextHeader extends Disposable {
@@ -30,7 +31,8 @@ export class SettingsContextHeader extends Disposable {
     @IQuickInputService private readonly quick: IQuickInputService,
     @IContextViewService contextView: IContextViewService,
     @ICommandService private readonly commands: ICommandService,
-    @IInstantiationService private readonly instantiation: IInstantiationService) {
+    @IInstantiationService private readonly instantiation: IInstantiationService,
+    @ILogService private readonly log: ILogService) {
     super();
     this.element.className = 'settings-context-label';
     this.element.style.cssText = 'font-size:13px;line-height:20px;overflow-wrap:anywhere';
@@ -70,7 +72,7 @@ export class SettingsContextHeader extends Disposable {
       status.append(inheritance);
       this.inheritance = this._register(new ReactSurface(inheritance, [
         '.configuration-entity-field{display:flex;flex-direction:column;gap:4px;margin:8px 0;min-width:0} input,select{max-width:100%;box-sizing:border-box} p{overflow-wrap:anywhere}',
-      ]));
+      ], diagnostic => this.log.error(diagnostic)));
       const location = { ...source.location };
       this._register(this.instantiation.createInstance(Link, status, { label: t('settings.editor.sourceLocations'), href: '#' }, {
         opener: () => this.run(async () => {

@@ -37,7 +37,7 @@ try {
   assert.ok(address && typeof address !== "string");
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
   scope.addCleanup("ReactSurface Chromium", () => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 }, permissions: ["clipboard-read", "clipboard-write"] });
   scope.addCleanup("ReactSurface BrowserContext", () => context.close());
   page = await context.newPage();
   page.on("pageerror", error => observations.errors.push({ kind: "page", message: error.message }));
@@ -85,15 +85,15 @@ try {
   assert.notEqual(observations.styles.panel, "rgba(0, 0, 0, 0)", "正向面板样式未加载");
   assert.equal(observations.styles.panel, observations.styles.expectedPanel);
   observations.resourceTabs = [];
-  for (const tab of ["files", "changes", "goal", "resources", "debug"]) {
+  for (const tab of ["files", "changes", "goal", "resources", "threads", "debug"]) {
     await first.getByRole("combobox", { name: "first 资源标签", exact: true }).selectOption(tab);
     const bodies = first.locator(".auxiliary-panel > .auxiliary-view-body");
-    await expect(bodies).toHaveCount(5);
+    await expect(bodies).toHaveCount(6);
     await expect(first.locator(".auxiliary-panel > .auxiliary-view-body:not([hidden])")).toHaveCount(1);
     const colors = await bodies.evaluateAll(elements => elements.map(element => ({
       surface: element.getAttribute("data-bt-surface"), background: getComputedStyle(element).backgroundColor,
     })));
-    assert.deepEqual(colors, Array.from({ length: 5 }, () => ({ surface: "layout", background: "rgba(0, 0, 0, 0)" })));
+    assert.deepEqual(colors, Array.from({ length: 6 }, () => ({ surface: "layout", background: "rgba(0, 0, 0, 0)" })));
     observations.resourceTabs.push({ tab, colors });
   }
   await first.getByRole("button", { name: "first 浮层", exact: true }).click();
@@ -104,20 +104,59 @@ try {
   await second.getByRole("button", { name: "second 计数 0", exact: true }).click();
   assert.equal(observations.errors.length, 0, JSON.stringify(observations.errors));
 
+  observations.clipboard = [];
+  for (const mode of ["success", "denied", "switch-focus"]) {
+    await page.evaluate(mode => {
+      const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const exec = document.execCommand;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      document.execCommand = () => {
+        if (mode === "switch-focus") document.querySelector("#first .boxteam-react-surface").shadowRoot.querySelector("input").focus();
+        return mode !== "denied";
+      };
+      window.restoreClipboard = () => {
+        if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else delete navigator.clipboard;
+        document.execCommand = exec;
+      };
+    }, mode);
+    const draft = second.getByRole("textbox", { name: "second 输入", exact: true });
+    await draft.fill("保留的原草稿");
+    // 直接触发按钮保留编辑器焦点，核对 fallback 清理不会抢走另一个宿主。
+    await draft.evaluate(element => { element.focus(); element.setSelectionRange(2, 5); });
+    await first.getByRole("button", { name: "first 复制", exact: true }).evaluate(element => element.click());
+    await expect(first.getByLabel("first 复制结果", { exact: true })).toHaveText(mode === "denied" ? "denied" : "copied");
+    await expect(draft).toHaveValue("保留的原草稿");
+    await expect(mode === "switch-focus" ? first.getByRole("textbox", { name: "first 输入", exact: true }) : draft).toBeFocused();
+    const state = await page.evaluate(() => ({ temporary: document.querySelectorAll('body > textarea').length,
+      value: document.querySelector('#second .boxteam-react-surface').shadowRoot.querySelector('input').value }));
+    assert.equal(state.temporary, 0);
+    observations.clipboard.push({ mode, ...state });
+    await page.evaluate(() => window.restoreClipboard());
+  }
+
   let classifiedErrorCount = 0;
   for (const [method, expected, component, count] of [
     ["failContext", "useAppState must be used within AppProvider", "ProviderLessConsumer", 1],
     ["failProvider", "fixture-provider-initialization-failed", "FailingProvider", 2],
   ]) {
     const start = observations.errors.length;
+    if (method === "failProvider") await page.evaluate(() => window.reactSurfaceHarness.failSink());
     await page.evaluate(method => window.reactSurfaceHarness[method](), method);
     await expect(first.getByRole("alert")).toContainText(expected);
     await expect(first.getByRole("button", { name: "刷新页面", exact: true })).toBeVisible();
+    const details = first.locator('details');
+    assert.equal(await details.getAttribute('open'), null);
+    await first.getByText("安全诊断", { exact: true }).click();
+    await expect(first.locator('pre')).toContainText(expected);
+    await first.getByRole("button", { name: "复制安全诊断", exact: true }).click();
+    await expect(first.getByRole('status')).toHaveText('已复制');
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())).includes(expected));
     await expect(first.getByRole("note")).toHaveCount(0);
     await second.getByRole("button", { name: `second 计数 ${count}`, exact: true }).click();
     await expect(second.getByRole("button", { name: `second 计数 ${count + 1}`, exact: true })).toBeVisible();
     const errors = observations.errors.slice(start);
-    assert.ok(errors.some(error => error.kind === "console" && error.message.includes("BoxTeam 前端渲染失败") && error.message.includes(expected)));
+    if (method === "failContext") assert.ok((await page.evaluate(() => window.reactSurfaceHarness.diagnostics)).some(message => message.includes(expected)));
+    else assert.ok(errors.some(error => error.kind === "console" && error.message.includes(expected)));
     for (const error of errors) {
       assert.ok(error.message.includes(expected)
         || (error.kind === "console" && error.message.startsWith(`The above error occurred in the <${component}> component:`)), JSON.stringify(error));

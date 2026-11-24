@@ -1,17 +1,15 @@
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayDiagnostics, type GatewayLogTarget } from "../../../gatewayApi";
 import type { GatewayRequestTarget } from "../../../api/workspaceIdentity";
-import { HttpRequestError } from "../../../api/http";
 import type {
   GatewayDiagnostics,
 } from "../../../types/backend";
-import { formatByteSize, formatLocalTimestamp } from "../../../utils/format";
+import { formatLocalTimestamp } from "../../../utils/format";
 import {
   diagnosticLogStatusLabel,
-  diagnosticLogUnavailableHint,
 } from "../../panels/gatewayLogPresentation";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorDiagnostic, errorSummary } from "../../../utils/errorMessage";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import GatewayRuntimeObservation from "./GatewayRuntimeObservation";
 
@@ -43,10 +41,9 @@ export default function GatewayDiagnosticsPanel({
   const gatewayId = target?.gateway_id;
   const gatewayConnectionId = target?.gateway_connection_id;
   const workspaceId = target?.workspace_id;
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   // 诊断范围可被连续切换；只有最后一次发起的响应才允许写入展示态，否则先发后到的
   // 旧范围响应会覆盖新范围，用户看到与当前选择不符的工作区/日志。
@@ -60,13 +57,12 @@ export default function GatewayDiagnosticsPanel({
     lastScopeRef.current = scopeKey;
     requestRef.current?.abort();
     setDiagnostics(null);
-    setSelectedLogId(null);
     setError(null);
     setLoading(true);
   }
 
   const loadDiagnostics = useCallback(
-    async (logId?: string | null) => {
+    async () => {
       requestRef.current?.abort();
       const controller = new AbortController();
       requestRef.current = controller;
@@ -75,17 +71,14 @@ export default function GatewayDiagnosticsPanel({
       try {
         const next = await getGatewayDiagnostics(apiPort, {
           target: gatewayId ? { gateway_id: gatewayId, gateway_connection_id: gatewayConnectionId, workspace_id: workspaceId } : undefined,
-          logId: logId ?? null,
-          tailLines: 300,
+          includeTail: false,
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
         setDiagnostics(next);
-        setSelectedLogId(next.selected_log_id);
       } catch (loadError) {
         if (controller.signal.aborted) return;
-        setError(loadError instanceof HttpRequestError && loadError.requestId
-          ? `${errorMessage(loadError)}\nrequest_id=${loadError.requestId}` : errorMessage(loadError));
+        setError(loadError);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -97,26 +90,8 @@ export default function GatewayDiagnosticsPanel({
     return () => requestRef.current?.abort();
   }, [loadDiagnostics]);
 
-  const selectedLog = useMemo(() => {
-    if (!diagnostics) return null;
-    const id = selectedLogId ?? diagnostics.selected_log_id;
-    return diagnostics.logs.find((log) => log.log_id === id) ?? diagnostics.logs[0] ?? null;
-  }, [diagnostics, selectedLogId]);
-
   const availableLogCount = diagnostics?.logs.filter((log) => log.status === "available").length ?? 0;
   const offlineWorkspaceCount = diagnostics?.workspaces.filter((item) => item.status === "offline").length ?? 0;
-  const copySelectedLog = async () => {
-    if (!selectedLog?.tail) return;
-    // 复制统一走 utils/clipboard 的唯一实现：非安全上下文下 navigator.clipboard 真实
-    // 缺失，必须回退兼容复制，不能把「没有 Clipboard API」当 TypeError 暴露给用户。
-    try {
-      await copyTextToClipboard(selectedLog.tail);
-      setCopyNotice(t("gateway.diagnostics.logCopied"));
-    } catch (copyError) {
-      setCopyNotice(errorMessage(copyError));
-    }
-  };
-
   const copyDiagnosticSummary = async () => {
     if (!diagnostics) return;
     // 默认复制只选身份与状态；原始日志仍由用户在单独的“复制”操作中明确取得。
@@ -133,7 +108,7 @@ export default function GatewayDiagnosticsPanel({
     try {
       await copyTextToClipboard(JSON.stringify(summary, null, 2));
       setCopyNotice(t("gateway.diagnostics.summaryCopied"));
-    } catch (copyError) { setCopyNotice(errorMessage(copyError)); }
+    } catch (copyError) { setCopyNotice(errorSummary(copyError)); }
   };
 
   return (
@@ -145,7 +120,7 @@ export default function GatewayDiagnosticsPanel({
             title={t("gateway.diagnostics.copySummaryHint")} onClick={() => void copyDiagnosticSummary()}>
             {t("gateway.diagnostics.copySummary")}
           </button>
-          <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void loadDiagnostics(selectedLogId)}>
+          <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void loadDiagnostics()}>
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
             {loading ? t("gateway.diagnostics.loading") : t("gateway.diagnostics.refreshLogs")}
           </button>
@@ -153,15 +128,18 @@ export default function GatewayDiagnosticsPanel({
       </section>
 
       <div className="gateway-console-feedback-slot">
-        {error ? (
+        {Boolean(error) ? (
           <div
             className="gateway-console-feedback error"
             role="alert"
-            title={t(diagnostics ? "gateway.diagnostics.refreshFailedWithSnapshot" : "gateway.diagnostics.readFailed", error)}
           >
             <span className="codicon codicon-error" aria-hidden="true" />
             <strong>{diagnostics ? t("gateway.diagnostics.refreshFailed") : t("gateway.diagnostics.readFailedTitle")}</strong>
-            <span className="gateway-console-feedback-message">{error}</span>
+            <span className="gateway-console-feedback-message">{errorSummary(error)}</span>
+            <button type="button" onClick={() => {
+              void copyTextToClipboard(errorDiagnostic(error)).then(() => setCopyNotice(t('gateway.diagnostics.summaryCopied')))
+                .catch(cause => setCopyNotice(errorSummary(cause)));
+            }}>{t('shell.copyDiagnostic')}</button>
           </div>
         ) : null}
         {copyNotice ? (
@@ -200,10 +178,7 @@ export default function GatewayDiagnosticsPanel({
             <p>{t("gateway.storage.pathBoundary")}</p>
             <p>{t("gateway.storage.retentionBoundary")}</p>
             {onOpenRetention ? <button type="button" className="gateway-compact-button" onClick={() => {
-              void onOpenRetention({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined }).catch(cause => setError(
-                cause instanceof HttpRequestError && cause.requestId
-                  ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause),
-              ));
+              void onOpenRetention({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined }).catch(cause => setError(cause));
             }}>{t("gateway.storage.retentionSettings")}</button> : null}
           </details>
 
@@ -239,51 +214,19 @@ export default function GatewayDiagnosticsPanel({
             </div>)}
           </details>
 
-          <section className="gateway-diagnostics-log-layout" aria-label={t("gateway.diagnostics.logViewer")}>
-            <aside className="gateway-diagnostics-log-list">
-              <header><div><strong>{t("gateway.diagnostics.logEntries")}</strong><span>{t("gateway.diagnostics.logEntryCount", diagnostics.logs.length)}</span></div><small>{t("gateway.diagnostics.selectLogHint")}</small></header>
-              <div>
-                {diagnostics.logs.map((log) => (
-                  <button
-                    type="button"
-                    key={log.log_id}
-                    className={log.log_id === selectedLog?.log_id ? "active" : undefined}
-                    onClick={() => void loadDiagnostics(log.log_id)}
-                  >
-                    <span className={`codicon ${log.source === "gateway" ? "codicon-server-process" : "codicon-folder"}`} aria-hidden="true" />
-                    <span className="gateway-diagnostics-log-copy"><strong>{log.label}</strong><small>{log.source === "gateway" ? t("gateway.diagnostics.gatewayControlPlane") : t("gateway.diagnostics.workspaceRuntime")}</small></span>
-                    <span className={`gateway-diagnostics-log-status ${log.status}`}>{diagnosticLogStatusLabel(log)}</span>
-                  </button>
-                ))}
-              </div>
-            </aside>
-            <article className="gateway-diagnostics-viewer">
-              {selectedLog ? (
-                <>
-                  <header>
-                    <div><span>{selectedLog.source === "gateway" ? t("gateway.diagnostics.gatewayControlPlane") : selectedLog.workspace_name ?? t("gateway.diagnostics.workspace")}</span><h2>{selectedLog.label}</h2><small>{selectedLog.size_bytes ? `${formatByteSize(selectedLog.size_bytes)} · ` : ""}{formatTime(selectedLog.updated_at)}{selectedLog.truncated ? ` · ${t("gateway.diagnostics.latestTailOnly")}` : ""}</small></div>
-                    <button type="button" className="gateway-compact-button" disabled={!selectedLog.tail} onClick={() => void copySelectedLog()}><span className="codicon codicon-copy" aria-hidden="true" />{t("gateway.diagnostics.copy")}</button>
-                  </header>
-                  {selectedLog.status === "unavailable" ? (
-                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>{t("gateway.diagnostics.logUnavailable")}</strong><p>{diagnosticLogUnavailableHint(selectedLog)}</p></div>
-                  ) : selectedLog.status === "empty" ? (
-                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.emptyLog")}</strong><p>{t("gateway.diagnostics.emptyLogDetail")}</p></div>
-                  ) : null}
-                  <button type="button" disabled={selectedLog.status === 'unavailable'} onClick={() => {
-                    void onOpenLog({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined,
-                      workspace_id: selectedLog.source === 'gateway' ? undefined : selectedLog.workspace_id ?? diagnostics.selected_workspace_id ?? undefined,
-                      log_id: selectedLog.log_id })
-                      .catch(cause => setError(errorMessage(cause)));
-                  }}>{t('gateway.settings.openOutput')}</button>
-                </>
-              ) : (
-                <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.noLogEntries")}</strong><p>{t("gateway.diagnostics.noLogEntriesDetail")}</p></div>
-              )}
-            </article>
+          <section className="gateway-diagnostics-log-list" aria-label={t("gateway.diagnostics.logEntries")}>
+            {diagnostics.logs.map(log => <div key={log.log_id}>
+              <strong>{log.label}</strong><span>{diagnosticLogStatusLabel(log)}</span>
+              <button type="button" disabled={log.status === 'unavailable'} onClick={() => {
+                void onOpenLog({ gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id ?? undefined,
+                  workspace_id: log.source === 'workspace' ? log.workspace_id ?? undefined : undefined, log_id: log.log_id })
+                  .catch(cause => setError(cause));
+              }}>{t('gateway.settings.openOutput')}</button>
+            </div>)}
           </section>
         </>
       ) : (
-        error ? (
+        Boolean(error) ? (
           <div className="gateway-diagnostics-viewer-empty" role="status">
             <span className="codicon codicon-warning" aria-hidden="true" />
             <strong>{t("gateway.diagnostics.noSnapshot")}</strong>

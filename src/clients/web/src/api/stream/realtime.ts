@@ -57,14 +57,15 @@ export async function consumeRealtimeSubscription(
           RAW_RESPONSE_HEADER_TIMEOUT_MS,
         );
         if (!response.ok) {
-          const detail = await readHttpErrorDetail(response);
+          const body = await readHttpErrorDetail(response, controller.signal);
           throw new HttpRequestError(
             response.status,
             response.statusText,
-            detail,
+            body.detail,
             subscription.path,
             response.headers.get("X-Request-ID"),
             response.headers.get("X-BoxTeam-Error-Context"),
+            { body: body.diagnostic },
           );
         }
         options.onConnected?.(response.headers);
@@ -83,9 +84,11 @@ export async function consumeRealtimeSubscription(
             ? new HttpRequestError(
                 failure.status,
                 "Realtime failed",
-                failure.message,
-                url.pathname,
+                failure.detail ?? failure.message,
+                failure.path ?? url.pathname,
                 failure.requestId,
+                null,
+                { cause: failure },
               )
             : failure;
         if (options.signal?.aborted) return;
@@ -93,8 +96,7 @@ export async function consumeRealtimeSubscription(
           !refreshedCredential &&
           error instanceof HttpRequestError &&
           error.status === 401 &&
-          typeof error.detail === "string" &&
-          error.detail.includes("invalid local token")
+          error.message.includes("invalid local token")
         ) {
           refreshedCredential = true;
           // 同一旧连接的所有订阅都会收到 401，只能由仍持旧凭据的一项发起刷新。

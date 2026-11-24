@@ -8,6 +8,12 @@ import { parse, modify, applyEdits } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SOURCE_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], writes: [], preflights: [], sourceReads: [], responses: [], sourceDiscoveries: [] };
+const pendingDiscovery = new Set();
+const discoveryRequest = request => {
+  const path = new URL(request.url()).pathname;
+  return request.method() === 'GET' && (path.endsWith('/config/sources') || path.startsWith('/api/v1/resources/')
+    || path === '/api/v1/resources' || path.startsWith('/api/v1/mcp/'));
+};
 let browser, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
@@ -18,6 +24,7 @@ try {
   result.consoleErrors = [];
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   page.on('request', request => {
+    if (discoveryRequest(request)) pendingDiscovery.add(request);
     const url = new URL(request.url());
     if (url.pathname.endsWith('/config/sources')) result.sourceDiscoveries.push({ phase: result.phase, path: url.pathname,
       method: request.method(), gateway: request.headers()['x-boxteam-target-gateway-id'], workspace: request.headers()['x-boxteam-workspace-id'] });
@@ -29,6 +36,8 @@ try {
     else if (request.method() === 'POST') result.preflights.push(record);
     else result.sourceReads.push(record);
   });
+  page.on('requestfinished', request => pendingDiscovery.delete(request));
+  page.on('requestfailed', request => pendingDiscovery.delete(request));
   page.on('response', response => { if (new URL(response.url()).pathname.includes('/config/sources/')) result.responses.push({ path: new URL(response.url()).pathname, status: response.status() }); });
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => { await globalThis.workbench.commands.executeCommand(id, ...args); }, { id, args });
   const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
@@ -85,16 +94,9 @@ try {
   const resourceSource = (source, gatewayScope) => quick.locator('.monaco-list-row').filter({ hasText: source + '.jsonc' })
     .filter({ hasText: gatewayScope ? '配置来源 · Gateway ·' : `配置来源 · ${workspace.name} ·` });
   const chooseSource = async (source, gatewayScope = false, modifiers = []) => {
-    const item = resourceSource(source, gatewayScope), input = quick.locator('input').first();
-    await input.focus();
-    // 其他资源来源会异步插入错误行；确认原版键盘焦点，避免鼠标坐标随行位移选错对象。
-    const count = await quick.locator('.monaco-list-row').count();
-    for (let index = 0; index <= count; index++) {
-      if (await item.evaluate(row => row.classList.contains('focused'))) break;
-      await input.press('ArrowDown');
-    }
-    await expect(item).toHaveClass(/\bfocused\b/);
-    await input.press([...modifiers, 'Enter'].join('+'));
+    // 原列表在异步来源结算后会替换键盘焦点；点击当时的精确资源项，不沿旧 focused 行回车。
+    await resourceSource(source, gatewayScope).click({ modifiers });
+    await expect(quick).toBeHidden();
   };
   const showSources = async (source = 'workspace_root_mutable_override', gatewayScope = false) => {
     await page.mouse.move(5, 5);
@@ -102,7 +104,8 @@ try {
     await expect(quick.locator('input').first()).toHaveValue('resource ');
     await quick.locator('input').first().fill('resource ' + source);
     await expect(resourceSource(source, gatewayScope)).toBeVisible();
-    // 来源目录采用原 Quick Input 进度条；等待真实发现结束，避免行插入时点中另一项。
+    // 只等本次有限来源发现请求；页面的常驻通道与后台轮询不属于Picker完成条件。
+    await expect.poll(() => pendingDiscovery.size).toBe(0);
     await expect(quick.locator('[role="progressbar"]')).toHaveAttribute('aria-hidden', 'true');
   };
   result.phase = 'resource-discovery';
@@ -164,18 +167,105 @@ try {
   await expect(tab).toContainText('workspace_root_mutable_override.jsonc');
   result.resource_open_and_save = true;
   let workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
-  const workspaceDraft = '// Workspace 来源注释\n' + update(workspaceDocument.jsonc, ['default_agent'], 'default');
+  const workspaceDraft = '// Workspace 来源注释\n' + update(workspaceDocument.jsonc, ['settings', 'workspace', 'default_agent'], 'default');
   await replace(workspaceDraft);
   // 焦点切换到 Gateway 设置再返回，原工作区文件的目标不随管理选择变化。
   await command('workbench.action.previousEditor');
   await command('workbench.action.nextEditor');
   await save();
   workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
-  assert.equal(parse(workspaceDocument.jsonc).default_agent, 'default');
+  assert.equal(parse(workspaceDocument.jsonc).settings.workspace.default_agent, 'default');
   assert(workspaceDocument.jsonc.includes('// Workspace 来源注释'));
   const workspaceWrite = result.writes.find(record => record.path === workspacePath);
   assert.equal(workspaceWrite.workspace_id, active.workspace_id);
   result.workspace_saved = true; result.frozen_owner = true;
+
+  result.phase = 'real-validation-marker-and-stale-array';
+  const validBeforeValidation = workspaceDocument.jsonc;
+  const proxyPath = ['settings', 'network', 'proxy'];
+  const arrayPath = [...proxyPath, 'bypass'];
+  // 原文档 schema 直接校验网络互斥块；合并后的业务路径不能冒充原文坐标。
+  const invalidArray = update(validBeforeValidation, proxyPath, { mode: 'explicit', url: 'http://proxy.invalid', bypass: ['有效条目', 7] });
+  await replace(invalidArray);
+  await command('notifications.clearAll');
+  const failureReady = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === workspacePath + '/preflight' && response.status() === 422);
+  const writesBeforeValidation = result.writes.length;
+  await command('workbench.action.files.save');
+  const validationResponse = await failureReady, validationBody = await validationResponse.json();
+  assert.equal(validationBody.request_id, validationResponse.headers()['x-request-id']);
+  const sourceUri = workspaceDocument.nodes.find(node => node.source_key === workspaceDocument.source_key).source_uri;
+  assert.equal(validationBody.detail.details.source_uri, sourceUri);
+  // oneOf 的真实诊断指向完整 proxy 块，不擅自把 union 失败改成数组元素坐标。
+  const validationIssue = validationBody.detail.details.issues.find(issue => JSON.stringify(issue.path) === JSON.stringify(proxyPath));
+  assert(validationIssue?.path_exact === true, JSON.stringify(validationBody));
+  assert.equal(validationIssue.code, 'oneOf');
+  assert.equal(result.writes.length, writesBeforeValidation, '失败预检不能进入真实PUT');
+  const validationNotice = page.locator('.notification-list-item').filter({ hasText: '草稿已保留' }).filter({ has: page.locator('.notification-list-item-message') });
+  await expect(validationNotice).toHaveCount(1);
+  const summary = await validationNotice.locator('.notification-list-item-message').innerText();
+  assert(Array.from(summary).length <= 160 && !summary.includes(validationBody.request_id), summary);
+  await page.setViewportSize({ width: 720, height: 950 });
+  await expect(validationNotice).toBeVisible();
+  assert.equal(await validationNotice.locator('.notification-list-item-message').innerText(), summary);
+  await page.setViewportSize({ width: 1500, height: 950 });
+  await validationNotice.locator('.codicon-notifications-configure').click();
+  await page.getByRole('menuitem', { name: '复制安全诊断', exact: true }).click();
+  const copiedValidation = await page.evaluate(() => navigator.clipboard.readText());
+  assert(copiedValidation.includes(validationBody.request_id) && copiedValidation.includes(sourceUri), copiedValidation);
+  await command('workbench.actions.view.problems');
+  const exactProblems = page.locator('.markers-panel .monaco-list-row').filter({ has: page.locator('.marker-source', { hasText: 'BoxTeam' }) });
+  await expect(exactProblems).toHaveCount(1);
+  const originalProblem = await exactProblems.innerText();
+  assert(originalProblem.includes(validationIssue.message), originalProblem);
+  await command('workbench.action.closePanel');
+  await command('notifications.hideToasts');
+  await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.press('F8');
+  const markerWidget = page.locator('.editor-instance:visible .marker-widget').last();
+  await expect(markerWidget).toBeVisible();
+  await expect(markerWidget).toContainText('BoxTeam');
+  await expect(markerWidget).toContainText(validationIssue.message);
+  await page.keyboard.press('Escape');
+  // 原生复制读取当前草稿；诊断动作不得改写用户正文。
+  await text.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Control+C');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), invalidArray);
+
+  let releaseLate, lateFetched;
+  const held = new Promise(resolve => { lateFetched = resolve; });
+  const release = new Promise(resolve => { releaseLate = resolve; });
+  let heldResponse;
+  const delayRealValidation = async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    // 延迟真实owner产生的422，保留正文和身份；不构造诊断metadata。
+    const response = await route.fetch();
+    assert.equal(response.status(), 422);
+    heldResponse = { body: await response.json(), request_id: response.headers()['x-request-id'] };
+    lateFetched(); await release;
+    await route.fulfill({ response });
+  };
+  await page.route('**/api/v1/config/sources/workspace_root_mutable_override/preflight', delayRealValidation);
+  await command('notifications.clearAll');
+  const lateSave = command('workbench.action.files.save');
+  try {
+    await held;
+    const reordered = update(invalidArray, arrayPath, [7, '有效条目']);
+    await replace(reordered);
+    releaseLate(); await lateSave;
+    await command('workbench.actions.view.problems');
+    await expect(exactProblems).toHaveCount(0);
+    await expect(page.locator('.notification-list-item-message').filter({ hasText: '草稿已保留' })).toBeVisible();
+    result.validation = { request_id: validationBody.request_id, source_uri: sourceUri, issue: validationIssue,
+      wide_and_narrow_summary: summary, copied_original: true, f8_problem: originalProblem,
+      late_request_id: heldResponse.request_id, late_issue: heldResponse.body.detail.details.issues[0],
+      same_uri_array_reordered_without_marker: true };
+  } finally {
+    releaseLate(); await page.unroute('**/api/v1/config/sources/workspace_root_mutable_override/preflight', delayRealValidation);
+    await lateSave;
+  }
+  await command('workbench.action.closePanel');
+  await replace(validBeforeValidation);
+  await save();
+  workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
 
   result.phase = 'real-cas-conflict';
   const draft = workspaceDocument.jsonc + '\n// 冲突时必须保留的草稿\n';
@@ -325,8 +415,11 @@ try {
   await expect(tab).not.toHaveClass(/\bdirty\b/);
   assert.equal(result.writes.length, readonlyBefore);
   await expect(text).not.toContainText('不得写入');
-  await showSources('inline'); await chooseSource('inline');
-  await expect(tab).toContainText('inline.jsonc');
+  const workspaceSources = await api('/api/v1/config/sources', { headers: workspaceHeaders });
+  const workspaceInline = workspaceSources.sources.find(source => source.layer === 'inline' && source.source_key && source.uri);
+  assert(workspaceInline, 'Workspace inline 来源必须由原 owner 提供 URI');
+  await showSources(workspaceInline.source_key); await chooseSource(workspaceInline.source_key);
+  await expect(tab).toContainText(workspaceInline.source_key + '.jsonc');
   await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// 工作区内置来源不得写入\n');
   await expect(tab).not.toHaveClass(/\bdirty\b/);
   await expect(text).not.toContainText('工作区内置来源不得写入');
@@ -347,9 +440,6 @@ try {
   };
   assert(inline.uri, 'Gateway inline 来源必须由原 owner 提供 URI');
   await openConfigurationUri(inline.uri, inline.source_key);
-  const workspaceSources = await api('/api/v1/config/sources', { headers: workspaceHeaders });
-  const workspaceInline = workspaceSources.sources.find(source => source.layer === 'inline' && source.source_key && source.uri);
-  assert(workspaceInline, 'Workspace inline 来源必须由原 owner 提供 URI');
   const gatewayUser = sources.sources.find(source => source.source_key === 'gateway_mutable_override');
   assert(gatewayUser?.uri, 'Gateway 文件来源必须由原 owner 提供 URI');
   result.sourceCatalogs = { gateway: sources, workspace: workspaceSources };
@@ -361,7 +451,16 @@ try {
   result.configuration_uri_opened = true;
   result.phase = 'configuration-resource-reference';
   result.configurationReferences = [];
-  for (const [source, gatewayScope] of [[inline, true], [gatewayUser, true], [workspaceInline, false]]) {
+  const workspaceRoot = workspaceSources.sources.find(source => source.source_key === 'workspace_root_mutable_override');
+  assert.equal(workspaceRoot?.layer, 'workspace');
+  assert(workspaceRoot.uri, '工作区文件来源必须由原 owner 提供 URI');
+  const workspaceAddress = await api('/api/gateway/resource-addresses/parse', { method: 'POST',
+    body: { uri: workspaceRoot.uri, local_gateway_id: health.gateway_id, resource_gateway_id: health.gateway_id } });
+  assert.equal(workspaceAddress.gateway_id, health.gateway_id);
+  assert.equal(workspaceAddress.scope, 'workspace');
+  assert.equal(workspaceAddress.scope_id, active.workspace_id);
+  assert.equal(workspaceAddress.kind, 'config');
+  for (const [source, gatewayScope] of [[inline, true], [gatewayUser, true], [workspaceInline, false], [workspaceRoot, false]]) {
     const parsed = await api('/api/gateway/resource-addresses/parse', { method: 'POST',
       body: { uri: source.uri, local_gateway_id: health.gateway_id, resource_gateway_id: health.gateway_id } });
     await showSources(source.source_key, gatewayScope);
@@ -383,20 +482,7 @@ try {
     assert.equal(result.sourceDiscoveries.length, openedDiscoveries + 1);
     result.configurationReferences.push({ sourceKey: source.source_key, gatewayScope, uri: parsed.reference_uri });
   }
-  const workspaceLogical = workspaceSources.sources.find(source => source.source_key === 'workspace_root_mutable_override');
-  assert(workspaceLogical && !workspaceLogical.uri, 'Workspace 逻辑来源不能伪造文件 URI');
-  await showSources(workspaceLogical.source_key);
-  assert.equal(await resourceSource(workspaceLogical.source_key, false).getByRole('button', { name: '复制资源 URI', exact: true }).count(), 0);
-  await chooseSource(workspaceLogical.source_key);
-  await expect(tab).toContainText(workspaceLogical.source_key + '.jsonc');
-  await expect(text).toBeVisible();
-  const logicalCopy = await page.evaluate(async () => {
-    try { await globalThis.workbench.commands.executeCommand('boxteam.resource.copyUri'); return { copied: true }; }
-    catch (error) { return { error: String(error) }; }
-  });
-  assert.match(logicalCopy.error, /没有可复制的规范 URI/);
   assert.equal(result.writes.length, readonlyBefore);
-  result.logicalConfigurationReferenceRejected = true;
   const status = command('boxteam.settings.sourceStatus');
   await expect(quick).toBeVisible(); await expect(quick).toContainText('来源层');
   await page.keyboard.press('Escape'); await status;

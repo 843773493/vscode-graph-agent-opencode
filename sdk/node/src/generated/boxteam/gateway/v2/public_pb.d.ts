@@ -2107,6 +2107,8 @@ export declare type GatewayDiagnosticLogReferenceDTO = Message<"boxteam.gateway.
   inode: string;
 
   /**
+   * 原物理行 UTF-8 字节半开区间，不能作为编辑器行号。
+   *
    * @generated from field: int64 line_start = 5;
    */
   lineStart: bigint;
@@ -2122,6 +2124,8 @@ export declare type GatewayDiagnosticLogReferenceDTO = Message<"boxteam.gateway.
   contentVersion: string;
 
   /**
+   * 去行尾 UTF-8 替换解码原文的 Unicode 码点半开区间。
+   *
    * @generated from field: int64 start_codepoint = 8;
    */
   startCodepoint: bigint;

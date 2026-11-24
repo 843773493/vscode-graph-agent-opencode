@@ -5,6 +5,7 @@ import type { GatewayManagementDirectoryDTO } from "../../../types/protocol_gene
 import { apiSuccessResponse, installGatewayFetch, restoreGatewayTestEnvironment } from "../../../tests/fixtures/session/gatewayEnvironment";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 import GatewayConnectionsPanel from "./GatewayConnectionsPanel";
+import { ComposerDiagnosticsContext } from "../../composer/ComposerDiagnosticsContext";
 
 afterEach(restoreGatewayTestEnvironment);
 const directory: GatewayManagementDirectoryDTO = { local_gateway_id: "gateway_local", items: [
@@ -48,18 +49,20 @@ test("原目录显示零工作区连接，manual改名保留原connection和端�
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 });
 
-test("目录HTTP失败保留request_id，不显示空连接成功状态", async () => {
+test("目录HTTP失败仅默认显示原因，request_id保留在窗口诊断且不显示空连接成功状态", async () => {
   installGatewayFetch(({ path }) => path === "/api/gateway/management/gateways"
     ? Response.json({ detail: "目录不可读" }, { status: 503, headers: { "X-Request-ID": "req-directory-failed" } }) : undefined);
   let renderer!: ReactTestRenderer;
+  const diagnostics: string[] = [];
   try {
     await act(async () => {
-      renderer = create(<WarmConfirmProvider><GatewayConnectionsPanel apiPort={8014} gatewayId="gateway_local" workspaces={[]}
+      renderer = create(<ComposerDiagnosticsContext.Provider value={message => diagnostics.push(message)}><WarmConfirmProvider><GatewayConnectionsPanel apiPort={8014} gatewayId="gateway_local" workspaces={[]}
         revision={0} onAddRemoteGatewayConnection={noop} onRefresh={noop} onRemoteGatewayReconnected={() => undefined}
-        onOpenConfiguration={noop} onOpenLogs={() => undefined} /></WarmConfirmProvider>);
+        onOpenConfiguration={noop} onOpenLogs={() => undefined} /></WarmConfirmProvider></ComposerDiagnosticsContext.Provider>);
       await flush();
     });
-    expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("req-directory-failed");
+    expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toBe("目录不可读");
+    expect(diagnostics.join("\n")).toContain("req-directory-failed");
     expect(JSON.stringify(renderer.toJSON())).not.toContain("暂无远程 Gateway 连接");
     expect(renderer.root.findAllByType("article")).toHaveLength(0);
   } finally { if (renderer) await act(async () => renderer.unmount()); }

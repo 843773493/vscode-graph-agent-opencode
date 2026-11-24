@@ -2,11 +2,13 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { VSBuffer } from '../../upstream/src/vs/base/common/buffer.js';
 import { Emitter, Event } from '../../upstream/src/vs/base/common/event.js';
 import { CancellationError, getErrorMessage } from '../../upstream/src/vs/base/common/errors.js';
-import { Disposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
-import { parse } from '../../upstream/src/vs/base/common/json.js';
+import { Disposable, DisposableStore, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { parse, parseTree, findNodeAtLocation } from '../../upstream/src/vs/base/common/json.js';
 import { dirname, resolvePath } from '../../upstream/src/vs/base/common/resources.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
+import type { ITextModel } from '../../upstream/src/vs/editor/common/model.js';
+import { IMarkerService, MarkerSeverity, type IMarkerData } from '../../upstream/src/vs/platform/markers/common/markers.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { IFileService, FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
   type IFileChange, type IFileSystemProviderWithFileReadWriteCapability, type IFileWriteOptions, type IStat } from '../../upstream/src/vs/platform/files/common/files.js';
@@ -19,10 +21,11 @@ import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/serv
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFailure, sourceFanoutStatus, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 import { workspaceContext } from '../workspaceContext.js';
 
 export const configSourceScheme = 'boxteam-config-source';
+const validationMarkerOwner = 'boxteam.configSourceValidation';
 
 /** 编辑器身份，不是业务资源 grammar；规范来源 URI 仍只取 owner 的 sources 回执。 */
 export function configSourceEditorUri(target: GatewayRequestTarget, sourceKey: string): URI {
@@ -66,7 +69,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   private readonly changed = this._register(new Emitter<URI>());
   readonly onDidChangeSource = this.changed.event;
   constructor(private readonly dialogs: IDialogService, private readonly notifications: INotificationService,
-    private readonly storage: IStorageService) { super(); }
+    private readonly storage: IStorageService, private readonly models: IModelService, private readonly markers: IMarkerService) { super(); }
 
   private submissionStorageKey(resource: URI): string { return 'boxteam.configurationSource.submission:' + resource.toString(); }
   /** 只保存原提交的查询身份；不保存请求正文、密码或客户端秘密摘要。 */
@@ -80,7 +83,40 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   async preflight(resource: URI, jsonc: string, signal?: AbortSignal, modelRef?: { provider_id: string; model_id?: string }) {
     const edit = this.edit(resource);
     if (!edit.baseline) throw new Error(t('settings.editor.restoredBaselineMissing'));
-    return edit.owner.preflight(edit.owner.intent(edit.sourceKey, jsonc, edit.baseline), signal, modelRef);
+    const model = this.models.getModel(resource), version = model?.getVersionId();
+    try {
+      const result = await edit.owner.preflight(edit.owner.intent(edit.sourceKey, jsonc, edit.baseline), signal, modelRef);
+      if (model === this.models.getModel(resource) && version === model?.getVersionId()) this.clearValidation(resource);
+      return result;
+    } catch (error) { this.showValidation(resource, jsonc, model, version, error); throw error; }
+  }
+
+  clearValidation(resource: URI): void { this.markers.remove(validationMarkerOwner, [resource]); }
+  private showValidation(resource: URI, jsonc: string, model: ITextModel | null, version: number | undefined, error: unknown): void {
+    // URI 相同不足以证明诊断仍有效；数组重排或任何草稿修改都必须使旧位置失效。
+    if (!model || model !== this.models.getModel(resource) || version !== model.getVersionId()
+      || jsonc !== model.getValue() || !(error instanceof HttpRequestError)) return;
+    const detail = error.detail;
+    if (!detail || typeof detail !== 'object' || !('details' in detail)) return;
+    const details = detail.details;
+    if (!details || typeof details !== 'object' || !('source_uri' in details) || !('issues' in details) || !Array.isArray(details.issues)) return;
+    const edit = this.edit(resource);
+    const source = edit.document?.nodes.find(node => node.source_key === edit.sourceKey)?.source_uri;
+    if (!source || details.source_uri !== source) return;
+    const root = parseTree(jsonc);
+    const markers: IMarkerData[] = [];
+    for (const issue of details.issues) {
+      if (!issue || typeof issue !== 'object' || issue.path_exact !== true || !Array.isArray(issue.path)
+        || !issue.path.every((part: unknown) => typeof part === 'string' || typeof part === 'number' && Number.isSafeInteger(part) && part >= 0)
+        || typeof issue.message !== 'string') continue;
+      const node = findNodeAtLocation(root, issue.path);
+      if (!node) continue; // union 分支或缺失成员不能猜成另一个字段。
+      const start = model.getPositionAt(node.offset), end = model.getPositionAt(node.offset + node.length);
+      markers.push({ severity: MarkerSeverity.Error, message: issue.message, code: typeof issue.code === 'string' ? issue.code : undefined,
+        source: 'BoxTeam', modelVersionId: version, startLineNumber: start.lineNumber, startColumn: start.column,
+        endLineNumber: end.lineNumber, endColumn: end.column });
+    }
+    this.markers.changeOne(validationMarkerOwner, resource, markers);
   }
 
 
@@ -142,6 +178,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const key = resource.toString();
     for (const stream of this.edits.get(key)?.schemaStreams ?? []) stream.abort.abort();
     this.edits.delete(key);
+    this.clearValidation(resource);
   }
   override dispose(): void {
     for (const key of this.edits.keys()) this.release(URI.parse(key));
@@ -207,7 +244,8 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     // 查不到回执仍是未知，不能因重开编辑器便换键提交。
     if (key && document.edit && (document.edit.source_saved || ['rejected', 'discarded', 'conflict'].includes(document.edit.state))) {
       await this.setSubmission(resource, edit);
-      this.notifications.info(sourceStatus(document));
+      if (document.edit.source_saved && !document.edit.layer_imported) this.notifications.error(sourceFailure(document));
+      else this.notifications.info(sourceStatus(document));
       if (document.edit.source_saved && document.edit.file_digest !== document.file_digest) {
         this.notifications.warn(t('settings.editor.savedThenChanged'));
       }
@@ -222,6 +260,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   private async saveSource(resource: URI, jsonc: string): Promise<void> {
     // 每次操作捕获原路由；显式重选连接只影响后续操作，资源目标始终来自 URI。
     const edit = this.edit(resource), owner = edit.owner;
+    const model = this.models.getModel(resource), version = model?.getVersionId();
     if (edit.saving) throw new Error(t('configuration.entities.saveInProgress'));
     edit.saving = true;
     try {
@@ -248,14 +287,16 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       await this.setSubmission(resource, edit, { key: intent.idempotency_key, gatewayConnectionId: owner.target.gateway_connection_id });
       saving = true;
       const saved = await owner.save(intent);
+      if (model === this.models.getModel(resource) && version === model?.getVersionId()) this.clearValidation(resource);
       this.update(resource, edit, saved);
       if (saved.edit && (saved.edit.source_saved || ['rejected', 'discarded', 'conflict'].includes(saved.edit.state))) await this.setSubmission(resource, edit);
       if (!saved.edit?.source_saved) throw new Error(t('settings.editor.sourceNotSaved', sourceStatus(saved)));
       edit.baseline = sourceBaseline(saved);
-      if (!saved.edit.layer_imported) this.notifications.error(sourceStatus(saved));
+      if (!saved.edit.layer_imported) this.notifications.error(sourceFailure(saved));
       else this.notifications.info(sourceStatus(saved));
       return;
     } catch (error) {
+      this.showValidation(resource, jsonc, model, version, error);
       if (error instanceof CancellationError && !saving) {
         await this.setSubmission(resource, edit);
         throw error;
@@ -268,18 +309,20 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       });
       this.update(resource, edit, latest);
       if (uncertain) {
-        if (!latest.edit) throw new Error(t('settings.editor.unknownNotResubmitted', intent.idempotency_key, getErrorMessage(error)));
+        if (!latest.edit) throw new Error(t('settings.editor.unknownNotResubmitted', intent.idempotency_key, getErrorMessage(error)), { cause: error });
         if (latest.edit.source_saved || ['rejected', 'discarded', 'conflict'].includes(latest.edit.state)) await this.setSubmission(resource, edit);
         if (latest.edit.source_saved) {
           if (latest.edit.file_digest !== latest.file_digest) {
             edit.baseline = sourceBaseline(latest);
-            throw new Error(t('settings.editor.savedThenChanged'));
+            throw new Error(t('settings.editor.savedThenChanged'), { cause: error });
           }
           edit.baseline = sourceBaseline(latest);
-          this.notifications.info(sourceStatus(latest)); return;
+          if (!latest.edit.layer_imported) this.notifications.error(sourceFailure(latest));
+          else this.notifications.info(sourceStatus(latest));
+          return;
         }
       }
-      throw new Error(t('settings.editor.changeFailedDraftPreserved', getErrorMessage(error)));
+      throw new Error(t('settings.editor.changeFailedDraftPreserved', getErrorMessage(error)), { cause: error });
     }
     } finally { edit.saving = false; }
   }
@@ -316,9 +359,9 @@ export async function restoreConfigSourceBackup(files: IFileService, resource: U
 class ConfigurationSourceEditors extends Disposable {
   constructor(@IFileService files: IFileService, @IDialogService dialogs: IDialogService, @INotificationService notifications: INotificationService,
     @IModelService models: IModelService, @IFilesConfigurationService configuration: IFilesConfigurationService, @IStorageService storage: IStorageService,
-    @ITextFileService textFiles: ITextFileService, @ILabelService labels: ILabelService) {
+    @ITextFileService textFiles: ITextFileService, @ILabelService labels: ILabelService, @IMarkerService markers: IMarkerService) {
     super();
-    const provider = this._register(new ConfigurationSourceFiles(dialogs, notifications, storage));
+    const provider = this._register(new ConfigurationSourceFiles(dialogs, notifications, storage, models, markers));
     this._register(files.registerProvider(configSourceScheme, provider));
     // 显示根与资源身份分离；沿用原标签服务刷新 Tab、悬停和面包屑，不改 URI 或保存归属。
     const labelChanged = this._register(new Emitter<void>());
@@ -346,8 +389,14 @@ class ConfigurationSourceEditors extends Disposable {
       })().catch(error => notifications.error(error));
     }));
     const autoSave = new Map<string, IDisposable>();
-    const added = (resource: URI) => { if (resource.scheme === configSourceScheme) autoSave.set(resource.toString(), configuration.disableAutoSave(resource)); };
-    this._register(models.onModelAdded(model => added(model.uri)));
+    const added = (model: ITextModel) => {
+      if (model.uri.scheme !== configSourceScheme) return;
+      const lifetime = new DisposableStore();
+      lifetime.add(configuration.disableAutoSave(model.uri));
+      lifetime.add(model.onDidChangeContent(() => provider.clearValidation(model.uri)));
+      autoSave.set(model.uri.toString(), lifetime);
+    };
+    this._register(models.onModelAdded(added));
     this._register(models.onModelRemoved(model => {
       if (model.uri.scheme !== configSourceScheme) return;
       autoSave.get(model.uri.toString())?.dispose(); autoSave.delete(model.uri.toString()); provider.release(model.uri);

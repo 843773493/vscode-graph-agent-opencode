@@ -28,7 +28,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
     .map(gatewayId => ({ gatewayId, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
   const roots = owners.map(owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`);
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
-    connection_kind: index === 0 ? 'local' : 'remote_gateway', status: 'ready', name: `名称 ${index === 0 ? 'A' : 'B'}` }));
+    connection_kind: index === 0 ? 'local' : 'remote_gateway', remote_gateways: [], status: 'ready', name: `名称 ${index === 0 ? 'A' : 'B'}` }));
   const frozen = { version: 1, gateway_id: owners[0].gatewayId, resolved_at: '2026-11-03T00:00:00Z', mode: 'selected',
     owners: owners.map(owner => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId })) };
   const configuration = { editor: { wordSeparators: ' /' }, files: { encoding: 'utf8', exclude: {} },
@@ -113,6 +113,17 @@ async function federatedBranchContract(mode, category, diagnostic) {
     connection.controller.close();
   };
   let busy = false, updates = 0, label;
+  const copyDiagnostic = async status => {
+    const index = status.buttons?.findIndex(button => button.tooltip === '复制安全诊断') ?? -1;
+    if (index < 0) throw new Error('状态缺少原生诊断复制动作');
+    await status.trigger(index);
+    return navigator.clipboard.readText();
+  };
+  const copyDiagnostics = async branches => {
+    const result = [];
+    for (const branch of branches) result.push(await copyDiagnostic(branch.status));
+    return result;
+  };
   try {
     if (mode.startsWith('session-') || mode.startsWith('thread-')) {
       const prefix = category === 'Thread' ? 'thread ' : 'session ';
@@ -207,18 +218,18 @@ async function federatedBranchContract(mode, category, diagnostic) {
       }
       first.controller.error(new TypeError('目标网络连接被重置'));
       await until(() => !busy);
-      return { details: branches.map(branch => branch.status.detail), labels: branches.map(branch => branch.status.label),
+      return { diagnostics: await copyDiagnostics(branches), details: branches.map(branch => branch.status.detail), labels: branches.map(branch => branch.status.label),
         requests: connections.map(connection => connection.request), pending: branches.map(branch => branch.pending),
         picks: branches.map(branch => branch.picks.map(pick => pick.id)), busy };
     }
     if (mode === 'disconnect-before-scope') {
       first.controller.close();
       await until(() => !busy);
-      const details = branches.map(branch => branch.status.detail), labels = branches.map(branch => branch.status.label);
+      const details = branches.map(branch => branch.status.detail), labels = branches.map(branch => branch.status.label), diagnostics = await copyDiagnostics(branches);
       const retry = branches[1].status.trigger();
       await until(() => connections.length === 2); const next = connections[1]; scope(next);
       page(next, 0, 2); page(next, 1, 2); end(next, [state(0), state(1)]); await retry;
-      return { details, labels, requests: connections.map(connection => connection.request), paths,
+      return { details, labels, diagnostics, requests: connections.map(connection => connection.request), paths,
         pending: branches.map(branch => branch.pending), busy, picks: branches.map(branch => branch.picks.map(pick => pick.id)) };
     }
     scope(first);
@@ -230,7 +241,8 @@ async function federatedBranchContract(mode, category, diagnostic) {
       await until(() => connections.length === 2); const next = connections[1]; scope(next);
       const terminal = { ...state(0), ...diagnostic, returned_results: 0, cursor: 'A-original-cursor' };
       send(next, 'branch', { branch: terminal }); end(next, [terminal]); await continuing;
-      const statuses = branches.map(branch => ({ label: branch.status.label, detail: branch.status.detail,
+      const copied = await copyDiagnostics(branches);
+      const statuses = branches.map((branch, index) => ({ label: branch.status.label, detail: branch.status.detail, diagnostic: copied[index],
         buttons: branch.status.buttons?.map(button => button.tooltip) ?? [], hasTrigger: typeof branch.status.trigger === 'function' }));
       const retainedPicks = branches.map(branch => branch.picks.map(pick => pick.id));
       const originalRetained = original.map((pick, index) => pick === branches[index].picks[0]);
@@ -256,6 +268,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
       send(next, 'branch', { branch: failure }); end(next, [failure]); await continuation;
       const failureLabel = branches[1].status.label, failureDetail = branches[1].status.detail,
         retryTooltip = branches[1].status.buttons[0].tooltip;
+      const failureDiagnostic = await copyDiagnostic(branches[1].status);
       // 使用 Quick Input 原标签渲染器核对文本，不在测试内复制 Markdown 或命令解析。
       const rendering = lifetime.add(new IconLabel(document.createElement('div'), { supportHighlights: true, supportIcons: true }));
       rendering.setLabel(failureLabel, failureDetail);
@@ -264,8 +277,8 @@ async function federatedBranchContract(mode, category, diagnostic) {
       const retry = branches[1].status.trigger();
       await until(() => connections.length === 3); const last = connections[2]; scope(last);
       send(last, 'branch', { branch: completed(1) }); end(last, [completed(1)]); await retry;
-      return { requests: connections.map(connection => connection.request), paths, failureLabel, failureDetail, retryTooltip, busy, diagnosticText, diagnosticLinks, diagnosticMarkup,
-        pending: branches.map(branch => branch.pending), status: branches.map(branch => branch.status.detail) };
+      return { requests: connections.map(connection => connection.request), paths, failureLabel, failureDetail, failureDiagnostic, retryTooltip, busy, diagnosticText, diagnosticLinks, diagnosticMarkup,
+        pending: branches.map(branch => branch.pending), status: branches.map(branch => branch.status.detail), diagnostics: await copyDiagnostics(branches) };
     }
     if (mode === 'cancel' || mode === 'late') {
       const count = updates; lifetime.dispose();
@@ -277,7 +290,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
     if (mode === 'disconnect') {
       page(first, 0, 2); first.controller.close();
       await until(() => !busy);
-      return { labels: branches.map(branch => branch.status.label), details: branches.map(branch => branch.status.detail),
+      return { labels: branches.map(branch => branch.status.label), details: branches.map(branch => branch.status.detail), diagnostics: await copyDiagnostics(branches),
         picks: branches.map(branch => branch.picks.map(pick => pick.id)) };
     }
     page(first, 0, 2, 'limited'); await until(() => !branches[0].pending);

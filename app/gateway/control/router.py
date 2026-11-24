@@ -70,6 +70,7 @@ async def get_gateway_diagnostics(
     workspace_id: str | None = Query(default=None),
     log_id: str | None = Query(default=None),
     tail_lines: int = Query(default=300, ge=20, le=1000),
+    include_tail: bool = Query(default=True),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -93,7 +94,7 @@ async def get_gateway_diagnostics(
                 registry,
                 selected_workspace_id=workspace_id,
                 selected_log_id=log_id,
-                tail_lines=tail_lines,
+                tail_lines=tail_lines, include_tail=include_tail,
                 service_plugins=getattr(request.app.state, "service_plugins", None),
                 observation=getattr(request.app.state, "runtime_observation", None),
             )
@@ -119,6 +120,7 @@ async def get_gateway_diagnostics(
         ).get(gateway_connection_id)
         params = {
             "tail_lines": str(tail_lines),
+            "include_tail": str(include_tail).lower(),
             **(
                 {"workspace_id": workspace_id}
                 if workspace_id is not None

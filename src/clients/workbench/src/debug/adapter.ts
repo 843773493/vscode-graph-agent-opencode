@@ -2,7 +2,8 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { AbstractDebugAdapter } from '../../upstream/src/vs/workbench/contrib/debug/common/abstractDebugAdapter.js';
 import type { IConfig, IDebugSession } from '../../upstream/src/vs/workbench/contrib/debug/common/debug.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
-import { formatFailureContext, getGatewayToken, onGatewayTokenInvalidated, type HttpFailureContext } from '../../../web/src/api/http.js';
+import { getGatewayToken, onGatewayTokenInvalidated, type HttpFailureContext } from '../../../web/src/api/http.js';
+import { errorMessage } from '../../../web/src/utils/errorMessage.js';
 import type { NodeDebugDebuggerContributionDTO, NodeDebugStartRequest, NodeDebugStateDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway, type ThreadOwner } from '../agentApi.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
@@ -92,7 +93,7 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
       target: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, session_id: owner.sessionId,
         thread_id: owner.threadId, debugger_registration_id: binding.registration_id } };
     // 浏览器不提供 WebSocket 握手状态和响应头，只标明已知边界，不推断 Gateway／Backend 谁故障。
-    return Object.assign(new Error(message + formatFailureContext(context), { cause }), { context });
+    return Object.assign(new Error(errorMessage(message), { cause }), { context });
   }
 
   sendMessage(message: DebugProtocol.ProtocolMessage): void {

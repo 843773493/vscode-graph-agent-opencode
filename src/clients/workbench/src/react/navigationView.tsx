@@ -269,8 +269,9 @@ export class NavigationSurface {
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
   private sessionActions?: SessionActionHandlers;
   private sessionActionsReady?: DeferredPromise<SessionActionHandlers>;
-  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService) {
-    this.surface = new ReactSurface(container, [...productStyles, style]);
+  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService,
+    onDiagnostic?: (message: string) => void) {
+    this.surface = new ReactSurface(container, [...productStyles, style], onDiagnostic);
     const bindWorkspaceActions = (actions?: WorkspaceActionHandlers) => {
       this.workspaceActions = actions;
       if (actions && this.actionsReady) { void this.actionsReady.complete(actions); this.actionsReady = undefined; }

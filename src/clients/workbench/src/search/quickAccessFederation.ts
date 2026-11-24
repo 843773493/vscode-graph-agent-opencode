@@ -19,29 +19,15 @@ import { loadSearchRoots } from './target.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { formatNumber, t } from '../../../shared/core/i18n/index.js';
-
-function httpFailureDetail(error: HttpRequestError): string {
-  const fields: string[] = [];
-  const detail = error.detail;
-  if (typeof detail === 'string') {
-    fields.push(`detail: ${detail}`);
-  } else if (detail && typeof detail === 'object') {
-    const values = !Array.isArray(detail) ? detail as Record<string, unknown> : undefined;
-    for (const key of ['code', 'owner', 'reason']) {
-      const value = values?.[key];
-      if (typeof value === 'string') fields.push(`${key}: ${value}`);
-    }
-    const serialized = JSON.stringify(detail);
-    if (serialized) fields.push(`detail: ${serialized}`);
-  }
-  fields.push(`http_status: ${error.status}`);
-  if (error.requestId) fields.push(`request_id: ${error.requestId}`);
-  return fields.join(' · ');
-}
+import { errorDiagnostic, errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { boundedFailureText } from '@boxteam/plugin-sdk/failures';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 
 interface SearchBranch<Category extends SearchCategory = SearchCategory> {
   contextOwner: WorkspaceOwner;
   diagnostics?: FederatedDiagnosticLogTargetDTO;
+  routeError?: string;
   diagnosticSummary?: string;
   category: Category;
   key: string;
@@ -118,12 +104,26 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
     const diagnostic = category === '运行日志' || category === 'Gateway 日志';
     const selectedOwners = diagnostic ? [...new Map(owners.map(owner => [owner.gatewayId, owner])).values()] : owners;
     return selectedOwners.map(owner => {
-      const diagnostics = diagnostic ? { gateway_id: owner.gatewayId, scope: { source: category === '运行日志' ? 'workspace' : 'gateway',
-        workspace_ids: category === '运行日志' ? owners.filter(item => item.gatewayId === owner.gatewayId).map(item => item.workspaceId) : [] } } : undefined;
+      const gatewayOwners = owners.filter(item => item.gatewayId === owner.gatewayId);
+      const diagnosticRoutes = gatewayOwners.map(item => new Set(snapshot.workspaces
+        .find(workspace => workspace.gateway_id === item.gatewayId && workspace.workspace_id === item.workspaceId)
+        ?.remote_gateways.filter(connection => connection.gateway_id === item.gatewayId)
+        .map(connection => connection.gateway_connection_id) ?? []));
+      const sharedRoutes = new Set(diagnosticRoutes[0] ?? []);
+      for (const routes of diagnosticRoutes.slice(1)) for (const id of sharedRoutes) if (!routes.has(id)) sharedRoutes.delete(id);
+      const logRoutes = new Set(diagnosticRoutes.flatMap(routes => [...routes]));
+      const routes = category === '运行日志' ? sharedRoutes : logRoutes;
+      const routeError = diagnostic && owner.gatewayId !== snapshot.gatewayId && routes.size !== 1
+        ? `运行日志目标 Gateway 的管理连接不能唯一确定: ${owner.gatewayId}` : undefined;
+      const gatewayConnectionId = owner.gatewayId === snapshot.gatewayId ? undefined : routes.values().next().value;
+      const diagnostics = diagnostic && !routeError ? { gateway_id: owner.gatewayId, ...(gatewayConnectionId ? { gateway_connection_id: gatewayConnectionId } : {}),
+        scope: { source: category === '运行日志' ? 'workspace' : 'gateway',
+          workspace_ids: category === '运行日志' ? gatewayOwners.map(item => item.workspaceId) : [] } } : undefined;
       const categoryLabel = searchCategoryLabel(category);
       const label = diagnostic ? `${gatewayLabel(owner.gatewayId)} · ${categoryLabel}` : owners.length === 1 ? categoryLabel : `${ownerLabel(owner)} · ${categoryLabel}`;
-      return { contextOwner: owner, diagnostics, category, key: `${diagnostic ? owner.gatewayId : searchOwnerKey(owner)}/${category}`, label,
-        picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${label} · ${t('quickAccess.querying')}` } };
+      return { contextOwner: owner, diagnostics, routeError, category, key: `${diagnostic ? owner.gatewayId : searchOwnerKey(owner)}/${category}`, label,
+        picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`,
+          label: `${label} · ${routeError ? t('quickAccess.queryFailed', routeError) : t('quickAccess.querying')}` } };
     });
   });
   const key = (branch: SearchBranch<SearchCategory>): FederatedSearchBranchKeyDTO => ({
@@ -133,28 +133,35 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
   });
   const fileQueries = new Map<SearchBranch, FederatedSearchQueryDTO>();
   const fileLimit = Math.max(1, Math.min(50, Math.floor(1000 / owners.length)));
-  const byKey = new Map(branches.map(branch => [searchBranchKey(key(branch)), branch]));
+  const byKey = new Map(branches.filter(branch => !branch.routeError).map(branch => [searchBranchKey(key(branch)), branch]));
   let scope: GatewaySearchScopeDTO | undefined;
   const inFlight = new Map<SearchBranch<SearchCategory>, symbol>();
   const refresh = () => { if (alive()) { busy(branches.some(branch => branch.pending)); progress(branches); } };
   const moreButton = { iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: t('quickAccess.moreCategory') };
   const retryButton = { iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.retryCategory') };
+  const copyButton = { iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') };
   const status = (branch: SearchBranch<SearchCategory>, state: FederatedSearchBranchDTO, requestId: string) => {
     const failed = state.state === 'failed', cancelled = state.state === 'cancelled';
     if (failed) branch.picks = [];
     const limited = state.state === 'limited';
     const continuation = limited && (state.cursor !== undefined && state.cursor !== null || state.code === 'output_limit');
+    const diagnostic = boundedFailureText([state.message, state.code && `code: ${state.code}`,
+      state.error_owner && `error_owner: ${state.error_owner}`, state.reason && `reason: ${state.reason}`,
+      ...(state.diagnostics ?? []).slice(0, 32).map(notice => `${notice.severity}: ${notice.message} · code: ${notice.code} · owner: ${notice.owner}`),
+      typeof state.http_status === 'number' && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join('\n'));
+    const action = continuation || ((failed || cancelled) && state.retryable);
     branch.status = { id: `status-${branch.key}`,
-      label: `${branch.label} · ${cancelled ? t('quickAccess.queryCancelled', state.message ?? state.code ?? state.state)
-        : failed ? t('quickAccess.queryFailed', (state.code === 'deadline' ? t('quickAccess.timeoutPrefix') : '') + (state.message ?? state.code ?? state.state))
+      label: failureSummary(`${branch.label} · ${cancelled ? t('quickAccess.queryCancelled', state.message ?? '未提供错误原因')
+        : failed ? t('quickAccess.queryFailed', (state.code === 'deadline' ? t('quickAccess.timeoutPrefix') : '') + (state.message ?? '未提供错误原因'))
         : limited ? t('quickAccess.queryLimited', state.code ?? t('quickAccess.moreResults')) : branch.picks.length ? t('quickAccess.queryComplete') : t('quickAccess.noResults')}`,
-      detail: [branch.diagnosticSummary ?? t('quickAccess.readCount', formatNumber(branch.picks.length)),
-        !failed && !cancelled && state.message, state.code && `code: ${state.code}`,
-        state.error_owner && `error_owner: ${state.error_owner}`, state.reason && `reason: ${state.reason}`,
-        ...(state.diagnostics ?? []).map(notice => `${notice.severity}: ${notice.message} · code: ${notice.code} · owner: ${notice.owner}`),
-        typeof state.http_status === 'number' && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join(' · '),
-      ...((continuation || ((failed || cancelled) && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
-        trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
+      ),
+      detail: failureSummary(branch.diagnosticSummary ?? t('quickAccess.readCount', formatNumber(branch.picks.length))),
+      buttons: [...(action ? [continuation ? moreButton : retryButton] : []), copyButton],
+      trigger: async (index = 0) => {
+        if (index === (action ? 1 : 0)) await copyTextToClipboard(diagnostic);
+        else await run([branch], continuation ? state.cursor : undefined);
+        return TriggerAction.NO_ACTION;
+      } };
   };
   const run = async (active: SearchBranch<SearchCategory>[], cursor?: string): Promise<void> => {
     if (!alive() || active.some(branch => branch.pending)) return;
@@ -188,9 +195,11 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
             byKey.set(searchBranchKey(key(branch)), branch);
           } catch (error) {
             settled.add(branch); branch.pending = false;
-            branch.status = { id: `status-${branch.key}`, label: `${branch.label} · ${t('quickAccess.queryFailed', error instanceof Error ? error.message : String(error))}`,
-              detail: error instanceof HttpRequestError ? httpFailureDetail(error) : undefined,
-              buttons: [retryButton], trigger: async () => { await run([branch]); return TriggerAction.NO_ACTION; } };
+            branch.status = { id: `status-${branch.key}`, label: failureSummary(`${branch.label} · ${t('quickAccess.queryFailed', errorMessage(error))}`),
+              buttons: [retryButton, copyButton], trigger: async (index = 0) => {
+                if (index === 1) await copyTextToClipboard(errorDiagnostic(error)); else await run([branch]);
+                return TriggerAction.NO_ACTION;
+              } };
           }
         });
         refresh();
@@ -236,7 +245,8 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
           const items: ResourceSearchItem[] = logs ? logs.items.map(hit => {
             if (!hit.source || !hit.reference || !logs.scope) throw new Error(t('quickAccess.error.logMissingLocation'));
             const workspaces = hit.source.workspace_ids.map(id => ownerLabel({ gatewayId: logs.gateway_id, workspaceId: id }));
-            return { kind: 'log', location: { scope: logs.scope, reference: hit.reference }, title: hit.source.label,
+            return { kind: 'log', location: { scope: logs.scope, reference: hit.reference },
+              gatewayConnectionId: branch.diagnostics?.gateway_connection_id, title: hit.source.label,
               description: hit.preview.replace(/\s+/g, ' '),
               detail: `${gatewayLabel(logs.gateway_id)} · ${hit.source.source === 'gateway' ? t('quickAccess.gatewayControl') : t('quickAccess.managedProcess', workspaces.join(t('quickAccess.listSeparator')), workspaces.length > 1 ? t('quickAccess.sharedSourceSuffix') : '')} · ${formatNumber(hit.reference.line_start)}` };
           }) : searchItems(event.page!, branch.contextOwner, ownerLabel(branch.contextOwner));
@@ -257,11 +267,13 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
       for (const branch of unfinished.length ? unfinished : active) {
         if (inFlight.get(branch) !== operation) continue;
         if (cursor) branch.picks = [];
-        const message = error instanceof Error ? error.message : String(error);
         const failureId = error instanceof HttpRequestError || error instanceof IncompleteSearchStreamError || error instanceof SearchStreamReadError ? error.requestId : requestId;
-        branch.status = { id: `status-${branch.key}`, label: `${branch.label} · ${t('quickAccess.queryFailed', error instanceof DOMException && error.name === 'TimeoutError' ? t('quickAccess.timeoutTarget') : message)}`,
-          detail: error instanceof HttpRequestError ? httpFailureDetail(error) : failureId ? `request_id: ${failureId}` : undefined,
-          buttons: [retryButton], trigger: async () => { await run(scope ? [branch] : branches); return TriggerAction.NO_ACTION; } };
+        branch.status = { id: `status-${branch.key}`, label: failureSummary(`${branch.label} · ${t('quickAccess.queryFailed', errorMessage(error))}`),
+          buttons: [retryButton, copyButton], trigger: async (index = 0) => {
+            if (index === 1) await copyTextToClipboard(`${errorDiagnostic(error)}${failureId ? `\nrequest_id: ${boundedFailureText(failureId, { maxBytes: 256 })}` : ''}`);
+            else await run(scope ? [branch] : branches);
+            return TriggerAction.NO_ACTION;
+          } };
       }
     } finally {
       clearTimeout(timer); abort.signal.removeEventListener('abort', cancel);
@@ -270,9 +282,10 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
     }
   };
   // 名称可立即返回；文件只在原根元数据就绪后一次提交，不逐 owner 排查询队列。
-  const names = branches.filter(branch => branch.category !== '文件');
+  const names = branches.filter(branch => branch.category !== '文件' && !branch.routeError);
   const files = branches.filter(branch => branch.category === '文件');
   if (names.length) void run(names);
   if (files.length) void run(files);
+  if (!names.length && !files.length) queueMicrotask(() => { if (alive()) { busy(false); progress(branches); } });
   return branches;
 }

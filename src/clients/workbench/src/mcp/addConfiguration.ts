@@ -15,7 +15,8 @@ import { gateway } from '../agentApi.js';
 import type { ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
-import { mcpConfigurationErrorMessage, mcpConfigurationSourceKey, saveMcpWorkspaceConfiguration } from './configuration.js';
+import { mcpConfigurationSourceKey, saveMcpWorkspaceConfiguration } from './configuration.js';
+import { errorMessage } from '../../../web/src/utils/errorMessage.js';
 
 interface InputContext {
   quickInput: IQuickInputService;
@@ -275,7 +276,7 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
         definition.headers[key] = reference;
       }
     } catch (cause) {
-      throw new Error(t('workbench.mcp.privateHeaderUnconfirmed', context.owner, serverId, mcpConfigurationErrorMessage(cause)), { cause });
+      throw new Error(t('workbench.mcp.privateHeaderUnconfirmed', context.owner, serverId, errorMessage(cause)), { cause });
     }
     const errors: ParseError[] = [];
     const source: unknown = parse(document.jsonc || '{}', errors);

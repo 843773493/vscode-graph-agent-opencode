@@ -153,6 +153,27 @@ async def test_diagnostics_finds_role_logs_and_launcher_override(
     assert payload["log_directory"] == str(root)
 
 
+async def test_metadata_diagnostics_does_not_open_any_log_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
+    contract = load_runtime_log_contract()
+    log_path = contract.path_for(contract.root_for(tmp_path), "gateway")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("actual log body\n")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    original_open = Path.open
+
+    def reject_body_read(path: Path, *args, **kwargs):
+        if path == log_path:
+            raise AssertionError("诊断元数据入口不得打开日志正文")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_body_read)
+    result = await collect_gateway_diagnostics(registry, gateway_id="gateway_diagnostic_paths", include_tail=False)
+    selected = next(log for log in result.logs if log.log_id == result.selected_log_id)
+    assert selected.status == "available" and selected.size_bytes == log_path.stat().st_size
+    assert selected.tail == "" and selected.line_count == 0
+
+
 def test_explicit_instance_log_stays_readable_outside_recent_log_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,11 +214,14 @@ async def test_missing_diagnostic_selection_does_not_expand_the_raw_log_exceptio
             selected_log_id=native_path if selector == "log" else None,
         )
     assert type(caught.value) is LookupError
-    assert "diagnostic-selector-marker" not in str(caught.value)
+    assert native_path in str(caught.value)
     assert f"stage=gateway-diagnostic-{selector}" in str(caught.value)
     cause = caught.value.__cause__
     assert type(cause) is LookupError and native_path in cause.args[0]
-    assert any(record.exc_info is not None and record.exc_info[1] is cause for record in caplog.records)
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert native_path in diagnostic.getMessage()
+    assert "LookupError" in diagnostic.getMessage()
     assert registry.targets() == () and registry.registry_revision == 0
 
 
@@ -228,7 +252,7 @@ def remote_diagnostics(monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
     client_class = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **options: client_class(
-        **options, transport=httpx.MockTransport(respond), trust_env=False,
+        **options, transport=httpx.MockTransport(respond),
     ))
     yield registry, responses, requests
 
@@ -285,18 +309,22 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
         return await control_router.get_gateway_diagnostics(
             request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
-            tail_lines=300, _="local-token", request_id="req_diagnostics_boundary", registry=registry,
+            tail_lines=300, include_tail=True, _="local-token", request_id="req_diagnostics_boundary", registry=registry,
         )
 
     with pytest.raises(HTTPException) as caught:
         await invoke()
     assert caught.value.status_code == status
-    assert "diagnostics-marker" not in str(caught.value.detail)
+    if failure == "transport":
+        assert native_path in str(caught.value.detail)
+    else:
+        assert "diagnostics-marker" not in str(caught.value.detail)
     assert f"stage={stage}" in str(caught.value.detail)
     assert isinstance(caught.value.__cause__, category)
     original = caught.value.__cause__
     diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
-    assert diagnostic.exc_info is not None and diagnostic.exc_info[1] is original
+    assert diagnostic.exc_info is None
+    assert category.__name__ in diagnostic.getMessage()
     if failure == "transport":
         assert original is native_error
     if failure.startswith("http-"):
@@ -306,8 +334,10 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
         assert f"status={original.response.status_code}" in str(caught.value.detail)
     if isinstance(original, ValidationError):
         assert original.errors()[0]["input"] == native_path
-    if failure != "json":
+    if failure in {"transport", "http-403", "http-503"}:
         assert "diagnostics-marker" in caplog.text
+    if failure == "validation":
+        assert "diagnostics-marker" not in caplog.text
     recovered = await invoke()
     assert recovered.data is not None
     assert recovered.data.logs[0].tail == native_path
@@ -331,7 +361,7 @@ async def test_remote_diagnostics_preflight_preserves_business_rejection(
         await control_router.get_gateway_diagnostics(
             request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
-            tail_lines=300, _="local-token", request_id="req_diagnostics_preflight", registry=registry,
+            tail_lines=300, include_tail=True, _="local-token", request_id="req_diagnostics_preflight", registry=registry,
         )
     assert caught.value.status_code == status and caught.value.detail == str(error)
     assert caught.value.__cause__ is error and not requests
@@ -349,7 +379,7 @@ async def test_remote_diagnostics_rejects_conflicting_or_invalid_gateway_before_
         await control_router.get_gateway_diagnostics(
             request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
-            tail_lines=300, _="local-token", request_id="req_diagnostics_target",
+            tail_lines=300, include_tail=True, _="local-token", request_id="req_diagnostics_target",
             registry=registry, target_gateway_id=target_gateway_id,
         )
     assert caught.value.status_code == 400

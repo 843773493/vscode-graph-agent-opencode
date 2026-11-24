@@ -22,3 +22,4 @@
 - SSE JSON 必须通过 `sseRuntime.js` 的运行时校验器校验，不能只依赖 TypeScript 类型断言。
 - 生成文件只能由协议生成流程覆盖；共享模块不得依赖具体客户端入口。新增源码子目录须包含四段式 `AGENTS.md`。
 - `realtime.js` 是 Workbench 与独立终端页面共用的事件连接 owner：按入口 URL 共享 WS、订阅独立反压和取消；已取消调用不能先创建无人持有的连接。领域游标与凭据由调用方维护，不允许各业务复制连接实现。
+- 实时错误的原因留在 message，requestId、subscriptionId、path 与安全 detail 沿 `RealtimeTransportError` 交付；共享连接失败分别绑定原订阅，不变异共享异常或把订阅失败当作业务执行终态。

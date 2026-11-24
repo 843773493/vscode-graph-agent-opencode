@@ -33,7 +33,7 @@ beforeAll(async () => {
 afterAll(() => run.close());
 
 async function exercise(name, argument) {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   try {
     const page = await context.newPage(), errors = [];
     page.on('pageerror', error => errors.push(String(error)));
@@ -45,6 +45,37 @@ async function exercise(name, argument) {
     return result;
   } finally { await context.close(); }
 }
+
+test('配置保存原FileService保留cause，原保存通知显示原因和HTTP诊断且保留动作', async () => {
+  const result = await exercise('configurationSaveFailureContract');
+  expect(result.causePreserved).toBe(true);
+  expect(result.originalOptions).toBe(true);
+  expect(result.result).toBe(result.expectedResult);
+  expect(result.visible).toEqual({ count: 1, message: '配置修改失败，草稿已保留。原配置字段拒绝',
+    actions: ['RetrySaveModelAction', 'SaveModelAsAction', 'RevertModelAction'] });
+  expect(result.copied).toContain('request_id: original-source-request');
+  expect(result.copied).toContain('source_uri: boxteam://workspace/original/resources/config/source');
+  expect(result.closes).toEqual([{ uri: 'boxteam-config-source://original-gateway/workspace/original-workspace/source.jsonc', handle: true }]);
+});
+
+test('原生通知仅交付未报告失败，混合聚合保留诊断且独立操作仍可显示', async () => {
+  const result = await exercise('notificationFailureContract');
+  expect(result.afterReported).toBe(0);
+  expect(result.visible.count).toBe(1);
+  expect(result.afterAggregate).toBe(1);
+  expect(result.count).toBe(2);
+  expect(result.visible.message).toBe('操作与状态重读部分失败');
+  expect(result.visible.actions).toContain('boxteam.notification.copyDiagnostic');
+  expect(result.copied).toContain('状态重读拒绝');
+  expect(result.copied).toContain('request_id: original-request');
+  expect(result.copied).not.toContain('private-test-token');
+  expect(result.independent.length).toBeLessThanOrEqual(160);
+  expect(result.independent).not.toContain('original-request');
+  expect(result.logs.every(message => !message.includes('private-test-token'))).toBe(true);
+  expect(result.originalMessage.length).toBeGreaterThan(160);
+  expect(result.originalDetail).toContain('private-test-token');
+  expect(result.retainedCause).toBe(true);
+});
 
 for (const ready of [false, true]) test(`原生阅读恢复保留当前展示且不触发定位提示，明确跳转才进入聊天：${ready}`, async () => {
   const result = await exercise('viewportRestoreContract', ready);
@@ -170,12 +201,13 @@ for (const mode of ['read-error-before-scope', 'read-error-after-scope']) test(`
   expect(result.busy).toBe(false);
   const unfinished = mode === 'read-error-after-scope' ? [1] : [0, 1];
   for (const index of unfinished) {
-    expect(result.details[index]).toBe('request_id: request-0');
+    expect(result.diagnostics[index]).toContain('request_id: request-0');
+    expect(result.details[index] ?? '').not.toContain('request_id');
     expect(result.labels[index]).toContain('搜索连接读取失败: 目标网络连接被重置');
   }
   if (mode === 'read-error-after-scope') {
     expect(result.labels[0]).toContain('本次查询完成');
-    expect(result.details[0]).toBe('本次读取 1 项，不代表全局快照 · request_id: request-0');
+    expect(result.details[0]).toBe('本次读取 1 项，不代表全局快照');
   }
   expect(result.picks.map(items => items.length)).toEqual(mode === 'read-error-after-scope' ? [1, 0] : [0, 0]);
 });
@@ -301,6 +333,29 @@ test('正文类别集合同时选择两类日志只发一个 wire query，来源
   expect(result.retryLabel).toContain('Gateway 原日志读取失败'); expect(result.errors).toEqual([]);
 });
 
+test('远端运行日志搜索、续查和原行接受保持明确连接', async () => {
+  const result = await exercise('contentSelectionContract', { mode: 'remote-logs' });
+  const targets = result.requests[0].queries[0].diagnostic_targets;
+  expect(targets.map(target => target.gateway_connection_id)).toEqual(['remote-log-connection', 'remote-log-connection']);
+  expect(result.requests[1].continuations[0].branch.diagnostics.gateway_connection_id).toBe('remote-log-connection');
+  expect(result.commands).toEqual([['boxteam.output.openLog', {
+    gateway_id: targets[0].gateway_id, gateway_connection_id: 'remote-log-connection',
+    workspace_id: undefined, log_id: 'gateway:file:plugin.log',
+    location: { scope: { source: 'gateway', workspace_ids: [] }, reference: {
+      gateway_id: targets[0].gateway_id, log_id: 'gateway:file:plugin.log', device: '1', inode: '2',
+      line_start: 1, line_end: 2, content_version: 'a'.repeat(64), start_codepoint: 0, end_codepoint: 1,
+    } },
+  }]]);
+  expect(result.errors).toEqual([]);
+});
+
+test('远端日志多连接无唯一管理路由时显示失败且不发查询', async () => {
+  const result = await exercise('contentSelectionContract', { mode: 'remote-ambiguous' });
+  expect(result.requests).toEqual([]);
+  expect(result.labels.filter(label => label.includes('不能唯一确定'))).toHaveLength(2);
+  expect(result.errors).toEqual([]);
+});
+
 for (const mode of ['user', 'gateway']) test(`正文类别集合在 ${mode} 身份失效时取消旧选择且零查询`, async () => {
   const result = await exercise('contentSelectionContract', { mode });
   expect(result.cancelled).toBe(true); expect(result.beforeConfirm).toBe(0);
@@ -352,7 +407,7 @@ test('正文同 UUID 跨 Gateway 只请求中继，快分支续页不被初始�
   expect(result.picks).toEqual([[`${ownerAKey}/2`, `${ownerAKey}/4`], [`${ownerBKey}/2`]]);
   expect(result.busy).toBe(false);
   expect(result.label).toBe('名称 A、名称 B');
-  expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
+  expect(result.status.every(detail => !detail.includes('request_id:'))).toBe(true);
 });
 
 for (const rejection of [
@@ -373,12 +428,13 @@ for (const rejection of [
   expect(retry.continuations).toEqual([{ branch: { owner: federatedOwners[1], category, operation: 'content' } }]);
   expect(result.failureLabel).toContain('原 owner 拒绝此续点');
   for (const field of [`code: ${rejection.code}`, `error_owner: ${rejection.owner}`, `reason: ${rejection.reason}`,
-    `http_status: ${rejection.status}`, 'request_id: request-1']) expect(result.failureDetail).toContain(field);
+    `http_status: ${rejection.status}`, 'request_id: request-1']) expect(result.failureDiagnostic).toContain(field);
+  expect(result.failureDetail).not.toContain('request_id:');
   expect(result.diagnosticText).toContain('[执行](command:workbench.action.closeWindow) <b>诊断</b>');
   expect(result.diagnosticLinks).toBe(0); expect(result.diagnosticMarkup).toBe(0);
   expect(result.retryTooltip).toBe('重新查询此类别');
   expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
-  expect(result.status[1]).toContain('request_id: request-2');
+  expect(result.diagnostics[1]).toContain('request_id: request-2');
 });
 
 test('文件使用原 QueryBuilder 选项，一次联邦 A+B，快分支续原 cursor 且独立重试', async () => {
@@ -433,7 +489,7 @@ test('正文流断开保留已完成 A，B 明确失败并显示原 request_id',
   const result = await exercise('contentBranchContract', 'disconnect');
   expect(result.labels[0]).toContain('本次查询完成');
   expect(result.labels[1]).toContain('未收到完整终态');
-  expect(result.details[1]).toBe('request_id: request-0');
+  expect(result.diagnostics[1]).toContain('request_id: request-0');
   expect(result.picks).toEqual([[`${ownerAKey}/2`], []]);
 });
 
@@ -447,16 +503,17 @@ for (const diagnostic of [
   const result = await exercise('branchStateContract', diagnostic), cancelled = diagnostic.state === 'cancelled';
   expect(result.statuses[0].label).toContain(cancelled ? '查询已取消：' : '查询失败：');
   expect(result.statuses[0].label).toContain(diagnostic.message);
-  expect(result.statuses[0].detail).toContain('request_id: request-1');
+  expect(result.statuses[0].diagnostic).toContain('request_id: request-1');
+  expect(result.statuses[0].detail).not.toContain('request_id:');
   for (const field of ['code', 'error_owner', 'reason', 'http_status']) {
-    if (diagnostic[field] == null) expect(result.statuses[0].detail).not.toContain(`${field}:`);
-    else expect(result.statuses[0].detail).toContain(`${field}: ${diagnostic[field]}`);
+    if (diagnostic[field] == null) expect(result.statuses[0].diagnostic).not.toContain(`${field}:`);
+    else expect(result.statuses[0].diagnostic).toContain(`${field}: ${diagnostic[field]}`);
   }
   expect(result.statuses[1].label).toContain('本次查询完成');
-  expect(result.statuses[1].detail).toContain('request_id: request-0');
+  expect(result.statuses[1].diagnostic).toContain('request_id: request-0');
   if (cancelled) {
-    expect(result.statuses[0].detail).toContain(`code: ${diagnostic.code}`);
-    expect(result.statuses[0].detail).toContain(`reason: ${diagnostic.reason}`);
+    expect(result.statuses[0].diagnostic).toContain(`code: ${diagnostic.code}`);
+    expect(result.statuses[0].diagnostic).toContain(`reason: ${diagnostic.reason}`);
     expect(result.statuses[0].label).not.toContain('查询失败：');
   } else {
     expect(result.statuses[0].label).not.toContain('查询已取消：');
@@ -464,8 +521,8 @@ for (const diagnostic of [
   }
   expect(result.retainedPicks).toEqual([cancelled ? [`${ownerAKey}/2`] : [], [`${ownerBKey}/2`]]);
   expect(result.originalRetained).toEqual([cancelled, true]);
-  expect(result.statuses[0].buttons).toEqual(diagnostic.retryable ? ['重新查询此类别'] : []);
-  expect(result.statuses[0].hasTrigger).toBe(diagnostic.retryable);
+  expect(result.statuses[0].buttons).toEqual(diagnostic.retryable ? ['重新查询此类别', '复制安全诊断'] : ['复制安全诊断']);
+  expect(result.statuses[0].hasTrigger).toBe(true);
   expect(result.callsBeforeRetry).toBe(2);
   expect(result.requests).toHaveLength(diagnostic.retryable ? 3 : 2);
   const continuation = result.requests[1];
@@ -489,15 +546,15 @@ test('受限分支保留原原因与续点，正常完成不伪造诊断或 HTTP
   const result = await exercise('branchStateContract', diagnostic);
   expect(result.statuses[0].label).toContain('本次查询覆盖受限（scan_limit）');
   for (const field of [diagnostic.message, 'code: scan_limit', 'error_owner: canonical_history', 'reason: item_budget', 'request_id: request-1']) {
-    expect(result.statuses[0].detail).toContain(field);
+    expect(result.statuses[0].diagnostic).toContain(field);
   }
-  expect(result.statuses[0].detail).not.toContain('http_status:');
-  expect(result.statuses[0].buttons).toEqual(['继续查询此类别']);
+  expect(result.statuses[0].diagnostic).not.toContain('http_status:');
+  expect(result.statuses[0].buttons).toEqual(['继续查询此类别', '复制安全诊断']);
   expect(result.statuses[0].hasTrigger).toBe(true);
   expect(result.retainedPicks).toEqual([[`${ownerAKey}/2`], [`${ownerBKey}/2`]]);
   expect(result.originalRetained).toEqual([true, true]);
   expect(result.statuses[1].label).toContain('本次查询完成');
-  expect(result.statuses[1].detail).toBe('本次读取 1 项，不代表全局快照 · request_id: request-0');
+  expect(result.statuses[1].detail).toBe('本次读取 1 项，不代表全局快照');
   expect(result.requests).toHaveLength(2);
   expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
 });
@@ -505,7 +562,8 @@ test('受限分支保留原原因与续点，正常完成不伪造诊断或 HTTP
 test('首个范围事件前断流保留原响应请求身份，明确重查原查询且不自动重试', async () => {
   const result = await exercise('contentBranchContract', 'disconnect-before-scope');
   expect(result.labels.every(label => label.includes('未收到完整终态'))).toBe(true);
-  expect(result.details).toEqual(['request_id: request-0', 'request_id: request-0']);
+  expect(result.details).toEqual([undefined, undefined]);
+  expect(result.diagnostics.every(text => text.includes('request_id: request-0'))).toBe(true);
   expect(result.requests).toHaveLength(2);
   const [first, retry] = result.requests;
   expect(first.scope).toEqual({ mode: 'selected', owners: federatedOwners });
@@ -638,7 +696,7 @@ for (const category of ['会话', 'Thread']) {
     ] : [[`${ownerAKey}/resource/needle Child 2`, `${ownerAKey}/resource/needle Child 4`], [`${ownerBKey}/resource/needle Child 2`]]);
     expect(result.highlights.flat().every(highlights => highlights.label.length > 0)).toBe(true);
     expect(result.busy).toBe(false);
-    expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
+    expect(result.status.every(detail => !detail.includes('request_id:'))).toBe(true);
   });
   test(`${category} 名称取消释放 Gateway reader，迟到展示被撤销`, async () => {
     const result = await exercise('nameBranchContract', { mode: 'cancel', category });
@@ -702,9 +760,8 @@ for (const mode of ['full-sync', 'full-async']) test(`明确完整窗口的 # �
   expect(result.calls).toHaveLength(2);
   expect(result.items).toHaveLength(2);
   expect(result.items.every(item => item.label.includes('工作区符号不可用'))).toBe(true);
-  const reasonPrefix = mode === 'full-sync' ? 'Error: provider-sync-owner-' : 'Error: provider-async-owner-';
-  expect(result.items.some(item => item.label.includes(`${reasonPrefix}0`))).toBe(true);
-  expect(result.items.some(item => item.label.includes(`${reasonPrefix}1`))).toBe(true);
+  const reasonPrefix = mode === 'full-sync' ? 'provider-sync-owner-' : 'provider-async-owner-';
+  expect(result.items.map(item => item.label).sort()).toEqual([0, 1].map(index => `工作区符号不可用：${reasonPrefix}${index}`));
   expect(result.items.every(item => item.description.includes('["gateway-a","workspace-a"]、["gateway-a","workspace-b"]'))).toBe(true);
 });
 

@@ -495,9 +495,11 @@ export interface GatewayDiagnosticLogReferenceDTO {
   log_id: string;
   device: string;
   inode: string;
+  /** 原物理行 UTF-8 字节半开区间，不能作为编辑器行号。 */
   line_start: number;
   line_end: number;
   content_version: string;
+  /** 去行尾 UTF-8 替换解码原文的 Unicode 码点半开区间。 */
   start_codepoint: number;
   end_codepoint: number;
 }

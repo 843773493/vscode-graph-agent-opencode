@@ -2,17 +2,14 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { t } from '../../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, type GatewayRequestTarget } from '../../../api/workspaceIdentity';
 import { getGatewayHealth, type GatewayLogTarget } from '../../../gatewayApi';
-import { HttpRequestError } from '../../../api/http';
-import { errorMessage } from '../../../utils/errorMessage';
+import { errorSummary } from '../../../utils/errorMessage';
 import type { GatewayHealth, GatewayWorkspace, AddRemoteGatewayConnectionRequest } from '../../../types/backend';
-import type { GatewayDiagnosticLogLocateRequest } from '../../../types/protocol_generated/boxteam/gateway/v2/public';
 import type { AppearanceBackground } from '../../../theme/theme';
 import type { GatewayBackendRuntimeActions } from './GatewayBackendRuntimePanel';
 const Connections = lazy(() => import('./GatewayConnectionsPanel'));
 const Devices = lazy(() => import('./GatewayInboundAccessPanel'));
 const Runtime = lazy(() => import('./GatewayBackendRuntimePanel'));
 const Diagnostics = lazy(() => import('./GatewayDiagnosticsPanel'));
-const LogLocation = lazy(() => import('./GatewayDiagnosticLogLocation'));
 const Theme = lazy(() => import('./GatewayBackgroundAssets'));
 const ConnectionDialog = lazy(() => import('./GatewayConnectionDialog'));
 
@@ -23,7 +20,6 @@ export interface GatewaySettingsContentProps extends GatewayBackendRuntimeAction
   workspaces: GatewayWorkspace[];
   revision: number;
   target: GatewayRequestTarget;
-  diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
   dialog?: 'ssh' | 'external-device';
   onCloseDialog: () => void;
   onChanged: () => void;
@@ -32,7 +28,6 @@ export interface GatewaySettingsContentProps extends GatewayBackendRuntimeAction
   onRemoteGatewayReconnected: (id: string) => void;
   onOpenConfiguration: (target?: GatewayRequestTarget) => Promise<void>;
   onOpenLogs: (gatewayConnectionId: string) => void;
-  onCloseLocation: () => void;
   onOpenLog: (target: GatewayLogTarget & { log_id: string }) => Promise<void>;
   background: AppearanceBackground;
   onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
@@ -47,8 +42,7 @@ export default function GatewaySettingsContent(props: GatewaySettingsContentProp
     void getGatewayHealth(0).then(data => {
       if (data.gateway_id !== props.entryGatewayId) throw new Error(t('gateway.connections.ownerMismatch'));
       if (active) setHealth({ data });
-    }).catch(cause => { if (active) setHealth({ error: cause instanceof HttpRequestError && cause.requestId
-      ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause) }); });
+    }).catch(cause => { if (active) setHealth({ error: errorSummary(cause) }); });
     return () => { active = false; };
   }, [props.page, props.entryGatewayId, props.revision]);
   return <div className="gateway-settings-content" data-management-page={props.page}>
@@ -68,7 +62,6 @@ export default function GatewaySettingsContent(props: GatewaySettingsContentProp
         : props.page === 'runtime' ? <Runtime workspaces={props.workspaces} workspaceKey={props.target.workspace_id ? gatewayWorkspaceKey({ gatewayId: props.target.gateway_id, workspaceId: props.target.workspace_id }) : undefined} onStart={props.onStart} onStop={props.onStop}
           onSafeRestart={props.onSafeRestart} onForceRestart={props.onForceRestart} />
         : props.page === 'theme' ? <Theme key={props.revision} apiPort={0} background={props.background} onUpdateBackground={props.onUpdateBackground} />
-        : props.diagnosticLocation ? <LogLocation key={props.revision} apiPort={0} request={props.diagnosticLocation} workspaces={props.workspaces} onClose={props.onCloseLocation} />
         : <Diagnostics key={props.revision} apiPort={0} target={props.target} onOpenRetention={props.onOpenConfiguration} onOpenLog={props.onOpenLog} />}
       {props.dialog ? <ConnectionDialog open mode={props.dialog} apiPort={0} onClose={props.onCloseDialog}
         onAddRemoteGatewayConnection={async payload => { await props.onAddRemoteGatewayConnection(payload); props.onChanged(); }}

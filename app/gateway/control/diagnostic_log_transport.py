@@ -35,39 +35,50 @@ MAX_DIAGNOSTIC_RESPONSE_BYTES = 8 * 1024 * 1024
 @overload
 async def read_diagnostic_log_target(
     registry: GatewayWorkspaceRegistry, payload: GatewayDiagnosticLogQueryRequest, *,
-    gateway_id: str, request_id: str, max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
+    gateway_id: str, request_id: str, gateway_connection_id: str | None = None,
+    max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
 ) -> GatewayDiagnosticLogQueryResultDTO: ...
 
 
 @overload
 async def read_diagnostic_log_target(
     registry: GatewayWorkspaceRegistry, payload: GatewayDiagnosticLogLocateRequest, *,
-    gateway_id: str, request_id: str, max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
+    gateway_id: str, request_id: str, gateway_connection_id: str | None = None,
+    max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
 ) -> GatewayDiagnosticLogLocationDTO: ...
 
 
 async def read_diagnostic_log_target(
     registry: GatewayWorkspaceRegistry, payload: GatewayDiagnosticLogQueryRequest | GatewayDiagnosticLogLocateRequest, *,
-    gateway_id: str, request_id: str, max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
+    gateway_id: str, request_id: str, gateway_connection_id: str | None = None,
+    max_bytes: int = MAX_DIAGNOSTIC_RESPONSE_BYTES,
 ) -> GatewayDiagnosticLogQueryResultDTO | GatewayDiagnosticLogLocationDTO:
     querying = isinstance(payload, GatewayDiagnosticLogQueryRequest)
     if gateway_id == registry.gateway_id:
+        if gateway_connection_id is not None:
+            raise LookupError("本地 Gateway 日志不接受远端连接选择")
         result = await query_diagnostic_logs(registry, payload, gateway_id=gateway_id) if isinstance(payload, GatewayDiagnosticLogQueryRequest) else (
             await locate_diagnostic_log(registry, payload, gateway_id=gateway_id)
         )
         if len(result.model_dump_json().encode()) > max_bytes:
             raise RuntimeLogQueryError("delivery_limit", "response_size_limit", "运行日志页超过本次字节配额，请缩小页大小后继续原分支")
         return result
-    connections = [connection for connection in registry.remote_gateway_connections() if connection.remote_gateway_id == gateway_id]
-    if not connections:
-        raise LookupError("运行日志目标 Gateway 未登记")
-    if len(connections) != 1:
-        raise LookupError("运行日志目标 Gateway 的管理连接不能唯一确定，请先明确连接关系")
-    connection = connections[0]
+    if gateway_connection_id is None:
+        connections = [connection for connection in registry.remote_gateway_connections() if connection.remote_gateway_id == gateway_id]
+        if not connections:
+            raise LookupError("运行日志目标 Gateway 未登记")
+        if len(connections) != 1:
+            raise LookupError("运行日志目标 Gateway 的管理连接不能唯一确定，请先明确连接关系")
+        connection = connections[0]
+    else:
+        connection = registry.remote_gateway_connection(gateway_connection_id)
+        if connection.remote_gateway_id != gateway_id:
+            raise LookupError("明确的 Gateway 连接不属于日志目标 Gateway")
     for workspace_id in payload.scope.workspace_ids:
         target = registry.resolve((gateway_id, workspace_id))
-        if target.connection_kind != "remote_gateway" or connection.connection_id not in target.remote_gateway_connection_ids:
+        if target.connection_kind != "remote_gateway":
             raise ValueError("运行日志筛选工作区不属于所选 Gateway 管理路由")
+        registry.remote_connection_for_target(target, connection_id=connection.connection_id)
     credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").get(connection.connection_id)
     url = registry.remote_gateway_url(connection.connection_id)
     deadline = payload.deadline_at if isinstance(payload, GatewayDiagnosticLogQueryRequest) else None

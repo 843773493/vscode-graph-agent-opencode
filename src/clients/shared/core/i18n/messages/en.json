@@ -191,6 +191,9 @@
   "bootstrap.loadChineseFailed": "Unable to load Simplified Chinese resources",
   "bootstrap.loadEnglishFailed": "Unable to load English resources",
   "bootstrap.loading": "Loading Workbench…",
+  "bootstrap.diagnostic": "Safe diagnostics",
+  "bootstrap.copyDiagnostic": "Copy safe diagnostics",
+  "bootstrap.copied": "Copied",
   "bootstrap.readLocaleFailed": "Unable to read display language preference",
   "bootstrap.retry": "Retry",
   "bootstrap.unsupportedLocale": "The saved display language is not supported",
@@ -3328,6 +3331,8 @@
   "shell.bootstrap.title": "Loading workspace and sessions...",
   "shell.bootstrap.waiting": "Still waiting for workspace and session data from the local backend.",
   "shell.reload": "Reload page",
+  "shell.diagnostic": "Safe diagnostics",
+  "shell.copyDiagnostic": "Copy safe diagnostics",
   "shell.renderFailed": "Page failed to load",
   "shell.renderFailedDetail": "A frontend component failed. The current page has stopped rendering.",
   "slash.agent.description": "Open the Agent picker.",
@@ -4579,5 +4584,13 @@
   "configuration.node.proxyAuth": "Proxy authentication",
   "configuration.node.proxyUsername": "Proxy username",
   "configuration.node.proxyPasswordReference": "Password reference (secret:sec_…; manage named secrets from the toolbar)",
-  "configuration.node.networkScope": "Applies to integrated HTTP requests on this target. Browser page traffic, plugins using their own networking, and user shell commands are not controlled by this setting. Internal control connections remain direct."
+  "configuration.node.networkScope": "Applies to integrated HTTP requests on this target. Browser page traffic, plugins using their own networking, and user shell commands are not controlled by this setting. Internal control connections remain direct.",
+  "bottom.gatewayLog.loaded": "Log loaded",
+  "bottom.gatewayLog.located": "Record selected",
+  "bottom.gatewayLog.tailOnly": "This source supports tail reading only",
+  "bottom.gatewayLog.candidates": "Select a log occurrence",
+  "bottom.gatewayLog.queryComplete": "Bounded query completed",
+  "bottom.gatewayLog.queryIncomplete": "Query incomplete: {0}",
+  "bottom.gatewayLog.continueQuery": "Continue bounded query",
+  "bottom.gatewayLog.modelTimeout": "Output model did not finish loading"
 }

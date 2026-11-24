@@ -7,6 +7,7 @@ import type { McpServerListResponseDTO } from '../../../web/src/types/protocol_g
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { authorizeMcpInWindow } from './authorizationWindow.js';
 import type { PluginRuntimeStatusDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 
 export type McpWorkspaceRequestTarget = GatewayWorkspaceRequestTarget & { backend_id?: string };
 export const mcpCatalogKey = (target: McpWorkspaceRequestTarget) =>
@@ -15,8 +16,8 @@ export const mcpCatalogKey = (target: McpWorkspaceRequestTarget) =>
 export interface McpCatalogSnapshot {
   catalog?: McpServerListResponseDTO;
   operations: readonly McpConnectionOperationDTO[];
-  error?: string;
-  actionError?: string;
+  error?: unknown;
+  actionError?: unknown;
 }
 
 export const pendingMcpOperation = (operation: McpConnectionOperationDTO | undefined) =>
@@ -28,7 +29,7 @@ export class WorkspaceMcpCatalog {
   readonly key: string;
   snapshot: McpCatalogSnapshot = { operations: [] };
   // 运行状态来自 Gateway 原 SSE；与工作区连接目录分开，断开连接不改变插件实例。
-  pluginRuntime?: { snapshot?: PluginRuntimeStatusDTO; error?: string };
+  pluginRuntime?: { snapshot?: PluginRuntimeStatusDTO; error?: unknown };
   private generation = 0;
   private busy = false;
   private reading?: { promise: Promise<void>; refresh: boolean };
@@ -66,7 +67,7 @@ export class WorkspaceMcpCatalog {
       this.changed();
     } catch (error) {
       if (generation !== this.generation || this.controller.signal.aborted) return;
-      this.snapshot = { ...this.snapshot, error: error instanceof Error ? error.message : String(error) };
+      this.snapshot = { ...this.snapshot, error };
       this.changed();
       throw error;
     }
@@ -98,18 +99,22 @@ export class WorkspaceMcpCatalog {
       }
     } catch (error) {
       failure = error;
-      this.snapshot = { ...this.snapshot, actionError: error instanceof Error ? error.message : String(error) };
-      this.changed();
+      if (!this.controller.signal.aborted) {
+        this.snapshot = { ...this.snapshot, actionError: error };
+        this.changed();
+      }
     }
     try {
+      if (this.controller.signal.aborted) throw new CancellationError();
       // 写入前的读取可继续收尾，但不能越过操作代次发布；失败同样重取唯一 owner。
       try { await this.reading?.promise; }
       catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], t('workbench.mcp.operationAndReadFailed')); }
       try { await this.refresh(); }
       catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], t('workbench.mcp.operationAndRefreshFailed')); }
+      if (this.controller.signal.aborted) throw new CancellationError();
     } finally {
       this.busy = false;
-      this.changed();
+      if (!this.controller.signal.aborted) this.changed();
     }
     if (failure !== undefined) throw failure;
   }

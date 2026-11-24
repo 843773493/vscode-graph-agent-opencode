@@ -24,7 +24,7 @@ const categoryMessageKeys: Record<SearchCategory, string> = {
 export function searchCategoryLabel(category: SearchCategory): string { return t(categoryMessageKeys[category]); }
 
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI; uri: string; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; uri: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string } | { kind: 'log'; location: GatewayDiagnosticLogLocateRequest }
+  { kind: 'resource'; resource: URI; uri: string; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; uri: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string } | { kind: 'log'; location: GatewayDiagnosticLogLocateRequest; gatewayConnectionId?: string }
 );
 
 /** 原 QueryBuilder 继续解释配置；只构建根局部条件，远端分发统一交 Gateway。 */

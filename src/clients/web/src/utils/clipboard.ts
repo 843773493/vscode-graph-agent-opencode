@@ -7,13 +7,24 @@ function fallbackCopyText(text: string): void {
   textarea.style.left = "-9999px";
   textarea.style.top = "0";
   document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  // TODO: 兼容非安全上下文下 Clipboard API 不可用的浏览器，后续全站 HTTPS 后移除。
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) {
-    throw new Error("浏览器拒绝复制文本");
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  const focused = active instanceof HTMLElement ? active : null;
+  const input = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement ? focused : null;
+  const selection = input ? [input.selectionStart, input.selectionEnd, input.selectionDirection] as const : undefined;
+  try {
+    textarea.focus();
+    textarea.select();
+    // TODO: 兼容非安全上下文下 Clipboard API 不可用的浏览器，后续全站 HTTPS 后移除。
+    if (!document.execCommand("copy")) throw new Error("浏览器拒绝复制文本");
+  } finally {
+    // 只还原仍由本次临时节点持有的焦点，用户已经切换时不抢回旧编辑器。
+    const restore = document.activeElement === textarea;
+    textarea.remove();
+    if (restore && focused?.isConnected) {
+      focused.focus({ preventScroll: true });
+      if (input && selection) input.setSelectionRange(selection[0], selection[1], selection[2] ?? undefined);
+    }
   }
 }
 

@@ -47,7 +47,8 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     config_path = Path(integration_workspace_config_path)
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(configuration)
-    configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
+    configuration["extends"] = "user:workspace_local"
+    configuration["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "source-settings-package.zip"
     manifest = {"manifest_version": 1, "extension_contract_version": 1, "package_id": "source.settings-probe",
@@ -97,7 +98,10 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["grid_kept_shared_dirty_source"]
         assert result["resource_browse_only"] and result["resource_open_and_save"] and result["resource_readonly"]
         assert result["configuration_uri_opened"]
-        assert len(result["configurationReferences"]) == 3
-        assert result["logicalConfigurationReferenceRejected"] is True
+        assert result["validation"]["copied_original"]
+        assert result["validation"]["same_uri_array_reordered_without_marker"]
+        assert len(result["configurationReferences"]) == 4
+        assert any(item["sourceKey"] == "workspace_root_mutable_override" and item["gatewayScope"] is False
+            for item in result["configurationReferences"])
     finally:
         close_gateway_process(gateway)

@@ -9,10 +9,11 @@ import { useTranscriptDisclosure, useDisclosureFocus } from "../TranscriptViewCo
 import MarkdownContent from "../MarkdownContent";
 import ToolRow from "../ToolRow";
 import { errorMessage } from "../../../utils/errorMessage";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import type { LoadTurnDetails } from "./types";
 import { ResponsePart } from "./responseStatusParts";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
-import { responseItemMenuActions, responseItemTarget, useChatItemMenu, useChatHover } from "../itemContextMenu";
+import { copyItemAction, responseItemMenuActions, responseItemTarget, useChatItemMenu, useChatHover } from "../itemContextMenu";
 import ResponseUsage, { responseUsageDetails, type ResponseUsageProps } from "./ResponseUsage";
 
 export function formatActivityDuration(durationMs: number | null | undefined): string {
@@ -75,7 +76,7 @@ function ActivityItem({ item, load, onForkItem, parent }: {
       <span className={`codicon codicon-chevron-${open ? "down" : "right"}`} aria-hidden="true" />
     </button>
     {open ? <div {...nodeAttributes(key, itemNode(item, "header"))}>
-      {error ? <div role="alert" className="chat-inline-error">{error}</div> : item.redacted ? <span>{t("chat.thinking.redacted")}</span>
+      {error ? <div role="alert" className="chat-inline-error">{failureSummary(error)}</div> : item.redacted ? <span>{t("chat.thinking.redacted")}</span>
         : loading ? <span role="status">{t("chat.activity.loading")}</span>
           : <MarkdownContent value={item.text} responseSources={JSON.stringify(item.responseSources)} />}
     </div> : null}
@@ -180,9 +181,11 @@ export function ProcessActivity({ process, groups, settled, stats, usage, status
   const activity = active ? t(active.kind === "aggregated_tool" ? "chat.process.toolRunning" : "chat.process.thinkingRunning") : undefined;
   const elapsed = useProcessDuration(JSON.stringify(process), settled, stats?.duration_ms);
   const duration = elapsed == null ? (!settled ? t("chat.activity.running") : undefined) : formatActivityDuration(elapsed);
-  const details = [status?.title, status?.detail, activity, duration, stats ? t("chat.activity.items", formatNumber(stats.item_count)) : undefined, usage ? responseUsageDetails(usage) : undefined].filter(Boolean).join("\n");
+  const statusDetail = status?.detail ? failureSummary(status.detail) : undefined;
+  const statusMenu = useChatItemMenu(() => status?.detail ? [copyItemAction(errorMessage(status.detail))] : [], status?.role === "alert" && Boolean(status.detail));
+  const details = [status?.title, statusDetail, activity, duration, stats ? t("chat.activity.items", formatNumber(stats.item_count)) : undefined, usage ? responseUsageDetails(usage) : undefined].filter(Boolean).join("\n");
   const hover = useChatHover([
-    ...(status ? [{label:t("chat.process.status"),value:status.title}, ...(status.detail ? [{label:t("chat.process.detail"),value:status.detail}] : [])] : []),
+    ...(status ? [{label:t("chat.process.status"),value:status.title}, ...(statusDetail ? [{label:t("chat.process.detail"),value:statusDetail}] : [])] : []),
     ...(duration ? [{label:t("chat.process.duration"),value:duration}] : []),
     ...(stats ? [{label:t("chat.process.items"),value:formatNumber(stats.item_count)}] : []),
     ...(activity ? [{label:t("chat.process.activity"),value:activity}] : []),
@@ -205,8 +208,8 @@ export function ProcessActivity({ process, groups, settled, stats, usage, status
         </span>
         {hasContents ? <span className={`codicon codicon-chevron-${open ? "down" : "right"}`} aria-hidden="true" /> : null}
       </button>
-      {status?.detail ? <div role={status.role ?? "status"} className="chat-working-detail" {...nodeAttributes(nodeKey(process, "status"), header)}>{status.detail}</div> : null}
-      {error ? <div role="alert" className="chat-inline-error">{error}</div> : null}
+      {statusDetail ? <div role={status?.role ?? "status"} className="chat-working-detail" {...statusMenu} {...nodeAttributes(nodeKey(process, "status"), header)}>{statusDetail}</div> : null}
+      {error ? <div role="alert" className="chat-inline-error">{failureSummary(error)}</div> : null}
       {open && hasContents ? <div className="chat-thinking-body">
         {outline?.beforeCursor ? <button type="button" disabled={loading} onClick={() => void fetchOutline(outline.beforeCursor)}>{t("chat.process.loadEarlier")}</button> : null}
         {processGroups.map(group => group.kind === "work" ? <ActivityGroup key={group.id} group={group} parent={header} showRawDetails={showRawDetails} load={load} onForkItem={onForkItem} />

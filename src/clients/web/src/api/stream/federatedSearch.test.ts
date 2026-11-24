@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { FederatedSearchRequest } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
-import { IncompleteSearchStreamError, SearchStreamReadError, streamFederatedSearch } from "./federatedSearch";
+import { IncompleteSearchStreamError, SearchStreamReadError, searchBranchKey, streamFederatedSearch } from "./federatedSearch";
 
 const owners = ["A", "B"].map(workspace_id => ({ gateway_id: "gateway", workspace_id }));
 const scope = { version: 1, gateway_id: "gateway", resolved_at: "2026-11-03T00:00:00Z", mode: "selected", owners };
@@ -222,6 +222,14 @@ const diagnosticPage = () => {
     complete: false, cursor: "original-log-cursor", limited_reason: "result_limit", scanned_sources: 1, scanned_lines: 1, scanned_bytes: 20 };
 };
 const diagnosticSummary = () => ({ state: "incomplete", order: "category-scope-owner-v1", branches: [diagnosticBranch()], returned_results: 1 });
+
+test("运行日志分支身份包含明确管理连接，续页不得换路", () => {
+  const original = diagnosticBranch().branch;
+  const selected = { ...original, diagnostics: { ...diagnosticTarget(), gateway_connection_id: "remote-A" } };
+  const different = { ...original, diagnostics: { ...diagnosticTarget(), gateway_connection_id: "remote-B" } };
+  expect(searchBranchKey(selected)).not.toBe(searchBranchKey(different));
+  expect(searchBranchKey(selected)).not.toBe(searchBranchKey(original));
+});
 
 test("运行日志每 Gateway 只有真实诊断分支，共享来源及原 cursor 通过同一流", async () => {
   const backend = install(), received: string[] = [];

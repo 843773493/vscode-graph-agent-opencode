@@ -1366,8 +1366,11 @@ scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace
 
 scenario('同来源分屏共享声明订阅，最后视图关闭回收，异路由与错误不串用', async () => {
   const Files = evaluate(await source('src/settings/sourceEditor.ts', true), ['ConfigurationSourceFiles'],
-    { Disposable, getErrorMessage: error => error.message }, ['observeConfigurationSchemas', 'release']).ConfigurationSourceFiles;
+    { Disposable, getErrorMessage: error => error.message, validationMarkerOwner: 'boxteam.configSourceValidation' },
+    ['observeConfigurationSchemas', 'release', 'clearValidation']).ConfigurationSourceFiles;
   const files = Object.create(Files.prototype), requests = [], received = [[], [], []], errors = [];
+  const markerRemovals = [];
+  files.markers = { remove: (...args) => markerRemovals.push(args) };
   const owner = { target: { gateway_connection_id: 'route-A' }, watchConfigurationSchemas(signal, next) {
     const reply = Promise.withResolvers(); requests.push({ signal, next, ...reply }); return reply.promise;
   } };
@@ -1395,6 +1398,7 @@ scenario('同来源分屏共享声明订阅，最后视图关闭回收，异路�
   files.observeConfigurationSchemas(resource, owner, observer(0));
   files.release(resource);
   expect(requests[2].signal.aborted).toBe(true); expect(files.edits.size).toBe(0);
+  expect(markerRemovals).toEqual([['boxteam.configSourceValidation', [resource]]]);
 });
 
 scenario('Pane 取消来源准备后不绑定迟到模型，释放已取得的文本引用', async () => {
@@ -1600,45 +1604,6 @@ scenario('来源层切换撤销在途 AI 搜索，并按新来源重跑当前查
   } finally { f.close(); }
 });
 
-scenario('没有工作区的 Gateway 仍注册和读取原生输出，旧工作区选择错误不被吞掉', async () => {
-  const target = { gateway_id: 'gateway-remote', gateway_connection_id: 'ssh-remote', connection_kind: 'remote_gateway', name: '远端' };
-  const reads = [], errors = [], registrations = [], writes = [];
-  const log = { log_id: 'gateway:gateway', service: 'gateway', label: 'Gateway 日志', status: 'available', tail: 'gateway-only-log' };
-  let snapshot = { gatewayId: 'entry', workspaces: [{ gateway_id: 'other-gateway', workspace_id: 'other-workspace' }] };
-  let selectedWorkspaceReads = 0;
-  const { WorkspaceOutput } = evaluate(await source('src/workspaceOutput.ts', true), ['WorkspaceOutput'], {
-    Disposable, OUTPUT_VIEW_ID: 'output', VSBuffer, joinPath, OutputChannelUpdateMode: { Replace: 1 },
-    workspaceContext: { getSnapshot: () => snapshot }, managementGateway: () => target,
-    managementWorkspace: () => { selectedWorkspaceReads++; throw new Error('已选工作区不存在'); },
-    getGatewayDiagnostics: async (_port, options) => { reads.push(options.target); return { logs: [log], selected_log_id: log.log_id }; },
-    watchPluginRuntimeStatus: async () => {},
-  }, ['updateScope', 'clearScope', 'readSelected', 'logText']);
-  const view = new WorkspaceOutput();
-  let selected;
-  Object.assign(view, { sources: new Map(), workspaceScopedContext: { set() {}, reset() {} }, refresh: { cancel() {}, schedule() {} },
-    views: { isViewVisible: () => true }, notifications: { error: error => errors.push(error) },
-    registry: { registerChannel: channel => registrations.push(channel), removeChannel() {} },
-    environment: { windowLogsPath: URI.parse('vscode-log:/window') },
-    files: { writeFile: async (_resource, value) => writes.push(value.toString()) },
-    output: { getActiveChannel: () => selected ? { id: selected } : undefined, showChannel: async id => { selected = id; }, getChannel: () => ({ update() {} }) },
-  });
-  try {
-    view.updateScope();
-    await view.loading;
-    await view.readSelected();
-    expect(selectedWorkspaceReads).toBe(0);
-    expect(reads).toHaveLength(2);
-    for (const read of reads) expect(read).toEqual({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: undefined });
-    expect(registrations.map(channel => channel.label)).toEqual(['Gateway 日志']);
-    expect(writes.at(-1)).toBe('gateway-only-log\n');
-    expect(errors).toEqual([]);
-    snapshot = { ...snapshot, workspaces: [{ gateway_id: target.gateway_id, workspace_id: 'another-workspace' }] };
-    view.updateScope(true);
-    expect(selectedWorkspaceReads).toBe(1);
-    expect(errors.map(error => error.message)).toEqual(['已选工作区不存在']);
-    expect(reads).toHaveLength(2);
-  } finally { view.clearScope(); view.dispose(); }
-});
 
 afterAll(async () => {
   await writeFile(join(run.artifactsDir, 'source-fingerprints.json'), `${JSON.stringify({ pinnedUpstreamCommit, fingerprints, registered, executed, passed }, null, 2)}\n`);
@@ -1672,12 +1637,12 @@ test('设置目录晚到与同分类范围刷新不能覆盖用户已选管理�
   view.show('connections', bound, { managementPage: 'connections' });
   expect(view.dialog).toBeUndefined();
   expect(pages.at(-1)).toBe('connections');
-  view.show('observability', bound, { managementPage: 'diagnostics', diagnosticLocation: { reference: { log_id: 'original' } } });
+  view.show('observability', bound, { managementPage: 'diagnostics' });
   view.show('observability', bound);
-  expect(view.request.diagnosticLocation.reference.log_id).toBe('original');
+  expect(view.request.managementPage).toBeUndefined();
   view.show('observability', { location: { gateway_id: 'remote' } });
   expect(pages.at(-1)).toBe('diagnostics');
-  expect(view.request.diagnosticLocation).toBeUndefined();
+  expect(view.source.location.gateway_id).toBe('remote');
   view.show('observability', bound, {}, true);
   expect(pages.at(-1)).toBeUndefined();
 });

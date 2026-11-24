@@ -11,12 +11,23 @@ import { coalesceWorkspaceSymbols, getWorkspaceSymbols, WorkspaceSymbolProviderR
 import { gatewayWorkspaceKey } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import type { SearchInvocationOptions } from './target.js';
+import { errorDiagnostic, errorMessage, errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 
 /** 明确范围只查询完整窗口工作区；原 Provider、评分与接受动作继续由上游持有。 */
 export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
   private openToken?: CancellationToken;
   private sourceGroup?: number;
   private picker?: Parameters<SymbolsQuickAccessProvider['provide']>[0];
+
+  private async copyDiagnostic(error: unknown, token: CancellationToken): Promise<void> {
+    const picker = this.picker;
+    try { await copyTextToClipboard(errorDiagnostic(error)); }
+    catch (copyError) {
+      if (picker && this.picker === picker && !token.isCancellationRequested) picker.validationMessage = errorSummary(copyError);
+    }
+  }
 
   override provide(picker: Parameters<SymbolsQuickAccessProvider['provide']>[0], token: CancellationToken, options: SearchInvocationOptions = {}) {
     if (options.searchOwners || options.searchOwner || options.searchOwnerError) picker.placeholder = t('quickAccess.symbols.placeholder', options.searchOwners?.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')) ?? options.searchOwner?.workspaceId ?? t('quickAccess.symbols.ownerUnavailable'));
@@ -76,10 +87,12 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
         if (token.isCancellationRequested) return;
         const picks = this.toSymbolPicks(prepared, pickOptions, token, coalesceWorkspaceSymbols([...results.values()].flat()));
         for (const [provider, error] of failures) picks.push({
-          label: t('quickAccess.symbols.unavailable', String(error)),
+          label: failureSummary(t('quickAccess.symbols.unavailable', errorMessage(error))),
           description: `${target} · Provider ${providers.indexOf(provider) + 1}`,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.symbols.retry') }],
-          trigger: async () => {
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.symbols.retry') },
+            { iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+          trigger: async index => {
+            if (index === 1) { await this.copyDiagnostic(error, token); return TriggerAction.NO_ACTION; }
             if (!token.isCancellationRequested && failures.has(provider)) await query([provider]);
             return TriggerAction.NO_ACTION;
           },
@@ -103,7 +116,9 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
       publish();
       await this.delayer.trigger(() => query(providers));
     } catch (error) {
-      if (!token.isCancellationRequested) progress([{ label: t('quickAccess.symbols.unavailable', String(error)) }], false);
+      if (!token.isCancellationRequested) progress([{ label: failureSummary(t('quickAccess.symbols.unavailable', errorMessage(error))),
+        buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+        trigger: async () => { await this.copyDiagnostic(error, token); return TriggerAction.NO_ACTION; } }], false);
     }
   }
 }

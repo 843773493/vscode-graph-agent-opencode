@@ -28,6 +28,10 @@ import { editorGroupSourcePaths, transformEditorGroups } from './editorGroupTran
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
+  'src/vs/workbench/services/notification/common/notificationService.ts',
+  'src/vs/platform/files/common/files.ts',
+  'src/vs/platform/files/common/fileService.ts',
+  'src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts',
   'src/vs/workbench/services/themes/browser/workbenchThemeService.ts',
   'src/vs/workbench/contrib/themes/browser/themes.contribution.ts',
   'src/vs/workbench/browser/web.main.ts',
@@ -142,6 +146,47 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
     let contents = source.replace(/\r\n/g, '\n');
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    if (path === join(upstream, 'src/vs/workbench/services/notification/common/notificationService.ts')) {
+      contents = `import { errorDiagnostic, errorSummary, isErrorReported } from ${JSON.stringify(resolve(root, '../web/src/utils/errorMessage.js'))};
+import { copyTextToClipboard } from ${JSON.stringify(resolve(root, '../web/src/utils/clipboard.js'))};
+import { t } from ${JSON.stringify(resolve(root, '../shared/core/i18n/index.js'))};
+import { ILogService } from '../../../../platform/log/common/log.js';
+` + contents;
+      contents = replaceOnce(contents, '@IStorageService private readonly storageService: IStorageService',
+        '@IStorageService private readonly storageService: IStorageService,\n\t\t@ILogService private readonly logService: ILogService');
+      contents = replaceOnce(contents, 'this.model.addNotification({ severity: Severity.Error, message });',
+        'this.notify({ severity: Severity.Error, message });');
+      contents = replaceOnce(contents, 'notify(notification: INotification): INotificationHandle {\n\t\tconst toDispose = new DisposableStore();', `notify(notification: INotification): INotificationHandle {
+if (isErrorReported(notification.message)) return new NoOpNotification();
+const toDispose = new DisposableStore();
+if (notification.severity === Severity.Error && (typeof notification.message === 'string' || notification.message instanceof Error)) {
+  const original = notification.message;
+  const diagnostic = errorDiagnostic(original);
+  if (original instanceof Error) this.logService.error(diagnostic);
+  const copy = toDispose.add(new Action('boxteam.notification.copyDiagnostic', t('shell.copyDiagnostic'), undefined, true, async () => {
+    try { await copyTextToClipboard(diagnostic); }
+    catch (error) { this.logService.error(errorDiagnostic(error)); this.warn(errorSummary(error)); }
+  }));
+  notification = { ...notification, message: errorSummary(original), actions: { ...notification.actions,
+    secondary: [...(notification.actions?.secondary ?? []), copy] } };
+}`);
+    }
+    if (path === join(upstream, 'src/vs/platform/files/common/files.ts')) {
+      contents = replaceOnce(contents,
+        'readonly options?: IReadFileOptions | IWriteFileOptions | ICreateFileOptions\n\t) {\n\t\tsuper(message);',
+        'readonly options?: IReadFileOptions | IWriteFileOptions | ICreateFileOptions,\n\t\terrorOptions?: ErrorOptions\n\t) {\n\t\tsuper(message, errorOptions);');
+    }
+    if (path === join(upstream, 'src/vs/platform/files/common/fileService.ts')) {
+      contents = replaceOnce(contents,
+        'ensureFileSystemProviderError(error).toString()), toFileOperationResult(error), writeFileOptions);',
+        'ensureFileSystemProviderError(error).toString()), toFileOperationResult(error), writeFileOptions, { cause: error });');
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts')) {
+      // 配置 owner 的原异常保留提交与 HTTP 诊断；仍由原保存通知维护动作、关闭和去重。
+      contents = replaceOnce(contents,
+        'message,\n\t\t\tactions\n\t\t});\n\t\tEvent.once(handle.onDidClose)',
+        "message: resource.scheme === 'boxteam-config-source' && fileOperationError.cause instanceof Error ? fileOperationError.cause : message,\n\t\t\tactions\n\t\t});\n\t\tEvent.once(handle.onDidClose)");
+    }
     if (path === join(upstream, 'src/vs/workbench/browser/parts/panel/panelActions.ts')) {
       // 最大化保留原动作及键盘入口，仅收入原生“更多操作”菜单。
       contents = replaceOnce(contents,

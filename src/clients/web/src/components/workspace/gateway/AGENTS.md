@@ -2,7 +2,7 @@
 
 `components/workspace/gateway/` 存放 Gateway 控制面的专用组件：原生设置内容 GatewaySettingsContent、连接对话框 GatewayConnectionDialog、入站访问面板 GatewayInboundAccessPanel、诊断面板 GatewayDiagnosticsPanel、背景资源 GatewayBackgroundAssets，以及工作区分组纯逻辑 gatewayWorkspacePresentation。
 
-`GatewayDiagnosticLogLocation` 是原诊断视图的临时原行定位展示，只调用具名精确读取；切换或关闭释放原文，不读取整份日志、不改变工作区或会话状态。
+日志查看与原记录定位统一交给 `boxteam.output.openLog`，设置页只展示诊断配置、进程概览和日志能力入口，不读取或保存日志正文。
 
 本目录与相邻子包的边界：
 

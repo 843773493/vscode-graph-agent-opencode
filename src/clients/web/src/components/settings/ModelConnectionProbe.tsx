@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../../../shared/core/i18n/index.js';
 import { modelMetadataDetails } from './modelMetadata.js';
-import { HttpRequestError } from '../../api/http.js';
+import { errorDiagnostic, errorSummary } from '../../utils/errorMessage.js';
+import { failureSummary } from '../../../../shared/core/failurePresentation.js';
 import { discoverLlmModels, getConfigSourceDocument, testLlmModel } from '../../api/configSources.js';
 import { observeSecretMetadata, SecretsClient } from '../../api/secrets.js';
 import type { GatewaySecretsDTO } from '../../types/protocol_generated/boxteam/gateway/v2/secrets.js';
@@ -28,8 +29,7 @@ interface TestObservation {
   preview: string;
   start?: LlmTestStartDTO;
   result?: LlmTestResultDTO;
-  error?: string;
-  errorStatus?: number;
+  error?: unknown;
 }
 
 function baselineKey(document: ConfigSourceDocumentDTO | LlmProbeObservationDTO): string {
@@ -60,7 +60,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
   const [catalog, setCatalog] = useState<{ result: LlmDiscoverResultDTO; version: number }>();
   const [discovering, setDiscovering] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const [search, setSearch] = useState('');
   const [modelFilter, setModelFilter] = useState('metadata');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -73,7 +73,6 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
   const committed = useRef(editor.connectionCommit);
   const secretEdited = useRef(false);
   const actualMode = mode ?? (editor.dirty || secret ? 'draft' : 'active');
-  const failureText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
   const changeSecret = (value: string) => { setSecret(value); setSecretModelId(selectedModelId); setSecretVersion(value => value + 1); };
 
   useEffect(() => { setObservedDocument(document); }, [document]);
@@ -134,7 +133,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
       if (controller.signal.aborted || discovery.current !== controller || revision.current.value !== version) return;
       setCatalog({ result, version }); setSelected(new Set());
     } catch (cause) {
-      if (!controller.signal.aborted) setError(failureText(cause));
+      if (!controller.signal.aborted) setError(cause);
     } finally {
       if (discovery.current === controller) { discovery.current = undefined; setDiscovering(false); }
     }
@@ -157,7 +156,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
         usesVault ? new SecretsClient(editor.target, controller.signal).list() : undefined,
       ]);
       if (!controller.signal.aborted) setObservedDocument(current);
-    } catch (cause) { if (!controller.signal.aborted) setError(failureText(cause)); }
+    } catch (cause) { if (!controller.signal.aborted) setError(cause); }
     finally { if (versionRead.current === controller) { versionRead.current = undefined; setRefreshing(false); } }
   };
   const runTests = async (ids: string[], testMode: TestObservation['mode'] | 'both') => {
@@ -185,12 +184,12 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
             });
             entry.result = result; entry.preview = result.preview;
             entry.status = result.status === 'cancelled' ? 'cancelled' : result.status === 'passed' ? 'passed' : 'failed';
-          } catch (cause) { entry.status = controller.signal.aborted ? 'cancelled' : 'failed'; entry.error = controller.signal.aborted ? undefined : failureText(cause); entry.errorStatus = cause instanceof HttpRequestError ? cause.status : undefined; }
+          } catch (cause) { entry.status = controller.signal.aborted ? 'cancelled' : 'failed'; entry.error = controller.signal.aborted ? undefined : cause; }
           update();
         }
       };
       await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
-    } catch (cause) { if (!controller.signal.aborted) setError(failureText(cause)); }
+    } catch (cause) { if (!controller.signal.aborted) setError(cause); }
     finally { if (batch.current === controller) { batch.current = undefined; setTesting(false); } }
   };
   const cancel = () => { discovery.current?.abort(); batch.current?.abort(); secretEdited.current = false; changeSecret(''); };
@@ -244,7 +243,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
       <p role="status">{t(catalog.result.complete ? 'configuration.probe.completeCatalog' : 'configuration.probe.incompleteCatalog', catalog.result.models.length)}
         {stale(catalog.result.observation, catalog.version) ? ` · ${t('configuration.probe.stale')}` : ''}</p>
       {catalog.result.observation ? <details><summary>{t('configuration.probe.observationDetails')}</summary>{observation(catalog.result.observation)}</details> : null}
-      {catalog.result.error ? <p role="alert">{catalog.result.error.message}</p> : null}
+      {catalog.result.error ? <p role="alert" className="failure-summary">{failureSummary(catalog.result.error.message)}</p> : null}
       {catalog.result.models.length > 0 ? <>
       <div className="configuration-form-grid"><label className="configuration-entity-field">{t('configuration.probe.modelType')}
         <select value={hasMetadata ? modelFilter : 'all'} onChange={event => setModelFilter(event.target.value)}>
@@ -263,7 +262,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
 
       <button type="button" disabled={!document.writable || !selected.size || stale(catalog.result.observation, catalog.version)} onClick={() => {
         try { onImport(catalog.result.models.filter(item => selected.has(item.model) && !configured.has(item.model)), editor.version); setSelected(new Set()); setCatalog(undefined); }
-        catch (cause) { setError(failureText(cause)); }
+        catch (cause) { setError(cause); }
       }}>{t('configuration.probe.importSelected')}</button>
       </> : null}
       {missing.length ? <p>{t('configuration.probe.notReturned', missing.map(model => model.id).join(', '))}</p> : null}
@@ -291,14 +290,14 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
         {entry.result.usage ? ` · usage ${JSON.stringify(entry.result.usage)}` : ''}</p> : null}
       {entry.start ? <small>request_id: {entry.start.request_id}</small> : null}
       {entry.error || entry.result?.error ? <>
-        <p role="alert">{entry.errorStatus === 422 ? t('configuration.probe.invalidConnection') : (entry.error ?? entry.result!.error!.message).split('\n')[0]}</p>
+        <p role="alert" className="failure-summary">{entry.error ? errorSummary(entry.error) : failureSummary(entry.result!.error!.message)}</p>
         <details><summary>{t('configuration.probe.errorDetails')}</summary>
-          <pre>{entry.error ?? `${entry.result!.error!.field ?? ''}\n${entry.result!.error!.message}`}</pre>
+          <pre>{entry.error ? errorDiagnostic(entry.error) : `${entry.result!.error!.field ?? ''}\n${entry.result!.error!.message}`}</pre>
           {onOpenSource ? <button type="button" onClick={onOpenSource}>{t('configuration.entities.openJsonc')}</button> : null}
         </details>
       </> : null}
       {entry.status === 'passed' && entry.result ? <button type="button" disabled={!document.writable || !canApplyMode(entry.modelId) || stale(entry.result.observation, entry.version) || !models.some(model => model.id === entry.modelId)} onClick={() => onApplyMode(entry.modelId, entry.result!.streaming)}>{t('configuration.probe.applyMode')}</button> : null}
     </section>)}
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p role="alert" className="failure-summary">{errorSummary(error)}</p> : null}
   </section>;
 }

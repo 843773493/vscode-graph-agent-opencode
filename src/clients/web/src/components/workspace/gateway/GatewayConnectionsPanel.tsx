@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { HttpRequestError, onGatewayTokenInvalidated } from "../../../api/http";
+import { onGatewayTokenInvalidated } from "../../../api/http";
 import {
   listGatewayManagementTargets,
   reconnectRemoteGatewayConnection,
@@ -8,7 +8,9 @@ import {
 } from "../../../gatewayApi";
 import type { AddRemoteGatewayConnectionRequest, GatewayWorkspace } from "../../../types/backend";
 import type { GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorDiagnostic, errorMessage } from "../../../utils/errorMessage";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
+import { ComposerDiagnosticsContext } from "../../composer/ComposerDiagnosticsContext";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 
 interface GatewayConnectionsPanelProps {
@@ -23,15 +25,11 @@ interface GatewayConnectionsPanelProps {
   onOpenLogs: (gatewayConnectionId: string) => void;
 }
 
-function connectionFailure(error: unknown): string {
-  return error instanceof HttpRequestError && error.requestId
-    ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error);
-}
-
 export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces, revision,
   onAddRemoteGatewayConnection, onRefresh, onRemoteGatewayReconnected, onOpenConfiguration, onOpenLogs,
 }: GatewayConnectionsPanelProps) {
   const confirm = useWarmConfirm();
+  const diagnostics = useContext(ComposerDiagnosticsContext);
   const [directory, setDirectory] = useState<GatewayManagementDirectoryDTO>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
@@ -65,10 +63,10 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
     const signal = AbortSignal.any([scope.signal, read.signal]);
     setError(undefined);
     if (gatewayId) void load(signal).catch(cause => {
-      if (!signal.aborted) { setDirectory(undefined); setError(connectionFailure(cause)); }
+      if (!signal.aborted) { setDirectory(undefined); setError(errorMessage(cause)); diagnostics(errorDiagnostic(cause)); }
     });
     return () => read.abort();
-  }, [gatewayId, load, revision, scope]);
+  }, [gatewayId, load, revision, scope, diagnostics]);
 
   const run = async (target: GatewayManagementTargetDTO, action: () => Promise<void>) => {
     if (scope.signal.aborted) return;
@@ -81,11 +79,10 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
     if (scope.signal.aborted) return;
     const reads = await Promise.allSettled([onRefresh(), load(scope.signal)]);
     for (const read of reads) if (read.status === "rejected") {
-      failure = failure ? `${connectionFailure(failure)}\n${connectionFailure(read.reason)}` : read.reason;
+      failure = failure ? new AggregateError([failure, read.reason], '连接操作与状态重读均失败') : read.reason;
     }
     if (scope.signal.aborted) return;
-    if (failure) setError(t("gateway.connections.actionFailure", gatewayId!, target.gateway_id,
-      target.gateway_connection_id!, connectionFailure(failure)));
+    if (failure) { setError(errorMessage(failure)); diagnostics(errorDiagnostic(failure)); }
     else setEditing(undefined);
     setBusy(undefined);
   };
@@ -112,7 +109,7 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
       <div><h2 id="remote-gateway-connections-title">{t("gateway.control.remoteGateways")}</h2><p>{t("gateway.connections.ownerDetail", gatewayId ?? t("gateway.connections.ownerUnavailable"))}</p></div>
       {targets ? <span>{t("gateway.control.connectionCount", targets.length)}</span> : null}
     </div>
-    {error ? <p className="panel-feedback" role="alert">{error}</p> : null}
+    {error ? <p className="panel-feedback failure-summary" role="alert">{failureSummary(error)}</p> : null}
 
     {targets?.map(target => {
       if (!target.gateway_connection_id || !target.remote_gateway_port || !["config", "manual"].includes(target.source_owner ?? "")) {
@@ -126,7 +123,7 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
         <h3>{target.name}</h3>
         <p><code>{target.gateway_id}</code> · <code>{gatewayConnectionId}</code></p>
         <p>{t(target.source_owner === "config" ? "gateway.connections.configOwner" : "gateway.connections.manualOwner")}</p>
-        <p>{target.connection_error ?? t("gateway.control.connected")}</p>
+        <p>{target.connection_error ? failureSummary(target.connection_error) : t("gateway.control.connected")}</p>
         {remote ? <p>{remote.username}@{remote.host}:{remote.port} → Gateway :{target.remote_gateway_port}</p> : <p>{t("gateway.connections.noWorkspaceProjection")}</p>}
         <details><summary>{t("gateway.control.workspaceCount", members.length)}</summary><ul>{members.map(workspace => <li key={workspace.workspace_id}>{workspace.name} <code>{workspace.workspace_id}</code></li>)}</ul></details>
         <div className="gateway-control-actions">
@@ -136,8 +133,7 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
             <button type="button" disabled={!!busy || loading} onClick={() => setEditing({ gatewayConnectionId, name: target.name })}>{t("gateway.connections.editName")}</button>
             <button type="button" className="danger-soft" disabled={!!busy || loading} onClick={() => void remove(target)}>{t("gateway.connections.remove")}</button>
           </> : <button type="button" onClick={() => void onOpenConfiguration().catch(cause => {
-            if (!scope.signal.aborted) setError(t("gateway.connections.actionFailure", gatewayId!, target.gateway_id,
-              gatewayConnectionId, connectionFailure(cause)));
+            if (!scope.signal.aborted) { setError(errorMessage(cause)); diagnostics(errorDiagnostic(cause)); }
           })}>{t("gateway.connections.openConfiguration")}</button>}
         </div>
         {editingName ? <form onSubmit={event => {

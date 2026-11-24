@@ -1,6 +1,6 @@
 import { gatewayWorkspaceKey, workspaceOwnerFromKey, type GatewayRequestTarget } from "./api/workspaceIdentity";
 import { formatNumber, t } from "../../shared/core/i18n/index.js";
-import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO, GatewayManagementDirectoryDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
+import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO, GatewayDiagnosticLogQueryRequest, GatewayDiagnosticLogQueryResultDTO, GatewayManagementDirectoryDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddRemoteGatewayConnectionRequest,
@@ -62,7 +62,11 @@ export async function listGatewayManagementTargets(port: number, signal?: AbortS
   ));
 }
 
-export type GatewayLogTarget = GatewayRequestTarget & { log_id?: string };
+export type GatewayLogTarget = GatewayRequestTarget & {
+  log_id?: string;
+  request_id?: string;
+  location?: GatewayDiagnosticLogLocateRequest;
+};
 
 export async function getGatewayDiagnostics(
   port: number,
@@ -70,6 +74,7 @@ export async function getGatewayDiagnostics(
     target?: GatewayRequestTarget;
     logId?: string | null;
     tailLines?: number;
+    includeTail?: boolean;
     signal?: AbortSignal;
   } = {},
 ): Promise<GatewayDiagnostics> {
@@ -80,6 +85,7 @@ export async function getGatewayDiagnostics(
   }
   if (target?.workspace_id) params.set("workspace_id", target.workspace_id);
   if (options.logId) params.set("log_id", options.logId);
+  if (options.includeTail !== undefined) params.set("include_tail", String(options.includeTail));
   if (options.tailLines) params.set("tail_lines", String(options.tailLines));
   const query = params.toString();
   return unwrapApiData(
@@ -93,12 +99,29 @@ export async function getGatewayDiagnostics(
   );
 }
 
+export async function queryGatewayDiagnosticLogs(
+  port: number, target: GatewayRequestTarget, request: GatewayDiagnosticLogQueryRequest, signal?: AbortSignal,
+): Promise<GatewayDiagnosticLogQueryResultDTO> {
+  const query = new URLSearchParams();
+  if (target.gateway_connection_id) query.set("gateway_connection_id", target.gateway_connection_id);
+  const suffix = query.size ? `?${query}` : "";
+  return unwrapApiData(await requestJson<APIResponse<GatewayDiagnosticLogQueryResultDTO>>(
+    port, `/api/gateway/diagnostics/query${suffix}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Target-Gateway-Id": target.gateway_id },
+      body: JSON.stringify(request), signal,
+    },
+  ));
+}
+
 export async function locateGatewayDiagnosticLog(
-  port: number, reference: GatewayDiagnosticLogLocateRequest, options: { signal?: AbortSignal } = {},
+  port: number, reference: GatewayDiagnosticLogLocateRequest, options: { gatewayConnectionId?: string; signal?: AbortSignal } = {},
 ): Promise<GatewayDiagnosticLogLocationDTO> {
+  const query = new URLSearchParams();
+  if (options.gatewayConnectionId) query.set("gateway_connection_id", options.gatewayConnectionId);
+  const suffix = query.size ? `?${query}` : "";
   return unwrapApiData(await requestJson<APIResponse<GatewayDiagnosticLogLocationDTO>>(
-    port, "/api/gateway/diagnostics/locate", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reference), ...options,
+    port, `/api/gateway/diagnostics/locate${suffix}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reference), signal: options.signal,
     },
   ));
 }

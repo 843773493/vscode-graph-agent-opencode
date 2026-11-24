@@ -1,14 +1,19 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { matchesFuzzy } from '../../upstream/src/vs/base/common/filters.js';
+import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
+import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
-import { PickerQuickAccessProvider, type IPickerQuickAccessItem } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
+import { PickerQuickAccessProvider, TriggerAction, type IPickerQuickAccessItem } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
 import type { IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import type { PluginInventoryResultDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { errorDiagnostic, errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -64,7 +69,7 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
   }
 
   protected report(action: Promise<unknown>): void {
-    void action.catch(error => this.notifications.error(error instanceof Error ? error.message : String(error)));
+    void action.catch(error => this.notifications.error(error instanceof Error ? error : errorMessage(error)));
   }
 
   protected override async _getPicks(filter: string, _disposables: DisposableStore, token: CancellationToken): Promise<PluginPick[]> {
@@ -97,7 +102,9 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
       }));
     } catch (error) {
       if (token.isCancellationRequested || query.controller.signal.aborted) return [];
-      return [{ id: 'plugin-inventory-failed', label: t('plugins.inventoryUnavailable', error instanceof Error ? error.message : String(error)) }];
+      return [{ id: 'plugin-inventory-failed', label: failureSummary(t('plugins.inventoryUnavailable', errorMessage(error))),
+        buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('shell.copyDiagnostic') }],
+        trigger: () => { this.report(copyTextToClipboard(errorDiagnostic(error))); return TriggerAction.NO_ACTION; } }];
     }
   }
 }

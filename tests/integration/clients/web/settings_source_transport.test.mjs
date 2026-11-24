@@ -15,6 +15,7 @@ import { FilePermission, FileType, FileSystemProviderCapabilities, FileSystemPro
 import { HttpRequestError, invalidateGatewayToken } from '../../../../src/clients/web/src/api/http.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../../src/clients/web/src/api/configSources.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+import { errorDiagnostic, errorSummary } from '../../../../src/clients/web/src/utils/errorMessage.js';
 
 // 实际声明依赖同一产品翻译入口。
 const localizedFunction = (...parts) => new Function('t', ...parts).bind(undefined, t);
@@ -34,8 +35,8 @@ async function declarations(path, names) {
   });
   return ts.transpile(selected.join('\n'), { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 }
-const ownerCode = await declarations('src/clients/workbench/src/settings/sourceOwner.ts', ['sourceBaseline', 'sourceStatus', 'sourceFanoutStatus', 'ConfigurationSourceOwner']);
-const filesCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation', 'ConfigurationSourceFiles']);
+const ownerCode = await declarations('src/clients/workbench/src/settings/sourceOwner.ts', ['sourceBaseline', 'sourceStatus', 'sourceFailure', 'sourceFanoutStatus', 'ConfigurationSourceOwner']);
+const filesCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'validationMarkerOwner', 'configSourceEditorUri', 'sourceLocation', 'ConfigurationSourceFiles']);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), JSON.stringify(fingerprints, null, 2) + '\n'));
 
 const sourceUriCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation']);
@@ -63,21 +64,51 @@ function fixture({ confirm, respond } = { confirm: async () => ({ confirmed: tru
     return call.method === 'PUT' ? { ...document, jsonc: call.intent.jsonc,
       edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: document.file_digest, state: 'active' } } : document;
   };
-  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus } = localizedFunction('gateway',
-    `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };`)({ request: transport });
+  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFailure, sourceFanoutStatus } = localizedFunction('gateway',
+    `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFailure, sourceFanoutStatus };`)({ request: transport });
   const environment = { VSBuffer, Emitter, Event, StorageScope: { WORKSPACE: 1 }, StorageTarget: { MACHINE: 1 }, CancellationError, getErrorMessage, Disposable, parse, dirname, resolvePath, URI,
     FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
-    HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };
+    HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFailure, sourceFanoutStatus };
   const { ConfigurationSourceFiles } = localizedFunction(...Object.keys(environment), `${filesCode}\nreturn { ConfigurationSourceFiles };`)(...Object.values(environment));
   const stored = new Map(), notices = [];
   const storage = { getObject: key => stored.get(key), store(key, value) { if (value === undefined) stored.delete(key); else stored.set(key, structuredClone(value)); }, async flush() {} };
-  const createFiles = () => new ConfigurationSourceFiles({ confirm }, { info: message => notices.push(message), error: message => notices.push(message), warn: message => notices.push(message) }, storage);
+  const createFiles = () => new ConfigurationSourceFiles({ confirm }, { info: message => notices.push(message), error: message => notices.push(message), warn: message => notices.push(message) }, storage,
+    { getModel: () => null }, { remove() {}, changeOne() {} });
   const files = createFiles();
   const target = { gateway_id: document.gateway_id, gateway_connection_id: 'original-route' };
   const resource = files.prepareEditor(target, sourceKey, document);
   return { files, resource, calls, target, sourceKey, document, stored, notices, createFiles };
 }
 const options = { create: false, overwrite: true, unlock: false };
+
+test.each([false, true])('来源已保存但层导入失败，响应丢失=%s仍保留保存成功及原查询身份', async lost => {
+  let saved;
+  const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
+    if (call.method === 'POST') return { document, changed_paths: ['changed'] };
+    if (call.method === 'PUT') {
+      saved = { ...document, jsonc: call.intent.jsonc, file_digest: 'saved-file',
+        edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: false, file_digest: 'saved-file', state: 'apply_failed' },
+        status: { reason: 'apply_failed', last_error: '原配置未生效 token=private-key' } };
+      if (lost) throw new Error('真实写入后的响应中断');
+      return saved;
+    }
+    return saved;
+  } });
+  await f.files.readFile(f.resource);
+  await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{"changed":true}').buffer, options)).resolves.toBeUndefined();
+  expect(f.calls.map(call => call.method)).toEqual(lost ? ['POST', 'PUT', 'GET'] : ['POST', 'PUT']);
+  expect(f.files.currentDocument(f.resource)).toBe(saved);
+  expect(f.files.pendingSubmission(f.resource)).toBeUndefined();
+  const failure = f.notices.at(-1);
+  expect(failure).toBeInstanceOf(Error);
+  expect(errorSummary(failure)).toContain('来源已保存 · 层未导入');
+  expect(errorSummary(failure)).not.toContain(saved.edit.idempotency_key);
+  expect(errorSummary(failure)).not.toContain('private-key');
+  expect(errorDiagnostic(failure)).toContain(saved.edit.idempotency_key);
+  expect(errorDiagnostic(failure)).toContain('Gateway=gateway-a');
+  expect(saved.status.last_error).toBe('原配置未生效 token=private-key');
+  f.files.dispose();
+});
 
 test('备份恢复先取得来源和相对 schema，保留草稿的旧 CAS 而非采用当前服务端基线', async () => {
   const f = fixture();
@@ -158,7 +189,7 @@ test('同一 URI 重选连接时，在途保存结清原路由，后续读取使
 
 test('共享来源预览说明观察范围，未上报结果不伪报成功', () => {
   const { sourceFanoutStatus } = localizedFunction(`${ownerCode}\nreturn { sourceFanoutStatus };`)();
-  const document = { workspace_id: 'workspace-a', source_key: 'workspace_mutable_override',
+  const document = { workspace_id: 'workspace-a', source_key: 'workspace_mutable_override', layer: 'user',
     fanout: { coverage: 'observed_only', source_generation: 2, fanout_id: 'original-fanout', result: 'fanout_partial', workspaces: [
       { workspace_id: 'workspace-a', status: 'applied', result: 'unchanged' },
       { workspace_id: 'workspace-b', status: 'conflict', result: 'conflict', error: '候选基线冲突' },
@@ -172,6 +203,12 @@ test('共享来源预览说明观察范围，未上报结果不伪报成功', ()
   expect(status).toContain('workspace-c: 本代尚未观察');
   expect(status).toContain('original-fanout');
   expect(sourceFanoutStatus({ ...document, fanout: undefined })).toContain('应用结果未知');
+  for (const layer of ['user_local', 'source']) {
+    expect(sourceFanoutStatus({ ...document, layer, fanout: undefined })).toContain('应用结果未知');
+  }
+  for (const layer of ['inline', 'workspace']) {
+    expect(sourceFanoutStatus({ ...document, layer, fanout: undefined })).toBe('');
+  }
 });
 
 

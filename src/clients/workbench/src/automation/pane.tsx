@@ -17,6 +17,7 @@ import { ReactSurface } from '../react/surface.js';
 import { TaskView } from '../react/taskView.js';
 import { productStyles } from '../react/productStyles.js';
 import { AutomationInput, type TaskPresentationAction } from './input.js';
+import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 
 export interface AutomationEditorOptions extends IEditorOptions { automationAction?: TaskPresentationAction; automationTask?: PersistentTaskDTO }
 
@@ -32,6 +33,7 @@ export class AutomationPane extends EditorPane {
   constructor(group: IEditorGroup,
     @ITelemetryService telemetry: ITelemetryService, @IThemeService themes: IThemeService,
     @IStorageService storage: IStorageService, @IEditorService private readonly editors: IEditorService,
+    @ILogService private readonly log: ILogService,
   ) { super(AutomationPane.ID, group, telemetry, themes, storage); }
   protected override createEditor(parent: HTMLElement): void {
     this.container = document.createElement('section');
@@ -45,7 +47,7 @@ export class AutomationPane extends EditorPane {
     await gateway.resolveWorkspace(input.owner);
     if (token.isCancellationRequested || this.input !== input) return;
     this.current = input;
-    this.surface = new ReactSurface(this.container, productStyles);
+    this.surface = new ReactSurface(this.container, productStyles, message => this.log.error(message));
     this.setOptions(options);
   }
   override setOptions(options: AutomationEditorOptions | undefined): void {

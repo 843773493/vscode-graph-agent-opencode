@@ -191,6 +191,9 @@
   "bootstrap.loadChineseFailed": "无法载入简体中文资源",
   "bootstrap.loadEnglishFailed": "无法载入英文资源",
   "bootstrap.loading": "正在加载工作台…",
+  "bootstrap.diagnostic": "安全诊断",
+  "bootstrap.copyDiagnostic": "复制安全诊断",
+  "bootstrap.copied": "已复制",
   "bootstrap.readLocaleFailed": "无法读取显示语言偏好",
   "bootstrap.retry": "重试",
   "bootstrap.unsupportedLocale": "不支持已保存的显示语言",
@@ -3328,6 +3331,8 @@
   "shell.bootstrap.title": "正在加载工作区与会话...",
   "shell.bootstrap.waiting": "仍在等待本地后端返回工作区和会话数据。",
   "shell.reload": "刷新页面",
+  "shell.diagnostic": "安全诊断",
+  "shell.copyDiagnostic": "复制安全诊断",
   "shell.renderFailed": "页面加载失败",
   "shell.renderFailedDetail": "前端组件发生异常，当前页面没有继续渲染。",
   "slash.agent.description": "打开 Agent 选择器。",
@@ -4579,5 +4584,13 @@
   "configuration.node.proxyAuth": "代理认证",
   "configuration.node.proxyUsername": "代理用户名",
   "configuration.node.proxyPasswordReference": "密码引用（secret:sec_…；通过工具栏管理命名密钥）",
-  "configuration.node.networkScope": "作用于当前目标已接入的 HTTP 请求。浏览器页面、插件自行出网和用户 Shell 命令不受此设置控制，内部控制连接保持直连。"
+  "configuration.node.networkScope": "作用于当前目标已接入的 HTTP 请求。浏览器页面、插件自行出网和用户 Shell 命令不受此设置控制，内部控制连接保持直连。",
+  "bottom.gatewayLog.loaded": "日志已读取",
+  "bottom.gatewayLog.located": "已选中日志记录",
+  "bottom.gatewayLog.tailOnly": "此来源仅支持尾读",
+  "bottom.gatewayLog.candidates": "选择日志命中",
+  "bottom.gatewayLog.queryComplete": "本次有界查询已完成",
+  "bottom.gatewayLog.queryIncomplete": "查询尚未完成：{0}",
+  "bottom.gatewayLog.continueQuery": "继续有界查询",
+  "bottom.gatewayLog.modelTimeout": "输出模型未在期限内完成读取"
 }

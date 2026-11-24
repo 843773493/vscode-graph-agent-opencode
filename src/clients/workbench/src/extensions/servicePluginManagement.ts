@@ -28,7 +28,7 @@ import { manageConfig, setPluginBindings, type Scope } from '../settings/pluginC
 
 import { PluginScope, pluginActions, pluginStateLabel, pluginIcon, pluginDescription } from './pluginScope.js';
 import { installedPluginGroups, type InstalledPlugin } from './pluginInventory.js';
-import { PluginEditorInput, readPluginInstanceLog } from './pluginEditor.js';
+import { PluginEditorInput } from './pluginEditor.js';
 import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
@@ -550,15 +550,11 @@ export class ServicePluginPackagesView extends ViewPane {
     if (!logId) return;
     const logs = append(container, $('button')) as HTMLButtonElement;
     logs.textContent = t('plugins.viewInstanceLog');
-    const output = append(container, $('pre'));
-    output.hidden = true;
-    output.setAttribute('aria-label', t('plugins.instanceLogAria'));
     logs.addEventListener('click', () => {
       logs.disabled = true;
-      output.hidden = false;
-      void readPluginInstanceLog(target, logId, signal).then(text => { output.textContent = text; })
-        .catch(error => { if (!signal.aborted) { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); } })
-        .finally(() => { logs.disabled = false; });
+      void this.commands.executeCommand('boxteam.output.openLog', { ...target, log_id: logId })
+        .catch(error => { if (!signal.aborted) this.notifications.error(error instanceof Error ? error : String(error)); })
+        .finally(() => { if (!signal.aborted) logs.disabled = false; });
     });
   }
 

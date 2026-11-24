@@ -8,6 +8,7 @@ import { IHoverService } from '../../upstream/src/vs/platform/hover/browser/hove
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import type { ChatItemMenuRequest, ChatHoverRow } from '../../../web/src/components/chat/itemContextMenu.js';
 import { t } from '../../../shared/core/i18n/index.js';
+import { errorSummary, isErrorReported } from '../../../web/src/utils/errorMessage.js';
 
 /** 内容动作由 React 提供，菜单、主题、键盘导航及 Hover 由 Workbench 承载。 */
 export class ChatItemMenu extends Disposable {
@@ -42,7 +43,7 @@ export class ChatItemMenu extends Disposable {
     super();
     // 菜单在动作开始时就销毁，错误订阅必须由宿主持有，直到异步动作结束。
     this._register(this.runner.onDidRun(({ error }) => {
-      if (error && !isCancellationError(error)) notifications.error(error);
+      if (error && !isCancellationError(error) && !isErrorReported(error)) notifications.error(errorSummary(error));
     }));
   }
 

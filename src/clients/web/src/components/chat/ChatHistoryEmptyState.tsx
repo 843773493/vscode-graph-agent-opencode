@@ -1,5 +1,7 @@
 import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import React from "react";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
+import { copyItemAction, useChatItemMenu } from "./itemContextMenu";
 import type { TurnProjectionState } from "../../state/session/turnTimeline";
 import type { SessionChangesSummary } from "../../types/backend";
 
@@ -20,12 +22,13 @@ export default function ChatHistoryEmptyState({
   sessionChangesLoading?: boolean;
   onOpenChanges?: () => void;
 }): React.ReactNode {
+  const menu = useChatItemMenu(() => historyError ? [copyItemAction(historyError)] : [], Boolean(historyError));
   return (
     <div className="chat-stream-empty-history" role="status">
       {historyError ? (
         <>
           <div className="chat-stream-empty-title">{t("chat.history.failed")}</div>
-          <div className="chat-stream-empty-detail" role="alert">{historyError}</div>
+          <div className="chat-stream-empty-detail" role="alert" {...menu}>{failureSummary(historyError)}</div>
           <button
             type="button"
             className="chat-stream-empty-action"

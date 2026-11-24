@@ -9,17 +9,19 @@ import { historicalBoundaryStatus } from "../../../state/timeline/chatResponseGr
 import { activityRendererRegistry } from "./activityRenderers";
 import MarkdownContent from "../MarkdownContent";
 import ContextNotice from "../ContextNotice";
-import { responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
+import { copyItemAction, responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
 import type { ChatTurnActions } from "./useChatTurnActions";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 
 export function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
   const message = [item.payload.error, item.payload.message, item.payload.detail]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const menu = useChatItemMenu(() => message ? [copyItemAction(message)] : [], Boolean(message));
   return (
-    <div className="chat-inline-error" role="alert">
+    <div className="chat-inline-error" role="alert" {...menu}>
       <span className="codicon codicon-error" aria-hidden="true" />
-      <span>{message ?? t("chat.status.failed")}</span>
+      <span>{failureSummary(message ?? t("chat.status.failed"))}</span>
     </div>
   );
 }
@@ -110,6 +112,7 @@ export function ActivityHistory({
 
 export function MessageStreamStatusPart({ conversation }: { conversation: ConversationView }) {
   const stream = conversation.messageStream;
+  const menu = useChatItemMenu(() => stream?.failure ? [copyItemAction(stream.failure.message)] : [], Boolean(stream?.failure));
   if (!stream) return null;
   const activityHistory = <ActivityHistory activities={stream.activities} />;
   if (stream.streamStatus === "interrupted") {
@@ -122,10 +125,10 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
       return (
         <>
           {activityHistory}
-          <div className="chat-inline-error" role="alert">
+          <div className="chat-inline-error" role="alert" {...menu}>
             <span className="codicon codicon-watch" aria-hidden="true" />
             <span>{t("chat.status.timedOut")}</span>
-            <span>{stream.failure.message}</span>
+            <span>{failureSummary(stream.failure.message)}</span>
           </div>
         </>
       );
@@ -140,10 +143,10 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     return (
       <>
         {activityHistory}
-        <div className="chat-inline-error" role="alert">
+        <div className="chat-inline-error" role="alert" {...menu}>
           <span className="codicon codicon-error" aria-hidden="true" />
           <span>{failureTitle}</span>
-          <span>{stream.failure.message}</span>
+          <span>{failureSummary(stream.failure.message)}</span>
         </div>
       </>
     );

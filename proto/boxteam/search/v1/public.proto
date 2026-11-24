@@ -13,6 +13,7 @@ message FederatedFileSearchTargetDTO {
 message FederatedDiagnosticLogTargetDTO {
   string gateway_id = 1;
   boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 2;
+  optional string gateway_connection_id = 3;
 }
 
 message FederatedSearchQueryDTO {

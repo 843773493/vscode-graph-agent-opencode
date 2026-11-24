@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { spawn } from 'node:child_process';
 import { sourceTransform } from './sourceTransform.mjs';
 import { createWorkbenchServer, gatewayProxyFailureHeaders } from './server.mjs';
+import { injectStartupFailure } from './startupFailure.mjs';
 
 export default async function () {
   const root = resolve(import.meta.dirname, '..');
@@ -128,8 +129,8 @@ export default async function () {
         },
         transformIndexHtml: {
           order: 'pre',
-          handler(html) {
-            return html.replace('<link rel="stylesheet" href="/out/main.css">', '')
+          async handler(html) {
+            return (await injectStartupFailure(root, html)).replace('<link rel="stylesheet" href="/out/main.css">', '')
               .replace('src="/out/main.js"', 'src="/src/bootstrap.ts"');
           },
         },

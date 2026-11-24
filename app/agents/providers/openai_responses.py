@@ -393,8 +393,6 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
             return current_index, current_output_index, current_sub_index, chunk
         if event_type in {"response.failed", "error"}:
             error = RuntimeError(f"LiteLLM Responses 请求失败: {event!r}")
-            mark_provider_failure(error, secrets=(self.api_key,), diagnostic_logger=logger)
-            record_upstream_error(error)
             raise error
 
         if (

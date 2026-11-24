@@ -161,11 +161,11 @@ class GatewayDiagnosticLogReferenceDTO(BaseModel):
     log_id: str = Field(min_length=1, max_length=512)
     device: str = Field(min_length=1, max_length=64)
     inode: str = Field(min_length=1, max_length=64)
-    line_start: int = Field(ge=0)
-    line_end: int = Field(gt=0)
+    line_start: int = Field(ge=0, description="物理行 UTF-8 字节半开区间起点")
+    line_end: int = Field(gt=0, description="物理行 UTF-8 字节半开区间终点")
     content_version: str = Field(pattern=r"^[0-9a-f]{64}$")
-    start_codepoint: int = Field(ge=0)
-    end_codepoint: int = Field(gt=0)
+    start_codepoint: int = Field(ge=0, description="去行尾原文的 Unicode 码点半开区间起点")
+    end_codepoint: int = Field(gt=0, description="去行尾原文的 Unicode 码点半开区间终点")
 
     @model_validator(mode="after")
     def validate_ranges(self) -> Self:
@@ -178,7 +178,7 @@ class GatewayDiagnosticLogMatchDTO(BaseModel):
     source: GatewayDiagnosticLogQuerySourceDTO
     reference: GatewayDiagnosticLogReferenceDTO
     preview: str
-    preview_start_codepoint: int = Field(ge=0)
+    preview_start_codepoint: int = Field(ge=0, description="去行尾原文的 Unicode 码点半开区间起点")
 
 
 class GatewayDiagnosticLogQueryResultDTO(BaseModel):

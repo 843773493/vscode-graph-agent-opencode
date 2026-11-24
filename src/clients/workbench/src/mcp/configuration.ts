@@ -3,13 +3,11 @@ import { Severity, type INotificationHandle, type INotificationService } from '.
 import type { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
+import { errorMessage } from '../../../web/src/utils/errorMessage.js';
 import { getConfigSourceDocument, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
 import type { ConfigSourceDocumentDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 export const mcpConfigurationSourceKey = 'workspace_root_mutable_override';
-export const mcpConfigurationErrorMessage = (cause: unknown) => cause instanceof HttpRequestError
-  ? `${cause.message}${cause.requestId ? ` · request_id ${cause.requestId}` : ''}`
-  : cause instanceof Error ? cause.message : String(cause);
 
 export async function saveMcpWorkspaceConfiguration(route: GatewayWorkspaceRequestTarget, document: ConfigSourceDocumentDTO,
   jsonc: string, quickInput: IQuickInputService, notifications: INotificationService, signal: AbortSignal,
@@ -48,13 +46,13 @@ export async function saveMcpWorkspaceConfiguration(route: GatewayWorkspaceReque
       }
     } catch (readError) {
       check();
-      observation = t('workbench.mcp.sourceReadFailed', mcpConfigurationErrorMessage(readError), idempotencyKey);
+      observation = t('workbench.mcp.sourceReadFailed', errorMessage(readError), idempotencyKey);
     }
     if (cause instanceof HttpRequestError && cause.status >= 400 && cause.status < 500) {
-      throw new Error(t('workbench.mcp.saveRejected', mcpConfigurationErrorMessage(cause), observation), { cause });
+      throw new Error(t('workbench.mcp.saveRejected', errorMessage(cause), observation), { cause });
     }
     if (!await notificationAction(notifications, Severity.Warning,
-      t('workbench.mcp.saveUnconfirmed', mcpConfigurationErrorMessage(cause), observation), t('workbench.mcp.querySubmission'), signal)) return;
+      t('workbench.mcp.saveUnconfirmed', errorMessage(cause), observation), t('workbench.mcp.querySubmission'), signal)) return;
     check();
     for (;;) {
       try {
@@ -66,7 +64,7 @@ export async function saveMcpWorkspaceConfiguration(route: GatewayWorkspaceReque
         }
       } catch (readError) {
         check();
-        observation = t('workbench.mcp.submissionQueryFailed', mcpConfigurationErrorMessage(readError), idempotencyKey);
+        observation = t('workbench.mcp.submissionQueryFailed', errorMessage(readError), idempotencyKey);
       }
       if (!await notificationAction(notifications, Severity.Warning,
         t('workbench.mcp.submissionStillMissing', observation), t('workbench.mcp.continueQuery'), signal)) return;

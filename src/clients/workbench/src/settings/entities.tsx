@@ -15,6 +15,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
+import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { EditorsOrder } from '../../upstream/src/vs/workbench/common/editor.js';
@@ -68,7 +69,8 @@ export class ConfigurationEntityView extends Disposable {
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @ICommandService private readonly commands: ICommandService,
     @IStorageService private readonly storage: IStorageService,
-    @IContextMenuService private readonly menus: IContextMenuService) {
+    @IContextMenuService private readonly menus: IContextMenuService,
+    @ILogService private readonly log: ILogService) {
     super();
     element.className = 'configuration-entities';
     const container = document.createElement('div');
@@ -82,7 +84,7 @@ export class ConfigurationEntityView extends Disposable {
     this.toolbar = this._register(new ToolBar(actions, this.menus));
     const body = document.createElement('div'); body.style.cssText = 'flex:1;min-height:0';
     container.append(header, body); element.replaceChildren(container);
-    this.surface = this._register(new ReactSurface(body, [styles]));
+    this.surface = this._register(new ReactSurface(body, [styles], diagnostic => this.log.error(diagnostic)));
     this._register(source.onDidChange(() => { if (!this.editingNode) { this.nodeTargets.clear(); this.render(); } }));
     const receive = (snapshot: Awaited<ReturnType<SecretsClient['list']>>) => {
       this.credentialNames = Object.fromEntries(snapshot.items.map(item => [item.id, item.name])); this.render();

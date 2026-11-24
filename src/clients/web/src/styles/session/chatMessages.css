@@ -1134,6 +1134,15 @@
   border-left: 3px solid var(--bt-status-danger);
   background: var(--bt-status-danger-background);
   color: var(--bt-status-danger);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-inline-error > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-inline-tool-unknown {

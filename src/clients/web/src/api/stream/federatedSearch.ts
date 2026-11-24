@@ -34,7 +34,7 @@ export class SearchStreamReadError extends Error {
 export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
   if (branch.diagnostics) {
     if (branch.owner || branch.category !== "runtime_log" || !branch.diagnostics.scope) throw new Error("诊断搜索分支归属无效");
-    return JSON.stringify(["diagnostics", branch.diagnostics.gateway_id, branch.diagnostics.scope.source,
+    return JSON.stringify(["diagnostics", branch.diagnostics.gateway_id, branch.diagnostics.gateway_connection_id ?? null, branch.diagnostics.scope.source,
       branch.diagnostics.scope.workspace_ids, branch.category, branch.operation]);
   }
   if (!branch.owner) throw new Error("搜索分支缺少 owner");

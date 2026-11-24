@@ -111,7 +111,7 @@ def _save_gateway_config(
     document = client.get(source_path).raise_for_status().json()["data"]
     configuration = commentjson.loads(document["jsonc"])
     update(configuration)
-    saved = client.put(source_path, json={
+    response = client.put(source_path, json={
         "gateway_id": gateway_id,
         "source_key": "gateway_mutable_override",
         "jsonc": json.dumps(configuration, ensure_ascii=False, indent=2) + "\n",
@@ -121,7 +121,9 @@ def _save_gateway_config(
         "expected_active_revision": document["active_revision"],
         "expected_active_digest": document["active_digest"],
         "idempotency_key": idempotency_key,
-    }).raise_for_status().json()["data"]
+    })
+    assert response.status_code == 200, response.text
+    saved = response.json()["data"]
     assert saved["edit"]["state"] == "active", saved
     return saved
 
@@ -195,6 +197,80 @@ def _wait_ready(client: httpx.Client, gateway_id: str, version: str) -> dict[str
             return slot
         time.sleep(0.1)
     raise AssertionError(f"Gateway {gateway_id} 插件未进入 ready：{slot}")
+
+
+def test_workbench_logs_open_read_locate_and_keep_original_gateway(
+    target_gateway_network: TargetGatewayNetwork,
+) -> None:
+    """日志正文、query/locate 与插件进程真实；仅 SSH 隧道沿原本机装具替换。"""
+    network = target_gateway_network
+    context = network.context
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "日志导航验收需要真实 Chromium"
+    client_a = network.clients[0]
+    gateway_a, gateway_b = network.gateway_ids
+    topology = json.loads((context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+    remote = client_a.post("/api/gateway/remote-gateways", json={
+        "name": "日志目标 Gateway B", "host": "127.0.0.1", "port": 22, "username": "log-ui",
+        "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3],
+    }).raise_for_status().json()["data"]
+    target, = [item for item in remote["items"] if item["gateway_id"] == gateway_b]
+    connection, = target["remote_gateways"]
+    package = context.artifacts_dir / "log-navigation-plugin.zip"
+    _write_package(package, "1.0.0")
+    for client, gateway_id in zip(network.clients, network.gateway_ids, strict=True):
+        _install(client, gateway_id, package)
+
+        def configure(document: dict[str, object], owner_id: str = gateway_id) -> None:
+            settings = document.setdefault("settings", {}).setdefault("gateway", {})
+            settings.setdefault("plugins", {})["runtime"] = {"entries": [{
+                "package_id": _PACKAGE_ID, "plugin_id": _PLUGIN_ID, "package_version": "1.0.0", "enabled": True,
+            }]}
+            # 双 Gateway 装具只安装本专项包；不继承另一个 Home 的新工作区默认插件。
+            settings["plugins"]["workspace_defaults"] = {"entries": []}
+            if owner_id == gateway_b:
+                settings["permissions"] = {"federation": {"default_effect": "deny", "rules": [
+                    {"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(gateway_a)}
+                    for capability in ("configuration_read", "service_plugin_installation_manage", "service_plugin_runtime_manage", "read", "send")
+                ]}}
+
+        _save_gateway_config(client, gateway_id, configure, f"log-ui-seed-{gateway_id}")
+    slots = [_wait_ready(client, gateway_id, "1.0.0")
+             for client, gateway_id in zip(network.clients, network.gateway_ids, strict=True)]
+    result_path = context.artifacts_dir / "log-navigation-ui.json"
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180",
+        "--", "bun", "tests/integration/clients/web/service_plugin_log_navigation.mjs"]
+    assets = Path(os.environ["BOXTEAM_WEB_ASSETS"])
+    environment = os.environ | {
+        "BOXTEAM_PLUGIN_LOG_UI_FIXTURE": json.dumps({
+            "baseUrl": str(client_a.base_url), "gatewayA": gateway_a, "gatewayB": gateway_b,
+            "workspaceId": network.workspace_id, "remoteName": "日志目标 Gateway B",
+            "connectionId": connection["gateway_connection_id"], "packageId": _PACKAGE_ID, "pluginId": _PLUGIN_ID,
+            "slots": slots, "resultPath": str(result_path), "artifacts": str(context.artifacts_dir),
+        }),
+        "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+    }
+    with chromium_temporary_environment(context.runtime_root_for_node("log-browser") / "chromium-tmp") as temporary:
+        run = subprocess.run(command, cwd=context.project_root, env=environment | temporary,
+            capture_output=True, text=True, timeout=195, check=False)
+    (context.artifacts_dir / "log-browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
+    (context.artifacts_dir / "log-browser.stderr.raw").write_text(run.stderr, encoding="utf-8")
+    (context.artifacts_dir / "log-browser-process.json").write_text(json.dumps({
+        "command": command, "exit_code": run.returncode, "assets": str(assets),
+        "assets_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
+        "gateway_ids": network.gateway_ids, "instances": slots,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert run.returncode == 0, f"真实日志导航验收失败：\n{run.stdout}\n{run.stderr}\n{result_path}"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["phase"] == "complete" and result["pageErrors"] == [] and result["externalRequests"] == []
+    assert result["activeWorkspaceUnchanged"] is True
+    if not result["navigationOnly"]:
+        assert result["detailLog"]["gateway_id"] == result["managementLog"]["gateway_id"] == gateway_b
+        assert result["settingsLog"]["gateway_id"] == gateway_b
+    assert result["location"]["copied_selection"] == result["location"]["query"]
+    assert result["lateLocation"]["old_operation"]["ok"] is False
+    assert result["lateLocation"]["visible_gateway_id"] == gateway_a
 
 
 @pytest.fixture

@@ -6,6 +6,8 @@ import { SearchView } from '../../upstream/src/vs/workbench/contrib/search/brows
 import type { ISearchModel } from '../../upstream/src/vs/workbench/contrib/search/browser/searchTreeModel/searchTreeCommon.js';
 import type { ISearchComplete } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import { SearchWorkspaceContext, scopeFromQuery, type SearchScope } from './scope.js';
+import { errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
 
 /** 保留原视图、全局结果模型和替换服务；只固定其后续查询使用的业务范围。 */
 export class ScopedSearchView extends SearchView {
@@ -35,7 +37,7 @@ export class ScopedSearchView extends SearchView {
     }).catch(error => {
       if (generation !== this.scopeGeneration) return;
       this.scopeError = error;
-      this.updateTitleDescription(t('quickAccess.search.scopeUnavailable', error instanceof Error ? error.message : String(error)));
+      this.updateTitleDescription(failureSummary(t('quickAccess.search.scopeUnavailable', errorSummary(error))));
     });
   }
 
@@ -47,7 +49,7 @@ export class ScopedSearchView extends SearchView {
     void ready.then(() => {
       if (generation !== this.queryGeneration) return;
       if (this.scopeError) {
-        this.searchAndReplaceWidget.searchInput?.showMessage({ content: String(this.scopeError), type: MessageType.ERROR });
+        this.searchAndReplaceWidget.searchInput?.showMessage({ content: errorSummary(this.scopeError), type: MessageType.ERROR });
         return;
       }
       super.triggerQueryChange(options);

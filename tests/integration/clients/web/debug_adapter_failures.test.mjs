@@ -2,6 +2,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test';
 import { PluginDebugAdapter } from '../../../../src/clients/workbench/src/debug/adapter.ts';
 import { gateway } from '../../../../src/clients/workbench/src/agentApi.ts';
 import * as http from '../../../../src/clients/web/src/api/http.ts';
+import { errorDiagnostic } from '../../../../src/clients/web/src/utils/errorMessage.ts';
 
 // 真实 Adapter／错误格式化，仅启动回执、凭据和 WebSocket 事件为显式服务边界。
 const originalSocket = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
@@ -52,7 +53,9 @@ test('握手失败保留精确目标，不捏造 HTTP 状态／request_id，不�
   expect(error.context).toEqual({ source: { component: 'workbench' }, stage: 'websocket_connect', target: {
     gateway_id: 'gateway-B', workspace_id: 'workspace-A', session_id: 'session-A', thread_id: 'thread-A', debugger_registration_id: 'debugger-A',
   } });
-  expect(error.message).toContain('websocket_connect');
+  expect(error.message).not.toContain('websocket_connect');
+  expect(errorDiagnostic(error)).toContain('stage: websocket_connect');
+  expect(errorDiagnostic(error)).toContain('target.gateway_id: gateway-B');
   expect(error.message).not.toContain('private-token');
   expect(error.requestId).toBeUndefined();
   expect(error.status).toBeUndefined();

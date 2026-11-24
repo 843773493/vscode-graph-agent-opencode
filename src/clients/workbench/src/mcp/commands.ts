@@ -11,7 +11,7 @@ import { managementGateway, managementWorkspace, managementTargetDisplayName, se
 import { workspaceContext } from '../workspaceContext.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { addMcpConfiguration } from './addConfiguration.js';
-import { mcpConfigurationErrorMessage } from './configuration.js';
+import { errorMessage, ReportedError } from '../../../web/src/utils/errorMessage.js';
 import { Action2, MenuId, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
@@ -119,7 +119,10 @@ export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, c
     try {
       await addMcpConfiguration(selected, managementTargetDisplayName(selected), quickInput, notifications, assertAccess, controller.signal, configUri, workspace.workspace_id);
     } finally { releaseUser(); releaseContext(); controller.abort(); }
-  } catch (cause) { notifications.error(mcpConfigurationErrorMessage(cause)); }
+  } catch (cause) {
+    notifications.error(cause instanceof Error ? cause : errorMessage(cause));
+    throw new ReportedError(errorMessage(cause), cause);
+  }
 }
 
 /** 原命令只操作明确选中对象；通配启动也冻结本次所选工作区的对象集合。 */
