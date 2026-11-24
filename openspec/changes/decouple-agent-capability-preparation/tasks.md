@@ -35,3 +35,9 @@
 实施验收记录：代码与契约检查见 design 的“实施证据与未通过项”。5.2 已采集完整样本，但暖失败 p95 超预算，保持未完成；不能用目录延迟或局部测试替代。
 
 2026-11-22 用户要求先修复已记录的附带问题，暂不处理点击发送至错误可见的延迟。附带修复及验收见 design 第三轮记录；5.2 保留原预算与未完成状态。
+
+2026-11-24 重新经隔离 Gateway、原生 Workspace 和真实 Workbench 验收，原件在 `out/tests/temp/2026/11/24/capability_latency/artifacts/`，受进程外时间／内存保护的命令及实际退出码见 `validation-receipts.json` 和各轮原始日志；`source-fingerprints.json` 记录 HEAD、Backend 源码和 Workbench 产物 SHA-256。两组完整样本使用相同 Workbench `main.js` 指纹 `e35bc5229b6e...`，请求均有真实 `request_id`；发送样本还保留 `job_id`、`turn_id`，浏览器页面异常为零。
+
+- `run-3/capability-catalog-result.json`：目录 66 项、99,755 字节，冷读 704.1ms；20 个未筛选暖列表 p50/p95/max＝28.6/47.9/54.7ms，20 个暖详情＝25.0/34.2/43.9ms，工具面板 355ms 可操作。满足完整 API 的 500/1500ms、首次 3000ms 及界面 2000ms 预算。
+- `run-4/capability-invalid-result.json`：无效 custom factory 的真实发送点击至新 Turn 错误 DOM，冷样本 1531.6ms；20 个未筛选暖样本 p50/p95/max＝1057.2/1283.8/1587.4ms。冷样本满足 3000ms，但暖 p95 超 500ms、最大值超 1500ms；5.2 保持未完成。
+- `run-5/backend-stages.jsonl` 是独立 1 冷＋5 暖分段诊断，不与完整样本混算；此时并发构建已将 Workbench `main.js` 指纹改为 `56d24d75e722...`。暖发送 HTTP 为 478–786ms，其中 `JobService.start_job` 为 394–654ms；随后 runtime acquire 为 194–319ms，内部 assemble 为 172–252ms，阶段有包含关系不可相加。下一项最有价值的优化是在 Job owner 内细分消息准入与持久队列派发，再按同一真实入口验证；不以工具准备局部耗时替代完整预算，也不在本变更改动其他会话的消息存储或导航。

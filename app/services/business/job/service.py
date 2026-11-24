@@ -858,6 +858,11 @@ class JobService:
         ):
             raise ValueError("预留 Job ID 必须是非空字符串")
 
+        # TODO: 定位并精简真实消息派发中的必要等待；2026-11-24 隔离 Gateway/Workbench
+        # 暖失败样本的 start_job 为 394–654ms，完整点击至错误 DOM p95 为 1283.8ms。
+        # 原件目录：out/tests/temp/2026/11/24/capability_latency/artifacts/，
+        # run-4/capability-invalid-result.json 与 run-5/backend-stages.jsonl；先细分本方法及
+        # _start_job_prepared 的锁、队列发布和持久化耗时，再保持原准入/幂等语义优化。
         async with self.thread_input_admission(session_id, thread_id):
             return await self._start_job_prepared(
                 session_id,
