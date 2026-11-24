@@ -365,6 +365,7 @@ export function useSessionRunActions({
     if (!session) {
       throw new Error("当前没有可压缩上下文的会话");
     }
+    const threadId = currentThreadId ?? session.thread_id;
 
     setState((prev) => ({
       ...prev,
@@ -373,12 +374,11 @@ export function useSessionRunActions({
     }));
 
     try {
-      // TODO: 压缩 API 当前只支持主线程，接通精确 Thread 合同后移除此限制。
-      if (currentThreadId && currentThreadId !== session.thread_id) throw new Error("子线程上下文压缩尚未接入");
       const result = await apiCompactSessionContext(
         apiPort,
         session.session_id,
         currentSessionGatewayWorkspaceId,
+        threadId,
       );
       setState((prev) => {
         const next = {
@@ -407,6 +407,7 @@ export function useSessionRunActions({
               : "上下文未压缩",
           {
             session_id: result.session_id,
+            thread_id: threadId,
             status: result.status,
             before_message_count: result.before_message_count,
             effective_message_count_before: result.effective_message_count_before,
@@ -444,6 +445,7 @@ export function useSessionRunActions({
     contentView,
     currentSession,
     currentThreadId,
+    currentSessionCacheKey,
     currentSessionGatewayWorkspaceId,
     refreshAgentStateSnapshot,
     setState,

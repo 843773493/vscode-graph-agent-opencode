@@ -26,9 +26,13 @@ class ContextCompactionService:
         self._session_service = session_service
         self._summarization_compactor = summarization_compactor
 
-    async def request_compaction(self, session_id: str) -> SessionCompactResultDTO:
+    async def request_compaction(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> SessionCompactResultDTO:
         owner = MutationIntentOwner(
-            session_id, await self._session_service.resolve_main_thread(session_id),
+            session_id,
+            await self._session_service.resolve_main_thread(session_id) if thread_id is None
+            else await self._session_service.resolve_thread(session_id, thread_id),
         )
         return await self._job_service.run_thread_idle_operation(
             session_id, owner.thread_id, lambda: self._request_when_idle(owner),

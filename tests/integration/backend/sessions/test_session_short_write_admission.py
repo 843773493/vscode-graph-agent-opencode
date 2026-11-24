@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -14,10 +14,18 @@ import httpx
 import pytest
 from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
-from langchain_core.messages import AnyMessage, HumanMessage
-from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langgraph.checkpoint.base import Checkpoint, CheckpointTuple, empty_checkpoint
 
-from app.agents.manual_compaction_checkpoint import ManualCompactionSnapshot
+from app.agents.graph_binding import (
+    DEEP_AGENT_CAPABILITY_PROFILE,
+    DEEP_AGENT_GRAPH_BINDING,
+    compute_capability_profile_hash,
+)
+from app.agents.manual_compaction_checkpoint import (
+    ManualCompactionCheckpointAdapter,
+    ManualCompactionSnapshot,
+)
 from app.api.deps import (
     get_context_compaction_service,
     get_goal_service,
@@ -26,10 +34,17 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.api.sessions import router as sessions_router
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import bind_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.runtime.context_compaction import ContextCompactionCheck
+from app.runtime.context_compaction import (
+    AgentSummarizationCompactor,
+    ContextCompactionCheck,
+)
 from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
@@ -56,14 +71,21 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.services.orchestration.owner_thread_creation_factory import (
+    OwnerThreadCreationFactory,
+)
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from tests.harness.python.run_context import TestRunContext
 from tests.support.node_debug_dependencies import (
     node_debug_binding_snapshot,
     node_debug_file_paths,
 )
+from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
@@ -174,6 +196,7 @@ class _RuntimeProbe:
 @dataclass(slots=True)
 class _Harness:
     workspace: CatalogWorkspaceContext
+    api: FastAPI
     client: httpx.AsyncClient
     session_service: SessionService
     job_service: JobService
@@ -193,6 +216,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         template_items=(),
     )
     workspace = build_catalog_workspace(run_context.output_root)
+    bind_workspace_id(workspace.workspace_root, workspace.workspace_id)
     session_service = SessionService(
         config_service=ConfigService(),
         trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
@@ -247,6 +271,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         try:
             yield _Harness(
                 workspace=workspace,
+                api=api,
                 client=client,
                 session_service=session_service,
                 job_service=job_service,
@@ -259,6 +284,195 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         finally:
             task_state.close()
             workspace.close()
+
+
+@pytest.fixture
+async def readonly_compaction(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[ConfigService, RolloutCheckpointSaver]]:
+    document = {
+        "config_version": 4,
+        "extends": "builtin:workspace",
+        "settings": {"workspace": {
+            "llm": {"providers": {
+                "primary": {"config_ref": "#/profiles/selected"},
+                "backup_1": {"config_ref": "#/profiles/unavailable"},
+            }},
+            "agents": {"default": {"model": {
+                "primary": {"provider_id": "primary", "model_id": "default"},
+                "fallbacks": [{"provider_id": "backup_1", "model_id": "default"}],
+            }}},
+        }},
+        "profiles": {
+            "selected": {"extends": "builtin:workspace#/profiles/provider.primary", "settings": {
+                "model_options": {
+                    "api_key": "secret:sec_11111111111111111111111111111111",
+                    "api_mode": {"model_info": {"max_input_tokens": 1000}},
+                },
+            }},
+            "unavailable": {"extends": "builtin:workspace#/profiles/provider.backup_1", "settings": {
+                "model_options": {"api_key": "${BOXTEAM_TEST_COMPACTION_UNRESOLVED_KEY}"},
+            }},
+        },
+    }
+    source = harness.workspace.workspace_root / ".boxteam/workspace.jsonc"
+    source.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.delenv("BOXTEAM_TEST_COMPACTION_UNRESOLVED_KEY", raising=False)
+
+    async def reject_credentials(*_args, **_kwargs):
+        pytest.fail("手动压缩只读检查不得解析所选模型或fallback凭据")
+
+    def reject_model(*_args, **_kwargs):
+        pytest.fail("手动压缩只读检查不得构造模型或Agent Graph")
+
+    monkeypatch.setattr(ConfigService, "prepare_llm_credentials", reject_credentials)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", reject_model)
+    monkeypatch.setattr("app.runtime.agent_runtime.prepare_agent_model", reject_model)
+    config = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=harness.workspace.workspace_root)
+    with RolloutCheckpointSaver(harness.workspace.sessions_root) as saver:
+        service = ContextCompactionService(
+            checkpoint_adapter=ManualCompactionCheckpointAdapter(checkpointer=saver),
+            job_service=harness.job_service,
+            session_service=harness.session_service,
+            summarization_compactor=AgentSummarizationCompactor(config_service=config),
+        )
+        harness.api.dependency_overrides[get_context_compaction_service] = lambda: service
+        try:
+            yield config, saver
+        finally:
+            await config.close()
+
+
+@pytest.mark.parametrize("target", ["skipped", "scheduled", "child"])
+async def test_compact_http_uses_readonly_configuration_and_only_schedules(
+    harness: _Harness, readonly_compaction, frozen_provider_prepare, target: str,
+) -> None:
+    """真实HTTP路由、配置、规划与checkpoint只登记请求，不生成或应用摘要。"""
+    config, saver = readonly_compaction
+    runtime = config.get_agent_runtime_config("default")
+    assert len(runtime["models"]) == 2
+    assert runtime["models"][0]["api_mode"]["model_info"]["max_input_tokens"] == 1000
+    session_id = await harness.workspace.create_session("只读手动压缩")
+    main_thread = harness.workspace.resolver.main_thread_id(session_id)
+    thread_id = main_thread
+    if target == "child":
+        profile = {**DEEP_AGENT_CAPABILITY_PROFILE, "thread_role": "child"}
+        factory = OwnerThreadCreationFactory(
+            sessions_root=harness.workspace.sessions_root, workspace_id=harness.workspace.workspace_id,
+            path_resolver=harness.workspace.resolver,
+        )
+        with factory.for_owner_session(session_id) as creation:
+            child = await creation.create(
+                idempotency_key="readonly-compaction-child", session_id=session_id, thread_id=None,
+                delegation_id=None, initial_state="idle", artifact_manifest={}, session_metadata={
+                    "graph_binding": {**asdict(DEEP_AGENT_GRAPH_BINDING),
+                        "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                    "capability_profile": profile, "task_seed": None, "task_reference": None,
+                },
+            )
+        thread_id = child.child_thread_id
+        assert thread_id != main_thread
+    completed_history = target != "skipped"
+    # 仅准备已有历史；压缩请求本身必须经过下面的真实HTTP入口。
+    for seeded_thread in dict.fromkeys((main_thread, thread_id)):
+        seeded_owner = MutationIntentOwner(session_id, seeded_thread)
+        user = HumanMessage(id=f"preview-user-{seeded_thread}", content="保留原始历史与约束。" * 100)
+        accepted = saver.accept_turn(
+            session_id, thread_id=seeded_thread, accepted_ingress_id=user.id,
+            acceptance_idempotency_key=f"preview-acceptance-{seeded_thread}", job_id=f"preview-job-{seeded_thread}",
+            admission_idempotency_key=f"preview-admission-{seeded_thread}", payload=user.content,
+            root_item_id=f"item-{user.id}",
+        )
+        admission = saver.execution_admission(
+            session_id, thread_id=seeded_thread, execution_id=str(accepted["initial_execution_id"]),
+        )
+        user = saver.accepted_user_message(
+            session_id, thread_id=seeded_thread, job_id=admission.job_id, message_id=user.id,
+        )
+        messages: list[AnyMessage] = [user]
+        with (
+            session_thread_owner_scope(seeded_owner, langgraph_thread_id=seeded_thread),
+            execution_admission_scope(admission, langgraph_thread_id=seeded_thread),
+        ):
+            if completed_history and seeded_thread == thread_id:
+                snapshot = frozen_provider_prepare(saver, key=f"preview-history-{seeded_thread}")
+                messages.append(AIMessage(
+                    id=f"preview-answer-{seeded_thread}", content="历史回答已完成。",
+                    response_metadata={"model_call_id": snapshot.model_call_id, "phase": "final_answer"},
+                ))
+                commit_fixture_output(saver, messages=messages)
+            checkpoint = empty_checkpoint()
+            checkpoint["channel_values"] = {"messages": messages}
+            checkpoint["channel_versions"] = {"messages": "1"}
+            checkpoint["updated_channels"] = ["messages"]
+            saver.put(build_checkpoint_config(seeded_thread), checkpoint,
+                      {"source": "preview-history-fixture", "step": 1, "writes": {}}, {"messages": "1"})
+    owner = MutationIntentOwner(session_id, thread_id)
+    before_items = saver.read_canonical_items(session_id, thread_id)
+    adapter = ManualCompactionCheckpointAdapter(checkpointer=saver)
+    before = await adapter.load_snapshot(owner)
+    assert before is not None and before.summarization_event is None
+    main_owner = MutationIntentOwner(session_id, main_thread)
+    main_before = await adapter.load_snapshot(main_owner)
+    main_items = saver.read_canonical_items(session_id, main_thread)
+
+    response = await harness.client.post(
+        f"/api/v1/sessions/{session_id}/compact",
+        params={"thread_id": thread_id} if target == "child" else {},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["request_id"] == "test-request-id"
+    data = response.json()["data"]
+    expected_count = 2 if completed_history else 1
+    assert data["session_id"] == session_id
+    assert data["status"] == ("scheduled" if completed_history else "skipped")
+    assert {field: data[field] for field in (
+        "before_message_count", "effective_message_count_before", "effective_message_count_after",
+        "summarized_message_count", "retained_message_count",
+    )} == {
+        "before_message_count": expected_count,
+        "effective_message_count_before": expected_count,
+        "effective_message_count_after": expected_count,
+        "summarized_message_count": 0,
+        "retained_message_count": expected_count,
+    }
+    after = await adapter.load_snapshot(owner)
+    assert after is not None and after.summarization_event is None
+    assert after.raw_messages == before.raw_messages
+    assert saver.read_canonical_items(session_id, thread_id) == before_items
+    assert not any(item.semantic_kind == "compaction_summary" for item in before_items)
+    assert after.channel_values.get("_force_cache_compaction", False) is completed_history
+    assert (after.source_tuple.config != before.source_tuple.config) is completed_history
+    if target == "child":
+        assert await adapter.load_snapshot(main_owner) == main_before
+        assert saver.read_canonical_items(session_id, main_thread) == main_items
+    # 原harness探针不参与这条路径，不能用它们的固定cutoff冒充真实规划。
+    assert harness.compactor.check_calls == 0
+    assert harness.checkpoint_adapter.load_calls == harness.checkpoint_adapter.save_calls == 0
+
+
+async def test_compact_http_rejects_foreign_and_invalid_thread_before_checkpoint_access(
+    harness: _Harness, readonly_compaction, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = await harness.workspace.create_session("目标会话")
+    other_session = await harness.workspace.create_session("外来会话")
+    foreign_thread = harness.workspace.resolver.main_thread_id(other_session)
+
+    async def reject_checkpoint(*_args, **_kwargs):
+        pytest.fail("非法Thread必须在任何checkpoint读取或写入前被拒绝")
+
+    monkeypatch.setattr(ManualCompactionCheckpointAdapter, "load_snapshot", reject_checkpoint)
+    monkeypatch.setattr(ManualCompactionCheckpointAdapter, "request_compaction", reject_checkpoint)
+    foreign = await harness.client.post(
+        f"/api/v1/sessions/{session_id}/compact", params={"thread_id": foreign_thread},
+    )
+    invalid = await harness.client.post(
+        f"/api/v1/sessions/{session_id}/compact", params={"thread_id": "../invalid-thread"},
+    )
+    assert foreign.status_code == 404, foreign.text
+    assert invalid.status_code == 422, invalid.text
+    assert invalid.json()["detail"][0]["loc"] == ["query", "thread_id"]
 
 
 @pytest.mark.asyncio

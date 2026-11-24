@@ -1115,14 +1115,14 @@ async def update_session(
 )
 async def compact_session_context(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    context_compaction_service: ContextCompactionService = Depends(
-        get_context_compaction_service
-    ),
+    *,
+    thread_id: CanonicalThreadId | None = None,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    context_compaction_service: Annotated[ContextCompactionService, Depends(get_context_compaction_service)],
 ):
     try:
-        result = await context_compaction_service.request_compaction(session_id=session_id)
+        result = await context_compaction_service.request_compaction(session_id=session_id, thread_id=thread_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:

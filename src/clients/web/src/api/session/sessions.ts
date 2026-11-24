@@ -262,11 +262,13 @@ export async function compactSessionContext(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  threadId?: string,
 ): Promise<SessionCompactResult> {
+  const query = threadId === undefined ? "" : `?${new URLSearchParams({ thread_id: threadId })}`;
   return unwrapApiData(
     await requestJson<APIResponse<SessionCompactResult>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/compact${query}`,
       { method: "POST", headers: workspaceHeader(workspaceId) },
     ),
   );
