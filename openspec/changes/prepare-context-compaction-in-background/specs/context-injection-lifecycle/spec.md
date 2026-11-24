@@ -74,4 +74,3 @@
 #### Scenario: 摘要期间Skill发生变化
 - **WHEN** 摘要只读取冻结Skill revision A，主运行当前发布revision B
 - **THEN** 摘要只使用其已保存A引用，不刷新主CSM或把B标记已消费；候选采用按实际依赖判定，下一主请求正常处理B
-

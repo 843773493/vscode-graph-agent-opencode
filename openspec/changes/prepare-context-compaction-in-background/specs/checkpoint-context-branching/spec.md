@@ -106,4 +106,3 @@ active view selection SHALL 是当前有效上下文的唯一权威；Graph mess
 #### Scenario: replay穿过多个压缩边界
 - **WHEN** 原Thread多次压缩后从合法历史anchor执行replay
 - **THEN** 使用该anchor解析得到的权威来源view及原协议闭合事实，不按最新event的旧数组索引截另一份历史；新分支和当前查询均沿原owner恢复
-
