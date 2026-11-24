@@ -22,7 +22,9 @@ from app.agents.skill_context import (
     install_frozen_skill_catalog,
 )
 from app.core.execution_admission_context import require_current_execution_admission
+from app.core.failures import mark_public_failure
 from app.core.model_request_context import SummaryCandidateScope
+from app.domain.context_compaction import ContextCapacityError, ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
@@ -64,6 +66,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundary,
+)
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    ProviderContextRequest,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle import (
     seal_registered_plan,
@@ -166,6 +171,7 @@ def prepare_registered_context(
     sealed_context: ContextPlanRegistration | None = None,
     allow_provider_reprojection: bool = False,
     source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
+    model_capacity: ModelCapacity | None = None,
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -207,6 +213,7 @@ def prepare_registered_context(
             session_id, thread_id, plan_creation_idempotency_key=plan_creation_idempotency_key,
             checkpoint_ns=checkpoint_ns,
         )
+        reused_sealed = registered is not None
         if registered is not None:
             if (registered.session_id, registered.thread_id, registered.draft.plan_id,
                 registered.draft.plan_creation_idempotency_key, registered.plan_state) != (
@@ -550,6 +557,7 @@ def prepare_registered_context(
                     "target_format": target_format, "loss": (), "omitted_ref_identities": frozenset(omitted),
                 },
                 wire_profile=wire_profile, wire_params=wire_params,
+                model_capacity=model_capacity,
                 request_input_hash=input_hash,
                 request_only_content=bodies, context_preparation=preparation,
                 activation_snapshot=activation_snapshot,
@@ -568,6 +576,10 @@ def prepare_registered_context(
         ))
         if canonical_json_bytes(snapshot.request_hash_preimage) != canonical_json_bytes(preimage):
             raise ValueError("source-mismatch: 最终 Provider request 与封存 request hash preimage 不一致")
+        if reused_sealed and model_capacity is not None and model_capacity.capacity_known:
+            budget = ProviderContextRequest(projection, preimage).budget(model_capacity)
+            if budget.exceeds_capacity:
+                raise mark_public_failure(ContextCapacityError(budget))
         pending = {
             "assembly_id": snapshot.assembly_id, "execution_id": snapshot.execution_id,
             "snapshot": snapshot, "plan": plan, "messages": projection.messages,

@@ -11,6 +11,7 @@ from app.agents.provider_api_mode import ProviderApiMode, parse_provider_api_mod
 from app.agents.providers.request_parameters import (
     normalize_request_headers,
     normalize_request_parameters,
+    output_token_reservation,
     validate_configured_parameters,
     validate_extra_body,
 )
@@ -41,17 +42,10 @@ def provider_model_capacity(
         if request_parameters is None
         else normalize_request_parameters(request_parameters, protocol=mode.protocol)
     )
-    output_fields = (
-        ("max_output_tokens",) if mode.protocol == "responses"
-        else ("max_tokens", "max_completion_tokens")
-    )
-    configured = [parameters[field] for field in output_fields if parameters.get(field) is not None]
-    if len(configured) > 1:
-        raise ValueError("输出预留存在多个非空长度参数，不能确定本次真实输出预算")
     return ModelCapacity(
         max_input_tokens=mode.model_info.max_input_tokens,
         context_window=mode.model_info.context_window,
-        output_reservation_tokens=configured[0] if configured else None,
+        output_reservation_tokens=output_token_reservation(parameters, protocol=mode.protocol),
     )
 
 

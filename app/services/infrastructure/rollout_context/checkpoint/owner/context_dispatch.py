@@ -17,6 +17,7 @@ from app.core.model_request_context import SummaryCandidateScope
 from app.core.resource_uri import parse_attachment_uri, parse_message_attachment_uri
 from app.core.sqlite_state import utc_now_text
 from app.core.trace_middleware import get_current_gateway_id
+from app.domain.context_compaction import ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
@@ -262,6 +263,7 @@ class ContextDispatchOwnerMixin:
         sealed_context: ContextPlanRegistration | None = None,
         allow_provider_reprojection: bool = False,
         source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
+        model_capacity: ModelCapacity | None = None,
     ) -> ContextDispatchPayload:
         """最终过滤后显式注册；稳定请求 key 必须由 execution owner 提供。
 
@@ -295,6 +297,7 @@ class ContextDispatchOwnerMixin:
                 sealed_context=sealed_context,
                 allow_provider_reprojection=allow_provider_reprojection,
                 source_message_grouping=source_message_grouping,
+                model_capacity=model_capacity,
             )
             snapshot = prepared["snapshot"]
             if not isinstance(snapshot, ContextAssemblySnapshot):

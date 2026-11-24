@@ -23,6 +23,12 @@ from app.core.model_request_context import (
     summary_candidate_scope,
 )
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.domain.context_compaction import (
+    ContextBudget,
+    ContextCapacityError,
+    InputTokenEstimate,
+    ModelCapacity,
+)
 
 
 def _model() -> BaseChatModel:
@@ -40,6 +46,38 @@ def _candidate(
         model=model,
         capabilities=frozenset({"text_input", *capabilities}),
     )
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_local_capacity_rejection_tries_next_model_without_provider_failure_event(monkeypatch, mode):
+    primary, backup = _model(), _model()
+    middleware = CapabilityRoutingMiddleware([_candidate("primary", primary), _candidate("backup", backup)])
+    calls = []
+    error = ContextCapacityError(ContextBudget(
+        capacity=ModelCapacity(context_window=100),
+        estimate=InputTokenEstimate(known_tokens=200, source="test"),
+    ))
+
+    def event(*args, **kwargs):
+        raise AssertionError("本地容量拒绝不得发布上游失败")
+
+    monkeypatch.setattr("app.agents.model_capability_routing.dispatch_custom_event", event)
+    monkeypatch.setattr("app.agents.model_capability_routing.adispatch_custom_event", event)
+
+    def handle(request):
+        calls.append(request.model)
+        if request.model is primary:
+            raise error
+        return ModelResponse(result=[AIMessage(content="正常发送")])
+
+    async def ahandle(request):
+        return handle(request)
+
+    request = ModelRequest(model=primary, messages=[HumanMessage(content="保留")])
+    response = middleware.wrap_model_call(request, handle) if mode == "sync" else await middleware.awrap_model_call(request, ahandle)
+    assert response.result[0].content == "正常发送"
+    assert calls == [primary, backup]
+    assert not is_provider_failure(error)
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

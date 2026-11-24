@@ -54,3 +54,70 @@ class ModelCapacity(BaseModel):
     def cannot_fit(self) -> bool:
         budget = self.input_budget_tokens
         return budget is not None and budget <= 0
+
+
+class InputTokenEstimate(BaseModel):
+    """完整计数和已知部分分开；未知媒体不能被当作零开销。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    known_tokens: int = Field(ge=0, strict=True)
+    unknown_parts: tuple[str, ...] = ()
+    source: str
+
+    @property
+    def input_tokens(self) -> int | None:
+        return None if self.unknown_parts else self.known_tokens
+
+    @property
+    def quality(self) -> Literal["estimated", "unknown"]:
+        return "unknown" if self.unknown_parts else "estimated"
+
+
+class ContextBudget(BaseModel):
+    """只读准备证据；策略判断不修改 view，也不声明上游精确适配。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capacity: ModelCapacity
+    estimate: InputTokenEstimate
+
+    @property
+    def exceeds_capacity(self) -> bool:
+        budget = self.capacity.input_budget_tokens
+        return budget is not None and (budget <= 0 or self.estimate.known_tokens > budget)
+
+    @property
+    def input_fraction(self) -> float | None:
+        budget = self.capacity.input_budget_tokens
+        tokens = self.estimate.input_tokens
+        return tokens / budget if tokens is not None and budget is not None and budget > 0 else None
+
+    def decision(
+        self, policy: CompactionPolicy, *, auto_summarize: bool,
+    ) -> Literal["unknown", "continue", "prepare", "compact", "cannot_fit"]:
+        budget = self.capacity.input_budget_tokens
+        if self.exceeds_capacity:
+            return "compact" if auto_summarize and budget > 0 else "cannot_fit"
+        fraction = self.input_fraction
+        if fraction is None:
+            return "unknown"
+        if auto_summarize:
+            if fraction >= policy.apply_fraction:
+                return "compact"
+            if fraction >= policy.prepare_fraction:
+                return "prepare"
+        return "continue"
+
+
+class ContextCapacityError(ValueError):
+    """本地容量拒绝，不能归因于上游服务失败。"""
+
+    def __init__(self, budget: ContextBudget) -> None:
+        self.budget = budget
+        super().__init__(
+            "context-capacity-exceeded: 完整 Provider 输入超出本次模型预算; "
+            f"input_estimate={budget.estimate.known_tokens}, "
+            f"input_budget={budget.capacity.input_budget_tokens}, "
+            f"count_quality={budget.estimate.quality}"
+        )

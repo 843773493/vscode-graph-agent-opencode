@@ -23,6 +23,7 @@ from app.agents.provider_capabilities import (
 from app.core.failures import failure_detail, is_provider_failure
 from app.core.model_request_context import current_summary_candidate
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.domain.context_compaction import ContextCapacityError
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,11 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             token = _SELECTED_PROVIDER.set(candidate.model)
             try:
                 response = handler(request.override(model=candidate.model))
+            except ContextCapacityError as error:
+                last_error = error
+                logger.info("模型候选容量不足: provider_id=%s model=%s: %s",
+                            candidate.provider_id, candidate.model_id, error)
+                continue
             except ScopeCancelledError:
                 # 父 turn 的用户中断、Job 总超时和内部执行取消都已经是
                 # 明确的执行边界，不能被 fallback 当成 provider 失败再次发起请求。
@@ -188,6 +194,11 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             token = _SELECTED_PROVIDER.set(candidate.model)
             try:
                 response = await handler(request.override(model=candidate.model))
+            except ContextCapacityError as error:
+                last_error = error
+                logger.info("模型候选容量不足: provider_id=%s model=%s: %s",
+                            candidate.provider_id, candidate.model_id, error)
+                continue
             except ScopeCancelledError:
                 # 取消不是 provider 能力降级；保留原始 reason 交给 Job/stream
                 # 状态机分类，避免 backup_4 覆盖用户选择或把 Job 继续拖成 running。

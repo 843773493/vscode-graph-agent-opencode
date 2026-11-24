@@ -37,6 +37,16 @@ def normalize_request_parameters(
     return result
 
 
+def output_token_reservation(parameters: Mapping[str, object], *, protocol: ApiProtocol) -> int | None:
+    """输出预算只取真实请求中的非空长度，别名与冲突沿同一参数合同处理。"""
+    normalized = normalize_request_parameters(parameters, protocol=protocol)
+    fields = ("max_output_tokens",) if protocol == "responses" else ("max_tokens", "max_completion_tokens")
+    configured = [normalized[field] for field in fields if normalized.get(field) is not None]
+    if len(configured) > 1:
+        raise ValueError("输出预留存在多个非空长度参数，不能确定本次真实输出预算")
+    return configured[0] if configured else None
+
+
 def merge_request_parameters(
     *layers: Mapping[str, Any], protocol: ApiProtocol,
 ) -> dict[str, Any]:

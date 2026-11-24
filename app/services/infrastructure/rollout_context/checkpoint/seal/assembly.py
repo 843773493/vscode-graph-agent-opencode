@@ -12,6 +12,8 @@ from app.agents.providers.wire_finalize import (
     ChatWireProfile,
     ResponsesWireProfile,
 )
+from app.core.failures import mark_public_failure
+from app.domain.context_compaction import ContextCapacityError, ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hash.request_hash import _context_request_hash_preimage
@@ -84,6 +86,7 @@ def _project_wire_snapshot(
     wire_params: Mapping[str, object],
     checkpoint_ns: str,
     activation: ResourceActivationSnapshotRef | None,
+    model_capacity: ModelCapacity | None,
 ) -> tuple[ContextAssemblySnapshot, ContextProjectionResult]:
     """在 authority 读取已关闭后生成本次 wire；不重读 canonical 正文。"""
     bodies = owner._request_content_for_plan(
@@ -95,6 +98,11 @@ def _project_wire_snapshot(
         wire_profile=wire_profile, wire_params=wire_params,
     )
     preimage = request.wire_request
+    if model_capacity is not None and model_capacity.capacity_known:
+        budget = request.budget(model_capacity)
+        if budget.exceeds_capacity:
+            # TODO: 统一准备接入完整候选后，在此之前模拟并采用；不能先封存超限请求。
+            raise mark_public_failure(ContextCapacityError(budget))
     # snapshot 来自本次 composer，只替换 wire；冷读仍独立验证所有 hash。
     snapshot = replace(
         snapshot, request_hash_preimage=preimage,
@@ -152,6 +160,7 @@ def seal_snapshot(
     activation_binding: ActivationSealBinding | None = None,
     prepared_details: tuple[PreparedDetail, ...] = (),
     validated_predecessors: _ValidatedPredecessors | None = None,
+    model_capacity: ModelCapacity | None = None,
 ) -> tuple[ContextAssemblySealReceipt, ContextProjectionResult | None]:
     source_refs = tuple(
         entry.ref for entry in snapshot.selection
@@ -180,6 +189,7 @@ def seal_snapshot(
             snapshot, projection = _project_wire_snapshot(
                 owner, snapshot, sealed_plan, items, prepared_details, wire[0], wire[1], checkpoint_ns,
                 activation_binding.snapshot if activation_binding is not None else None,
+                model_capacity,
             )
         except BaseException as error:
             record_failed_seal(

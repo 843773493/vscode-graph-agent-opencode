@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage
 
 from app.abstractions.session_context import SessionContextHistoryProjection
 from app.agents.providers.wire_finalize import ResponsesWireProfile
+from app.domain.context_compaction import ContextBudget, ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.hashing import (
@@ -86,6 +87,19 @@ class ProviderContextRequest:
 
     projection: ContextProjectionResult
     wire_request: dict[str, object]
+
+    def budget(self, capacity: ModelCapacity) -> ContextBudget:
+        """计数只消费本次最终正文；调用方提供与模型实例同快照的容量。"""
+        from app.agents.providers.request_budget import estimate_wire_input
+        from app.agents.providers.request_parameters import output_token_reservation
+
+        capacity = ModelCapacity(
+            max_input_tokens=capacity.max_input_tokens, context_window=capacity.context_window,
+            output_reservation_tokens=output_token_reservation(
+                self.wire_request, protocol="responses" if "input" in self.wire_request else "chat_completions",
+            ),
+        )
+        return ContextBudget(capacity=capacity, estimate=estimate_wire_input(self.wire_request))
 
 
 class ContextProjectionOwnerMixin:

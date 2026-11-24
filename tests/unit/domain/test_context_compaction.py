@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.context_compaction import ModelCapacity
+from app.domain.context_compaction import (
+    CompactionPolicy,
+    ContextBudget,
+    InputTokenEstimate,
+    ModelCapacity,
+)
 
 
 @pytest.mark.parametrize("input_limit,window,output_tokens,expected", [
@@ -39,3 +44,29 @@ def test_capacity_is_frozen():
     capacity = ModelCapacity(context_window=128000)
     with pytest.raises(ValueError, match="frozen"):
         capacity.context_window = 200000
+
+
+@pytest.mark.parametrize("tokens,automatic,expected", [
+    (69, True, "continue"), (70, True, "prepare"), (85, True, "compact"),
+    (90, False, "continue"), (101, False, "cannot_fit"), (101, True, "compact"),
+])
+def test_budget_policy_does_not_turn_automatic_threshold_into_hard_capacity(tokens, automatic, expected):
+    budget = ContextBudget(capacity=ModelCapacity(context_window=100),
+                           estimate=InputTokenEstimate(known_tokens=tokens, source="test"))
+    assert budget.decision(CompactionPolicy(), auto_summarize=automatic) == expected
+    assert budget.capacity.output_reservation_known is False
+
+
+def test_unknown_media_does_not_gain_fraction_from_known_capacity():
+    budget = ContextBudget(capacity=ModelCapacity(context_window=100), estimate=InputTokenEstimate(
+        known_tokens=80, unknown_parts=("input_audio",), source="test",
+    ))
+    assert budget.input_fraction is None
+    assert budget.decision(CompactionPolicy(), auto_summarize=True) == "unknown"
+    assert budget.model_copy(update={"capacity": ModelCapacity()}).input_fraction is None
+
+
+def test_negative_output_room_cannot_be_repaired_by_summarization():
+    budget = ContextBudget(capacity=ModelCapacity(context_window=100, output_reservation_tokens=101),
+                           estimate=InputTokenEstimate(known_tokens=0, source="test"))
+    assert budget.decision(CompactionPolicy(), auto_summarize=True) == "cannot_fit"

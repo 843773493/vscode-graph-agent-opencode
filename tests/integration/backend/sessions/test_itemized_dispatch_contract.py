@@ -75,6 +75,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
+from app.runtime.network_proxy import ProxyRoutes
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
@@ -1741,6 +1742,7 @@ def _build_toolset_dispatch_case(
     model = model_type(
         model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
         custom_llm_provider="openai", streaming=True, max_retries=0,
+        proxy_routes=ProxyRoutes(()),
     )
     bridge = dispatch_bridge(
         session_id=session, instruction="ToolSet sealed owner 合同",

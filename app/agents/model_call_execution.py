@@ -34,6 +34,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.model_request_context import current_summary_candidate
 from app.core.phase_observer import observe_phase, observe_phase_sync
+from app.domain.context_compaction import ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -225,6 +226,7 @@ class _ProviderPreparation:
     bound_model: Runnable[Any, AIMessage]
     response_format: ResponseFormat[Any] | None
     allow_provider_reprojection: bool
+    capacity: ModelCapacity
 
 
 class _PreparedModelCall(TypedDict):
@@ -363,6 +365,10 @@ class ModelCallExecution:
             include_structured_output=include_structured_output,
             bound_model=bound_model, response_format=response_format,
             allow_provider_reprojection=allow_provider_reprojection,
+            capacity=ModelCapacity(
+                max_input_tokens=(request.model.profile or {}).get("max_input_tokens"),
+                context_window=(request.model.profile or {}).get("context_window"),
+            ),
         )
 
     def _frozen_preparation(
@@ -538,6 +544,7 @@ class ModelCallExecution:
             extension_policy_resolver=self._extension_policy_resolver,
             provider_version=context.provider_version,
             wire_profile=context.wire_profile, wire_params=context.wire_params,
+            model_capacity=context.capacity,
             target_format=context.target_format, checkpoint_ns=checkpoint_ns,
             model_call_id=sealed_model_call_id,
             callback_model_call_id=callback_id,

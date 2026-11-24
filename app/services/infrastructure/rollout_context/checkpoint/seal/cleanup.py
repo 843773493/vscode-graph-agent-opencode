@@ -28,6 +28,7 @@ def record_failed_seal(
         "plan-order-integrity",
         "plan-hash-mismatch",
         "request-hash-mismatch",
+        "context-capacity-exceeded",
     }:
         error_code = "seal-storage-failure"
     owner._storage.assemblies.record_context_plan_seal_failure(

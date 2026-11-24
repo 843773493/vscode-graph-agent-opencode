@@ -160,6 +160,7 @@ def record_seal_failure(
         "plan-hash-mismatch",
         "request-hash-mismatch",
         "seal-storage-failure",
+        "context-capacity-exceeded",
     }:
         raise ValueError("seal failure error_code 不属于允许的控制分类")
     failure_id = f"seal-failure:{create_uuid_hex()}"

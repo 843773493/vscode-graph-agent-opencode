@@ -12,6 +12,7 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
 )
 from app.core.identifier import create_uuid_hex
+from app.domain.context_compaction import ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -65,6 +66,7 @@ def seal_registered_plan(
     context_preparation: ContextSealPreparation | None = None,
     registered: ContextPlanRegistration | None = None,
     validated_predecessors: _ValidatedPredecessors | None = None,
+    model_capacity: ModelCapacity | None = None,
 ) -> ContextPlanSealResult:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     if (wire_profile is None) != (wire_params is None):
@@ -209,6 +211,7 @@ def seal_registered_plan(
             seal_input_hash=input_hash,
             checkpoint_ns=checkpoint_ns,
             wire=wire_projection,
+            model_capacity=model_capacity,
             detail=None, required_detail=False, sensitive_detail=False,
             activation_binding=activation_binding,
             prepared_details=prepared_details,
