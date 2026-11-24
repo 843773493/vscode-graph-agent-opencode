@@ -7,10 +7,11 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from app.core.config_sources import read_stable_config_file, verify_stable_config_file
 from app.services.infrastructure.config.source_uri import config_file_uri
-from configs.inheritance import ConfigGraph, NodeLocation
+from configs.inheritance import ConfigGraph, NodeLocation, config_document_schema
 from configs.inheritance.values import thaw
 from configs.runtime import merge_json_objects
 
@@ -112,6 +113,43 @@ def write_config(tmp_path: Path):
         path.write_text("// 真实 JSONC 注释\n" + json.dumps(document), encoding="utf-8")
         return path
     return write
+
+
+@pytest.mark.parametrize("domain,version", [("gateway", 6), ("workspace", 4)])
+def test_document_schema_validates_only_local_definitions_without_inserting_defaults(domain, version):
+    schema = config_document_schema(domain=domain, version=version)
+    Draft202012Validator.check_schema(schema)
+    document = {
+        "config_version": version, "extends": f"builtin:{domain}", "settings": {"network": {}},
+        "profiles": {"unused": {"extends": "missing.jsonc", "settings": {}}},
+    }
+    Draft202012Validator(schema).validate(document)
+    # 保存 schema 与解析器共用的本地信封，不要求片段独立满足完整业务配置，
+    # 不自动填 proxy、bypass 等默认值，也不为未选中 profile 读取父文件。
+    assert document["settings"] == {"network": {}}
+    assert schema["$defs"]["networkSettings"]["properties"]["proxy"]["x-merge"] == "replace"
+
+
+@pytest.mark.parametrize("proxy", [
+    {}, {"url": "http://proxy.invalid"}, {"mode": "explicit"},
+    {"mode": "direct", "url": "http://proxy.invalid"},
+    {"mode": "environment", "bypass": ["localhost"]},
+    {"mode": "explicit", "url": "http://proxy.invalid", "auth": {"username": "user", "password": "plaintext"}},
+])
+def test_document_rejects_malformed_proxy_even_in_unselected_profile(proxy, graph_factory, write_config):
+    entry = write_config("entry.jsonc", {}, profiles={
+        "unused": {"settings": {"network": {"proxy": proxy}}},
+    })
+    with pytest.raises(ValueError, match="配置节点校验失败"):
+        graph_factory(entry).resolve_scope()
+
+
+def test_local_empty_network_keeps_parent_policy_without_inserting_defaults(graph_factory, write_config):
+    write_config("parent.jsonc", {"network": {"proxy": {"mode": "direct"}}})
+    entry = write_config("entry.jsonc", {"network": {}}, parent="parent.jsonc")
+    result = graph_factory(entry).resolve_scope()
+    assert thaw(result.settings) == {"network": {"proxy": {"mode": "direct"}}}
+    assert result.origins.locate(("network", "proxy", "mode")).source_uri.endswith("parent_jsonc")
 
 
 def test_only_explicit_chain_participates_and_metadata_is_not_merged(write_config, graph_factory):

@@ -21,6 +21,7 @@ from app.core.config_sources import (
 from app.core.resource_uri import parse_resource_uri
 
 from .merge import SettingsMerger
+from .schema import config_document_schema
 from .values import ConfigValue, FieldOrigin, NodeLocation, ResolvedNode, freeze
 
 # 解析结果不可变；校验直接接受只读映射和元组，不为每个模型物化整个工作区。
@@ -72,26 +73,9 @@ class ConfigGraph:
         # Workspace 共同选项可不完整；消费者最终选项使用 owner 提供的完整 schema。
         _Validator.check_schema(options_schema)
         self._options_validator = _Validator(options_schema, registry=Registry())
-        namespaces = ["network", domain] + (["model_options"] if domain == "workspace" else [])
-        partial_settings = {
-            "type": "object", "additionalProperties": False,
-            "properties": {key: {"type": "object"} for key in namespaces},
-        }
-        profile_settings = {
-            "type": "object", "additionalProperties": False,
-            "properties": {key: {"type": "object"} for key in namespaces if key != domain},
-        }
-        node = {"type": "object", "additionalProperties": False, "required": ["settings"], "properties": {
-            "extends": {"type": "string", "minLength": 1}, "settings": profile_settings,
-        }}
-        self._document_validator = _Validator({
-            "type": "object", "additionalProperties": False, "required": ["config_version", "settings"],
-            "properties": {
-                "$schema": {"type": "string"}, "config_version": {"type": "integer", "const": version},
-                "extends": {"type": "string", "minLength": 1}, "settings": partial_settings,
-                "profiles": {"type": "object", "propertyNames": {"minLength": 1}, "additionalProperties": node},
-            },
-        })
+        self._document_validator = _Validator(
+            config_document_schema(domain=domain, version=version), registry=Registry(),
+        )
 
     @property
     def dependencies(self) -> Mapping[Path, StableConfigFile]:
