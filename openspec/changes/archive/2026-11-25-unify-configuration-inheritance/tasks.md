@@ -51,7 +51,7 @@ Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来�
 - [x] 7.1 根据第1组核实来源决定受支持迁移；有真实合同／额外授权才在原 owner 编写有版本 JSONC 转换与备份恢复，预检报告旧模型双重优先级转换中可能固定的值及取舍。无发布基线不猜测开发数据版本、不改真实 Home，保留已有历史迁移及其支持链。
 - [x] 7.2 更新受影响现有配置技能、AGENTS、说明和测试注释，替换固定合并顺序／两种继承的旧约定；检索清理悬空读写、旧字段 schema、客户端另算来源和不再使用的特殊缓存，不保留双读双写。
 - [x] 7.3 通过实际 Gateway／Workspace／Workbench 产品入口验证配置导入、保存、热加载、冲突和原会话执行；新 Home、真实目录与 ZIP／发行包中的默认来源均可定位。发布平台按实际改动补相应检查，不以单个 helper 成功代替验收。
-- [ ] 7.4 复用性能装具验证20个 Provider×10个 Model、共享祖先和六编辑器并存的配置 inspection／模型设置：至少20次暖读 p95≤500ms、单次≤1500ms，可操作模型设置每次≤2000ms，首次未缓存读取≤3000ms；父文件零暖读，不能以 loading 作为终点。记录原始样本、p95／max、数据规模、request_id、源码指纹、命令／退出码及未验证范围。
+- [x] 7.4 复用性能装具验证20个 Provider×10个 Model、共享祖先和六编辑器并存的配置 inspection／模型设置：至少20次暖读 p95≤500ms、单次≤1500ms，可操作模型设置每次≤2000ms，首次未缓存读取≤3000ms；父文件零暖读，不能以 loading 作为终点。记录原始样本、p95／max、数据规模、request_id、源码指纹、命令／退出码及未验证范围。
 - [x] 7.5 所有测试加进程外超时与内存保护，产物沿既有隔离目录；失败先归因，不默认全仓长跑或无变化重跑。复审是否能减少包装、分支、重复状态、深拷贝、重复校验和额外持久化，删除无明确必要性的新增机制，再做相关定向回归。
 - [x] 7.6 增补显式 live 集成用例：从实际验收 Home 的 .env 读取标准代理配置（本机 10809），通过真实 UI／Gateway／Workspace 新建 PTY，无临时 export 或 --proxy 访问外部 HTTPS；Provider 填 base_url、协议、密钥后发现上游模型，再模型测试与正式会话请求，覆盖流式／非流式。复用已有装具，外部调用少量按需运行，不写死测试端口／凭据，不在离线套件暗发付费请求。
 - [x] 7.7 为7.6保留脱敏代理连接／CONNECT 关联证据与 request_id，证明外部各路径命中代理、内部控制直连；隔离故障用例验证原期限和无直连 fallback。登记实际 Home／源码／命令／退出码及未验收阶段，根种子更新、TCP 探测或 mock 成功均不能代替产品验收。
@@ -82,3 +82,7 @@ Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来�
 2026-11-25 用户已批准调整地址展示合同：只读 inspection 展示配置 endpoint 与协议，SDK 请求地址移至显式模型测试 observation，真实调用继续由 SDK 发送。此前等待轻量 SDK API 的冷读 TODO 由此合同调整替代；本轮迁齐协议、配置投影、Settings 和实际 HTTP 验证，不增加配置格式版本或地址缓存。7.4 仍待新合同下完整冷／暖产品性能验收后勾选，既有失败原件保留。
 
 地址展示纵向切片已迁齐：inspection 删除 request_url（proto 编号5及名称 reserved），从原 options 展示 endpoint／协议；模型测试在原 worker／期限内、创建模型前解析 SDK 地址并写入 observation。配置解析18项、真实SDK／HTTP与来源预检11项、组件／API 54项均通过；实际wire地址与测试start／result中的SDK地址一致。Web 全源码 tsgo、Workbench 219份变换源码类型检查、完整79扩展构建、协议生成及两份OpenAPI一致性通过，相关产品源码无漂移。Buf格式／lint通过；对固定HEAD的breaking检查仅获准删除字段这一项，原件见 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/inspection-contract18/`。宽范围32项既有Ruff诊断与HEAD逐项相同，未扩大修复；本次其余生产文件静态检查通过。最小充分复审保留原解析、probe与transport owner，无新地址规则、缓存、配置版本或持久状态。必要的extra_body正式参数冲突校验仍可能加载SDK；OAuth只读测试移除无关extra_body后验证连接展示不加载SDK，不据此宣称所有配置都不加载。完整冷／暖性能及真实模型UI验收继续进行，7.4尚未勾选。
+
+7.4 最终性能验收通过（2026-11-25）：原20 Provider×10 Model、共享祖先、六编辑器负载，1次冷inspection 139.3ms，20次未筛暖读p95／max=128.4／156.8ms，20轮可操作Settings最大1244.4ms，暖请求窗口父文件读取0；另用独立新进程／Home验证首次完整Settings 1636.8ms、冷inspection 139.6ms。两门exit 0，源码指纹无变化，不预热、不筛样、不改预算；原件为 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/20261125T011620-248d6214/`、`20261125T011740-e59fd221/`，命令、退出码和前后指纹见同任务 `artifacts/inspection-contract18/latency-{full05,first-settings06}-receipt.json`。此前3766.4ms／5155.6ms失败证据继续保留，不能据单轮结果承诺所有环境相同收益。
+
+最终真实模型UI回归通过：`model-ui08` 1 passed／131.25s／exit 0，三协议 SDK request_url 与真实上游路径一致，原26总请求／18模型请求和CAS／取消／导入断言保持，pageErrors为空；正式原件在 `out/tests/integration/clients/web/test_model_connection_probe/runs/run-95e610b8a2f3/nodes/node-20d5dd782416/artifacts/`。最终产品源码、四份受影响测试和Workbench资产指纹无漂移，测试代理自有进程与owner已清理。完整收据 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/inspection-contract18/cold-sdk-review-delivery.json`。本变更31/31已完成，主规范原有3项能力块与delta逐块相同，另同步新增统一配置继承和网络代理两项主规范后归档；未同步dev／release／main或重启8027。
