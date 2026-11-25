@@ -14,6 +14,7 @@ from app.agents.middleware_prompts import (
     RUNTIME_WORKSPACE_SCOPE_FIELD,
 )
 from app.agents.providers import wire_finalize
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
@@ -83,15 +84,18 @@ def _restore_and_send(saver, session, thread, model):
     reference = cold.issue_context_dispatch_ref(
         restored, attempt_key=restored.plan_id, callback_model_call_id=restored.model_call_id,
     )
-    payload = cold.read_context_for_dispatch(reference)
+    responses = reference.target_format == "responses"
+    payload = cold.read_context_for_dispatch(
+        reference, wire_profile=responses_wire_profile(model) if responses else chat_wire_profile(model),
+        wire_params=responses_wire_params(model, kwargs={}) if responses else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+    )
     messages, tools, losses = payload["messages"], payload["tools"], payload["losses"]
     assert losses == ()
-    native = payload.get("native_projection")
     admission = cold.execution_admission(session, thread_id=thread, execution_id=restored.execution_id)
     with (
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
-        sealed_assembly_dispatch_scope(reference, restored, resource_refs=payload["resource_refs"], native_projection=native),
+        sealed_assembly_dispatch_scope(reference, restored, resource_refs=payload["resource_refs"], provider_params=payload["provider_params"]),
     ):
         next(model.bind_tools(tools).stream(messages))
 

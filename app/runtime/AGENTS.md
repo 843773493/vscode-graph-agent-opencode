@@ -58,6 +58,8 @@ app/runtime/
 
 - 依赖提供协议优先于直接 import 具体实现；新增外部依赖时同步在协议与 `app/container.py` 装配处补齐，并移除旧的兼容分支（发现 `hasattr` / TODO 兼容分支应尽快消除）。
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
+- `anthropic_messages.py` 只把最终 Messages 正文交给 LiteLLM 的传输与响应解析，复用已有连接池、认证、工具名还原和错误分类；不得重新转换历史或维护另一份请求正文。
+- `image_preparation.py` 在调用时加载 Pillow，统一图片源字节／像素和预览编码预算；附件与 `read_file` 复用它，UI 可请求较小缩略图。原件、资源版本与模型能力判断仍归原 owner，不在此建立缓存或持久化状态。
 - Windows文件系统的pywin32依赖只在`windows_fs.py`函数执行时加载；目录句柄与ACL错误保留公共文件系统的OSError子类及Windows错误码，不回退到外部权限命令或吞掉查询失败。
 - `native_file_stat.py`只补 Python 标准库未暴露的 Linux 创建时间；ctypes 在调用时加载，statx 错误保留原 errno，明确沿固定 libuv 的已核实传统 stat 分支，不构造另一套文件 I/O 层。
 - 日志的文件身份由 `boxteam_plugin_sdk.logging` 从实际描述符读取；Windows 使用原生卷序列号与文件索引，POSIX 使用描述符身份，与 Node 的 bigint fstat 表示一致。

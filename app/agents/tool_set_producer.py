@@ -50,9 +50,11 @@ class RegisteredToolSetProducer:
         self._last_snapshot: tuple[tuple[str, bool, bool], ToolSetSnapshot] | None = None
         schemas = []
         for tool in tools:
+            # 先准备共享公开模型，SDK 转换直接复用工具原 memo。
+            parameters = export_model_tool_json_schema(tool) if isinstance(tool, BaseTool) else None
             schema = convert_to_openai_tool(tool)
-            if isinstance(tool, BaseTool) and schema.get("type") == "function":
-                schema["function"]["parameters"] = export_model_tool_json_schema(tool)
+            if parameters is not None and schema.get("type") == "function":
+                schema["function"]["parameters"] = parameters
             schemas.append(schema)
         schemas_json = canonical_json_bytes(schemas)
         # 解析模板不对外暴露；ToolSetSnapshot 会把输入复制到独立的规范 JSON。

@@ -20,6 +20,7 @@ from app.agents.providers.wire_finalize import (
     responses_wire_params,
     responses_wire_profile,
 )
+from app.runtime.network_proxy import ProxyRoutes
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -99,7 +100,7 @@ def _model(provider: ProviderKind, endpoint: str):
             api_base=endpoint,
             custom_llm_provider="openai",
             streaming=True,
-        )
+            proxy_routes=ProxyRoutes(()),        )
     return BoxteamOpenAIResponsesModel(
         model="gpt-5.6-luna",
         api_key="test-key",
@@ -107,6 +108,7 @@ def _model(provider: ProviderKind, endpoint: str):
         custom_llm_provider="openai",
         responses_store=False,
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -217,15 +219,6 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                 assembly_id=snapshot.assembly_id,
             ) == snapshot
             assert snapshot.model_call_id == model_call_id
-            native_projection = (
-                saver.project_context_plan_to_native(
-                    args.session_id,
-                    thread_id,
-                    prepared["plan"],
-                )
-                if is_responses
-                else None
-            )
             await runtime.start_model(model_call_id, args.provider)
             _observe_phase("model_started")
 
@@ -235,7 +228,8 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                     execution_admission_scope(admission, langgraph_thread_id=thread_id),
                     sealed_assembly_dispatch_scope(
                         prepared["dispatch_ref"], snapshot,
-                        resource_refs=prepared["resource_refs"], native_projection=native_projection,
+                        resource_refs=prepared["resource_refs"],
+                        provider_params=prepared["provider_params"],
                     ),
                 ):
                     async for _chunk in model.astream(

@@ -4,6 +4,7 @@ import base64
 import json
 import time
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -12,6 +13,7 @@ import pytest
 from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemState
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
+from PIL import Image
 from pydantic import ValidationError
 
 from app.agents.workspace_backend import build_workspace_backend
@@ -421,7 +423,9 @@ async def attachment_tools(configure_filesystem_tools, tmp_path: Path, session_b
     session_id = "ses_019b781159d47374805bc4427d081a14"
     session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
     store = AttachmentBlobStore(tmp_path)
-    data = b"\x89PNG\r\n\x1a\nattachment"
+    with BytesIO() as buffer:
+        Image.new("RGB", (80, 60), "red").save(buffer, format="PNG")
+        data = buffer.getvalue()
     ref = (await store.persist_inline(session_id, [AttachmentRef(file_id="inline:abc.png", name="abc.png", content_type="image/png", data_url="data:image/png;base64," + base64.b64encode(data).decode())], thread_id=store._path_resolver.main_thread_id(session_id), message_id="msg_" + create_uuid_hex(namespace="message")))[0]
 
     def read(file_id, max_bytes):
@@ -456,7 +460,7 @@ async def test_read_file_reads_logical_attachment_with_catalog_mime(attachment_t
     assert isinstance(attachment_result, ToolMessage)
     assert attachment_result.status == "success"
     assert any(
-        isinstance(block, dict) and block.get("type") == "image" and block.get("mime_type") == "image/png"
+        isinstance(block, dict) and block.get("type") == "image" and block.get("mime_type") == "image/webp"
         for block in attachment_result.content
     )
 

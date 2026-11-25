@@ -22,6 +22,7 @@ from app.agents.providers.wire_finalize import (
     responses_wire_params,
     responses_wire_profile,
 )
+from app.runtime.network_proxy import ProxyRoutes
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -371,7 +372,7 @@ def _model(provider: ProviderKind, *, api_base: str | None = None):
             api_base=api_base or "https://opencode.ai/zen/v1",
             custom_llm_provider="openai",
             streaming=True,
-        )
+            proxy_routes=ProxyRoutes(()),        )
     return BoxteamOpenAIResponsesModel(
         model="gpt-5.6-luna",
         api_key="test-key",
@@ -379,6 +380,7 @@ def _model(provider: ProviderKind, *, api_base: str | None = None):
         custom_llm_provider="openai",
         responses_store=False,
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -500,17 +502,8 @@ async def _prepare_sealed_provider_request(
             assembly_id=snapshot.assembly_id,
         ) == snapshot
         assert snapshot.model_call_id == model_call_id
-        native_projection = (
-            saver.project_context_plan_to_native(
-                session_id,
-                thread_id,
-                prepared["plan"],
-            )
-            if is_responses
-            else None
-        )
         await runtime.start_model(model_call_id, provider)
-    return prepared, snapshot, model_call_id, native_projection
+    return prepared, snapshot, model_call_id
 
 
 def _protocol(provider: ProviderKind) -> Literal[
@@ -624,7 +617,6 @@ async def _consume_model(
     thread_id: str,
     model_call_id: str,
     snapshot: ContextAssemblySnapshot,
-    native_projection: Mapping[str, object] | None,
 ) -> None:
     with (
         session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
@@ -632,7 +624,7 @@ async def _consume_model(
         sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], snapshot,
             resource_refs=prepared["resource_refs"],
-            native_projection=native_projection,
+            provider_params=prepared["provider_params"],
         ),
     ):
         async for _chunk in model.astream(
@@ -699,7 +691,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     model = None
     try:
         model = _model(provider)
-        prepared, snapshot, model_call_id, native_projection = (
+        prepared, snapshot, model_call_id = (
             await _prepare_sealed_provider_request(
                 saver=saver,
                 runtime=runtime,
@@ -725,7 +717,6 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
                 thread_id=thread_id,
                 model_call_id=model_call_id,
                 snapshot=snapshot,
-                native_projection=native_projection,
             )
         )
         target_event = await _read_until(
@@ -984,15 +975,6 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
                 assembly_id=sealed_snapshot.assembly_id,
             ) == sealed_snapshot
             assert sealed_snapshot.model_call_id == model_call_id
-            native_projection = (
-                saver.project_context_plan_to_native(
-                    session_id,
-                    thread_id,
-                    prepared["plan"],
-                )
-                if is_responses
-                else None
-            )
             await runtime.start_model(model_call_id, provider)
 
             async def consume_prepared_request() -> None:
@@ -1008,7 +990,7 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
                     sealed_assembly_dispatch_scope(
                         prepared["dispatch_ref"], sealed_snapshot,
                         resource_refs=prepared["resource_refs"],
-                        native_projection=native_projection,
+                        provider_params=prepared["provider_params"],
                     ),
                 ):
                     async for _chunk in model.astream(
@@ -1170,7 +1152,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     model = None
     try:
         model = _model(provider, api_base=server.endpoint)
-        prepared, snapshot, model_call_id, native_projection = (
+        prepared, snapshot, model_call_id = (
             await _prepare_sealed_provider_request(
                 saver=saver,
                 runtime=runtime,
@@ -1196,7 +1178,6 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
                 thread_id=thread_id,
                 model_call_id=model_call_id,
                 snapshot=snapshot,
-                native_projection=native_projection,
             )
         )
         target_event = await _read_until(

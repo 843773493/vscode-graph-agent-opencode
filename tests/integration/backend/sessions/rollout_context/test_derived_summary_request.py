@@ -13,6 +13,7 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage
 
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
 from app.agents.model_call_execution import (
     DerivedModelRequest,
     DerivedModelResult,
@@ -246,7 +247,11 @@ async def test_chunk_has_its_own_execution_and_keeps_parent_sources_and_open_too
         ready = cold._storage.compactions.read_result(session, thread, candidate.candidate_id)
         assert ready.result_ref == detail_ref
         assert ready.text == result.response.result[0].text
-        assert cold.read_context_for_dispatch(result.dispatch_ref)["snapshot"] == snapshot
+        assert cold.read_context_for_dispatch(
+            result.dispatch_ref,
+            wire_profile=responses_wire_profile(summary_model[0]) if result.dispatch_ref.target_format == "responses" else chat_wire_profile(summary_model[0]),
+            wire_params=responses_wire_params(summary_model[0], kwargs={}) if result.dispatch_ref.target_format == "responses" else chat_wire_params(summary_model[0], stop=None, kwargs={}, stream=True),
+        )["snapshot"] == snapshot
 
 
 @pytest.mark.asyncio
@@ -276,7 +281,11 @@ async def test_merge_uses_real_result_and_rejects_forged_text_after_cold_read(pr
     owner.discard(session, thread, candidate.candidate_id, reason="merged")
     saver.gc_context_plan_details(session, thread, expired_before=datetime.max.replace(tzinfo=UTC))
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        payload = cold.read_context_for_dispatch(merged.dispatch_ref)
+        payload = cold.read_context_for_dispatch(
+            merged.dispatch_ref,
+            wire_profile=responses_wire_profile(summary_model[0]) if merged.dispatch_ref.target_format == "responses" else chat_wire_profile(summary_model[0]),
+            wire_params=responses_wire_params(summary_model[0], kwargs={}) if merged.dispatch_ref.target_format == "responses" else chat_wire_params(summary_model[0], stop=None, kwargs={}, stream=True),
+        )
         assert cold._storage.compactions.read_result(session, thread, merge_candidate.candidate_id).text == ready.text
         assert any(ready.text in message.content and message.response_metadata.get("compaction_summary")
                    for message in payload["messages"])

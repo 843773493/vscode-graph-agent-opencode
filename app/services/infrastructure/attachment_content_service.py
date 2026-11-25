@@ -13,10 +13,7 @@ import mimetypes
 import shutil
 import subprocess
 import tempfile
-from io import BytesIO
 from pathlib import Path
-
-from PIL import Image, ImageOps
 
 from app.core.atomic_fs import native_io_path
 from app.core.path_utils import get_workspace_root
@@ -26,6 +23,7 @@ from app.core.resource_uri import (
 )
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
+from app.runtime.image_preparation import MODEL_IMAGE_MAX_EDGE, prepare_image
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -42,7 +40,6 @@ VIDEO_FRAME_MIME_TYPE = "image/jpeg"
 VIDEO_FRAME_COUNT = 6
 VIDEO_FRAME_FPS = 1
 VIDEO_FRAME_WIDTH = 512
-ATTACHMENT_PREVIEW_MAX_EDGE = 512
 # 视频抽帧必须在有界时间内返回：该路径在事件循环线程内同步执行（runner 在
 # 协程中直接调用 UserContentBuilder.build），无界子进程会连同任务取消一起卡死。
 VIDEO_FRAME_TIMEOUT_SECONDS = 30
@@ -170,32 +167,18 @@ class AttachmentContentService:
             preview = self._attachment_store.read_thumbnail(
                 session_id,
                 attachment.file_id,
-                max_edge=ATTACHMENT_PREVIEW_MAX_EDGE,
+                max_edge=MODEL_IMAGE_MAX_EDGE,
             )
-            preview_type = preview.content_type
-            preview_data = preview.data
         else:
             file_path, uri = self._workspace_file(attachment.file_id)
             try:
                 image_stream = native_io_path(file_path).open("rb")
             except OSError as error:
                 raise OSError(error.errno, error.strerror, uri) from error
-            with image_stream, Image.open(image_stream) as image:
-                normalized = ImageOps.exif_transpose(image)
-                normalized.thumbnail(
-                    (ATTACHMENT_PREVIEW_MAX_EDGE, ATTACHMENT_PREVIEW_MAX_EDGE),
-                    Image.Resampling.LANCZOS,
-                )
-                if normalized.mode not in {"RGB", "RGBA"}:
-                    normalized = normalized.convert(
-                        "RGBA" if "A" in normalized.mode else "RGB"
-                    )
-                output = BytesIO()
-                normalized.save(output, format="WEBP", quality=78, method=4)
-            preview_type = "image/webp"
-            preview_data = output.getvalue()
-        encoded = base64.b64encode(preview_data).decode("ascii")
-        return f"data:{preview_type};base64,{encoded}"
+            with image_stream:
+                preview = prepare_image(image_stream)
+        encoded = base64.b64encode(preview.data).decode("ascii")
+        return f"data:{preview.content_type};base64,{encoded}"
 
     def video_preview_data_urls(self, attachment: AttachmentRef) -> list[str]:
         if _is_managed_attachment(attachment.file_id):

@@ -47,6 +47,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
     PreparedProviderContext,
     ProviderPreparationConflict,
+    _require_sealed_wire,
     freeze_registered_context,
     prepared_context_plan_id,
     seal_prepared_context,
@@ -87,6 +88,7 @@ class ContextDispatchPayload(TypedDict):
     losses: tuple[str, ...]
     resource_refs: tuple[SessionContextResourceDTO, ...]
     native_projection: NotRequired[dict[str, object]]
+    provider_params: dict[str, object]
 
 
 class ContextDispatchOwnerMixin:
@@ -112,6 +114,7 @@ class ContextDispatchOwnerMixin:
             target_format: str | None = None,
             collect_capability_losses: bool = False,
             include_request_only: bool = True, include_native: bool = False,
+            wire_profile: ChatWireProfile | ResponsesWireProfile | None = None,
         ) -> ContextProjectionResult: ...
 
     def issue_context_dispatch_ref(
@@ -124,7 +127,10 @@ class ContextDispatchOwnerMixin:
             attempt_key=attempt_key, callback_model_call_id=callback_model_call_id,
         )
 
-    def read_context_for_dispatch(self, reference: SealedContextDispatchRef) -> ContextDispatchPayload:
+    def read_context_for_dispatch(
+        self, reference: SealedContextDispatchRef, *,
+        wire_profile: ChatWireProfile | ResponsesWireProfile, wire_params: Mapping[str, object],
+    ) -> ContextDispatchPayload:
         """冷恢复只读精确 assembly；不访问 CSM、实时 ToolSet 或最新 view。"""
         if not isinstance(reference, SealedContextDispatchRef):
             raise TypeError("sealed-assembly binding violation: 缺少 typed dispatch reference")
@@ -138,13 +144,16 @@ class ContextDispatchOwnerMixin:
                 include_runtime_notices=True, include_summaries=True,
                 collect_capability_losses=True,
                 include_native=reference.target_format == "responses",
+                wire_profile=wire_profile,
             )
             snapshot = projection.assembly
+            _require_sealed_wire(snapshot, projection, wire_profile=wire_profile, wire_params=wire_params)
         result: ContextDispatchPayload = {"snapshot": snapshot, "dispatch_ref": reference,
                   "assembly_id": snapshot.assembly_id, "plan": projection.plan,
                   "execution_id": snapshot.execution_id,
                   "messages": projection.messages, "tools": projection.tools,
-                  "losses": projection.losses, "resource_refs": projection.resource_refs}
+                  "losses": projection.losses, "resource_refs": projection.resource_refs,
+                  "provider_params": {**wire_params, **({"tools": projection.tools} if projection.tools else {})}}
         if projection.native is not None:
             result["native_projection"] = projection.native
         return result

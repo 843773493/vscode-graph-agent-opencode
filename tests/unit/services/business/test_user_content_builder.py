@@ -97,8 +97,9 @@ def test_user_content_builder_converts_workspace_image_attachment(
     from PIL import Image
 
     with Image.open(BytesIO(preview_bytes)) as preview:
-        assert max(preview.size) == 512
+        assert preview.size == (1600, 900)
     assert len(preview_bytes) < len(original_image_bytes)
+    assert image_path.read_bytes() == original_image_bytes
 
 
 def test_user_content_builder_rejects_unpersisted_inline_image(

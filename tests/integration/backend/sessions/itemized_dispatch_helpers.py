@@ -26,6 +26,7 @@ from app.agents.model_call_graph import create_model_call_agent
 from app.agents.policy import ToolPolicyResolver
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.runtime.network_proxy import ProxyRoutes
 from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
@@ -301,6 +302,22 @@ def chat_reply_frames(
     )
 
 
+def anthropic_reply_frames(ordinal: int, *, text: str = "native-http-result", tool_name: str | None = None) -> tuple[StreamFrame, ...]:
+    events = [
+        {"type": "message_start", "message": {"id": f"msg-{ordinal}", "type": "message", "role": "assistant", "model": "claude-test", "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    ]
+    if tool_name is not None:
+        events[1]["content_block"] = {"type": "tool_use", "id": f"call-{ordinal}", "name": tool_name, "input": {}}
+        events[2]["delta"] = {"type": "input_json_delta", "partial_json": '{"path":"README.md"}'}
+        events[4]["delta"]["stop_reason"] = "tool_use"
+    return tuple(StreamFrame(kind="done" if event["type"] == "message_stop" else "data", encoding="json", payload=event, event=event["type"]) for event in events)
+
+
 @pytest.fixture
 def native_http_server(
     request: pytest.FixtureRequest,
@@ -327,8 +344,8 @@ def native_http_server(
                 self.send_error(504, "native contract response gate timeout")
                 return
             if (
-                self.path not in {"/v1/responses", "/v1/chat/completions"}
-                or self.headers.get("Authorization") != f"Bearer {state.api_key}"
+                self.path not in {"/v1/responses", "/v1/chat/completions", "/v1/messages"}
+                or (self.headers.get("x-api-key") != state.api_key if self.path == "/v1/messages" else self.headers.get("Authorization") != f"Bearer {state.api_key}")
             ):
                 self.send_error(400, "native contract endpoint/auth mismatch")
                 return
@@ -342,7 +359,18 @@ def native_http_server(
                 self.end_headers()
                 self.wfile.write(response)
                 return
-            if self.path == "/v1/responses":
+            if self.path == "/v1/messages" and not body.get("stream"):
+                content = {"type": "tool_use", "id": f"call-{ordinal}", "name": state.output_tool_name, "input": {"path": "README.md"}} if state.output_tool_name else {"type": "text", "text": state.response_text}
+                response = json.dumps({"id": f"msg-{ordinal}", "type": "message", "role": "assistant", "model": "claude-test", "content": [content], "stop_reason": "tool_use" if state.output_tool_name else "end_turn", "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 1}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            if self.path == "/v1/messages":
+                frames, protocol = anthropic_reply_frames(ordinal, text=state.response_text, tool_name=state.output_tool_name), "anthropic_messages_sse"
+            elif self.path == "/v1/responses":
                 frames = responses_reply_frames(
                     ordinal, call_tool=(state.call_tool or state.output_tool_name is not None or state.responses_failure == "partial_tool") and ordinal == 1,
                     text=state.response_text, tool_name=state.output_tool_name or "inspect_file",
@@ -422,6 +450,7 @@ async def invoke_provider_dispatch(
         custom_llm_provider="openai",
         streaming=True,
         max_retries=0,
+        proxy_routes=ProxyRoutes(()),
     )
     thread = saver._storage.storage.main_thread_id(session_id)
     manager = ContextSourceManager(

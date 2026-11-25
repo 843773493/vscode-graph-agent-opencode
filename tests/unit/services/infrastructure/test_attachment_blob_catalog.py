@@ -939,6 +939,11 @@ async def test_read_thumbnail_generates_bounded_cached_webp(
     with Image.open(BytesIO(thumbnail.data)) as image:
         assert max(image.size) == 512
     assert store.read_thumbnail(SESSION_A, stored.file_id).data == thumbnail.data
+    model_preview = AttachmentContentService(workspace_root=tmp_path, attachment_store=store).image_preview_data_url(stored)
+    with Image.open(BytesIO(base64.b64decode(model_preview.split(",", 1)[1]))) as image:
+        assert image.size == (1600, 900)
+    assert store.read(SESSION_A, stored.file_id).data == buffer.getvalue()
+    assert store.read_thumbnail(SESSION_A, stored.file_id).data == thumbnail.data
     store.close()
 
 
@@ -959,7 +964,7 @@ async def test_read_thumbnail_reports_corrupt_image_as_value_error(
 
 
 @pytest.mark.asyncio
-async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnostics(
+async def test_preview_source_io_error_keeps_uri_and_errno_in_generated_diagnostics(
     tmp_path, session_bundle_factory, monkeypatch,
 ) -> None:
     import errno
@@ -975,7 +980,7 @@ async def test_preview_cache_io_error_keeps_uri_and_errno_in_generated_diagnosti
     original_open = Path.open
 
     def denied_preview_open(target, mode="r", *args, **kwargs):
-        if target.parts[-2:] == ("preview", "512.webp") and mode == "xb":
+        if target.parts[-2:] == ("original", "content") and mode == "rb":
             raise PermissionError(errno.EACCES, "Permission denied", str(target))
         return original_open(target, mode, *args, **kwargs)
 

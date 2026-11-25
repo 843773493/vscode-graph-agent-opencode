@@ -81,7 +81,7 @@ from app.agents.providers.wire_finalize import (
 from app.agents.sealed_assembly_dispatch import (
     ProviderInvocationPurpose,
     read_sealed_assembly_dispatch,
-    validate_sealed_assembly_dispatch,
+    read_sealed_provider_request,
 )
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
@@ -325,38 +325,16 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             raise error
         await run_manager.on_llm_end(LLMResult(generations=[[generation]]))
 
-    def _validate_completion_dispatch(self, payload: Mapping[str, Any]) -> None:
-        """校验最终调用参数；非 Agent 豁免只能来自构建时的显式用途。"""
-        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
-        if binding is None:
-            return
-        messages = payload.get("messages")
-        if not isinstance(messages, list):
-            raise TypeError("source-mismatch: Chat 发送缺少 finalized messages")
-        params = wire_request_params(
-            self, {key: value for key, value in payload.items() if key not in {"messages", "tools"}},
-        )
-        wire_request = finalize_chat_wire(
-            messages=messages, tools=payload.get("tools"), params=params,
-            custom_llm_provider=self.custom_llm_provider,
-        )
-        validate_sealed_assembly_dispatch(
-            invocation_purpose=self.invocation_purpose,
-            profile=chat_wire_profile(self),
-            wire_request=wire_request,
-        )
-
     def completion_with_retry(
         self,
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
-        self._validate_completion_dispatch(kwargs)
         prepare_model_request()
         client = self._provider_http_client(is_async=False)
         binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         record_upstream_request(
-            request=kwargs,
+            request=kwargs.get("_anthropic_request", kwargs),
             model=self.model_name or self.model,
             provider=self.custom_llm_provider,
             api_base=self.api_base,
@@ -368,6 +346,11 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         # LangChain 已消费构造时冻结的 max_retries；SDK 不再叠加一层重试。
         kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
+            if self.custom_llm_provider == "anthropic":
+                from app.runtime.anthropic_messages import complete_anthropic_messages
+
+                body = kwargs.pop("_anthropic_request")
+                return complete_anthropic_messages(body, params=kwargs, client=client, asynchronous=False)
             return super().completion_with_retry(run_manager=run_manager, **kwargs)
         except ScopeCancelledError:
             raise
@@ -381,12 +364,11 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
-        self._validate_completion_dispatch(kwargs)
         prepare_model_request()
         client = self._provider_http_client(is_async=True)
         binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         record_upstream_request(
-            request=kwargs,
+            request=kwargs.get("_anthropic_request", kwargs),
             model=self.model_name or self.model,
             provider=self.custom_llm_provider,
             api_base=self.api_base,
@@ -397,6 +379,11 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         kwargs.setdefault("client", client)
         kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
+            if self.custom_llm_provider == "anthropic":
+                from app.runtime.anthropic_messages import complete_anthropic_messages
+
+                body = kwargs.pop("_anthropic_request")
+                return await complete_anthropic_messages(body, params=kwargs, client=client, asynchronous=True)
             return await super().acompletion_with_retry(
                 run_manager=run_manager, **kwargs
             )
@@ -454,13 +441,28 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
 
         `stream` 必须与真实入口一致，非流式请求不得被共享转换改写成流式。
         """
-        return (
-            finalize_chat_messages(messages, profile=chat_wire_profile(self)),
-            chat_send_params(
-                self, stop=stop, kwargs=kwargs,
-                stream=stream,
-            ),
+        params = chat_send_params(
+            self, stop=stop, kwargs=kwargs,
+            stream=stream,
         )
+        profile = chat_wire_profile(self)
+        sealed = read_sealed_provider_request(
+            invocation_purpose=self.invocation_purpose, profile=profile,
+            params=wire_request_params(self, params),
+        )
+        if self.custom_llm_provider == "anthropic":
+            if sealed is None:
+                sealed = finalize_chat_wire(
+                    messages=finalize_chat_messages(messages, profile=profile),
+                    tools=params.get("tools"),
+                    params=wire_request_params(self, {key: value for key, value in params.items() if key != "tools"}),
+                    custom_llm_provider="anthropic",
+                )
+            # Native body 与 SDK 响应解码参数一起交给原生发送入口，不再走 Chat 转换。
+            params["_anthropic_request"] = sealed
+        if sealed is not None:
+            return cast(list[dict[str, Any]], sealed["messages"]), params
+        return finalize_chat_messages(messages, profile=profile), params
 
     def _delta_reasoning(self, delta: Mapping[str, Any]) -> str:
         for key in ("reasoning_content", "reasoning"):

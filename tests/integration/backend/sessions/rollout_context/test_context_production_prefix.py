@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -1034,7 +1033,7 @@ def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
     )
 
 
-def test_summary_prepare_does_not_read_unrelated_parent_detail(production_context, frozen_summary_prepare):
+def test_summary_prepare_does_not_read_unrelated_parent_detail(frozen_provider_wire, production_context, frozen_summary_prepare):
     saver, session, thread, _connection, manager, prepare = production_context
     previous = prepare("summary-damaged-base")
     snapshot = saver.get_context_assembly(session, thread, assembly_id=previous["assembly_id"])
@@ -1046,9 +1045,17 @@ def test_summary_prepare_does_not_read_unrelated_parent_detail(production_contex
     items = saver.read_canonical_items(session, thread)
     result = frozen_summary_prepare(saver, session, thread, key="summary-damaged-candidate", items=items)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        assert cold.read_context_for_dispatch(result["dispatch_ref"])["snapshot"] == result["snapshot"]
+        assert cold.read_context_for_dispatch(
+            result["dispatch_ref"],
+            wire_profile=frozen_provider_wire("summary-provider", "chat_completions")["wire_profile"],
+            wire_params=frozen_provider_wire("summary-provider", "chat_completions")["wire_params"],
+        )["snapshot"] == result["snapshot"]
         with pytest.raises(DetailUnavailableError, match="typed v3"):
-            cold.read_context_for_dispatch(previous["dispatch_ref"])
+            cold.read_context_for_dispatch(
+                previous["dispatch_ref"],
+                wire_profile=frozen_provider_wire("production-provider", "chat_completions")["wire_profile"],
+                wire_params=frozen_provider_wire("production-provider", "chat_completions")["wire_params"],
+            )
     assert manager.prepare_pending() == pending
 
 
@@ -1327,30 +1334,3 @@ def test_same_body_new_semantic_revision_is_not_discarded(production_context):
     assert connection.execute(
         "SELECT latest_visible_committed_revision, latest_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:2", "instructions:2")
-
-
-@pytest.mark.parametrize(("target_format", "damage"), [
-    ("chat_completions", "messages"), ("responses", "input"), ("responses", "tools"),
-])
-def test_final_request_is_rechecked_against_sealed_wire(
-    production_context, monkeypatch, target_format, damage,
-):
-    _saver, _session, _thread, _connection, _manager, prepare = production_context
-    original = preparation.seal_registered_plan
-
-    def drifted_projection(*args, **kwargs):
-        receipt = original(*args, **kwargs)
-        projected = receipt.projection
-        assert projected is not None
-        messages, native = projected.messages, projected.native
-        if damage == "messages":
-            messages = [*messages, HumanMessage(content="未封存的额外正文")]
-        elif damage == "input":
-            native["request"]["input"].append({"role": "user", "content": "未封存的额外正文"})
-        else:
-            native["request"]["tools"].append({"type": "function", "name": "unsealed_tool", "parameters": {}})
-        return replace(receipt, projection=replace(projected, messages=messages, native=native))
-
-    monkeypatch.setattr(preparation, "seal_registered_plan", drifted_projection)
-    with pytest.raises(ValueError, match="最终 Provider request"):
-        prepare("wire-drift", target_format=target_format)

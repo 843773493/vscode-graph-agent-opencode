@@ -450,7 +450,7 @@ def test_session_control_adapter_loads_catalog_binding_without_json_store(
     control.close()
 
     reader = SessionControlGraphBindingStore(
-        lambda _session_id: SessionControlStore(database_path)
+        lambda _session_id: SessionControlStore(database_path, read_only=True)
     )
     loaded = reader.load_graph_binding(_owner(thread_id=thread_id))
 
@@ -475,7 +475,7 @@ def test_session_control_adapter_returns_none_for_unbound_catalog_row(
     control.close()
 
     reader = SessionControlGraphBindingStore(
-        lambda _session_id: SessionControlStore(database_path)
+        lambda _session_id: SessionControlStore(database_path, read_only=True)
     )
     assert reader.load_graph_binding(_owner(thread_id=thread_id)) is None
 

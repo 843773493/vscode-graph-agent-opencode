@@ -176,7 +176,7 @@ def _require_sealed_wire(
     snapshot: ContextAssemblySnapshot, projection: ContextProjectionResult, *,
     wire_profile: ChatWireProfile | ResponsesWireProfile, wire_params: Mapping[str, object],
 ) -> dict[str, object]:
-    """新 seal 与幂等恢复共用最终 wire 校验，不信任后来漂移的 projection。"""
+    """冷恢复重新核对最终 wire，不信任后来漂移的 Provider 配置。"""
     preimage = normalize_wire_request(finalize_provider_wire(
         messages=projection.messages, tools=projection.tools,
         native_request=None if projection.native is None else projection.native["request"],
@@ -780,6 +780,7 @@ def freeze_registered_context(
             "snapshot": snapshot, "plan": plan, "messages": projection.messages,
             "tools": projection.tools, "losses": projection.losses,
             "resource_refs": projection.resource_refs,
+            "provider_params": {**wire_params, **({"tools": projection.tools} if projection.tools else {})},
         }
         if projection.native is not None:
             pending["native_projection"] = projection.native
@@ -808,6 +809,7 @@ def seal_prepared_context(owner, prepared: PreparedProviderContext) -> dict[str,
                 "omitted_ref_identities": frozenset(prepared.omitted),
             },
             wire_profile=prepared.wire_profile, wire_params=prepared.wire_params, model_capacity=prepared.capacity,
+            prepared_request=prepared.request,
             request_input_hash=prepared.input_hash, request_only_content=prepared.bodies,
             context_preparation=prepared.preparation, activation_snapshot=prepared.activation,
             checkpoint_ns=prepared.checkpoint_ns,
@@ -815,12 +817,12 @@ def seal_prepared_context(owner, prepared: PreparedProviderContext) -> dict[str,
         snapshot, projection = sealed.snapshot, sealed.projection
         if projection is None:
             raise RuntimeError("source-mismatch: Provider seal 未返回本次 wire projection")
-        _require_sealed_wire(snapshot, projection, wire_profile=prepared.wire_profile, wire_params=prepared.wire_params)
         if prepared.source_manager is not None:
             prepared.source_manager.acknowledge_sealed_pending(prepared.source_batch, snapshot.seal_binding)
         result = {"assembly_id": snapshot.assembly_id, "execution_id": snapshot.execution_id,
                   "snapshot": snapshot, "plan": projection.plan, "messages": projection.messages,
-                  "tools": projection.tools, "losses": projection.losses, "resource_refs": projection.resource_refs}
+                  "tools": projection.tools, "losses": projection.losses, "resource_refs": projection.resource_refs,
+                  "provider_params": {**prepared.wire_params, **({"tools": projection.tools} if projection.tools else {})}}
         if projection.native is not None:
             result["native_projection"] = projection.native
         return result

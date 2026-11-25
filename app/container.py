@@ -960,7 +960,8 @@ def _build_app_container(
         graph_binding_store=SessionControlGraphBindingStore(
             session_control_store_factory=lambda session_id: SessionControlStore(
                 session_path_resolver.resolve_session_node(session_id)
-                / CONTROL_DATABASE_NAME
+                / CONTROL_DATABASE_NAME,
+                read_only=True,
             ),
         ),
         # 精确 thread 的真实 generation scope、lease 与 idle unload 共用同一 owner。

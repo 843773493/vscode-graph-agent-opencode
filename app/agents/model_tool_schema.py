@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from functools import lru_cache
 from typing import Any, cast
 
 from cachetools import LRUCache
@@ -31,6 +32,30 @@ class CallBoundStructuredTool(StructuredTool):
             raise TypeError("带调用身份的工具只接受 object 参数")
         # config／run_manager 等也可能是公开字段，不能经过 BaseTool 的 kwargs 注入通道。
         return (tool_call_id or "", self.name, kwargs), {}
+
+
+@lru_cache(maxsize=256)
+def _shared_public_model(
+    input_model: type[BaseModel], name: str, description: str,
+) -> type[BaseModel]:
+    # 仍由 LangChain 过滤注入字段并缓存 JSON Schema；不持有运行工具及其闭包。
+    definition = StructuredTool(name=name, description=description, args_schema=input_model)
+    return cast(type[BaseModel], definition.tool_call_schema)
+
+
+def _get_tool_call_schema(tool: BaseTool) -> type[BaseModel] | dict[str, Any] | None:
+    if (
+        isinstance(tool, BaseTool)
+        and type(tool).tool_call_schema is BaseTool.tool_call_schema
+        and not isinstance(tool.args_schema, dict)
+        and tool._tool_call_schema_memo is None
+    ):
+        # 回填框架原 memo，后续 SDK 直接读取也复用同一模型；name、description、
+        # args_schema 重新赋值及 model_copy 的失效继续由 BaseTool 负责。
+        tool._tool_call_schema_memo = _shared_public_model(
+            tool.get_input_schema(), tool.name, tool.description,
+        )
+    return getattr(tool, "tool_call_schema", None)
 
 
 def model_tool_schema_validator(schema: dict[str, Any]) -> Validator:
@@ -76,7 +101,7 @@ def model_tool_schema_validator(schema: dict[str, Any]) -> Validator:
 
 def get_model_tool_schema(tool: BaseTool) -> type[BaseModel]:
     """返回 LangChain 面向模型公开的权威 Pydantic 工具参数模型。"""
-    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    tool_call_schema = _get_tool_call_schema(tool)
     if not isinstance(tool_call_schema, type) or not issubclass(
         tool_call_schema,
         BaseModel,
@@ -98,7 +123,7 @@ def validate_model_tool_arguments(
             "模型工具参数必须是 object: "
             f"tool_name={tool.name} actual_type={type(arguments).__name__}"
         )
-    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    tool_call_schema = _get_tool_call_schema(tool)
     if isinstance(tool_call_schema, dict):
         # 定义校验可复用，当前调用参数始终经过真实 validator。
         model_tool_schema_validator(tool_call_schema).validate(arguments)
@@ -127,7 +152,7 @@ def filter_tool_event_injected_arguments(
             f"tool_name={tool.name} actual_type={type(arguments).__name__}"
         )
 
-    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    tool_call_schema = _get_tool_call_schema(tool)
     if not isinstance(tool_call_schema, dict) and not (
         isinstance(tool_call_schema, type)
         and issubclass(tool_call_schema, BaseModel)
@@ -144,7 +169,7 @@ def filter_tool_event_injected_arguments(
 
 def export_model_tool_json_schema(tool: BaseTool) -> dict[str, Any]:
     """导出发送给模型及请求回放使用的公开 JSON Schema。"""
-    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    tool_call_schema = _get_tool_call_schema(tool)
     parameters = (
         dict(tool_call_schema)
         if isinstance(tool_call_schema, dict)

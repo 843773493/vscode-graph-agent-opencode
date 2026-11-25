@@ -6,6 +6,7 @@ import {
   listMessages,
   replayMessageTurn,
   sendUserMessage,
+  reconcileMessageSubmissions,
   uploadSessionAttachment,
   discardSessionAttachment,
 } from "./sessionMessages";
@@ -223,6 +224,40 @@ describe("发送与重放统一消费真实准入身份", () => {
     workspace_changes_reverted: false,
     notice: "已准入重放",
   } as const;
+  test.each(["accepted", "unknown"] as const)("恢复查询避让本页面的在途提交，结束后恢复原查询：%s", async outcome => {
+    const owner = { workspaceKey: WORKSPACE_KEY, sessionId: "session-accepted", threadId: "thread-accepted" };
+    let finish!: (response: Response) => void;
+    let started!: () => void;
+    const postStarted = new Promise<void>(resolve => { started = resolve; });
+    const response = new Promise<Response>(resolve => { finish = resolve; });
+    installSessionApiFetchMock(() => { started(); return response; });
+    const sending = sendUserMessage(48_311, owner.sessionId, "在途输入", undefined, [],
+      WORKSPACE_KEY, "after_turn", owner.threadId, MESSAGE_OPERATION_ID)
+      .then(value => ({ value, error: null }), error => ({ value: null, error }));
+    try {
+      await postStarted;
+      const results = await reconcileMessageSubmissions(48_311, owner);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.accepted).toBeNull();
+      expect(businessRequests.filter(path => path.includes("/message-submissions/"))).toEqual([]);
+    } finally {
+      finish(outcome === "accepted"
+        ? Response.json({ data: accepted, request_id: "req-active-send" })
+        : Response.json({ detail: "响应丢失" }, { status: 503 }));
+    }
+    const result = await sending;
+    if (outcome === "accepted") {
+      expect(result.value).toEqual(accepted);
+      expect(await loadMessageSubmissions(owner)).toEqual([]);
+      expect(businessRequests).toHaveLength(1);
+    } else {
+      expect(result.error).toBeInstanceOf(Error);
+      expect(await loadMessageSubmissions(owner)).toHaveLength(1);
+      expect(businessRequests.filter(path => path.includes("/message-submissions/"))).toHaveLength(1);
+      await reconcileMessageSubmissions(48_311, owner);
+      expect(businessRequests.filter(path => path.includes("/message-submissions/"))).toHaveLength(2);
+    }
+  });
   test("预上传发送原始字节，消息和重试快照只保存附件引用", async () => {
     const attachment = { file_id: "boxteam://gateway-test/workspaces/ws/attachments/att_test/original/content",
       directory_uri: "boxteam://gateway-test/workspaces/ws/attachments/att_test", name: "报告.txt", content_type: "text/plain" };

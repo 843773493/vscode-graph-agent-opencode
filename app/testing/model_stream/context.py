@@ -47,9 +47,9 @@ def current_model_call_identity() -> ModelCallIdentity:
         raise ModelStreamMatchError("call_identity 缺少显式 SessionThread/model-call dispatch") from error
     if dispatch is None:
         raise ModelStreamMatchError("call_identity 缺少 sealed dispatch")
-    snapshot = dispatch.snapshot
-    owner = require_current_session_thread_owner(langgraph_thread_id=snapshot.thread_id)
-    if (owner.session_id, owner.thread_id) != (snapshot.session_id, snapshot.thread_id):
+    reference = dispatch.reference
+    owner = require_current_session_thread_owner(langgraph_thread_id=reference.thread_id)
+    if (owner.session_id, owner.thread_id) != (reference.session_id, reference.thread_id):
         raise ModelStreamMatchError("回放 dispatch 与实际 SessionThread owner 冲突")
     return ModelCallIdentity(owner.session_id, owner.thread_id, dispatch.callback_model_call_id)
 

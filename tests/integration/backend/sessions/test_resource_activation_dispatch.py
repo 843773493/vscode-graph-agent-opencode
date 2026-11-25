@@ -9,6 +9,8 @@ import pytest
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
+from app.runtime.network_proxy import ProxyRoutes
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
@@ -74,15 +76,6 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         )
         interactions.append({**cassette.raw["interactions"][0], "protocol": protocol})
     first_call, second_call = replay.control.plan_model_calls(session, thread, interactions)
-    prepared = []
-    prepare = saver.prepare_context_for_provider
-
-    def record_prepare(*args, **kwargs):
-        result = prepare(*args, **kwargs)
-        prepared.append(result)
-        return result
-
-    monkeypatch.setattr(saver, "prepare_context_for_provider", record_prepare)
     await invoke_provider_dispatch(
         saver, session, turn, endpoint, api_key,
         target_format=target_format, registry=registry, activation_policy=policy,
@@ -116,8 +109,6 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         resumed = restarted.resume_turn(session, thread_id=thread, turn_id=turn, job_id="activation-resume")
         assert resumed["execution_id"] != first.execution_id
         assert _load_activation(restarted, first) == original
-        prepare = restarted.prepare_context_for_provider
-        monkeypatch.setattr(restarted, "prepare_context_for_provider", record_prepare)
         await invoke_provider_dispatch(
             restarted, session, turn, endpoint, api_key,
             target_format=target_format, registry=registry, activation_policy=hot_policy,
@@ -150,28 +141,34 @@ async def test_mixed_activation_survives_lost_execution_and_cold_resume(
         raise AssertionError("已封存请求重试不得重新冻结或读取当前 Registry")
 
     with RolloutCheckpointSaver(sessions) as cold:
-        reference = prepared[-1]["dispatch_ref"]
+        reference = cold.issue_context_dispatch_ref(
+            second, attempt_key=second.plan_id, callback_model_call_id=second_call,
+        )
+        model_type = {
+            "responses": BoxteamOpenAIResponsesModel,
+            "chat_completions": BoxteamLiteLLMChatModel,
+        }[target_format]
+        model = model_type(
+            model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
+            custom_llm_provider="openai", streaming=True, max_retries=0,
+            proxy_routes=ProxyRoutes(()),
+        )
         with monkeypatch.context() as patch:
             patch.setattr(registry, "capture", unexpected)
             patch.setattr(cold, "prepare_context_for_provider", unexpected)
-            payload = cold.read_context_for_dispatch(reference)
+            payload = cold.read_context_for_dispatch(
+                reference, wire_profile=responses_wire_profile(model) if target_format == "responses" else chat_wire_profile(model),
+                wire_params=responses_wire_params(model, kwargs={}) if target_format == "responses" else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+            )
             assert payload["snapshot"] == second
             assert _load_activation(cold, first) == original
             with (
                 dispatch_execution_scope(cold, session, turn, activation_policy=hot_policy, registry=registry),
                 sealed_assembly_dispatch_scope(
                     reference, payload["snapshot"], resource_refs=payload["resource_refs"],
-                    native_projection=payload.get("native_projection"),
+                    provider_params=payload["provider_params"],
                 ),
             ):
-                model_type = {
-                    "responses": BoxteamOpenAIResponsesModel,
-                    "chat_completions": BoxteamLiteLLMChatModel,
-                }[target_format]
-                model = model_type(
-                    model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
-                    custom_llm_provider="openai", streaming=True, max_retries=0,
-                )
                 bound = model.bind_tools(payload["tools"]) if payload["tools"] else model
                 await bound.ainvoke(payload["messages"])
         assert len(cold.list_context_assemblies(session, thread)) == 2

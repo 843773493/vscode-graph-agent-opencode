@@ -92,7 +92,8 @@ def test_workspace_image_preview_opens_source_without_reading_all_bytes(
     input_image = Image.new("RGB", (900, 300), "red")
     with BytesIO() as image_stream:
         input_image.save(image_stream, format="PNG")
-        source.write_bytes(image_stream.getvalue())
+        original = image_stream.getvalue()
+        source.write_bytes(original)
     input_image.close()
     service = svc.AttachmentContentService(workspace_root=root)
     monkeypatch.setattr(
@@ -108,7 +109,8 @@ def test_workspace_image_preview_opens_source_without_reading_all_bytes(
     assert preview.startswith("data:image/webp;base64,")
     preview_bytes = base64.b64decode(preview.split(",", maxsplit=1)[1])
     with Image.open(BytesIO(preview_bytes)) as preview_image:
-        assert preview_image.size == (512, 171)
+        assert preview_image.size == (900, 300)
+    assert source.read_bytes() == original
 
 
 def test_attachment_rejects_outside_absolute_path_without_workspace_redirection(

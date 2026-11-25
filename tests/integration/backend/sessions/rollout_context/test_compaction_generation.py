@@ -14,6 +14,7 @@ import pytest
 from langchain_core.messages import messages_from_dict
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
 from app.agents.summarization.generation import CompactionGenerator, SummaryCallBudget
 from app.agents.summarization.state import SummaryGenerationError
 from app.core.checkpoint_config import build_checkpoint_config
@@ -175,7 +176,11 @@ async def test_runtime_registers_one_real_summary_task_without_holding_session_g
     assert preparations == [recipe]
     assert waiting == [(handle.task_id, True), (handle.task_id, False)]
     assert "COMPACTION_TEST_KEY" not in str(handle.descriptor.payload)
-    assert "最新输入保留在外" not in str(saver.read_context_for_dispatch(result.dispatch_ref)["snapshot"].request_hash_preimage)
+    assert "最新输入保留在外" not in str(saver.read_context_for_dispatch(
+        result.dispatch_ref,
+        wire_profile=responses_wire_profile(_model) if result.dispatch_ref.target_format == "responses" else chat_wire_profile(_model),
+        wire_params=responses_wire_params(_model, kwargs={}) if result.dispatch_ref.target_format == "responses" else chat_wire_params(_model, stop=None, kwargs={}, stream=True),
+    )["snapshot"].request_hash_preimage)
     assert runtime.ready(owner) == ReadyCompactionCandidate(frozen, result, False)
     assert await runtime.request(owner, agent_id="default", model_recipe=recipe) == registry.get_handle(session, handle.task_id)
     recovered = await handler.reconcile(registry.get_handle(session, handle.task_id))
@@ -258,7 +263,11 @@ async def test_runtime_freezes_real_summary_target_and_reuses_same_range_after_r
     ref, namespace, _deadline = handler.descriptor_input(handle.descriptor)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         persisted = cold._storage.compactions.read_task_input(session, thread, ref, checkpoint_ns=namespace)
-        wire = cold.read_context_for_dispatch(result.dispatch_ref)["snapshot"].request_hash_preimage
+        wire = cold.read_context_for_dispatch(
+            result.dispatch_ref,
+            wire_profile=responses_wire_profile(_model) if result.dispatch_ref.target_format == "responses" else chat_wire_profile(_model),
+            wire_params=responses_wire_params(_model, kwargs={}) if result.dispatch_ref.target_format == "responses" else chat_wire_params(_model, stop=None, kwargs={}, stream=True),
+        )["snapshot"].request_hash_preimage
     assert persisted.target_constraint == target
     assert frozen.target_constraint_hash == sha256_jcs({key: target[key] for key in ("capacity", "policy")})
     assert len(requests) == 1 and normalize_wire_request(requests[0]) == wire
@@ -740,7 +749,11 @@ async def test_real_three_chunk_generation_merges_all_sources_and_cold_ready_wit
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         ready = cold._storage.compactions.read_result(session, thread, candidate.candidate_id)
         assert ready == result
-        payload = cold.read_context_for_dispatch(ready.dispatch_ref)
+        payload = cold.read_context_for_dispatch(
+            ready.dispatch_ref,
+            wire_profile=responses_wire_profile(model) if ready.dispatch_ref.target_format == "responses" else chat_wire_profile(model),
+            wire_params=responses_wire_params(model, kwargs={}) if ready.dispatch_ref.target_format == "responses" else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+        )
         assert payload["snapshot"].selection_policy == "derived_request"
         selected_summaries = [entry for entry in payload["snapshot"].selection
                               if entry.included and entry.ref.ref_type == "request_only" and entry.ref.semantic_kind == "extension"]
@@ -906,7 +919,11 @@ async def test_successor_uses_frozen_summary_and_atomically_replaces_either_real
         second_result = await generator.generate(second, budget=SummaryCallBudget(time.time() + 60), derived_summaries=(first_result,))
         assert second_result.coverage == tuple(refs)
         assert controller.transport.hit_counts == {0: 2}
-        wire = saver.read_context_for_dispatch(second_result.dispatch_ref)["snapshot"].request_hash_preimage
+        wire = saver.read_context_for_dispatch(
+            second_result.dispatch_ref,
+            wire_profile=responses_wire_profile(model) if second_result.dispatch_ref.target_format == "responses" else chat_wire_profile(model),
+            wire_params=responses_wire_params(model, kwargs={}) if second_result.dispatch_ref.target_format == "responses" else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+        )["snapshot"].request_hash_preimage
         assert first_result.text in str(wire) and "后段明确取消旧计划" in str(wire)
         assert "原始约束0" not in str(wire)
         if predecessor_application == "after-ready":

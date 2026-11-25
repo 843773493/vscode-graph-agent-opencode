@@ -293,7 +293,6 @@ async def runtime_case(
         request_observer: Callable[[dict[str, object]], None]
 
         async def acompletion_with_retry(self, run_manager=None, **kwargs):
-            self._validate_completion_dispatch(kwargs)
             dispatch = read_sealed_assembly_dispatch(invocation_purpose="agent")
             assert dispatch is not None
             case.model_dispatches.append(dispatch)

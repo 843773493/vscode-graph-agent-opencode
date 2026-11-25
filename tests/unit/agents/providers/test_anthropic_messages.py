@@ -10,13 +10,14 @@ from app.runtime.provider_model import build_model_from_provider
 
 
 @pytest.fixture
-def anthropic_provider() -> dict[str, Any]:
+def anthropic_provider(direct_proxy_routes) -> dict[str, Any]:
     return {
         "id": "anthropic-test",
         "endpoint": "https://example.com/anthropic",
         "model": "claude-test",
         "api_key": "test-key",
         "custom_llm_provider": "anthropic",
+        "proxy_routes": direct_proxy_routes,
         "api_mode": {
             "protocol": "anthropic_messages",
             "model_info": {
@@ -46,7 +47,7 @@ def test_anthropic_messages_mode_uses_litellm_chat_model(
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_stream_uses_litellm_acompletion(
+async def test_anthropic_messages_stream_passes_native_body_to_transport(
     monkeypatch: pytest.MonkeyPatch,
     anthropic_provider: dict[str, Any],
 ) -> None:
@@ -126,10 +127,10 @@ async def test_anthropic_messages_stream_uses_litellm_acompletion(
 
     assert chunks
     assert captured["custom_llm_provider"] == "anthropic"
-    assert captured["messages"][0]["content"] == [
+    assert captured["_anthropic_request"]["messages"][0]["content"] == [
         {"type": "text", "text": "请看图"},
         {
-            "type": "image_url",
-            "image_url": {"url": "data:image/webp;base64,preview"},
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/webp", "data": "preview"},
         },
     ]

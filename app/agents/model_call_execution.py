@@ -328,7 +328,7 @@ class _PreparedModelCall(TypedDict):
     tools: list[dict[str, object]]
     losses: tuple[str, ...]
     resource_refs: tuple[SessionContextResourceDTO, ...]
-    native_projection: NotRequired[Mapping[str, object]]
+    provider_params: Mapping[str, object]
     extension_call_scope: NotRequired[AbstractContextManager[CallRetention]]
     compaction_target: NotRequired[Mapping[str, object]]
     model_name: NotRequired[str]
@@ -1194,11 +1194,6 @@ class ModelCallExecution:
         if self._extension_call_scope is not None:
             # 冻结正文的读取仍在原 Session gate 内；短期连接占用在真实发送前进入。
             prepared["extension_call_scope"] = self._extension_call_scope(activation, callback_id, checkpoint_ns)
-        if _target_format(request.model) == "responses":
-            native = prepared.get("native_projection")
-            if not isinstance(native, Mapping):
-                raise TypeError("itemized context 缺少本次 Saver prepare 的 native projection")
-            prepared["losses"] = tuple(native["losses"])
         logger.warning(
             "[itemized-context] provider prepare completed: session_id=%s turn_id=%s checkpoint_ns=%s assembly_id=%s",
             session_id,
@@ -1330,7 +1325,7 @@ class ModelCallExecution:
             logs = LLMLoggingMiddleware(sessions_dir=self._checkpointer._storage.storage.sessions_dir)
             with sealed_assembly_dispatch_scope(
                 prepared["dispatch_ref"], prepared["snapshot"], resource_refs=prepared["resource_refs"],
-                native_projection=prepared.get("native_projection"),
+                provider_params=prepared["provider_params"],
             ):
                 response = await logs.alog_call(log_request, lambda: self._ainvoke(
                     prepared, messages, tools, response_decoder=self._derived_response,
@@ -1401,7 +1396,7 @@ class ModelCallExecution:
                 with prepared.get("extension_call_scope", nullcontext()) as retain_calls, sealed_assembly_dispatch_scope(
                     prepared["dispatch_ref"], prepared["snapshot"],
                     resource_refs=prepared["resource_refs"],
-                    native_projection=prepared.get("native_projection"),
+                    provider_params=prepared["provider_params"],
                 ):
                     response = self._invoke(prepared, messages, tools)
                     return _bind_response_model_call(
@@ -1461,7 +1456,7 @@ class ModelCallExecution:
                 with prepared.get("extension_call_scope", nullcontext()) as retain_calls, sealed_assembly_dispatch_scope(
                     prepared["dispatch_ref"], prepared["snapshot"],
                     resource_refs=prepared["resource_refs"],
-                    native_projection=prepared.get("native_projection"),
+                    provider_params=prepared["provider_params"],
                 ):
                     response = await self._ainvoke(prepared, messages, tools)
                     return _bind_response_model_call(

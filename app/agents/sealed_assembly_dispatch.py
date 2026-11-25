@@ -1,4 +1,4 @@
-"""向两协议发送边界传递 Saver 已提交 assembly，并校验实际发送请求。
+"""向发送边界交付 Saver 已提交 assembly 中的最终正文。
 
 ContextVar 只承载本次 handler 的不可变绑定，不重建上下文、不读 storage、
 不维护第二份持久账本。非 Agent 调用只能由构建方显式标注用途。
@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
@@ -24,7 +24,6 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
 ProviderInvocationPurpose = Literal["agent", "derived", "compaction", "tool_test", "model_test"]
@@ -32,12 +31,24 @@ ProviderInvocationPurpose = Literal["agent", "derived", "compaction", "tool_test
 
 @dataclass(frozen=True, slots=True)
 class SealedAssemblyDispatch:
-    """同一已提交 snapshot 与它的可选 Responses 原生投影。"""
+    """同一 dispatch 的私有封存值；只有读取正文时才复制对应容器。"""
 
     reference: SealedContextDispatchRef
-    snapshot: ContextAssemblySnapshot
-    resource_refs: tuple[SessionContextResourceDTO, ...]
-    native_projection: dict[str, object] | None = None
+    _snapshot: ContextAssemblySnapshot
+    _resource_refs: tuple[SessionContextResourceDTO, ...]
+    _provider_params: Mapping[str, object]
+
+    @property
+    def snapshot(self) -> ContextAssemblySnapshot:
+        return copy.deepcopy(self._snapshot)
+
+    @property
+    def resource_refs(self) -> tuple[SessionContextResourceDTO, ...]:
+        return copy.deepcopy(self._resource_refs)
+
+    @property
+    def provider_params(self) -> Mapping[str, object]:
+        return copy.deepcopy(self._provider_params)
 
     @property
     def callback_model_call_id(self) -> str:
@@ -55,7 +66,7 @@ def sealed_assembly_dispatch_scope(
     snapshot: ContextAssemblySnapshot,
     *,
     resource_refs: tuple[SessionContextResourceDTO, ...],
-    native_projection: Mapping[str, object] | None = None,
+    provider_params: Mapping[str, object],
 ) -> Iterator[None]:
     """仅在本次 handler 内绑定 Saver snapshot；两协议都必须有真实封存。"""
     if not isinstance(reference, SealedContextDispatchRef):
@@ -72,34 +83,11 @@ def sealed_assembly_dispatch_scope(
         reference.validate_snapshot(snapshot)
     except ItemSchemaError as error:
         raise ValueError("source-mismatch: sealed assembly hash/manifest 非法") from error
-    if snapshot.target_format == "responses":
-        if not isinstance(native_projection, Mapping):
-            raise ValueError("source-mismatch: Responses binding 缺少 sealed native projection")
-        required = ("session_id", "assembly_id", "plan_hash", "selection", "request")
-        if any(key not in native_projection for key in required):
-            raise TypeError("source-mismatch: sealed native projection 缺少 manifest 字段")
-        if (
-            native_projection["session_id"] != snapshot.session_id
-            or native_projection["assembly_id"] != snapshot.assembly_id
-            or native_projection["plan_hash"] != snapshot.plan_hash
-            or canonical_json_bytes(native_projection["selection"])
-            != canonical_json_bytes([entry.to_dict() for entry in snapshot.selection])
-        ):
-            raise ValueError("source-mismatch: native projection 与 sealed assembly 不一致")
-        request = native_projection["request"]
-        if not isinstance(request, Mapping) or not all(
-            key in request for key in ("input", "tools")
-        ):
-            raise TypeError("source-mismatch: native request 缺少 sealed input/tools")
-    elif snapshot.target_format != "chat_completions" or native_projection is not None:
-        raise ValueError("source-mismatch: sealed dispatch protocol/native projection 不一致")
-    if native_projection is not None and native_projection.get("resource_refs") != [
-        ref.model_dump(mode="json") for ref in resource_refs
-    ]:
-        raise ValueError("source-mismatch: native projection 安全资源摘要不一致")
+    if snapshot.target_format not in {"responses", "chat_completions"}:
+        raise ValueError("source-mismatch: sealed dispatch protocol 非法")
     binding = SealedAssemblyDispatch(
-        reference=reference, snapshot=snapshot, resource_refs=resource_refs,
-        native_projection=dict(native_projection) if native_projection is not None else None,
+        reference=reference, _snapshot=snapshot, _resource_refs=resource_refs,
+        _provider_params=provider_params,
     )
     token = _SEALED_ASSEMBLY_DISPATCH.set(copy.deepcopy(binding))
     try:
@@ -111,8 +99,24 @@ def sealed_assembly_dispatch_scope(
 def read_sealed_assembly_dispatch(
     *, invocation_purpose: ProviderInvocationPurpose,
 ) -> SealedAssemblyDispatch | None:
-    """返回独立副本，调用方修改嵌套正文不会污染 scope。"""
-    return copy.deepcopy(_require_dispatch(invocation_purpose))
+    """只读取 dispatch；正文属性各自返回副本，不为身份查询复制全部历史。"""
+    return _require_dispatch(invocation_purpose)
+
+
+def read_sealed_provider_request(
+    *, invocation_purpose: ProviderInvocationPurpose,
+    profile: ChatWireProfile | ResponsesWireProfile,
+    params: Mapping[str, object],
+) -> dict[str, object] | None:
+    """直接交付已封存的协议正文，不从语义消息重新投影。"""
+    binding = _require_dispatch(invocation_purpose)
+    if binding is None:
+        return None
+    _validate_profile(binding, profile)
+    if canonical_json_bytes(params) != canonical_json_bytes(binding._provider_params):
+        raise ValueError("source-mismatch: 当前 Provider 参数与封存请求不一致")
+    # 只复制 JSON 容器，不复制不可变正文字符串。
+    return copy.deepcopy(cast(dict[str, object], binding._snapshot.request_hash_preimage))
 
 
 def _require_dispatch(
@@ -128,9 +132,9 @@ def _require_dispatch(
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")
     if value is None:
         raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
-    if invocation_purpose in {"derived", "compaction"} and (value.reference.turn_id is not None or value.snapshot.selection_policy != "derived_request"):
+    if invocation_purpose in {"derived", "compaction"} and (value.reference.turn_id is not None or value._snapshot.selection_policy != "derived_request"):
         raise ValueError("source-mismatch: 派生 Provider 只能发送独立派生请求")
-    # scope 入口已完整校验并私有复制，对外读取只返回副本；内部校验不暴露封存值。
+    # scope 入口已完整校验并私有复制，正文属性各自隔离；内部校验不暴露封存值。
     # 读取时只联校当前执行归属，避免每个 callback、日志和发送步骤重复计算完整历史 hash。
     admission = require_current_execution_admission(langgraph_thread_id=value.reference.thread_id)
     if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
@@ -141,18 +145,11 @@ def _require_dispatch(
     return value
 
 
-def validate_sealed_assembly_dispatch(
-    *,
-    invocation_purpose: ProviderInvocationPurpose,
+def _validate_profile(
+    binding: SealedAssemblyDispatch,
     profile: ChatWireProfile | ResponsesWireProfile,
-    wire_request: Mapping[str, object],
 ) -> None:
-    """在真实网络入口前校 profile、完整 finalized body 与同一 request hash。"""
-    # 内部校验只读 scope 私有封存值；不为丢弃的副本深拷贝整份历史和工具集。
-    binding = _require_dispatch(invocation_purpose)
-    if binding is None:
-        return
-    snapshot = binding.snapshot
+    snapshot = binding._snapshot
     target_format = "responses" if isinstance(profile, ResponsesWireProfile) else "chat_completions"
     if (
         profile.identity() != snapshot.provider_version
@@ -161,22 +158,12 @@ def validate_sealed_assembly_dispatch(
         or snapshot.projector_version != WIRE_PROJECTOR_VERSION
     ):
         raise ValueError("source-mismatch: 当前 Provider profile/projector 与 sealed assembly 不一致")
-    try:
-        preimage = normalize_wire_request(wire_request)
-        actual_body = canonical_json_bytes(preimage)
-        sealed_body = canonical_json_bytes(snapshot.request_hash_preimage)
-    except ItemSchemaError as error:
-        raise ValueError("source-mismatch: 实际 Provider wire preimage 非法") from error
-    # scope 已验证 sealed request_hash；相同 profile/projector 下，完整规范字节相等
-    # 就对应同一 hash preimage，无需再构造 plan 并重复计算整份请求摘要。
-    if actual_body != sealed_body:
-        raise ValueError("source-mismatch: 实际 Provider wire 与 sealed request_hash/preimage 不一致")
 
 
 __all__ = [
     "ProviderInvocationPurpose",
     "SealedAssemblyDispatch",
     "read_sealed_assembly_dispatch",
+    "read_sealed_provider_request",
     "sealed_assembly_dispatch_scope",
-    "validate_sealed_assembly_dispatch",
 ]

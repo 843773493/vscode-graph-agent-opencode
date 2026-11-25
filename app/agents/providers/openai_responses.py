@@ -4,7 +4,7 @@ import asyncio
 import copy
 import logging
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -50,7 +50,7 @@ from app.agents.providers.openai_response_history import (
 from app.agents.providers.request_parameters import merge_request_parameters
 from app.agents.providers.wire_finalize import (
     finalize_responses_body,
-    finalize_responses_wire,
+    WIRE_EXCLUDED_KEYS,
     responses_send_params,
     responses_wire_profile,
     wire_request_params,
@@ -58,7 +58,7 @@ from app.agents.providers.wire_finalize import (
 from app.agents.sealed_assembly_dispatch import (
     ProviderInvocationPurpose,
     read_sealed_assembly_dispatch,
-    validate_sealed_assembly_dispatch,
+    read_sealed_provider_request,
 )
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
@@ -245,37 +245,24 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     ) -> dict[str, Any]:
         if stop is not None:
             raise ValueError("Responses API 不支持 stop 参数")
-        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
         payload = responses_send_params(self, kwargs=kwargs)
         payload.update({
             "stream": self.streaming,
             "include": list(self.responses_include),
             "store": self.responses_store,
         })
-        if binding is not None:
-            native = binding.native_projection
-            if not isinstance(native, Mapping):
-                raise TypeError("source-mismatch: Responses binding 缺少 native projection")
-            request = native.get("request")
-            if not isinstance(request, Mapping):
-                raise TypeError("source-mismatch: native request 必须是 object")
-            if "input" not in request or "tools" not in request:
-                raise TypeError("source-mismatch: native request 缺少 input/tools")
-            # 封存正文（input/tools）与参数合并、SDK Responses 参数映射、
-            # reasoning 清洗与 chatgpt instructions 归并共用唯一 finalize。
+        sealed = read_sealed_provider_request(
+            invocation_purpose=self.invocation_purpose, profile=responses_wire_profile(self),
+            params=wire_request_params(self, payload),
+        )
+        if sealed is not None:
+            # 业务正文已经完成 SDK 参数映射、reasoning 清洗和 instructions 归并。
             if deadline is not None and time.monotonic() >= deadline:
                 raise ResponsesPayloadBuildTimeoutError(
                     "Responses 请求 payload 构造超过时间预算: "
                     f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
                 )
-            return finalize_responses_wire(
-                input_items=request["input"],
-                tools=request["tools"],
-                params=payload,
-                include=payload["include"],
-                store=payload["store"],
-                merge_system_to_instructions=self.custom_llm_provider == "chatgpt",
-            )
+            return {**{key: value for key, value in payload.items() if key in WIRE_EXCLUDED_KEYS}, **sealed}
         # 只有构建时明确指定 tool_test 才能走原非 Agent 历史输入构造。
         finalized = finalize_responses_body(
             payload,
@@ -564,11 +551,6 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
 
     def _record_responses_request(self, payload: dict[str, Any], *, asynchronous: bool) -> None:
         binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
-        validate_sealed_assembly_dispatch(
-            invocation_purpose=self.invocation_purpose,
-            profile=responses_wire_profile(self),
-            wire_request=wire_request_params(self, payload),
-        )
         prepare_model_request()
         record_upstream_request(
             request=payload, model=self.model, provider=self.custom_llm_provider,

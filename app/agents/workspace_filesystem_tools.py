@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import json
 import time
 from functools import partial, update_wrapper
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -29,8 +31,10 @@ from app.core.resource_uri import (
     ResourceUriGrammarError,
     parse_resource_uri,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
+from app.runtime.image_preparation import prepare_image
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
@@ -212,10 +216,15 @@ def _read_navigation_message(
         raise ValueError("文件 owner 未返回读取内容")
     metadata = {"resource_navigation": result.model_dump(exclude={"content", "entries"})}
     if result.content_encoding == "base64":
+        content, mime_type = result.content, result.mime_type
+        if result.media_type == "image":
+            preview = prepare_image(BytesIO(base64.b64decode(content, validate=True)))
+            content = base64.b64encode(preview.data).decode("ascii")
+            mime_type = preview.content_type
         message = ToolMessage(
-            content_blocks=[{"type": result.media_type, "base64": result.content, "mime_type": result.mime_type}],
+            content_blocks=[{"type": result.media_type, "base64": content, "mime_type": mime_type}],
             name="read_file", tool_call_id=runtime.tool_call_id, status="success",
-            additional_kwargs={**metadata, "read_file_path": result.node.uri, "read_file_media_type": result.mime_type},
+            additional_kwargs={**metadata, "read_file_path": result.node.uri, "read_file_media_type": mime_type},
         )
         if len(message.model_dump_json().encode()) > max_response_bytes:
             raise ResourceFileOperationError("output_limit_exceeded", "媒体工具结果超过响应字节上限", reason="response_byte_limit")
@@ -404,7 +413,7 @@ def configure_workspace_filesystem_tools(
                     max_lines=max_lines or DEFAULT_MAX_LINES, max_bytes=max_bytes,
                     max_response_bytes=max_response_bytes, timeout_ms=timeout_ms,
                 ), local_gateway_id=gateway_id, artifact_reader=artifact_reader, deadline=deadline)
-                message = _read_navigation_message(result, runtime, max_response_bytes)
+                message = await run_sync_shielded(_read_navigation_message, result, runtime, max_response_bytes)
                 if time.monotonic() >= deadline:
                     raise TimeoutError
                 return message

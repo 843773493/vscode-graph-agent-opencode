@@ -38,11 +38,13 @@ from app.agents.model_capability_routing import (
 )
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
-from app.agents.providers.wire_finalize import chat_wire_profile, responses_wire_profile
+from app.agents.providers.wire_finalize import (
+    chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params,
+)
 from app.agents.sealed_assembly_dispatch import (
     read_sealed_assembly_dispatch,
+    read_sealed_provider_request,
     sealed_assembly_dispatch_scope,
-    validate_sealed_assembly_dispatch,
 )
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
@@ -663,8 +665,9 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
         model = model_type(
             model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
             custom_llm_provider="openai", streaming=True, max_retries=0,
-            temperature=temperature if changed_field == "instance_temperature" else None,
+            model_kwargs={"temperature": temperature} if changed_field == "instance_temperature" else {},
             image_input_replay=False,
+            proxy_routes=ProxyRoutes(()),
         )
         if ordinal == 0:
             create_dispatch_agent(model, tools=[inspect_file], execution=bridge, checkpointer=saver)
@@ -972,52 +975,27 @@ async def test_agent_without_dispatch_binding_fails_before_provider_http(
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
 @pytest.mark.parametrize("changed_field", ["temperature", "image_input_replay"])
 async def test_provider_drift_after_committed_seal_fails_before_http(
-    dispatch_saver, native_http_server, dispatch_bridge, monkeypatch, target_format, changed_field,
+    toolset_dispatch_case, monkeypatch, target_format, changed_field,
 ) -> None:
     """先由真实 Saver 提交封存，再改实际模型；不得把发送漂移误当成新 seal。"""
-    saver, session_id, turn_id, _ = dispatch_saver
-    state, endpoint = native_http_server
-    thread = saver._storage.storage.main_thread_id(session_id)
-    model_type = {
-        "chat_completions": BoxteamLiteLLMChatModel,
-        "responses": BoxteamOpenAIResponsesModel,
-    }[target_format]
-    model = model_type(
-        model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
-        custom_llm_provider="openai", streaming=True, max_retries=0,
-        temperature=0.1, image_input_replay=False,
-    )
-    sealed_ids = []
-    prepare = saver.prepare_context_for_provider
+    case = toolset_dispatch_case
+    invoke = case.bridge._ainvoke
 
-    def seal_then_change_model(*args, **kwargs):
-        prepared = prepare(*args, **kwargs)
-        sealed_ids.append(prepared["assembly_id"])
+    async def change_then_send(prepared, messages, tools):
+        # 修改真正将要发送的冻结模型；原模型已在准备阶段复制，不再参与本次发送。
+        bound = prepared["bound_model"]
+        model = bound.bound
         if changed_field == "temperature":
-            model.temperature = 0.8
+            model.model_kwargs = {**model.model_kwargs, "temperature": 0.8}
         else:
             model.image_input_replay = True
-        return prepared
+        return await invoke(prepared, messages, tools)
 
-    monkeypatch.setattr(saver, "prepare_context_for_provider", seal_then_change_model)
-    agent = create_dispatch_agent(
-        model, tools=[inspect_file], checkpointer=saver,
-        execution=dispatch_bridge(
-            session_id=session_id, instruction="已封存后不得改变模型参数",
-            checkpointer=saver, tools=[inspect_file],
-        ),
-    )
-    with (
-        dispatch_execution_scope(saver, session_id, turn_id),
-        pytest.raises(ValueError, match="source-mismatch"),
-    ):
-        await agent.ainvoke({"messages": []}, cast(RunnableConfig, build_checkpoint_config(thread)))
-    assert len(sealed_ids) == 1
-    (snapshot,) = saver.list_context_assemblies(session_id, thread)
-    assert snapshot.assembly_id == sealed_ids[0]
-    assert snapshot.request_hash_preimage["temperature"] == 0.1
-    assert state.requests == []
-    assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
+    monkeypatch.setattr(case.bridge, "_ainvoke", change_then_send)
+    with pytest.raises(ValueError, match="source-mismatch"):
+        await case.dispatch("changed-after-seal")
+    assert len(case.saver.list_context_assemblies(case.session, case.thread)) == 1
+    assert case.controller.transport.call_count == 0
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -1744,10 +1722,12 @@ def _build_toolset_dispatch_case(
     model_type = {
         "responses": BoxteamOpenAIResponsesModel,
         "chat_completions": BoxteamLiteLLMChatModel,
+        "anthropic_messages": BoxteamLiteLLMChatModel,
     }[target_format]
     model = model_type(
-        model="openai/gpt-4.1", api_key=api_key, api_base=endpoint,
-        custom_llm_provider="openai", streaming=True, max_retries=0,
+        model="anthropic/claude-test" if target_format == "anthropic_messages" else "openai/gpt-4.1", api_key=api_key,
+        api_base=endpoint.removesuffix("/v1") if target_format == "anthropic_messages" else endpoint,
+        custom_llm_provider="anthropic" if target_format == "anthropic_messages" else "openai", streaming=True, max_retries=0,
         proxy_routes=ProxyRoutes(()),
     )
     bridge = dispatch_bridge(
@@ -1780,12 +1760,6 @@ def _build_toolset_dispatch_case(
             # handler 只读已成功提交的 assembly，真实 SDK 还会联校 finalized wire/hash。
             handle = read_sealed_assembly_dispatch(invocation_purpose="agent")
             assert handle is not None
-            if target_format == "responses":
-                native, snapshot = handle.native_projection, handle.snapshot
-                assert (native["session_id"], native["assembly_id"], native["plan_hash"]) == (
-                    snapshot.session_id, snapshot.assembly_id, snapshot.plan_hash,
-                )
-                assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
             dispatches.append(handle)
             outbound.append(handle.snapshot)
             return await original_invoke(prepared, messages, tools)
@@ -1881,28 +1855,20 @@ async def toolset_dispatch_case(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
-async def test_dispatch_scope_reuses_validation_and_keeps_copies_admission_and_wire_isolated(
-    toolset_dispatch_case, target_format, monkeypatch,
+async def test_dispatch_scope_keeps_copies_admission_and_wire_isolated(
+    toolset_dispatch_case, target_format,
 ):
     case = toolset_dispatch_case
     snapshot = await case.dispatch("scope-validation-reuse")
     dispatch = case.dispatches[-1]
     reference = dispatch.reference
     frozen_wire = canonical_json_bytes(snapshot.request_hash_preimage)
-    validations = []
-    validate = type(reference).validate_snapshot
-
-    def observe(value, candidate):
-        validations.append(candidate.assembly_id)
-        validate(value, candidate)
-
-    monkeypatch.setattr(type(reference), "validate_snapshot", observe)
     profile = responses_wire_profile(case.model) if target_format == "responses" else chat_wire_profile(case.model)
     with (
         dispatch_execution_scope(case.saver, case.session, case.turn),
         sealed_assembly_dispatch_scope(
             reference, snapshot, resource_refs=dispatch.resource_refs,
-            native_projection=dispatch.native_projection,
+            provider_params=dispatch.provider_params,
         ),
     ):
         # 输入和每次返回的嵌套容器都不能修改 scope 私有封存正文。
@@ -1910,35 +1876,98 @@ async def test_dispatch_scope_reuses_validation_and_keeps_copies_admission_and_w
         first = read_sealed_assembly_dispatch(invocation_purpose="agent")
         assert canonical_json_bytes(first.snapshot.request_hash_preimage) == frozen_wire
         first.snapshot.request_hash_preimage["tools"].clear()
-        if first.native_projection is not None:
-            first.native_projection["request"]["tools"].clear()
+        first.provider_params["tools"].clear()
         second = read_sealed_assembly_dispatch(invocation_purpose="agent")
         assert canonical_json_bytes(second.snapshot.request_hash_preimage) == frozen_wire
-        if second.native_projection is not None:
-            assert second.native_projection["request"]["tools"]
+        assert second.provider_params["tools"]
+        outgoing = read_sealed_provider_request(invocation_purpose="agent", profile=profile, params=dispatch.provider_params)
+        assert canonical_json_bytes(outgoing) == frozen_wire
+        outgoing["tools"].clear()
+        assert canonical_json_bytes(read_sealed_provider_request(
+            invocation_purpose="agent", profile=profile, params=dispatch.provider_params,
+        )) == frozen_wire
         admission = current_execution_admission(langgraph_thread_id=case.thread)
         with (
             execution_admission_scope(replace(admission, execution_id="foreign-execution"), langgraph_thread_id=case.thread),
             pytest.raises(ValueError, match="reference 与当前 execution 不一致"),
         ):
             read_sealed_assembly_dispatch(invocation_purpose="agent")
-        wire = json.loads(frozen_wire)
-        validate_sealed_assembly_dispatch(invocation_purpose="agent", profile=profile, wire_request=wire)
-        wire["tools"].clear()
-        with pytest.raises(ValueError, match="实际 Provider wire"):
-            validate_sealed_assembly_dispatch(invocation_purpose="agent", profile=profile, wire_request=wire)
-        assert validations == [snapshot.assembly_id]
     with (
         dispatch_execution_scope(case.saver, case.session, case.turn),
         pytest.raises(ValueError, match="sealed assembly hash/manifest 非法"),
         sealed_assembly_dispatch_scope(
             reference, replace(second.snapshot, request_hash=sha256_jcs({"tampered": True})),
-            resource_refs=dispatch.resource_refs, native_projection=dispatch.native_projection,
+            resource_refs=dispatch.resource_refs, provider_params=dispatch.provider_params,
         ),
     ):
         raise AssertionError("篡改的 snapshot 不得进入 scope")
     assert case.controller.transport.call_count == 1
     assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_provider_sends_sealed_history_instead_of_rebuilding_later_messages(
+    toolset_dispatch_case, target_format, monkeypatch,
+):
+    case = toolset_dispatch_case
+    invoke = case.bridge._ainvoke
+
+    async def send(prepared, messages, tools):
+        return await invoke(prepared, [HumanMessage(content="不属于本次封存的临时消息")], tools)
+
+    monkeypatch.setattr(case.bridge, "_ainvoke", send)
+    snapshot = await case.dispatch("sealed-history-reuse")
+    assert case.controller.transport.call_count == 1
+    assert "不属于本次封存的临时消息" not in json.dumps(snapshot.request_hash_preimage, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["anthropic_messages"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("call_tool", [False, True])
+async def test_anthropic_sends_native_sealed_body_over_http(
+    native_toolset_dispatch_case, target_format, streaming, synchronous, call_tool, monkeypatch,
+):
+    case = native_toolset_dispatch_case
+    case.model.streaming = streaming
+    case.state.output_tool_name = "inspect_file" if call_tool else None
+    original = case.bridge._ainvoke
+    async def invoke(prepared, messages, tools):
+        result = await asyncio.to_thread(case.bridge._invoke, prepared, messages, tools) if synchronous else await original(prepared, messages, tools)
+        if call_tool:
+            assert result.result[0].tool_calls[0]["name"] == "inspect_file"
+            assert result.result[0].tool_calls[0]["args"] == {"path": "README.md"}
+        else:
+            assert result.result[0].text == case.state.response_text
+        return result
+    monkeypatch.setattr(case.bridge, "_ainvoke", invoke)
+    snapshot = await case.dispatch("native-anthropic-body")
+    assert case.state.requests[-1]["path"] == "/v1/messages"
+    assert snapshot.request_hash_preimage["messages"]
+    assert snapshot.request_hash_preimage["tools"][0]["input_schema"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["anthropic_messages"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_anthropic_http_failure_preserves_sdk_error_classification(
+    native_toolset_dispatch_case, target_format, streaming, synchronous, monkeypatch,
+):
+    from app.runtime.litellm_runtime import litellm
+
+    case = native_toolset_dispatch_case
+    case.model.streaming = streaming
+    case.state.response_status = 401
+    if synchronous:
+        async def invoke(prepared, messages, tools):
+            return await asyncio.to_thread(case.bridge._invoke, prepared, messages, tools)
+        monkeypatch.setattr(case.bridge, "_ainvoke", invoke)
+    with pytest.raises(litellm.AuthenticationError):
+        await case.dispatch("native-anthropic-unauthorized")
+    assert len(case.state.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -1949,7 +1978,7 @@ async def test_typed_dispatch_reference_blocks_each_binding_mismatch_before_http
     case = toolset_dispatch_case
     snapshot = await case.dispatch("reference-source")
     reference = case.dispatches[-1].reference
-    native = case.dispatches[-1].native_projection
+    params = case.dispatches[-1].provider_params
     changes = {
         "session_id": "foreign-session", "thread_id": "foreign-thread",
         "execution_id": "foreign-execution", "attempt_key": "foreign-attempt",
@@ -1963,14 +1992,14 @@ async def test_typed_dispatch_reference_blocks_each_binding_mismatch_before_http
         with (
             dispatch_execution_scope(case.saver, case.session, case.turn),
             pytest.raises(ValueError, match="sealed-assembly binding violation"),
-            sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, resource_refs=(), native_projection=native),
+            sealed_assembly_dispatch_scope(replace(reference, **{field: value}), snapshot, resource_refs=(), provider_params=params),
         ):
             await case.model.ainvoke([])
         assert case.controller.transport.call_count == 1, field
     with (
         pytest.raises(TypeError, match="dispatch reference"),
         # 有意向类型边界注入缺失引用，证明真实发送前拒绝。
-        sealed_assembly_dispatch_scope(None, snapshot, resource_refs=(), native_projection=native),  # pyright: ignore[reportArgumentType]
+        sealed_assembly_dispatch_scope(None, snapshot, resource_refs=(), provider_params=params),  # pyright: ignore[reportArgumentType]
     ):
         await case.model.ainvoke([])
     assert case.controller.transport.call_count == 1
@@ -1985,6 +2014,8 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
     snapshot = await case.dispatch("reference-cold-retry")
     reference = case.dispatches[-1].reference
     original_request = case.request(snapshot)
+    profile = responses_wire_profile(case.model) if target_format == "responses" else chat_wire_profile(case.model)
+    params = responses_wire_params(case.model, kwargs={}) if target_format == "responses" else chat_wire_params(case.model, stop=None, kwargs={}, stream=True)
 
     def unexpected(*_args, **_kwargs):
         raise AssertionError("只读 dispatch 不得重取 CSM/ToolSet 或重新准备")
@@ -2016,7 +2047,9 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
             statements.clear()
             owners.clear()
             assembly_reads.clear()
-            payload = restarted.read_context_for_dispatch(reference)
+            payload = restarted.read_context_for_dispatch(
+                reference, wire_profile=profile, wire_params=params,
+            )
             audits = sum("FROM storage_commits commit_record ORDER BY" in sql and "LIMIT" not in sql for sql in statements)
             measurement = {"attempt": attempt, "full_audits": audits, "assembly_reads": len(assembly_reads)}
             print(f"cold dispatch audits ({target_format}): {measurement}")
@@ -2033,7 +2066,7 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
         assert restarted._prepared_dispatches == {}
         with (
             dispatch_execution_scope(restarted, case.session, case.turn),
-            sealed_assembly_dispatch_scope(reference, payload["snapshot"], resource_refs=payload["resource_refs"], native_projection=payload.get("native_projection")),
+            sealed_assembly_dispatch_scope(reference, payload["snapshot"], resource_refs=payload["resource_refs"], provider_params=payload["provider_params"]),
         ):
             await case.model.bind_tools(payload["tools"]).ainvoke(payload["messages"])
         assert restarted.get_context_assembly(case.session, case.thread, assembly_id=snapshot.assembly_id) == snapshot
@@ -2050,7 +2083,7 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
                 "reference_hash": "foreign-reference",
             }.items():
                 with pytest.raises(ValueError, match="sealed-assembly binding violation"):
-                    restarted.read_context_for_dispatch(replace(reference, **{field: value}))
+                    restarted.read_context_for_dispatch(replace(reference, **{field: value}), wire_profile=profile, wire_params=params)
                 assert case.controller.transport.call_count == 2, field
     assert case.controller.transport.call_count == 2
     assert case.request(snapshot) == original_request
@@ -2202,16 +2235,6 @@ async def test_real_bridge_dispatch_uses_seal_projection_without_post_ack_reread
     assert case.controller.transport.call_count == 1
     body = case.request(snapshot)
     assert snapshot.request_hash_preimage == normalize_wire_request(body)
-    if target_format == "responses":
-        native = handle.native_projection
-        assert native is not None
-        assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
-        assert (native["session_id"], native["assembly_id"], native["plan_hash"]) == (
-            snapshot.session_id, snapshot.assembly_id, snapshot.plan_hash,
-        )
-        assert (body["input"], body["tools"]) == (native["request"]["input"], native["request"]["tools"])
-    else:
-        assert handle.native_projection is None
 
 
 def _select_contract_tools(case, *names):

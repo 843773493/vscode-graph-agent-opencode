@@ -466,6 +466,7 @@ def event_stream_model_factory(monkeypatch: pytest.MonkeyPatch, protocol: str):
         model = model_class(
             model="test-model", api_key="test-key", api_base="https://example.com/v1",
             custom_llm_provider="openai", invocation_purpose="tool_test", max_retries=1,
+            proxy_routes=ProxyRoutes(()),
         )
         return model, opened
 
@@ -598,10 +599,8 @@ async def test_local_preflight_rejection_does_not_create_provider_attempt(
         raise error
 
     module = "app.agents.providers.openai_responses" if protocol == "responses" else "app.agents.providers.litellm_chat"
-    if preflight == "dispatch" and protocol == "chat_completions":
-        monkeypatch.setattr(BoxteamLiteLLMChatModel, "_validate_completion_dispatch", reject)
-    elif preflight == "dispatch":
-        monkeypatch.setattr(f"{module}.validate_sealed_assembly_dispatch", reject)
+    if preflight == "dispatch":
+        monkeypatch.setattr(f"{module}.read_sealed_provider_request", reject)
     elif preflight == "client":
         monkeypatch.setattr(BoxteamLiteLLMChatModel, "_provider_http_client", reject)
     else:

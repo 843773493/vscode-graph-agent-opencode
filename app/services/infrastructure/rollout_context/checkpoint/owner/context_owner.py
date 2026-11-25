@@ -366,6 +366,7 @@ class ContextOwnerMixin(
         *,
         wire_profile: ChatWireProfile | ResponsesWireProfile,
         wire_params: Mapping[str, object],
+        prepared_request: ProviderContextRequest | None = None,
     ) -> ProviderContextRequest:
         """预算与 seal 共用冻结材料；不创建 assembly 或刷新 CSM／工具目录。"""
         snapshot = context.assembly
@@ -384,10 +385,15 @@ class ContextOwnerMixin(
             include_native=isinstance(wire_profile, ResponsesWireProfile),
             wire_profile=wire_profile,
         )
+        if prepared_request is not None and (
+            projection.messages != prepared_request.projection.messages
+            or projection.tools != prepared_request.projection.tools
+        ):
+            raise ValueError("source-mismatch: seal 投影与本次冻结请求不一致")
         return ProviderContextRequest(
             projection=projection,
             semantic_messages=tuple(projection.messages if semantic_messages is None else semantic_messages),
-            wire_request=normalize_wire_request(finalize_provider_wire(
+            wire_request=prepared_request.wire_request if prepared_request is not None else normalize_wire_request(finalize_provider_wire(
                 messages=projection.messages, tools=projection.tools,
                 native_request=None if projection.native is None else projection.native["request"],
                 profile=wire_profile, params=wire_params,

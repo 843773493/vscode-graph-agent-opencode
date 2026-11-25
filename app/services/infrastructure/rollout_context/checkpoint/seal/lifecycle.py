@@ -26,6 +26,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
     ContextProjectionResult,
+    ProviderContextRequest,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.assembly import (
     seal_snapshot,
@@ -67,6 +68,7 @@ def seal_registered_plan(
     registered: ContextPlanRegistration | None = None,
     validated_predecessors: _ValidatedPredecessors | None = None,
     model_capacity: ModelCapacity | None = None,
+    prepared_request: ProviderContextRequest | None = None,
 ) -> ContextPlanSealResult:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     if (wire_profile is None) != (wire_params is None):
@@ -212,6 +214,7 @@ def seal_registered_plan(
             checkpoint_ns=checkpoint_ns,
             wire=wire_projection,
             model_capacity=model_capacity,
+            prepared_request=prepared_request,
             detail=None, required_detail=False, sensitive_detail=False,
             activation_binding=activation_binding,
             prepared_details=prepared_details,

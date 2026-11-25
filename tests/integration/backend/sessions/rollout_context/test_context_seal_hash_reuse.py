@@ -15,7 +15,6 @@ from app.domain.itemized.epoch import tool_set as tool_set_domain
 from app.domain.itemized.epoch.root_compilation import CompiledRootSourceProvenance
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.plans import contributions as contribution_domain
@@ -31,13 +30,7 @@ from app.services.infrastructure.rollout_context.assembly.plans import manifest
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.checkpoint.seal import (
-    assembly as assembly_seal,
-)
-from app.services.infrastructure.rollout_context.checkpoint.seal import lifecycle, retry
-from app.services.infrastructure.rollout_context.runtime.composer import (
-    ContextPlanComposer,
-)
+from app.services.infrastructure.rollout_context.checkpoint.seal import retry
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
 )
@@ -551,87 +544,8 @@ def test_registered_draft_reuse_keeps_first_error_and_distinct_comparison(
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
-    production_context, monkeypatch, target_format,
-):
-    _saver, _session, _thread, _connection, manager, prepare = production_context
-    original_manifest = retry.draft_manifest
-    original_input_hash = lifecycle.seal_input_hash
-    original_plan_hash = ContextRequestPlan.plan_hash
-    original_assembly = ContextPlanComposer.assembly
-    original_wire_hash = assembly_seal._context_request_hash_preimage
-    original_seal = lifecycle.seal_snapshot
-    phase = {"name": "prepare"}
-    manifests, consumed, composed, hashes, finalized = [], [], [], [], []
-
-    def manifest(plan):
-        value = original_manifest(plan)
-        manifests.append(value)
-        return value
-
-    def input_hash(value, *args, **kwargs):
-        consumed.append(value)
-        return original_input_hash(value, *args, **kwargs)
-
-    def plan_hash(plan):
-        hashes.append((phase["name"], plan.plan_state, plan.assembly_id))
-        return original_plan_hash(plan)
-
-    def assembly(composer, *args, **kwargs):
-        previous = phase["name"]
-        phase["name"] = "composer"
-        try:
-            snapshot = original_assembly(composer, *args, **kwargs)
-            composed.append(snapshot)
-            return snapshot
-        finally:
-            phase["name"] = previous
-
-    def wire_hash(plan, *args, **kwargs):
-        previous = phase["name"]
-        phase["name"] = "final-wire"
-        try:
-            finalized.append(plan.assembly_id)
-            return original_wire_hash(plan, *args, **kwargs)
-        finally:
-            phase["name"] = previous
-
-    def seal(*args, **kwargs):
-        phase["name"] = "seal"
-        result = original_seal(*args, **kwargs)
-        phase["name"] = "prepare"
-        return result
-
-    monkeypatch.setattr(retry, "draft_manifest", manifest)
-    monkeypatch.setattr(lifecycle, "seal_input_hash", input_hash)
-    monkeypatch.setattr(ContextRequestPlan, "plan_hash", plan_hash)
-    monkeypatch.setattr(ContextPlanComposer, "assembly", assembly)
-    monkeypatch.setattr(assembly_seal, "_context_request_hash_preimage", wire_hash)
-    monkeypatch.setattr(lifecycle, "seal_snapshot", seal)
-    first = prepare("reuse-first", target_format=target_format)
-    manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
-    second = prepare("reuse-second", target_format=target_format)
-    assert len(manifests) == len(consumed) == len(composed) == 2
-    assert all(value is consumed[index] for index, value in enumerate(manifests))
-    assert finalized == [first["assembly_id"], second["assembly_id"]]
-    assert not [event for event in hashes if event[0] == "final-wire"]
-    assert [event[2] for event in hashes if event[:2] == ("composer", "sealed")] == [
-        first["assembly_id"], second["assembly_id"],
-    ]
-    for provisional, result in zip(composed, (first, second), strict=True):
-        snapshot = result["snapshot"]
-        assert snapshot.plan_hash == provisional.plan_hash
-        assert snapshot.request_hash_preimage != provisional.request_hash_preimage
-        assert snapshot.request_hash != provisional.request_hash
-        assert snapshot.request_hash == context_request_hash(
-            snapshot.as_sealed_plan(), snapshot.provider_version,
-            projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
-            target_format=snapshot.target_format, wire_request=snapshot.request_hash_preimage,
-        )
-
-
-@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
 def test_prepare_persists_canonical_snapshot_and_cold_retry_revalidates(
+    frozen_provider_wire,
     production_context, monkeypatch, target_format,
 ):
     saver, session, thread, connection, _manager, prepare = production_context
@@ -682,8 +596,16 @@ def test_prepare_persists_canonical_snapshot_and_cold_retry_revalidates(
     retried = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
     assert retried["snapshot"].to_dict() == snapshot.to_dict()
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        first = cold.read_context_for_dispatch(prepared["dispatch_ref"])
-        second = cold.read_context_for_dispatch(prepared["dispatch_ref"])
+        first = cold.read_context_for_dispatch(
+            prepared["dispatch_ref"],
+            wire_profile=frozen_provider_wire("production-provider", target_format)["wire_profile"],
+            wire_params=frozen_provider_wire("production-provider", target_format)["wire_params"],
+        )
+        second = cold.read_context_for_dispatch(
+            prepared["dispatch_ref"],
+            wire_profile=frozen_provider_wire("production-provider", target_format)["wire_profile"],
+            wire_params=frozen_provider_wire("production-provider", target_format)["wire_params"],
+        )
     assert first["snapshot"] is not second["snapshot"]
     assert first["snapshot"].to_dict() == second["snapshot"].to_dict() == snapshot.to_dict()
     assert connection.execute(

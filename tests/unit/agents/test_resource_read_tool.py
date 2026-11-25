@@ -6,16 +6,22 @@ import base64
 import hashlib
 import json
 import time
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
+from PIL import Image
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.message import AttachmentRef
+from app.services.infrastructure.attachment_content_service import (
+    AttachmentContentService,
+)
 
 
 @pytest.fixture
@@ -110,11 +116,21 @@ async def test_existing_media_set_is_complete_not_utf8_decoded(read_case, synchr
     workspace, owner, tools = read_case
     name = f"中文 %.{extension.upper()}"
     raw = b"\x89\xff\x00\x80media original"
+    if media_type == "image":
+        with BytesIO() as buffer:
+            Image.new("RGB", (80, 60), "red").save(buffer, format="PNG")
+            raw = buffer.getvalue()
     (workspace / name).write_bytes(raw)
     result = await _read(tools, owner.input_uri(name), synchronous)
     assert result.status == "success", result.content
     block, = result.content_blocks
-    assert block["type"] == media_type and base64.b64decode(block["base64"]) == raw
+    assert block["type"] == media_type
+    if media_type == "image":
+        assert block["mime_type"] == "image/webp"
+        with Image.open(BytesIO(base64.b64decode(block["base64"]))) as preview:
+            assert preview.size == (80, 60)
+    else:
+        assert base64.b64decode(block["base64"]) == raw
     assert block["mime_type"]
     assert result.additional_kwargs["read_file_path"] == owner.input_uri(name)
     assert result.additional_kwargs["resource_navigation"]["truncated"] is False
@@ -124,15 +140,18 @@ async def test_existing_media_set_is_complete_not_utf8_decoded(read_case, synchr
 @pytest.mark.asyncio
 @pytest.mark.parametrize("synchronous", [False, True])
 @pytest.mark.parametrize("vision", [False, True])
-async def test_real_read_image_result_keeps_provider_projection(read_case, synchronous, vision):
+async def test_real_read_image_result_keeps_provider_projection(read_case, synchronous, vision, provider_with_direct_network):
     workspace, owner, tools = read_case
-    raw = b"\x89PNG\r\n\x1a\n"
+    with BytesIO() as buffer:
+        Image.new("RGB", (80, 60), "red").save(buffer, format="PNG")
+        raw = buffer.getvalue()
     (workspace / "image %.png").write_bytes(raw)
     uri = owner.input_uri("image %.png")
     result = await _read(tools, uri, synchronous)
     original = result.model_copy(deep=True)
     model = BoxteamLiteLLMChatModel(model="openai/test-model", api_key="test-key",
-        api_base="https://example.com/v1", provider_id="read-projection", image_input_replay=vision)
+        api_base="https://example.com/v1", provider_id="read-projection", image_input_replay=vision,
+        **provider_with_direct_network)
     messages = model._convert_messages_to_dicts([result])
     wire = messages[0]
     assert wire["role"] == "tool" and wire["tool_call_id"] == result.tool_call_id
@@ -144,13 +163,42 @@ async def test_real_read_image_result_keeps_provider_projection(read_case, synch
         assert source["type"] == "text" and result.tool_call_id in source["text"]
         assert image == {
             "type": "image_url",
-            "image_url": {"url": "data:image/png;base64," + base64.b64encode(raw).decode()},
+            "image_url": {"url": "data:image/webp;base64," + result.content_blocks[0]["base64"]},
         }
     else:
         assert len(messages) == 1
         block, = wire["content"]
         assert block["type"] == "text" and uri in block["text"]
     assert result == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_image_attachment_and_read_file_share_model_preview(read_case, synchronous):
+    workspace, _, tools = read_case
+    path = workspace / "large.png"
+    with Image.new("RGB", (3000, 2000), "red") as image:
+        image.save(path)
+    original = path.read_bytes()
+    result = await _read(tools, path.name, synchronous)
+    assert result.status == "success", result.content
+    block, = result.content_blocks
+    service = AttachmentContentService(workspace_root=workspace)
+    attachment_preview = service.image_preview_data_url(AttachmentRef(file_id=path.name, content_type="image/png"))
+    assert attachment_preview == "data:image/webp;base64," + block["base64"]
+    with Image.open(BytesIO(base64.b64decode(block["base64"]))) as image:
+        assert max(image.size) <= 2048 and image.width * image.height <= 2_500_000
+    assert path.read_bytes() == original
+    assert result.additional_kwargs["resource_navigation"]["content_hash"] == "sha256:" + hashlib.sha256(original).hexdigest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_invalid_image_is_a_failed_tool_result(read_case, synchronous):
+    workspace, _, tools = read_case
+    (workspace / "invalid.png").write_bytes(b"not an image")
+    result = await _read(tools, "invalid.png", synchronous)
+    assert result.status == "error" and not isinstance(result.content, list)
 
 
 @pytest.mark.asyncio

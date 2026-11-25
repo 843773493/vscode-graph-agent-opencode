@@ -48,6 +48,7 @@ FILESYSTEM_TOOL_DESCRIPTIONS = {
         "Text uses 1-indexed line_offset and optional max_lines. Full-byte reads return sha256 content_hash for "
         "conditional writes even when displayed lines are truncated; incomplete byte windows have no version. "
         "Images, audio, video and PDFs return multimodal content without pagination; media must fit both byte budgets. "
+        "Images return a bounded first-frame preview with EXIF orientation applied; the original file and its content_hash are preserved. "
         "Skill reads do not activate instructions; use skill_load. Never read `.boxteam` paths directly. "
         "max_bytes includes skipped lines; increase it explicitly for later lines."
     ),

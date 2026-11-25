@@ -8,6 +8,7 @@ import time
 import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
 from app.agents.summarization.generation import CompactionGenerator, SummaryCallBudget
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -364,7 +365,11 @@ async def test_model_preparation_starts_background_then_adopts_ready_without_sec
     ref, namespace, _deadline = CompactionTaskHandler.descriptor_input(handles[0].descriptor)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         task_input = cold._storage.compactions.read_task_input(session, _thread, ref, checkpoint_ns=namespace)
-        instruction = str(cold.read_context_for_dispatch(summary.dispatch_ref)["snapshot"].request_hash_preimage["messages"][-1]["content"])
+        instruction = str(cold.read_context_for_dispatch(
+            summary.dispatch_ref,
+            wire_profile=responses_wire_profile(model) if summary.dispatch_ref.target_format == "responses" else chat_wire_profile(model),
+            wire_params=responses_wire_params(model, kwargs={}) if summary.dispatch_ref.target_format == "responses" else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+        )["snapshot"].request_hash_preimage["messages"][-1]["content"])
     target = task_input.target_constraint
     assert target["capacity"] == prepared.capacity.model_dump(mode="json")
     assert target["retained_input_tokens"] == retained.estimate.input_tokens

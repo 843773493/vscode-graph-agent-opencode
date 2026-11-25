@@ -19,7 +19,6 @@ from urllib.parse import unquote_to_bytes
 
 import portalocker
 from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
-from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.core.atomic_fs import fsync_directory
@@ -45,6 +44,11 @@ from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.runtime.image_preparation import (
+    IMAGE_SOURCE_MAX_BYTES,
+    MODEL_IMAGE_MAX_EDGE,
+    prepare_image,
+)
 from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.turn import ThreadAttachmentListDTO, TurnAttachmentDTO
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
@@ -373,14 +377,17 @@ class AttachmentBlobStore(AttachmentUploadsMixin, WorkingCopiesMixin, ForkAttach
             raise mark_public_failure(error, str(error))
         return target
 
-    def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
+    def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None, max_bytes: int | None = None) -> ResourceFileContent:
         attachment_id, children = self._resource_id(file_id, session_id=session_id, thread_id=owner_thread_id)
         with self.access_files(attachment_id), workspace_file_mutation_lock(self._workspace_root):
             path = resolve_attachment_file(self._ensure_directory_locked(attachment_id), children)
             if not path.is_file():
                 raise FileNotFoundError(f"附件文件不存在：{file_id}")
             try:
-                data = path.read_bytes()
+                with path.open("rb") as stream:
+                    data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+                if max_bytes is not None and len(data) > max_bytes:
+                    raise ValueError(f"附件文件超过 {max_bytes} 字节上限：{file_id}")
             except OSError as error:
                 raise OSError(error.errno, error.strerror, file_id) from error
             version = self._catalog.file_version(attachment_id, "/".join(children))
@@ -423,8 +430,8 @@ class AttachmentBlobStore(AttachmentUploadsMixin, WorkingCopiesMixin, ForkAttach
         return result
 
     def read_thumbnail(self, session_id: str | None, file_id: str, *, max_edge: int = 512) -> ResourceFileContent:
-        if not 64 <= max_edge <= 1024:
-            raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
+        if not 64 <= max_edge <= MODEL_IMAGE_MAX_EDGE:
+            raise ValueError(f"图片缩略图 max_edge 必须在 64 到 {MODEL_IMAGE_MAX_EDGE} 之间")
         attachment_id, _ = self._resource_id(file_id, session_id=session_id)
         with self.access_files(attachment_id):
             result = self._read_thumbnail_held(session_id, file_id, attachment_id=attachment_id, max_edge=max_edge)
@@ -436,20 +443,14 @@ class AttachmentBlobStore(AttachmentUploadsMixin, WorkingCopiesMixin, ForkAttach
         root = self.ensure_directory(attachment_id)
         if max_edge == 512 and version is not None and (root / "preview/512.webp").is_file():
             return self.read(session_id, uri)
-        source = self.read(session_id, file_id)
+        source = self.read(session_id, file_id, max_bytes=IMAGE_SOURCE_MAX_BYTES)
         if not source.content_type.startswith("image/"):
             raise ValueError(f"附件不是图片，无法生成缩略图：{file_id}")
         try:
-            with Image.open(BytesIO(source.data)) as image:
-                normalized = ImageOps.exif_transpose(image)
-                normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-                if normalized.mode not in {"RGB", "RGBA"}:
-                    normalized = normalized.convert("RGBA" if "A" in normalized.mode else "RGB")
-                output = BytesIO()
-                normalized.save(output, format="WEBP", quality=78, method=4)
-        except (OSError, ValueError) as error:
+            preview = prepare_image(BytesIO(source.data), max_edge=max_edge)
+        except OSError as error:
             raise ValueError(f"附件图片已损坏或不是有效图片：{file_id}") from error
-        content = output.getvalue()
+        content = preview.data
         if max_edge == 512:
             with self.directory_access(attachment_id), workspace_file_mutation_lock(self._workspace_root):
                 root = self._ensure_directory_locked(attachment_id)
@@ -467,7 +468,7 @@ class AttachmentBlobStore(AttachmentUploadsMixin, WorkingCopiesMixin, ForkAttach
                 digest = "sha256:" + hashlib.sha256(content).hexdigest()
                 save_file_version(self._attachments_root, content, digest=digest, length=len(content), attachment_id=attachment_id)
                 self._catalog.publish_file_version(AttachmentFileVersion(attachment_id, "preview/512.webp", "preview", digest, len(content), None, "image/webp"))
-        return ResourceFileContent(content, "image/webp")
+        return preview
 
     @asynccontextmanager
     async def admit_directory(self, attachment_id: str) -> AsyncIterator[None]:

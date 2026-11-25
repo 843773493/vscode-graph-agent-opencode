@@ -40,6 +40,7 @@ from app.services.infrastructure.rollout_context.assembly.seal_preflight import 
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
     ContextProjectionInput,
     ContextProjectionResult,
+    ProviderContextRequest,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
@@ -87,6 +88,7 @@ def _project_wire_snapshot(
     checkpoint_ns: str,
     activation: ResourceActivationSnapshotRef | None,
     model_capacity: ModelCapacity | None,
+    prepared_request: ProviderContextRequest | None,
 ) -> tuple[ContextAssemblySnapshot, ContextProjectionResult]:
     """在 authority 读取已关闭后生成本次 wire；不重读 canonical 正文。"""
     bodies = owner._request_content_for_plan(
@@ -96,6 +98,7 @@ def _project_wire_snapshot(
     request = owner.project_frozen_context_request(
         ContextProjectionInput(snapshot, sealed_plan, activation), items, bodies,
         wire_profile=wire_profile, wire_params=wire_params,
+        prepared_request=prepared_request,
     )
     preimage = request.wire_request
     if model_capacity is not None and model_capacity.capacity_known:
@@ -160,6 +163,7 @@ def seal_snapshot(
     prepared_details: tuple[PreparedDetail, ...] = (),
     validated_predecessors: _ValidatedPredecessors | None = None,
     model_capacity: ModelCapacity | None = None,
+    prepared_request: ProviderContextRequest | None = None,
 ) -> tuple[ContextAssemblySealReceipt, ContextProjectionResult | None]:
     source_refs = tuple(
         entry.ref for entry in snapshot.selection
@@ -189,6 +193,7 @@ def seal_snapshot(
                 owner, snapshot, sealed_plan, items, prepared_details, wire[0], wire[1], checkpoint_ns,
                 activation_binding.snapshot if activation_binding is not None else None,
                 model_capacity,
+                prepared_request,
             )
         except BaseException as error:
             record_failed_seal(

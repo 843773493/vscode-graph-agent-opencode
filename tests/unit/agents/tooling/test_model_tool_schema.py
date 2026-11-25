@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import weakref
 from typing import Any, ClassVar
 
 import pytest
@@ -8,7 +10,7 @@ from jsonschema import Draft202012Validator, SchemaError
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 from app.agents import model_tool_schema
@@ -33,6 +35,81 @@ def schema_checks(monkeypatch: pytest.MonkeyPatch) -> list[object]:
 
     monkeypatch.setattr(Draft202012Validator, "check_schema", staticmethod(track))
     return checked
+
+
+def test_public_model_reused_across_tools_without_sharing_execution_context() -> None:
+    class Input(BaseModel):
+        count: int = Field(ge=1)
+
+    def create(label: str) -> StructuredTool:
+        return StructuredTool(
+            name="shared", description="共享声明，独立运行上下文", args_schema=Input,
+            func=lambda count: f"{label}:{count}",
+        )
+
+    first, second = create("first"), create("second")
+    first_export = export_model_tool_json_schema(first)
+    second_export = export_model_tool_json_schema(second)
+    assert first.tool_call_schema is second.tool_call_schema
+    assert first_export == second_export
+    first_export["properties"]["count"]["minimum"] = -1
+    assert export_model_tool_json_schema(second)["properties"]["count"]["minimum"] == 1
+    assert first.invoke({"count": "2"}) == "first:2"
+    assert second.invoke({"count": 3}) == "second:3"
+    with pytest.raises(ValidationError):
+        validate_model_tool_arguments(second, {"count": 0})
+    references = weakref.ref(first), weakref.ref(second)
+    del first, second
+    gc.collect()
+    assert all(reference() is None for reference in references)
+
+
+def test_public_model_tracks_reassignment_and_model_copy() -> None:
+    class Input(BaseModel):
+        value: str
+
+    class Replacement(BaseModel):
+        value: int
+
+    target = StructuredTool(name="original", description="原定义", args_schema=Input)
+    original = get_model_tool_schema(target)
+    target.name = "renamed"
+    renamed = get_model_tool_schema(target)
+    assert renamed is not original
+    assert renamed.model_json_schema()["title"] == "renamed"
+    target.description = "新描述"
+    assert get_model_tool_schema(target).model_json_schema()["description"] == "新描述"
+    target.args_schema = Replacement
+    assert export_model_tool_json_schema(target)["properties"]["value"]["type"] == "integer"
+    copied = target.model_copy(update={"name": "original", "description": "原定义", "args_schema": Input})
+    assert get_model_tool_schema(copied) is original
+    assert export_model_tool_json_schema(target)["properties"]["value"]["type"] == "integer"
+
+
+def test_shared_public_model_keeps_injected_fields_private() -> None:
+    class Input(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+        value: str
+        runtime: ToolRuntime
+
+    targets = [StructuredTool(name="injected", description="后端注入", args_schema=Input) for _ in range(2)]
+    for target in targets:
+        assert set(export_model_tool_json_schema(target)["properties"]) == {"value"}
+        with pytest.raises(ValueError, match="后端注入参数不得由模型提供"):
+            validate_model_tool_arguments(target, {"value": "ok", "runtime": {}})
+    assert targets[0].tool_call_schema is targets[1].tool_call_schema
+
+
+def test_custom_public_schema_remains_owned_by_tool() -> None:
+    class CustomSchemaTool(StructuredTool):
+        @property
+        def tool_call_schema(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {self.description: {"type": "string"}}}
+
+    target = CustomSchemaTool(name="custom", description="before", args_schema={"type": "object"})
+    assert set(export_model_tool_json_schema(target)["properties"]) == {"before"}
+    target.description = "after"
+    assert set(export_model_tool_json_schema(target)["properties"]) == {"after"}
 
 
 def test_model_tool_schema_excludes_runtime_from_all_public_operations() -> None:

@@ -97,7 +97,7 @@ def model_request_url(connection: Mapping[str, Any]) -> str:
 
 
 def anthropic_request_body(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """封存与发送校验复用 LiteLLM 自身的 Anthropic 正文转换，不发送请求。"""
+    """用 LiteLLM 生成一次最终 Anthropic 正文，供封存和直接发送。"""
     sdk = _import_litellm()
     from litellm.utils import get_optional_params
 

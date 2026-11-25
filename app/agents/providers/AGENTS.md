@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-`app/agents/providers/` 存放 LangChain `BaseChatModel` 包装层。Chat Completions 走 LiteLLM `completion/acompletion`，OpenAI Responses API 走 LiteLLM `responses/aresponses`；本目录负责把各模型输出统一成经过 `message_content_schema.py` 校验的 **LangChain 有序 content blocks**，供 `app/services/orchestration/agent_execution_service` 通过 SSE 推送给前端、并写入 LangGraph checkpoint 用于多轮对话。
+`app/agents/providers/` 存放 LangChain `BaseChatModel` 包装层。OpenAI Chat Completions 走 LiteLLM `completion/acompletion`，Anthropic Messages 直发封存正文并复用 LiteLLM 传输与响应解析，OpenAI Responses API 走 LiteLLM `responses/aresponses`；本目录负责把各模型输出统一成经过 `message_content_schema.py` 校验的 **LangChain 有序 content blocks**，供 `app/services/orchestration/agent_execution_service` 通过 SSE 推送给前端、并写入 LangGraph checkpoint 用于多轮对话。
 
 本目录是"接入新模型"的入口：所有 provider 实现 + 它们的格式自检工具都在这里。
 
@@ -46,9 +46,9 @@ def test_xxx_provider_format():
 
 `api_key` / `api_base` / `model` 都走构造参数；测试里用 `example.com` 之类占位即可。
 
-### 4. 历史消息回环必须走 `_convert_messages_to_dicts`
+### 4. 历史消息只在所属请求生成边界投影
 
-provider 历史消息从 LangGraph checkpoint 读出后，**必须**经过本方法的转换再发回后端；不要在调用方另写一份 role 映射（LangChain `HumanMessage.type == "human"`、AIMessage 是 `"ai"`，但 OpenAI 风格后端要 `"user"` / `"assistant"`）。`_format_check.check_history_messages_accepted` 已在自检中覆盖这条契约。
+历史消息的协议转换统一由 `wire_finalize.py` 实现，不在调用方另写 role、媒体或 reasoning 映射。正式 Agent 直接消费本次封存的最终正文；封存作用域完整核对正文和引用，发送时只核对当前参数、profile 与执行归属，不重建历史或重复计算全文摘要。Anthropic Messages 正文经 `runtime/anthropic_messages.py` 直接进入 LiteLLM 的 HTTP 传输与响应解析，不再交回 Chat 输入转换。显式非 Agent 模型测试在发送前生成一次正文，也使用同一发送入口；`_convert_messages_to_dicts` 供历史格式自检复用。`_format_check.check_history_messages_accepted` 覆盖消息转换合同。
 
 ### 5. 工具结果媒体必须经过 `project_tool_message_content`
 

@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.agents.providers.wire_finalize import chat_wire_profile, chat_wire_params, responses_wire_profile, responses_wire_params
 from app.agents.summarization.generation import CompactionGenerator, SummaryCallBudget
 from app.agents.summarization.state import (
     CompactionReductionError,
@@ -55,7 +56,11 @@ async def test_summary_keeps_source_update_after_excluded_canonical_tail(generat
     result = await CompactionGenerator(saver=saver, model=model, activation=activation).generate(
         candidate, budget=SummaryCallBudget(time.time() + 30),
     )
-    wire = saver.read_context_for_dispatch(result.dispatch_ref)["snapshot"].request_hash_preimage
+    wire = saver.read_context_for_dispatch(
+        result.dispatch_ref,
+        wire_profile=responses_wire_profile(model) if result.dispatch_ref.target_format == "responses" else chat_wire_profile(model),
+        wire_params=responses_wire_params(model, kwargs={}) if result.dispatch_ref.target_format == "responses" else chat_wire_params(model, stop=None, kwargs={}, stream=True),
+    )["snapshot"].request_hash_preimage
     assert "SOURCE_UPDATED_AFTER_TAIL" in str(wire)
     assert "UNSELECTED_LATEST_INPUT" not in str(wire)
     assert result.source_versions == (("instruction:R01", "instructions:2"),)

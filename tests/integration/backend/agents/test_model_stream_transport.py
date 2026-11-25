@@ -28,6 +28,7 @@ from app.agents.providers.wire_finalize import (
     responses_wire_params,
     responses_wire_profile,
 )
+from app.runtime.network_proxy import ProxyRoutes
 from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -164,11 +165,9 @@ class SealedTransportOwner:
             assert self.saver.get_context_assembly(
                 self.owner.session_id, self.owner.thread_id, assembly_id=snapshot.assembly_id,
             ) == snapshot
-            native = self.saver.project_context_plan_to_native(
-                self.owner.session_id, self.owner.thread_id, prepared["plan"],
-            ) if responses else None
             with sealed_assembly_dispatch_scope(
-                prepared["dispatch_ref"], snapshot, resource_refs=prepared["resource_refs"], native_projection=native,
+                prepared["dispatch_ref"], snapshot, resource_refs=prepared["resource_refs"],
+                provider_params=prepared["provider_params"],
             ):
                 yield prepared["messages"]
 
@@ -214,6 +213,7 @@ def _model(*, api_key: str = "test-key", no_proxy: bool = False) -> BoxteamLiteL
         custom_llm_provider="openai",
         no_proxy=no_proxy,
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -225,6 +225,7 @@ def _chat_tool_model() -> BoxteamLiteLLMChatModel:
         custom_llm_provider="openai",
         provider_id="primary",
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -235,6 +236,7 @@ def _sequence_model() -> BoxteamLiteLLMChatModel:
         api_base="https://provider.example/v1",
         custom_llm_provider="openai",
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 
@@ -331,6 +333,7 @@ def _responses_model() -> BoxteamOpenAIResponsesModel:
         provider_id="backup_3",
         responses_store=False,
         streaming=True,
+        proxy_routes=ProxyRoutes(()),
     )
 
 

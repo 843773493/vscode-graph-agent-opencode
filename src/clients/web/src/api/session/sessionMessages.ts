@@ -16,7 +16,7 @@ import type { LLMRequestLogReferenceDTO, LLMRequestLogLocationDTO, TraceLocation
 import type { TraceEvent } from "../../types/backend";
 import { HttpRequestError } from "../http";
 import {
-  freezeMessageSubmission, loadMessageSubmissions, rejectMessageSubmission, releaseMessageSubmission,
+  freezeMessageSubmission, loadMessageSubmissions, messageSubmissionKey, rejectMessageSubmission, releaseMessageSubmission,
   type FrozenMessageSubmission, type MessageSubmissionOwner,
 } from "../../state/messageSubmissions/storage";
 import type { MessageSubmissionResultDTO as GeneratedSubmissionResult } from "../../types/protocol_generated/boxteam/workspace/v2/public";
@@ -355,32 +355,43 @@ export class MessageSubmissionRejectedError extends Error {
   }
 }
 
+const activeMessageSubmissions = new Map<string, number>();
+
 /** 只按冻结输入提交；网络失败先查原身份，不把队列缺项当作未接收。 */
 export async function submitFrozenMessage(port: number, record: FrozenMessageSubmission): Promise<MessageRunAccepted> {
   if (record.state === "rejected") throw new MessageSubmissionRejectedError(record.request.operation_id, record.error ?? "消息已被拒绝，请编辑后重新提交");
   const { owner, request } = record;
-  let accepted: MessageRunAccepted;
+  const key = JSON.stringify([messageSubmissionKey(owner), request.operation_id]);
+  // 只记录本页面尚在发送的请求；接收事实和刷新恢复仍归后端及原持久输入。
+  activeMessageSubmissions.set(key, (activeMessageSubmissions.get(key) ?? 0) + 1);
   try {
-    accepted = await sendMessage(port, owner.sessionId, request, owner.workspaceKey, owner.threadId);
-  } catch (error) {
-    let result: Awaited<ReturnType<typeof queryMessageSubmission>>;
+    let accepted: MessageRunAccepted;
     try {
-      result = await queryMessageSubmission(port, owner, request.operation_id);
-    } catch (queryError) {
-      throw new MessageSubmissionUnknownError(request.operation_id, queryError);
+      accepted = await sendMessage(port, owner.sessionId, request, owner.workspaceKey, owner.threadId);
+    } catch (error) {
+      let result: Awaited<ReturnType<typeof queryMessageSubmission>>;
+      try {
+        result = await queryMessageSubmission(port, owner, request.operation_id);
+      } catch (queryError) {
+        throw new MessageSubmissionUnknownError(request.operation_id, queryError);
+      }
+      if (result.status === "accepted" && result.accepted) accepted = result.accepted;
+      else if (error instanceof HttpRequestError && [400, 422].includes(error.status)) {
+        // 消息入口在准入前拒绝且原身份查询未接收，才允许用户编辑为新操作。
+        try { await rejectMessageSubmission(record, error.message); }
+        catch (storageError) { throw new MessageSubmissionUnknownError(request.operation_id, storageError); }
+        throw new MessageSubmissionRejectedError(request.operation_id, error);
+      } else throw new MessageSubmissionUnknownError(request.operation_id, error);
     }
-    if (result.status === "accepted" && result.accepted) accepted = result.accepted;
-    else if (error instanceof HttpRequestError && [400, 422].includes(error.status)) {
-      // 消息入口在准入前拒绝且原身份查询未接收，才允许用户编辑为新操作。
-      try { await rejectMessageSubmission(record, error.message); }
-      catch (storageError) { throw new MessageSubmissionUnknownError(request.operation_id, storageError); }
-      throw new MessageSubmissionRejectedError(request.operation_id, error);
-    } else throw new MessageSubmissionUnknownError(request.operation_id, error);
+    // 接收已确定时，清理失败仍按原身份恢复，不能让 Composer 生成新操作重发。
+    try { await releaseMessageSubmission(record); }
+    catch (error) { throw new MessageSubmissionUnknownError(request.operation_id, error); }
+    return accepted;
+  } finally {
+    const remaining = activeMessageSubmissions.get(key)! - 1;
+    if (remaining) activeMessageSubmissions.set(key, remaining);
+    else activeMessageSubmissions.delete(key);
   }
-  // 接收已确定时，清理失败仍按原身份恢复，不能让 Composer 生成新操作重发。
-  try { await releaseMessageSubmission(record); }
-  catch (error) { throw new MessageSubmissionUnknownError(request.operation_id, error); }
-  return accepted;
 }
 
 /** 刷新只对账原操作；未知结果保留，不用新身份补发，拒绝项不自动发送。 */
@@ -390,7 +401,9 @@ export async function reconcileMessageSubmissions(port: number, owner: MessageSu
   const results: Array<{ record: FrozenMessageSubmission; accepted: MessageRunAccepted | null }> = [];
   for (const record of records) {
     signal?.throwIfAborted();
-    if (record.state === "rejected") { results.push({ record, accepted: null }); continue; }
+    if (record.state === "rejected" || activeMessageSubmissions.has(JSON.stringify([messageSubmissionKey(owner), record.request.operation_id]))) {
+      results.push({ record, accepted: null }); continue;
+    }
     const result = await queryMessageSubmission(port, owner, record.request.operation_id, signal);
     signal?.throwIfAborted();
     if (result.status === "accepted" && result.accepted) {
