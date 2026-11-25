@@ -230,11 +230,10 @@ export function messageStreamTurnIdForSession(
     return null;
   }
 
-  // TODO：pending 镜像先退休而 Turn 仍 accepted、流仍 open 时，这里会失去订阅候选。
-  // 按 2026-11-25 的收口裁定保留此延迟线索，后续核对 Turn 退休与消息流终态的时序。
   const pendingTurnsByThread = new Map<string, Set<string>>();
   for (const conversation of pending) {
     if (conversation.threadId === undefined || conversation.turnId === undefined) continue;
+    if (timeline?.threadId && conversation.threadId !== timeline.threadId) continue;
     let turnIds = pendingTurnsByThread.get(conversation.threadId);
     if (!turnIds) {
       turnIds = new Set();
@@ -243,17 +242,30 @@ export function messageStreamTurnIdForSession(
     turnIds.add(conversation.turnId);
   }
 
+  const streamsByThread = preferredStreamsBySession(
+    state.messageStreamsByTurnStream ?? new Map(), sessionCacheKey,
+  ).get(sessionId);
+  // 队列可以先退休；已确认的最新未结束 Turn 仍需消费消息流尾帧。
+  // 不跨 Turn 比较事件序号，避免旧回合的高序号 open 镜像抢走当前订阅。
+  const latestTurnId = timeline?.orderedTurnIds.at(-1);
+  const latestTurn = latestTurnId ? timeline?.turnsById[latestTurnId] : undefined;
+  if (timeline?.threadId && timeline.scopeKey === sessionCacheKey
+    && !timeline.restoredFromCache
+    && !timeline.hasAfter && latestTurn?.session_id === sessionId) {
+    // 历史已接管终态且 live 镜像退休后，不再消费旧 open 流。
+    if (TERMINAL_TURN_STATUSES.has(latestTurn.status)
+      && !pendingTurnsByThread.get(timeline.threadId)?.has(latestTurn.turn_id)) return null;
+    const stream = streamsByThread?.get(timeline.threadId)?.get(latestTurn.turn_id);
+    return stream && !isTerminalStatus(stream.streamStatus) ? stream.turnId : null;
+  }
+
   let candidate: MessageStreamState | undefined;
-  for (const stream of state.messageStreamsByTurnStream?.values() ?? []) {
-    if (
-      stream.sessionCacheKey !== sessionCacheKey
-      || stream.sessionId !== sessionId
-      || !pendingTurnsByThread.get(stream.threadId)?.has(stream.turnId)
-      || isTerminalStatus(stream.streamStatus)
-    ) {
-      continue;
+  for (const [threadId, streams] of streamsByThread ?? []) {
+    for (const stream of streams.values()) {
+      if (!pendingTurnsByThread.get(threadId)?.has(stream.turnId)
+        || isTerminalStatus(stream.streamStatus)) continue;
+      if (!candidate || stream.lastEventSeq > candidate.lastEventSeq) candidate = stream;
     }
-    if (!candidate || stream.lastEventSeq > candidate.lastEventSeq) candidate = stream;
   }
   return candidate?.turnId ?? null;
 }
