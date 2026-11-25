@@ -276,6 +276,31 @@ async function flushReconnectRounds(
 }
 
 describe("useSessionMessageStream 有界重连", () => {
+  test("同步探测卸载不发订阅，存活挂载在微任务中立即订阅", async () => {
+    installGatewayTestWindow(49_760);
+    const { Harness } = streamHarness({
+      port: 49_760, sessionId: "ses_effect_probe", turnId: "turn_effect_probe", workspaceId: WORKSPACE_KEY,
+    });
+    const signals: AbortSignal[] = [];
+    spyOn(messageStreamApi, "streamSessionMessageEvents").mockImplementation(async (_port, _session, _turn, options) => {
+      signals.push(options!.signal!);
+      await new Promise<void>(resolve => options!.signal!.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<Harness />); });
+    act(() => renderer.unmount());
+    act(() => { renderer = create(<Harness />); });
+    expect(signals).toHaveLength(0);
+    try {
+      await act(async () => { await Promise.resolve(); });
+      expect(signals).toHaveLength(1);
+      expect(signals[0]!.aborted).toBe(false);
+    } finally {
+      act(() => renderer.unmount());
+    }
+    expect(signals[0]!.aborted).toBe(true);
+  });
+
   test("显式重新同步撤销旧订阅，只为原 Thread 建立一次新订阅", async () => {
     installGatewayTestWindow(49_760);
     const sessionId = "ses_reload_status";

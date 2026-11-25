@@ -351,15 +351,14 @@ export function useSessionMessageStream({
         reconnectAttempt += 1;
       }
     };
-    // StrictMode 会在开发/热更新探测时先执行一次 effect cleanup。延迟首个
-    // 网络订阅可以让这次探测在发出 fetch 前结束，避免真实 SSE 被主动 abort。
-    const connectTimerId = window.setTimeout(() => {
+    // StrictMode 的同步 cleanup 先撤销探测订阅；存活的 effect 在微任务中
+    // 立即连接，不为每个新 Turn 添加固定等待。
+    queueMicrotask(() => {
       void connect();
-    }, 120);
+    });
 
     return () => {
       unregisterObservation();
-      window.clearTimeout(connectTimerId);
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };
