@@ -38,6 +38,7 @@ turn/
 - 局部 hook 只管理单个 Turn 的交互状态。
 - 不把跨 Turn 的 transcript、虚拟滚动或历史分页移入本目录。
 - Response body 保持纯组件，复杂聚合复用 `state/` 纯函数。
+- 已终态 Turn 的 memo 比较同时核对消息流镜像；Job／Turn revision 不替代后到失败帧的展示版本。
 - 产品文案与派生状态使用 `shared/core/i18n`；保持用户和模型正文、工具参数、结果及原始错误，不回写翻译到历史。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。
 

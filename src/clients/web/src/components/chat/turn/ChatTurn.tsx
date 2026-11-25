@@ -198,6 +198,15 @@ export function areChatTurnPropsEqual(
     && left.status === right.status
     && left.pending === right.pending
     && left.jobId === right.jobId
+    // Job 终态与消息流独立交付；同 Turn revision 仍须显示后到的失败与诊断。
+    && left.messageStream?.connectionStatus === right.messageStream?.connectionStatus
+    && left.messageStream?.streamStatus === right.messageStream?.streamStatus
+    && left.messageStream?.lastEventSeq === right.messageStream?.lastEventSeq
+    && left.messageStream?.failure === right.messageStream?.failure
+    && left.messageStream?.protocolError === right.messageStream?.protocolError
+    && left.messageStream?.activeState === right.messageStream?.activeState
+    && left.messageStream?.activities === right.messageStream?.activities
+    && left.messageStream?.resumable === right.messageStream?.resumable
     && responseItemsEqual(left.responseItems, right.responseItems)
     && left.events.length === right.events.length
     && lastEventId(left) === lastEventId(right)

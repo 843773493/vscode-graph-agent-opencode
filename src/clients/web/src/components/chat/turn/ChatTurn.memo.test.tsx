@@ -7,6 +7,35 @@ import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
 describe("ChatTurn memo 比较", () => {
+  test.each(["终态帧", "同序号失败详情"])("Job 已失败后立即显示后到的消息流%s", (phase) => {
+    const previous = conversation("error", "job_failed");
+    previous.displayMode = "live";
+    previous.turnRevision = 2;
+    previous.responseItems = [];
+    previous.assistantMessages = [];
+    previous.messageStream = {
+      connectionStatus: phase === "终态帧" ? "connected" : "terminal",
+      streamStatus: phase === "终态帧" ? "open" : "failed",
+      lastEventSeq: 2,
+      failure: null,
+      resumable: false,
+    };
+    const message = "自定义扩展工具 factory 必须返回 BaseTool";
+    const next = { ...previous, messageStream: {
+      ...previous.messageStream,
+      connectionStatus: "terminal" as const,
+      streamStatus: "failed" as const,
+      failure: { code: "execution_error", message, details: {}, afterInterruptRequested: false, resumable: false },
+    } };
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<ChatTurn {...chatTurnProps(previous)} />); });
+    try {
+      expect(JSON.stringify(renderer.toJSON())).not.toContain(message);
+      act(() => { renderer.update(<ChatTurn {...chatTurnProps(next)} />); });
+      expect(JSON.stringify(renderer.toJSON())).toContain(message);
+    } finally { act(() => renderer.unmount()); }
+  });
+
   test("同revision的执行证据或结果更新不会被正文复用挡住", () => {
     const previous = conversation("done");
     previous.turnRevision = 2;
@@ -110,6 +139,10 @@ describe("ChatTurn memo 比较", () => {
     first.turnId = "job_1";
     first.turnRevision = 4;
     first.turnItemsView = "full";
+    first.messageStream = {
+      connectionStatus: "terminal", streamStatus: "completed", lastEventSeq: 3,
+      failure: null, resumable: false,
+    };
     let renderer: ReactTestRenderer;
 
     act(() => {
@@ -119,6 +152,7 @@ describe("ChatTurn memo 比较", () => {
     reconstructed.turnId = "job_1";
     reconstructed.turnRevision = 4;
     reconstructed.turnItemsView = "full";
+    reconstructed.messageStream = { ...first.messageStream };
     act(() => {
       renderer!.update(<MemoProbe value={chatTurnProps(reconstructed)} />);
     });
