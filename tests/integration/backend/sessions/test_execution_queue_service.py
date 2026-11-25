@@ -6,7 +6,7 @@ import json
 import shutil
 import threading
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +14,11 @@ import portalocker
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.agents.graph_binding import (
+    DEEP_AGENT_CAPABILITY_PROFILE,
+    DEEP_AGENT_GRAPH_BINDING,
+    compute_capability_profile_hash,
+)
 from app.core.identifier import create_prefixed_id
 from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -36,6 +41,9 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     VIEW_CREATION_MIGRATION_SQL,
 )
 from app.services.orchestration.execution_queue import ExecutionQueueService
+from app.services.orchestration.owner_thread_creation_factory import (
+    OwnerThreadCreationFactory,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema24,
@@ -124,6 +132,65 @@ async def test_cold_projection_reads_canonical_body_and_frozen_identity(queue_ca
     with case.saver._storage.storage.read_connection(case.session, case.thread) as connection:
         serialized, = connection.execute("SELECT input_json FROM execution_queue").fetchone()
     assert "不可变正文" not in serialized and "content" not in json.loads(serialized)
+
+
+async def test_queue_version_tracks_original_main_and_child_revisions(queue_case: QueueCase):
+    case = queue_case
+    assert await case.store.snapshot_version(case.session) == 0
+    assert case.saver.execution_queue_revision(case.session, case.thread) == 0
+    first = case.accept()
+    main_revision = case.saver.execution_queue_snapshot(case.session, case.thread).revision
+    assert await case.store.snapshot_version(case.session) == main_revision > 0
+
+    profile = {**DEEP_AGENT_CAPABILITY_PROFILE, "thread_role": "child"}
+    factory = OwnerThreadCreationFactory(sessions_root=case.workspace.sessions_root,
+        workspace_id=case.workspace.workspace_id, path_resolver=case.workspace.resolver)
+    with factory.for_owner_session(case.session) as owner:
+        created = await owner.create(
+            idempotency_key="queue-revision-child", session_id=case.session, thread_id=None,
+            delegation_id=None, initial_state="idle",
+            session_metadata={
+                "graph_binding": {**asdict(DEEP_AGENT_GRAPH_BINDING),
+                    "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
+                "capability_profile": profile, "task_seed": None, "task_reference": None,
+            }, artifact_manifest={},
+        )
+    child = replace(case, thread=created.child_thread_id)
+    child.accept("独立 child 输入", internal=True)
+    child_revision = case.saver.execution_queue_snapshot(case.session, child.thread).revision
+    assert child_revision > 0
+    assert await case.store.snapshot_version(case.session) == main_revision + child_revision
+
+    claim = await case.store.claim(first)
+    assert claim is not None
+    try:
+        claimed = case.saver.execution_queue_snapshot(case.session, case.thread).revision
+        assert claimed > main_revision
+        assert await case.store.snapshot_version(case.session) == claimed + child_revision
+        await claim.start()
+        started = case.saver.execution_queue_snapshot(case.session, case.thread).revision
+        assert started > claimed
+        assert await case.store.snapshot_version(case.session) == started + child_revision
+        case.saver.mark_job_terminal_status(session_id=case.session, thread_id=case.thread,
+            job_id=first.cursor.admission.job_id, status="cancelled")
+        terminal = case.saver.execution_queue_snapshot(case.session, case.thread).revision
+        assert terminal > started
+        assert await case.store.snapshot_version(case.session) == terminal + child_revision
+    finally:
+        await claim.close()
+
+
+async def test_queue_version_missing_revision_fails_with_exact_owner(queue_case: QueueCase):
+    case = queue_case
+    case.accept()
+    with case.saver._storage.storage._connect(case.thread, session_id=case.session) as connection:
+        connection.execute("DELETE FROM execution_queue_revision")
+        connection.commit()
+    with pytest.raises(RuntimeError, match="stage=read_revision") as rejected:
+        await case.store.snapshot_version(case.session)
+    assert case.session in str(rejected.value) and case.thread in str(rejected.value)
+    assert str(rejected.value.__cause__) == "执行队列 revision 缺失"
+    assert str(case.workspace.session_dir(case.session)) not in str(rejected.value)
 
 
 async def test_global_queue_scan_holds_read_guard_until_snapshot_finishes(
@@ -361,6 +428,10 @@ async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active
     assert "缺少冻结队列输入" in str(rejected.value.__cause__)
     assert str(storage.root(case.session, thread_id=case.thread)) not in str(rejected.value)
     assert storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original
+    # 版本通知不表示输入已验收；真正消费仍须经过上面的完整拒绝边界。
+    assert await case.store.snapshot_version(case.session) == case.saver.execution_queue_snapshot(
+        case.session, case.thread,
+    ).revision
     # 原程序明确结算后才可继续，不能由恢复检查擅自取消或重建原执行。
     admission = record.cursor.admission
     assert case.saver.execution_admission_for_job(case.session, thread_id=case.thread,

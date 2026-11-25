@@ -114,6 +114,9 @@ class RuntimeExecutionOwnerMixin:
     def execution_queue_snapshot(self, session_id: str, thread_id: str, *, validate_inputs: bool = False) -> ExecutionQueueSnapshot:
         return self._storage.executions.execution_queue_snapshot(session_id, thread_id, validate_inputs=validate_inputs)
 
+    def execution_queue_revision(self, session_id: str, thread_id: str) -> int:
+        return self._storage.executions.execution_queue_revision(session_id, thread_id)
+
     def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
         return self._storage.executions.execution_queue_record(session_id, thread_id, job_id)
 

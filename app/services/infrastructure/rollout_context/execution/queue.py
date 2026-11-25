@@ -190,6 +190,17 @@ class RolloutExecutionQueueMixin:
             raise RuntimeError("执行队列与 admission Job identity 不一致")
         return ExecutionQueueRecord(cursor, queue_input, row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11])
 
+    def execution_queue_revision(self, session_id: str, thread_id: str) -> int:
+        """版本通知只读原事务递增的计数，不物化或校验未消费的队列输入。"""
+        try:
+            with self._storage.read_connection(session_id, thread_id) as connection:
+                row = connection.execute("SELECT revision FROM execution_queue_revision WHERE singleton_id=1").fetchone()
+                if row is None:
+                    raise RuntimeError("执行队列 revision 缺失")
+                return row[0]
+        except RolloutNotMaterializedError:
+            return 0
+
     def execution_queue_snapshot(
         self, session_id: str, thread_id: str, *, checkpoint_ns: str = "", validate_inputs: bool = False,
     ) -> ExecutionQueueSnapshot:

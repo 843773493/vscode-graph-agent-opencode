@@ -83,13 +83,16 @@ class ExecutionQueueService:
     def _legacy_path(self, session_id: str) -> Path:
         return self._path_resolver.resolve_session_node_for_runtime(session_id) / "pending_requests.json"
 
-    def _snapshots(self, session_id: str) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
+    def _owners(self, session_id: str) -> tuple[MutationIntentOwner, ...]:
         owners = self._owner.execution_queue_owners(session_id=session_id)
         for identity in dict.fromkeys(owner.session_id for owner in owners):
             if self._legacy_path(identity).exists():
                 raise RuntimeError(f"pending v5 控制引用须显式 migrate_schema 后再启动: session_id={identity}")
+        return owners
+
+    def _snapshots(self, session_id: str) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
         snapshots = []
-        for owner in owners:
+        for owner in self._owners(session_id):
             with self._access(owner.session_id, owner.thread_id, "read_control"):
                 snapshots.append((owner, self._owner.execution_queue_snapshot(
                     owner.session_id, owner.thread_id, validate_inputs=True,
@@ -153,8 +156,14 @@ class ExecutionQueueService:
                                 pause_id=pause_id, continuation_job_id=continuation_job_id)
 
     async def snapshot_version(self, session_id: str) -> int:
-        snapshots = await asyncio.to_thread(self._snapshots, session_id)
-        return sum(snapshot.revision for _owner, snapshot in snapshots)
+        def read() -> int:
+            revision = 0
+            for owner in self._owners(session_id):
+                with self._access(owner.session_id, owner.thread_id, "read_revision"):
+                    revision += self._owner.execution_queue_revision(owner.session_id, owner.thread_id)
+            return revision
+
+        return await asyncio.to_thread(read)
 
     @staticmethod
     def _control(record: ExecutionQueueRecord, *, position: int, snapshot_version: int) -> PendingRequestControl:
