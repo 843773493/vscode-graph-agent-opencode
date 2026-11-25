@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.gateway.config.loader import load_gateway_config
 from app.gateway.config.values import GatewayConfig
+from app.gateway.credentials import load_or_create_gateway_id
 from configs.installer import resolve_config_resource_source
 from configs.maintenance.runtime_logging_migration import (
     LoggingMigrationInput,
@@ -35,6 +36,7 @@ def prepare_v6_snapshot(
         config_path=files["gateway.jsonc"].path, local_config_path=local, entry_path=local,
         schema_path=resolve_config_resource_source("gateway_schema.jsonc", project_root=project_root),
         inline_config_path=inline, source_overrides={"gateway_local_mutable_override": document}, persist_migrations=False,
+        gateway_id=load_or_create_gateway_id(item.path.parent / "identity.json", read_only=True),
     )
     require_preserved_values({key: value for key, value in item.payload.items() if key not in {"$schema", "config_version"}},
                              config.payload)

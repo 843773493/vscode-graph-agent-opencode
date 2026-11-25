@@ -13,6 +13,7 @@ from app.core.config_sources import config_revision
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.config.loader import load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import load_or_create_gateway_id
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.maintenance.runtime_logging_commit import commit_runtime_logging_migration
@@ -115,6 +116,7 @@ def test_workspace_active_replays_frozen_values_after_file_changes_and_restores_
 
 def test_gateway_active_and_pending_keep_distinct_frozen_configuration(migration_paths) -> None:
     home, _ = migration_paths
+    gateway_id = load_or_create_gateway_id(home / 'state/gateway/identity.json')
     source = home / 'config/gateway.jsonc'
     payload = deepcopy(read_jsonc_object(Path.cwd() / 'configs/gateway_inline.jsonc')['settings']['gateway'])
     payload['config_version'] = 5
@@ -141,8 +143,9 @@ def test_gateway_active_and_pending_keep_distinct_frozen_configuration(migration
     with GatewayStateStore(path=home / 'state/gateway/gateway.sqlite') as store:
         loaded = load_gateway_config(config_path=source, local_config_path=source.with_name('gateway_local.jsonc'),
                                      entry_path=source.with_name('gateway_local.jsonc'), schema_path=home / 'config/gateway_schema.jsonc',
-                                     state_store=store, startup=True)
+                                     state_store=store, startup=True, gateway_id=gateway_id)
         assert loaded.payload['logging']['runtime']['pretty'] is True
         pending = store.get_pending_config_candidate(config_domain='gateway')
         assert pending.payload['logging']['runtime']['pretty'] is False
+        assert pending.source_baseline['gateway_local_mutable_override']['uri'].startswith(f'boxteam://gateway/{gateway_id}/')
         assert pending.source_baseline['gateway_local_mutable_override']['document']['settings']['gateway']['logging']['runtime']['pretty'] is False
