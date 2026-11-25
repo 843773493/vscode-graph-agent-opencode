@@ -240,7 +240,6 @@ class ConfigOptionsInspectionDTO(BaseModel):
 class ConfigModelInspectionDTO(ConfigOptionsInspectionDTO):
     model_ref: ModelReferenceDTO
     model: str
-    request_url: str
 
 
 class ConfigProviderInspectionDTO(ConfigOptionsInspectionDTO):

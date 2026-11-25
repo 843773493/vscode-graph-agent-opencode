@@ -167,9 +167,16 @@ class ConfigLlmProbeMixin:
         connection, observation = await self._prepare_llm_probe(
             request, gateway_id=gateway_id, deadline=deadline, model_id=request.model_id, streaming=request.streaming,
         )
+
+        def prepare_model() -> tuple[BoxteamLiteLLMChatModel, str]:
+            from app.runtime.litellm_runtime import model_request_url
+
+            request_url = public_endpoint(model_request_url(connection))
+            model = build_model_from_provider(connection, {}, invocation_purpose="model_test", gateway_id=gateway_id)
+            return model, request_url
+
         async with asyncio.timeout_at(deadline):
-            model = await asyncio.to_thread(build_model_from_provider, connection, {},
-                invocation_purpose="model_test", gateway_id=gateway_id)
+            model, observation.request_url = await asyncio.to_thread(prepare_model)
         return LlmTestInvocation(
             model=model, observation=observation,
             model_ref=ModelReferenceDTO(provider_id=request.provider_id, model_id=request.model_id),

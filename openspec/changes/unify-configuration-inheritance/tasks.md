@@ -77,3 +77,8 @@ Gateway 切片验收：来源编辑定向测试32项通过；真实 Gateway 来�
 后续冷路径复核：通过本机10809代理取得PyPI已发布LiteLLM 1.110.3发行包并核SHA-256；`__init__.py`、`utils.py`、两份懒加载模块均与当前1.110.2逐字一致，不以补丁升级承诺冷读改善。原证据在 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/upstream-sdk-02/receipt.json`，未改依赖或安装环境。只读inspection的最终URL字段是当前公开合同；是否改为展示配置endpoint与协议、将SDK最终URL移至模型测试／实际调用，已向用户请求确认，未获答复前保持现状，7.4不勾选。
 
 兼容依赖与调用方补核：`openai-sdk-04/receipt.json` 使用正式 `model_request_url`，当前OpenAI 2.37.0冷执行3966.1ms，临时wheel中的兼容2.54.0为5224.4ms，返回URL相同；zip导入与已安装目录并非严格性能对照，不能据此宣称新版稳定变慢，也没有升级收益证据，依赖及锁文件未改。03因错误解析venv解释器而未进入SDK，原始失败保留，不计性能样本。独立只读复审核对active inspection与带Model引用的来源预检均确实需要request_url；LiteLLM根包无条件导入utils／main／Router／dispatch，具体Provider URL模块仍依赖根包，现有CLI lazy入口不能用于此合同。没有发现可直接移除的误触发；不自拼URL、不预热，7.4继续未完成。
+
+
+2026-11-25 用户已批准调整地址展示合同：只读 inspection 展示配置 endpoint 与协议，SDK 请求地址移至显式模型测试 observation，真实调用继续由 SDK 发送。此前等待轻量 SDK API 的冷读 TODO 由此合同调整替代；本轮迁齐协议、配置投影、Settings 和实际 HTTP 验证，不增加配置格式版本或地址缓存。7.4 仍待新合同下完整冷／暖产品性能验收后勾选，既有失败原件保留。
+
+地址展示纵向切片已迁齐：inspection 删除 request_url（proto 编号5及名称 reserved），从原 options 展示 endpoint／协议；模型测试在原 worker／期限内、创建模型前解析 SDK 地址并写入 observation。配置解析18项、真实SDK／HTTP与来源预检11项、组件／API 54项均通过；实际wire地址与测试start／result中的SDK地址一致。Web 全源码 tsgo、Workbench 219份变换源码类型检查、完整79扩展构建、协议生成及两份OpenAPI一致性通过，相关产品源码无漂移。Buf格式／lint通过；对固定HEAD的breaking检查仅获准删除字段这一项，原件见 `out/tests/temp/2026/11/24/config_inheritance_latency/artifacts/inspection-contract18/`。宽范围32项既有Ruff诊断与HEAD逐项相同，未扩大修复；本次其余生产文件静态检查通过。最小充分复审保留原解析、probe与transport owner，无新地址规则、缓存、配置版本或持久状态。必要的extra_body正式参数冲突校验仍可能加载SDK；OAuth只读测试移除无关extra_body后验证连接展示不加载SDK，不据此宣称所有配置都不加载。完整冷／暖性能及真实模型UI验收继续进行，7.4尚未勾选。

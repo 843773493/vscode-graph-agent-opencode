@@ -164,8 +164,8 @@ const intent = { ...target, source_key: sourceKey, jsonc: '// 保留注释\n{"de
 
 test("选定模型预检只增加查询引用，沿原来源意图取回同一模型的后端投影", async () => {
   const modelRef = { provider_id: "team+/", model_id: "main model" };
-  const inspection = ConfigModelInspectionDTO.fromPartial({ model_ref: modelRef, model: "upstream-main", options: { temperature: 0 }, origins: [],
-    request_url: "https://model.test/v1/responses", config_ref: "#/profiles/model", node_id: "model", chain: [],
+  const inspection = ConfigModelInspectionDTO.fromPartial({ model_ref: modelRef, model: "upstream-main", options: { temperature: 0, endpoint: "https://model.test/v1", api_mode: { protocol: "responses" } }, origins: [],
+    config_ref: "#/profiles/model", node_id: "model", chain: [],
     local_settings: {}, inherited_settings: {}, network: {}, shared: false });
   const providerInspection = ConfigProviderInspectionDTO.fromPartial({ provider_id: modelRef.provider_id });
   let count = 0;

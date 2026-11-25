@@ -182,7 +182,8 @@ function modelTestResponse(input: LlmDiscoverRequest & { model_id: string; strea
     layer_digest: value.layer_digest ?? null, source_generation: value.source_generation ?? null,
     file_presence: value.file_presence ?? null, file_digest: value.file_digest ?? null,
   }]));
-  const start = { request_id: 'probe-test', observation: { ...directory(input).observation, source_baseline, credential },
+  const start = { request_id: 'probe-test', observation: { ...directory(input).observation, source_baseline, credential,
+    request_url: 'https://provider.test/v1/responses' },
     model_ref: { provider_id: input.provider_id, model_id: input.model_id }, streaming: input.streaming ?? true };
   const result = { ...start, status, first_content_ms: 3, elapsed_ms: 5, preview: '完成',
     preview_truncated: false, usage: null, error: null };
@@ -216,6 +217,8 @@ test('明确测试两种模式分别发真实选择且不修改草稿，应用�
   expect(calls.map(call => call.streaming)).toEqual([true, false]);
   expect(fixture.onApplyMode).not.toHaveBeenCalled();
   expect(JSON.stringify(view!.toJSON())).toContain('probe-test');
+  expect(JSON.stringify(view!.toJSON())).toContain(t('configuration.probe.requestUrl'));
+  expect(JSON.stringify(view!.toJSON())).toContain('https://provider.test/v1/responses');
   await click('configuration.probe.applyMode');
   expect(fixture.onApplyMode.mock.calls).toEqual([['main', true]]);
 });

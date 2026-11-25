@@ -233,6 +233,8 @@ message LlmProbeObservationDTO {
   string protocol = 11;
   string endpoint = 12;
   string observed_at = 13;
+  // 显式模型测试按 SDK 规则解析的请求地址；目录发现不提供。
+  optional string request_url = 14;
 }
 
 message LlmModelMetadataDTO {
@@ -362,11 +364,13 @@ message ConfigModelOptionOriginDTO {
 }
 
 message ConfigModelInspectionDTO {
+  reserved 5;
+  reserved "request_url";
+
   ModelReferenceDTO model_ref = 1;
   string model = 2;
   google.protobuf.Struct options = 3;
   repeated ConfigModelOptionOriginDTO origins = 4;
-  string request_url = 5;
   optional string catalog_url = 6;
   string config_ref = 7;
   string node_id = 8;

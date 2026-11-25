@@ -400,7 +400,7 @@ class LlmCredentialObservationDTO(_message.Message):
     def __init__(self, source: _Optional[str] = ..., secret_id: _Optional[str] = ..., revision: _Optional[int] = ..., scope: _Optional[str] = ...) -> None: ...
 
 class LlmProbeObservationDTO(_message.Message):
-    __slots__ = ("gateway_id", "workspace_id", "mode", "provider_id", "edit_version", "source_key", "source_baseline", "active_revision", "active_digest", "credential", "protocol", "endpoint", "observed_at")
+    __slots__ = ("gateway_id", "workspace_id", "mode", "provider_id", "edit_version", "source_key", "source_baseline", "active_revision", "active_digest", "credential", "protocol", "endpoint", "observed_at", "request_url")
     class SourceBaselineEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -421,6 +421,7 @@ class LlmProbeObservationDTO(_message.Message):
     PROTOCOL_FIELD_NUMBER: _ClassVar[int]
     ENDPOINT_FIELD_NUMBER: _ClassVar[int]
     OBSERVED_AT_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_URL_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     workspace_id: str
     mode: str
@@ -434,7 +435,8 @@ class LlmProbeObservationDTO(_message.Message):
     protocol: str
     endpoint: str
     observed_at: str
-    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., mode: _Optional[str] = ..., provider_id: _Optional[str] = ..., edit_version: _Optional[int] = ..., source_key: _Optional[str] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_revision: _Optional[int] = ..., active_digest: _Optional[str] = ..., credential: _Optional[_Union[LlmCredentialObservationDTO, _Mapping]] = ..., protocol: _Optional[str] = ..., endpoint: _Optional[str] = ..., observed_at: _Optional[str] = ...) -> None: ...
+    request_url: str
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., mode: _Optional[str] = ..., provider_id: _Optional[str] = ..., edit_version: _Optional[int] = ..., source_key: _Optional[str] = ..., source_baseline: _Optional[_Mapping[str, ConfigSourceBaselineDTO]] = ..., active_revision: _Optional[int] = ..., active_digest: _Optional[str] = ..., credential: _Optional[_Union[LlmCredentialObservationDTO, _Mapping]] = ..., protocol: _Optional[str] = ..., endpoint: _Optional[str] = ..., observed_at: _Optional[str] = ..., request_url: _Optional[str] = ...) -> None: ...
 
 class LlmModelMetadataDTO(_message.Message):
     __slots__ = ("max_input_tokens", "supports_vision", "supports_video_input", "supports_audio_input", "supports_audio_output", "supports_function_calling", "supports_reasoning", "sources", "catalog_provider", "context_window")
@@ -678,12 +680,11 @@ class ConfigModelOptionOriginDTO(_message.Message):
     def __init__(self, path: _Optional[str] = ..., source_key: _Optional[str] = ..., definition: _Optional[str] = ..., definition_path: _Optional[str] = ..., node_id: _Optional[str] = ...) -> None: ...
 
 class ConfigModelInspectionDTO(_message.Message):
-    __slots__ = ("model_ref", "model", "options", "origins", "request_url", "catalog_url", "config_ref", "node_id", "chain", "local_settings", "inherited_settings", "network", "shared")
+    __slots__ = ("model_ref", "model", "options", "origins", "catalog_url", "config_ref", "node_id", "chain", "local_settings", "inherited_settings", "network", "shared")
     MODEL_REF_FIELD_NUMBER: _ClassVar[int]
     MODEL_FIELD_NUMBER: _ClassVar[int]
     OPTIONS_FIELD_NUMBER: _ClassVar[int]
     ORIGINS_FIELD_NUMBER: _ClassVar[int]
-    REQUEST_URL_FIELD_NUMBER: _ClassVar[int]
     CATALOG_URL_FIELD_NUMBER: _ClassVar[int]
     CONFIG_REF_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -696,7 +697,6 @@ class ConfigModelInspectionDTO(_message.Message):
     model: str
     options: _struct_pb2.Struct
     origins: _containers.RepeatedCompositeFieldContainer[ConfigModelOptionOriginDTO]
-    request_url: str
     catalog_url: str
     config_ref: str
     node_id: str
@@ -705,7 +705,7 @@ class ConfigModelInspectionDTO(_message.Message):
     inherited_settings: _struct_pb2.Struct
     network: _struct_pb2.Struct
     shared: bool
-    def __init__(self, model_ref: _Optional[_Union[ModelReferenceDTO, _Mapping]] = ..., model: _Optional[str] = ..., options: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., origins: _Optional[_Iterable[_Union[ConfigModelOptionOriginDTO, _Mapping]]] = ..., request_url: _Optional[str] = ..., catalog_url: _Optional[str] = ..., config_ref: _Optional[str] = ..., node_id: _Optional[str] = ..., chain: _Optional[_Iterable[_Union[_config_pb2.ConfigNodeInspectionDTO, _Mapping]]] = ..., local_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., inherited_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., network: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., shared: _Optional[bool] = ...) -> None: ...
+    def __init__(self, model_ref: _Optional[_Union[ModelReferenceDTO, _Mapping]] = ..., model: _Optional[str] = ..., options: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., origins: _Optional[_Iterable[_Union[ConfigModelOptionOriginDTO, _Mapping]]] = ..., catalog_url: _Optional[str] = ..., config_ref: _Optional[str] = ..., node_id: _Optional[str] = ..., chain: _Optional[_Iterable[_Union[_config_pb2.ConfigNodeInspectionDTO, _Mapping]]] = ..., local_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., inherited_settings: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., network: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., shared: _Optional[bool] = ...) -> None: ...
 
 class ConfigProviderInspectionDTO(_message.Message):
     __slots__ = ("provider_id", "options", "origins", "catalog_url", "config_ref", "node_id", "chain", "local_settings", "inherited_settings", "network", "shared")

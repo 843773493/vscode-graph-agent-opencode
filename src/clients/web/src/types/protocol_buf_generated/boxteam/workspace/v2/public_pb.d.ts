@@ -1020,6 +1020,13 @@ export declare type LlmProbeObservationDTO = Message<"boxteam.workspace.v2.LlmPr
    * @generated from field: string observed_at = 13;
    */
   observedAt: string;
+
+  /**
+   * 显式模型测试按 SDK 规则解析的请求地址；目录发现不提供。
+   *
+   * @generated from field: optional string request_url = 14;
+   */
+  requestUrl?: string | undefined;
 };
 
 /**
@@ -1619,11 +1626,6 @@ export declare type ConfigModelInspectionDTO = Message<"boxteam.workspace.v2.Con
    * @generated from field: repeated boxteam.workspace.v2.ConfigModelOptionOriginDTO origins = 4;
    */
   origins: ConfigModelOptionOriginDTO[];
-
-  /**
-   * @generated from field: string request_url = 5;
-   */
-  requestUrl: string;
 
   /**
    * @generated from field: optional string catalog_url = 6;

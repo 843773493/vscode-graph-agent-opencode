@@ -15,7 +15,7 @@ const modelRef = { provider_id: 'team', model_id: 'main' };
 const result = ConfigModelInspectionDTO.fromPartial({ model_ref: modelRef, model: 'upstream-main',
   config_ref: '#/profiles/fast', node_id: 'fast', chain: [{ node_id: 'fast', source_key: 'workspace', definition_path: '/profiles/fast' }],
   local_settings: { model_options: { temperature: 0 } }, inherited_settings: {}, network: { proxy: { mode: 'direct' } },
-  options: { temperature: 0 }, request_url: 'https://models.test/v1/responses',
+  options: { temperature: 0, endpoint: 'https://models.test/v1', api_mode: { protocol: 'responses' } },
   origins: [{ path: '/temperature', source_key: 'workspace', definition: 'node',
     definition_path: '/profiles/fast/settings/model_options/temperature' }] });
 const receipt = ConfigSourcePreflightDTO.fromPartial({ document: { active_revision: 7 }, model_options: result,
@@ -49,7 +49,11 @@ test('只有显式预检才请求，编辑标记旧回执过期并保持原来�
   expect(inspect).not.toHaveBeenCalled();
   await act(async () => { view!.root.findAllByType('button')[0].props.onClick(); await flush(); });
   expect(inspect).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(view!.toJSON())).toContain(result.request_url);
+  expect(JSON.stringify(view!.toJSON())).toContain(result.options!.endpoint);
+  expect(JSON.stringify(view!.toJSON())).toContain(t('configuration.inspect.endpoint'));
+  expect(JSON.stringify(view!.toJSON())).toContain(t('configuration.inspect.protocol'));
+  expect(JSON.stringify(view!.toJSON())).toContain('responses');
+  expect(JSON.stringify(view!.toJSON())).not.toContain(t('configuration.probe.requestUrl'));
   expect(JSON.stringify(view!.toJSON())).toContain(t('configuration.inspect.current'));
   const sections = view!.root.findAll(node => node.type === 'section' && node.props['data-model-options']);
   expect(sections.map(section => section.props['data-model-options'])).toEqual(['draft', 'active']);
@@ -73,7 +77,7 @@ test('编辑、换模型及卸载取消预检，不采用未遵守取消的迟�
   act(() => view!.update(render(2)));
   expect(calls[0].signal.aborted).toBe(true);
   await act(async () => { calls[0].resolve(receipt); await flush(); });
-  expect(JSON.stringify(view!.toJSON())).not.toContain(result.request_url);
+  expect(JSON.stringify(view!.toJSON())).not.toContain(result.options!.endpoint);
   run();
   act(() => view!.update(render(2, { ...modelRef, model_id: 'other' })));
   expect(calls[1].signal.aborted).toBe(true);

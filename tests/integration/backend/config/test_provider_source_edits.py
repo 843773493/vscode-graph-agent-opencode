@@ -394,7 +394,9 @@ async def test_selected_model_preflight_reports_values_and_both_origins_without_
     assert origins["/request_options/default_headers/x-route"]["definition_path"].endswith("/default_headers/x-ROUTE")
     assert origins["/endpoint"]["source_key"] == SOURCE and origins["/endpoint"]["definition"] == "node"
     assert origins["/api_mode/supports_reasoning"]["definition_path"] == "/profiles/model-main/settings/model_options/api_mode/supports_reasoning"
-    assert inspected["request_url"] == "https://primary.example/v1/chat/completions"
+    assert "request_url" not in inspected
+    assert inspected["options"]["endpoint"] == "https://primary.example/v1"
+    assert inspected["options"]["api_mode"]["protocol"] == "chat_completions"
     assert inspected["catalog_url"] == "https://primary.example/v1/models"
     assert inspected["options"]["api_key"] == "secret:sec_" + "1" * 32
     running = result["active_model_options"]

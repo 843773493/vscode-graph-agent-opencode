@@ -210,6 +210,8 @@ Agent／调用节点只在已有执行边界创建，只有一个父节点与原
 
 这使“最终值看起来相同”和“本节点明确覆盖了相同值”仍可区分。UI、预检、目录发现、测试与正式调用不能各自重新 merge。
 
+只读 inspection 直接展示同一 options 中已脱敏的 endpoint 与 api_mode.protocol，不维护第二份字段或为地址展示导入模型 SDK。显式模型测试才在原构造 worker 和绝对期限内调用 SDK 地址规则，先解析地址再创建模型，将脱敏 request_url 放入原 observation；目录发现不提供此字段。该值标为 SDK 解析地址，不能冒充已观测的 HTTP 地址。真实调用仍沿原 SDK／transport，测试用实际 HTTP 捕获核对解析值，不在前端或配置读取中维护厂商 URL 规则。
+
 ### 6. 依赖、保存与热重载复用原 owner
 
 - loader 读取入口，稳定读取明确父文件及引用节点，保存源 revision／digest／generation、规范化父边和原文定位。共享文件同一读取批次只读一次。schema／引用／业务校验在候选建立时执行，不在普通读请求执行。

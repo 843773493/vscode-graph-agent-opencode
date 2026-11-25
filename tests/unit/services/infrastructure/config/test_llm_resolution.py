@@ -234,9 +234,9 @@ def test_duplicate_header_case_fails_in_same_node(model_config, resolver_factory
 
 
 @pytest.mark.parametrize("lower_name,higher_name", [("max_tokens", "max_output_tokens"), ("max_output_tokens", "max_tokens")])
-def test_inspection_retains_actual_alias_header_sources_without_network(model_config, resolver_factory, monkeypatch, lower_name, higher_name):
+def test_inspection_retains_actual_alias_header_sources_without_sdk(model_config, resolver_factory, monkeypatch, lower_name, higher_name):
     from app.runtime import litellm_runtime
-    monkeypatch.setattr(litellm_runtime, "load_litellm", lambda: pytest.fail("预检不能访问网络"))
+    monkeypatch.setattr(litellm_runtime, "_import_litellm", lambda: pytest.fail("只读预检不能加载 SDK"))
     provider = model_config["profiles"]["provider"]["settings"]["model_options"]
     provider["request_options"]["parameters"] = {lower_name: 100}
     local = model_config["profiles"]["model"]["settings"]["model_options"]
@@ -245,6 +245,9 @@ def test_inspection_retains_actual_alias_header_sources_without_network(model_co
     with resolver.use_secrets({}):
         result = resolver.inspect_model_reference(graph, REF)
     origins = {origin.path: origin for origin in result.origins}
+    assert "request_url" not in result.model_dump()
+    assert result.options["endpoint"] == "https://models.example/v1"
+    assert result.options["api_mode"]["protocol"] == "responses"
     assert result.options["api_key"] == "${BOXTEAM_UNIT_MISSING_KEY}"
     assert result.options["request_options"]["parameters"]["max_output_tokens"] == 50
     assert origins["/request_options/parameters/max_output_tokens"].definition == "node"
@@ -268,17 +271,20 @@ def test_model_can_detach_from_provider_and_select_shared_node(model_config, res
     assert resolver.inspect_provider(graph, "team").shared is False
 
 
-def test_oauth_inspection_does_not_construct_authentication_owner(model_config, resolver_factory, monkeypatch):
-    from app.runtime.litellm_runtime import _import_litellm
-    _import_litellm()
-    from litellm.llms.chatgpt.responses import transformation
-    monkeypatch.setattr(transformation, "Authenticator", lambda: pytest.fail("预检不能创建认证 owner"))
+def test_oauth_inspection_does_not_load_authentication_sdk(model_config, resolver_factory, monkeypatch):
+    from app.runtime import litellm_runtime
+    monkeypatch.setattr(litellm_runtime, "_import_litellm", lambda: pytest.fail("OAuth 只读预检不能加载 SDK"))
     options = model_config["profiles"]["provider"]["settings"]["model_options"]
     options.update(endpoint="https://chatgpt.com/backend-api/codex/", custom_llm_provider="chatgpt", auth={"type": "oauth", "method": "chatgpt"})
     options.pop("api_key")
+    options.pop("request_options")
+    model_config["profiles"]["model"]["settings"]["model_options"].pop("request_options")
     resolver, graph = resolver_factory(model_config)
     result = resolver.inspect_model_reference(graph, REF)
-    assert result.request_url == "https://chatgpt.com/backend-api/codex/responses" and result.catalog_url is None
+    assert "request_url" not in result.model_dump()
+    assert result.options["endpoint"] == "https://chatgpt.com/backend-api/codex/"
+    assert result.options["api_mode"]["protocol"] == "responses"
+    assert result.catalog_url is None
 
 
 def test_proxy_credentials_prepare_late_even_without_model_api_key(model_config, resolver_factory, monkeypatch):

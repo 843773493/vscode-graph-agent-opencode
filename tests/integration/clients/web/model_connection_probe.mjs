@@ -119,6 +119,7 @@ try {
     const preflight = (await response.json()).data;
     const receipt = preflight.model_options;
     assert.deepEqual(receipt.model_ref, { provider_id: 'primary', model_id: 'default' });
+    assert.equal('request_url' in receipt, false, '只读预检展示配置地址与协议');
     await expect(inspection.getByRole('status')).toHaveText('本次草稿预检通过');
     await expect(inspection.locator('[data-model-options="draft"] > pre')).toHaveText(JSON.stringify(receipt.options, null, 2));
     await expect(inspection.locator('[data-model-options="active"] > pre')).toHaveText(JSON.stringify(preflight.active_model_options.options, null, 2));
@@ -130,7 +131,8 @@ try {
   const providerReceipt = await inspect();
   assert.equal(providerReceipt.options.request_options.parameters.temperature, 0);
   assert.equal(providerReceipt.options.request_options.parameters.top_p, null);
-  assert.equal(providerReceipt.request_url, fixture.endpoint + '/chat/completions');
+  assert.equal(providerReceipt.options.endpoint, fixture.endpoint + '/');
+  assert.equal(providerReceipt.options.api_mode.protocol, 'chat_completions');
   const temperatureOrigin = receipt => receipt.origins.find(origin => origin.path === '/request_options/parameters/temperature');
   assert.equal(temperatureOrigin(providerReceipt).definition, 'node');
   assert.equal(temperatureOrigin(providerReceipt).source_key, location.source_key);
@@ -169,13 +171,15 @@ try {
   const reasoningCapability = modelOptions.getByRole('combobox', { name: '思考能力', exact: true });
   await reasoningCapability.selectOption('false');
   const responseOptions = await inspect();
-  assert.equal(responseOptions.request_url, fixture.endpoint + '/responses');
+  assert.equal(responseOptions.options.endpoint, fixture.endpoint + '/');
+  assert.equal(responseOptions.options.api_mode.protocol, 'responses');
   assert.equal(responseOptions.options.api_mode.streaming, false);
   assert.deepEqual(responseOptions.options.api_mode.supports_reasoning, {});
   await modelProtocol.selectOption('');
   await reasoningCapability.selectOption('');
   const chatOptions = await inspect();
-  assert.equal(chatOptions.request_url, fixture.endpoint + '/chat/completions');
+  assert.equal(chatOptions.options.endpoint, fixture.endpoint + '/');
+  assert.equal(chatOptions.options.api_mode.protocol, 'chat_completions');
   assert.equal(chatOptions.options.api_mode.streaming, false);
   const restoredModeDraft = JSON.parse(result.requests.filter(item => item.path.endsWith('/preflight')).at(-1).body.jsonc);
   const restoredMode = localModelOptions(restoredModeDraft, 'primary', 'default').api_mode;
@@ -568,7 +572,9 @@ try {
     assert(events.every(event => event.request_id === response.requestId));
     assert.equal(events[0].observation.protocol, protocol);
     assert.deepEqual(events[0].observation, events.at(-1).observation);
-    result.protocolWires.push({ protocol, requestId: response.requestId });
+    const route = { chat_completions: '/chat/completions', responses: '/responses', anthropic_messages: '/messages' }[protocol];
+    assert.equal(events[0].observation.request_url, fixture.endpoint + route);
+    result.protocolWires.push({ protocol, requestId: response.requestId, requestUrl: events[0].observation.request_url });
     if (protocol === 'chat_completions') {
       for (const parameters of [
         { temperature: 0, extra_body: { temperature: 1 } },

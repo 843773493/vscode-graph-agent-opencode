@@ -76,6 +76,7 @@ class LlmProbeObservationDTO(BaseModel):
     protocol: str
     endpoint: str
     observed_at: str
+    request_url: str | None = None
 
 
 class LlmModelMetadataDTO(BaseModel):

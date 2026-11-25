@@ -98,13 +98,17 @@ Workspace 业务命名空间的模型目录 SHALL 使用 `llm.providers.<provide
 
 ### Requirement: 模型能力与协议覆盖必须明确且可验证
 
-Provider SHALL 支持协议与连接默认，Model 可通过所选节点明确覆盖现有协议支持选项。能力、reasoning 线格式与请求参数分别展示，枚举只开放真实项；未知能力不靠名称或其他模型猜测，冲突组合拒绝。系统 SHALL 展示按真实规则生成的脱敏目录／请求地址及协议，客户端不自行拼接不同地址。
+Provider SHALL 支持协议与连接默认，Model 可通过所选节点明确覆盖现有协议支持选项。能力、reasoning 线格式与请求参数分别展示，枚举只开放真实项；未知能力不靠名称或其他模型猜测，冲突组合拒绝。只读 inspection SHALL 展示所选节点解析出的脱敏 endpoint、协议及目录地址，不为计算模型请求地址加载模型 SDK。显式模型测试 SHALL 展示由实际 SDK 规则解析的脱敏请求地址，标明其为 SDK 解析值；实际调用的最终发送地址由原调用观测负责，客户端不得自行拼接或把配置 endpoint 当作已观察到的请求地址。
 
 协议切换 SHALL 在同一来源草稿中明确提供完整 supports_reasoning 块，不自动转换或改写能力。原子替换由统一 schema 合并语义承担，原 owner 进行业务一致性校验，不保留按来源阶段和 Provider 阶段各一份实现，也不增加通用厂商策略框架。
 
 api_mode.streaming SHALL 是节点链上可继承布尔项，内置 Workspace 根明确声明 true 以保留原默认及可见来源。false 必须让上游真实非流式，不能收集流式伪装非流式。测试与正式请求共用解析，非流式的消息、reasoning、工具调用和 usage 语义保持，页面事件流不受影响。普通请求参数不得另提供覆盖该值的 stream，失败不自动切模式或协议。
 
 正式 Job SHALL 将同一冻结传输选择经原 Saver profile／wire 参数、统一 finalizer、request_hash preimage 和实际 adapter 发送，完整正文的 stream／stream_options 一致。不得剔除实际正文字段、绕过 sealed binding 或放宽 source-mismatch；必要投影变化沿原 projector 升版，不重写历史封存。
+
+#### Scenario: 只读查看与显式测试分别展示地址
+- **WHEN** 用户只读查看 Model 的有效配置，随后显式运行模型测试
+- **THEN** 只读查看从同一配置结果展示 endpoint 与协议，不为地址展示导入模型 SDK、不调用模型；既有 extra_body 等参数冲突校验保持。模型测试在原期限内使用 SDK 规则解析并脱敏请求地址，回执保留该值，真实 HTTP 验证覆盖解析地址与实际发送一致
 
 #### Scenario: 同服务中的模型采用不同协议
 - **WHEN** 一个 Model 继承服务协议，另一个节点明确选择不同合法协议及完整选项

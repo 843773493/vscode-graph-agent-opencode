@@ -246,6 +246,8 @@ export interface LlmProbeObservationDTO {
   protocol: string;
   endpoint: string;
   observed_at: string;
+  /** 显式模型测试按 SDK 规则解析的请求地址；目录发现不提供。 */
+  request_url?: string | undefined;
 }
 
 export interface LlmProbeObservationDTO_SourceBaselineEntry {
@@ -403,7 +405,6 @@ export interface ConfigModelInspectionDTO {
   model: string;
   options: { [key: string]: any } | undefined;
   origins: ConfigModelOptionOriginDTO[];
-  request_url: string;
   catalog_url?: string | undefined;
   config_ref: string;
   node_id: string;
@@ -5704,6 +5705,7 @@ function createBaseLlmProbeObservationDTO(): LlmProbeObservationDTO {
     protocol: "",
     endpoint: "",
     observed_at: "",
+    request_url: undefined,
   };
 }
 
@@ -5736,6 +5738,7 @@ export const LlmProbeObservationDTO: MessageFns<LlmProbeObservationDTO> = {
       protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : "",
       endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : "",
       observed_at: isSet(object.observed_at) ? globalThis.String(object.observed_at) : "",
+      request_url: isSet(object.request_url) ? globalThis.String(object.request_url) : undefined,
     };
   },
 
@@ -5786,6 +5789,9 @@ export const LlmProbeObservationDTO: MessageFns<LlmProbeObservationDTO> = {
     if (message.observed_at !== "") {
       obj.observed_at = message.observed_at;
     }
+    if (message.request_url !== undefined) {
+      obj.request_url = message.request_url;
+    }
     return obj;
   },
 
@@ -5818,6 +5824,7 @@ export const LlmProbeObservationDTO: MessageFns<LlmProbeObservationDTO> = {
     message.protocol = object.protocol ?? "";
     message.endpoint = object.endpoint ?? "";
     message.observed_at = object.observed_at ?? "";
+    message.request_url = object.request_url ?? undefined;
     return message;
   },
 };
@@ -6949,7 +6956,6 @@ function createBaseConfigModelInspectionDTO(): ConfigModelInspectionDTO {
     model: "",
     options: undefined,
     origins: [],
-    request_url: "",
     catalog_url: undefined,
     config_ref: "",
     node_id: "",
@@ -6970,7 +6976,6 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
       origins: globalThis.Array.isArray(object?.origins)
         ? object.origins.map((e: any) => ConfigModelOptionOriginDTO.fromJSON(e))
         : [],
-      request_url: isSet(object.request_url) ? globalThis.String(object.request_url) : "",
       catalog_url: isSet(object.catalog_url) ? globalThis.String(object.catalog_url) : undefined,
       config_ref: isSet(object.config_ref) ? globalThis.String(object.config_ref) : "",
       node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
@@ -6997,9 +7002,6 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
     }
     if (message.origins?.length) {
       obj.origins = message.origins.map((e) => ConfigModelOptionOriginDTO.toJSON(e));
-    }
-    if (message.request_url !== "") {
-      obj.request_url = message.request_url;
     }
     if (message.catalog_url !== undefined) {
       obj.catalog_url = message.catalog_url;
@@ -7039,7 +7041,6 @@ export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
     message.model = object.model ?? "";
     message.options = object.options ?? undefined;
     message.origins = object.origins?.map((e) => ConfigModelOptionOriginDTO.fromPartial(e)) || [];
-    message.request_url = object.request_url ?? "";
     message.catalog_url = object.catalog_url ?? undefined;
     message.config_ref = object.config_ref ?? "";
     message.node_id = object.node_id ?? "";

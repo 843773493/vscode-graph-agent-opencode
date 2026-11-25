@@ -41,7 +41,6 @@ _retired_runtimes: dict[str, list[ModelMetadataRuntime]] = {}
 
 
 def _import_litellm() -> ModuleType:
-    # TODO: 上游提供轻量 URL／参数元数据入口后迁移冷 inspection；当前完整导入约3.7秒，详见配置继承7.4验收。
     global _import_local_only
     with _import_lock:
         if "litellm" in sys.modules:
@@ -67,7 +66,7 @@ def _local_only_mode() -> bool:
 
 
 def model_request_url(connection: Mapping[str, Any]) -> str:
-    """预检使用实际 SDK 的地址规则，不创建客户端、解析凭据或发起网络调用。"""
+    """显式模型测试使用实际 SDK 的地址规则，不创建客户端或发起网络调用。"""
     _import_litellm()
     from litellm.secret_managers.main import get_secret_bool
     from litellm.types.utils import LlmProviders

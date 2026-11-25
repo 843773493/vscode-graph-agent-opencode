@@ -55,7 +55,8 @@ export function ModelOptionsInspection({ modelRef, version, inspect, onOpenSourc
           <h5>{t(`configuration.inspect.${kind}`)}</h5>
           {kind === 'active' ? <p>{t('configuration.inspect.activeRevision', 'active_digest' in data ? data.active_revision : data.document?.active_revision ?? '')}</p> : null}
           {options ? <>
-            <dl>{'request_url' in options ? <><dt>{t('configuration.inspect.requestUrl')}</dt><dd><code>{options.request_url}</code></dd></> : null}
+            <dl><dt>{t('configuration.inspect.endpoint')}</dt><dd><code>{options.options?.endpoint}</code></dd>
+              <dt>{t('configuration.inspect.protocol')}</dt><dd><code>{options.options?.api_mode?.protocol}</code></dd>
               <dt>{t('configuration.inspect.catalogUrl')}</dt><dd><code>{options.catalog_url ?? t('configuration.inspect.noCatalog')}</code></dd></dl>
             <p>{t('configuration.node.reference')} <code>{options.config_ref}</code></p>
             <ol>{options.chain.map(node => <li key={node.node_id}><button type="button" title={node.source_uri ? node.source_uri + '#' + node.definition_path : node.node_id}

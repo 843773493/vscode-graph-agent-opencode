@@ -512,6 +512,9 @@ async def test_model_probe_uses_real_adapter_and_single_request(
         })
     assert inspection.status_code == 200, inspection.text
     inspected = inspection.json()["data"]["model_options"]
+    assert "request_url" not in inspected
+    assert inspected["options"]["endpoint"] == defaults["endpoint"]
+    assert inspected["options"]["api_mode"]["protocol"] == protocol
     assert catalog.requests == [] and probe_case.rows() == before
     response = await probe_case.client.post("/api/v1/config/llm/test", json=request)
     assert response.status_code == 200, response.text
@@ -531,7 +534,7 @@ async def test_model_probe_uses_real_adapter_and_single_request(
     headers = catalog.requests[0][1]
     assert headers.get("Authorization") == (f"Bearer {api_key}" if api_key and protocol != "anthropic_messages" else None)
     assert headers.get("X-Api-Key") == (api_key if api_key and protocol == "anthropic_messages" else None)
-    assert inspected["request_url"] == str(httpx.URL(catalog.endpoint).copy_with(path=catalog.requests[0][0]))
+    assert result["observation"]["request_url"] == str(httpx.URL(catalog.endpoint).copy_with(path=catalog.requests[0][0]))
     wire = catalog.model_requests[0]
     assert wire["model"] == "configured-main" and wire.get("stream", False) is streaming
     assert wire["temperature"] == 0 and "top_p" not in wire

@@ -199,6 +199,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
     && `${item.model} ${item.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   const missing = models.filter(model => !catalog?.result.models.some(item => item.model === model.model));
   const observation = (value: LlmProbeObservationDTO) => <small>{value.mode} · {value.protocol} · {value.endpoint} · {value.observed_at}
+    {value.request_url ? <> · {t('configuration.probe.requestUrl')}: <code>{value.request_url}</code></> : null}
     {' · '}{t('configuration.probe.editVersion', value.edit_version)} · {value.credential?.source}
     {value.credential?.revision == null ? '' : ` r${value.credential.revision}`}
     {value.mode === 'active' ? ` · active r${value.active_revision}` : ` · ${value.source_key}`}</small>;

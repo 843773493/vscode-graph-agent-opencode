@@ -153,14 +153,11 @@ class LlmResolution:
         return resolved
 
     def inspect_model_reference(self, graph: ConfigGraph, reference: ModelReferenceDTO) -> ConfigModelInspectionDTO:
-        from app.runtime.litellm_runtime import model_request_url
-
         resolved = self.resolve_model_reference(graph, reference, expand_credentials=False)
         definition = self._provider_definition(graph, reference.provider_id)["models"][reference.model_id]
         node = graph.resolve_model(reference.provider_id, reference.model_id)
         return ConfigModelInspectionDTO(
             model_ref=reference, model=resolved["model"],
-            request_url=public_endpoint(model_request_url(resolved)),
             **self._inspect_node(graph, node, resolved, config_ref=definition["config_ref"]),
         )
 
