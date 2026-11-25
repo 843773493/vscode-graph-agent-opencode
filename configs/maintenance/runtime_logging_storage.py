@@ -12,7 +12,11 @@ from app.gateway.config.connection_ids import (
     _CONNECTION_ID_RECORD_VERSION,
     _normalize_connection_ids,
 )
+from app.gateway.config.source_edit import GatewaySourceEditMixin
 from app.services.infrastructure.config.recovery import recover_stopped_config_applies
+from app.services.infrastructure.config.state import (
+    build_snapshot_secret_binding_summary,
+)
 from configs.maintenance.runtime_logging_migration import (
     TARGET_CONFIG_VERSIONS,
     ConfigDomain,
@@ -21,6 +25,13 @@ from configs.maintenance.runtime_logging_migration import (
     without_retired_defaults,
 )
 from configs.migrations.gateway.v5_jsonc_to_v6_jsonc import migrate_v5_jsonc_to_v6_jsonc
+from configs.migrations.gateway.v5_sqlite_to_v6_sqlite import prepare_v6_snapshot
+from configs.migrations.workspace.v3_jsonc_to_v4_jsonc import (
+    migrate_v3_jsonc_to_v4_jsonc,
+)
+from configs.migrations.workspace.v3_sqlite_to_v4_sqlite import (
+    migrate_v3_sqlite_to_v4_sqlite,
+)
 from configs.runtime import require_current_workspace_config
 
 MUTABLE_TABLES = (
@@ -35,6 +46,10 @@ def migrated_payload(
     *, source_key: str | None = None,
 ) -> dict[str, object]:
     if domain == "workspace":
+        if payload.get("config_version") == 3:
+            if source_key is None:
+                raise ValueError("Workspace v3 来源缺少明确层身份")
+            return migrate_v3_jsonc_to_v4_jsonc(payload, source_key=source_key)
         require_current_workspace_config(payload)
         return payload
     if domain == "gateway" and payload.get("config_version") == 6:
@@ -119,13 +134,16 @@ def migrate_database(
     source_path: Path, plan: RuntimeLoggingMigrationPlan,
     file_digests: dict[str, tuple[str | None, str | None]],
     connection_entries: list[dict[str, object]] | None = None,
+    project_root: Path | None = None,
 ) -> None:
     connection.row_factory = sqlite3.Row
     recover_stopped_config_applies(connection, domain)
-    if domain == "workspace":
-        # v4 摘要属于冻结配置图；预检已拒绝旧版，日志迁移不重建当前正文或摘要。
+    workspace_upgrade = domain == "workspace" and any(
+        item.path == source_path and item.config_version == 3 for item in plan.inputs
+    )
+    if domain == "workspace" and not workspace_upgrade:
         return
-    identity = read_connection_identity(connection)
+    identity = read_connection_identity(connection) if domain == "gateway" else None
     if identity is not None and identity[0] != _CONNECTION_ID_RECORD_VERSION:
         # v3 的 entries 与稳定 ID 原样保留，只升级格式标记；不触碰其它 Gateway 记录。
         connection.execute(
@@ -145,9 +163,19 @@ def migrate_database(
         if changed == payload and old["config_version"] == version:
             continue
         digest = config_revision(changed) if changed is not None else None
-        filename = {"gateway_mutable_override": "gateway.jsonc", "gateway_local_mutable_override": "gateway_local.jsonc"}[key]
+        filenames = {"gateway_mutable_override": "gateway.jsonc", "gateway_local_mutable_override": "gateway_local.jsonc",
+                     "workspace_mutable_override": "workspace.jsonc", "workspace_local_mutable_override": "workspace_local.jsonc",
+                     "workspace_root_mutable_override": "workspace.jsonc"}
+        filename = filenames[key]
         for file, (before, after) in file_digests.items():
             path = Path(file)
+            if domain == "workspace":
+                source = next(item for item in plan.inputs if item.kind == "file" and item.path == path)
+                if key == "workspace_root_mutable_override":
+                    if path.parent / "state/workspace.sqlite" != source_path:
+                        continue
+                elif source.key != filename:
+                    continue
             if path.name == filename and before == old["layer_digest"] and before is not None:
                 digest = after
                 break
@@ -159,26 +187,36 @@ def migrate_database(
             (version, _dump(changed) if changed is not None else None, revision, digest, generation, old["layer_digest"], old["payload_json"], utc_now_text(), key),
         )
         references[key] = (old, {"layer_revision": revision, "layer_digest": digest, "source_generation": generation})
+    if workspace_upgrade:
+        migrate_v3_sqlite_to_v4_sqlite(connection, source_path=source_path, plan=plan, project_root=project_root)
+        return
     row = connection.execute(
         "SELECT * FROM config_active_snapshot WHERE config_domain=?", (domain,),
     ).fetchone()
     old_active_revision = int(row["active_revision"]) if row is not None else None
     if row is None:
         _migrate_pending(connection, domain, plan, references, file_digests,
-                         old_active_revision, old_active_revision)
+                         old_active_revision, old_active_revision, project_root=project_root)
         return
     old = dict(row)
     payload = json.loads(str(old["payload_json"]))
-    changed = migrated_active_payload(payload, domain, plan)
+    gateway_upgrade = domain == "gateway" and old["schema_version"] == 5
+    if gateway_upgrade:
+        active_input = next(item for item in plan.inputs if item.path == source_path and item.kind == "active")
+        config = prepare_v6_snapshot(plan, item=active_input, project_root=project_root)
+        baseline, _, revisions, digests = GatewaySourceEditMixin()._source_baseline(config)
+        changed = config.payload
+    else:
+        changed = migrated_active_payload(payload, domain, plan)
+        baseline = json.loads(str(old["source_baseline_json"]))
+        revisions = json.loads(str(old["layer_revisions_json"]))
+        digests = json.loads(str(old["layer_digests_json"]))
     effective_digest = config_revision(changed)
     if (payload == changed and not references and old["schema_version"] == TARGET_CONFIG_VERSIONS[domain]
             and old["effective_digest"] == effective_digest):
         _migrate_pending(connection, domain, plan, references, file_digests,
-                         old_active_revision, old_active_revision)
+                         old_active_revision, old_active_revision, project_root=project_root)
         return
-    baseline = json.loads(str(old["source_baseline_json"]))
-    revisions = json.loads(str(old["layer_revisions_json"]))
-    digests = json.loads(str(old["layer_digests_json"]))
     for key, (prior, current) in references.items():
         bound = baseline.get(key)
         if isinstance(bound, dict) and (
@@ -200,13 +238,14 @@ def migrate_database(
                    if isinstance(value, dict) and value.get("source_generation") is not None]
     connection.execute(
         "UPDATE config_active_snapshot SET active_revision=?, payload_json=?, source_baseline_json=?, "
-        "source_generation=?, layer_revisions_json=?, layer_digests_json=?, effective_digest=?, schema_version=? "
+        "source_generation=?, layer_revisions_json=?, layer_digests_json=?, effective_digest=?, schema_version=?, secret_bindings_json=? "
         "WHERE config_domain=?",
         (revision, _dump(changed), _dump(baseline), max([int(old["source_generation"]), *generations]),
-         _dump(revisions), _dump(digests), effective_digest, TARGET_CONFIG_VERSIONS[domain], domain),
+         _dump(revisions), _dump(digests), effective_digest, TARGET_CONFIG_VERSIONS[domain],
+         _dump(build_snapshot_secret_binding_summary(changed, baseline)), domain),
     )
     _migrate_pending(connection, domain, plan, references, file_digests,
-                     old_active_revision, revision)
+                     old_active_revision, revision, project_root=project_root)
 
 
 def _migrate_pending(
@@ -214,15 +253,23 @@ def _migrate_pending(
     references: dict[str, tuple[dict[str, object], dict[str, object]]],
     file_digests: dict[str, tuple[str | None, str | None]],
     old_active_revision: int | None, active_revision: int | None,
+    *, project_root: Path | None = None,
 ) -> None:
     """待生效正文与 active 使用同一转换；不复用旧运行时的健康证明。"""
     for row in connection.execute(
         "SELECT * FROM config_pending_candidate WHERE config_domain=? "
         "AND state NOT IN ('active','rejected','discarded') ORDER BY pending_revision", (domain,),
     ).fetchall():
-        payload = migrated_active_payload(json.loads(row["payload_json"]), domain, plan)
+        original = json.loads(row["payload_json"])
+        if domain == "gateway" and original.get("config_version") == 5:
+            item = next(item for item in plan.inputs if item.kind == "pending" and item.key == row["candidate_id"])
+            config = prepare_v6_snapshot(plan, item=item, project_root=project_root)
+            payload = config.payload
+            baseline, _, _, _ = GatewaySourceEditMixin()._source_baseline(config)
+        else:
+            payload = migrated_active_payload(original, domain, plan)
+            baseline = json.loads(row["source_baseline_json"])
         digest = config_revision(payload)
-        baseline = json.loads(row["source_baseline_json"])
         for key, (prior, current) in references.items():
             bound = baseline.get(key)
             if isinstance(bound, dict) and bound.get("layer_revision") == prior["layer_revision"] and bound.get("layer_digest") == prior["layer_digest"]:
@@ -245,10 +292,11 @@ def _migrate_pending(
                        if isinstance(value, dict) and value.get("source_generation") is not None]
         connection.execute(
             "UPDATE config_pending_candidate SET payload_json=?,source_baseline_json=?,candidate_digest=?,"
-            "effective_digest=?,base_active_revision=?,source_generation=?,source_edit_json=?,pending_revision=? "
+            "effective_digest=?,base_active_revision=?,source_generation=?,source_edit_json=?,pending_revision=?,secret_bindings_json=? "
             "WHERE config_domain=? AND candidate_id=?",
             (_dump(payload), _dump(baseline), digest, digest, base, max([row["source_generation"] or 0, *generations]),
-             _dump(source_edit) if source_edit is not None else None, revision, domain, row["candidate_id"]),
+             _dump(source_edit) if source_edit is not None else None, revision,
+             _dump(build_snapshot_secret_binding_summary(payload, baseline)), domain, row["candidate_id"]),
         )
         connection.execute(
             "UPDATE gateway_restart_intent SET base_active_revision=?,health_proof_json=NULL WHERE candidate_id=? "

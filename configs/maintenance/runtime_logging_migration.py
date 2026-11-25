@@ -32,6 +32,17 @@ _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
 }
 
 
+def require_preserved_values(before: object, after: object, path: str = "") -> None:
+    """转换校验只报告字段位置，不能将凭据或配置原值写进诊断。"""
+    if isinstance(before, dict) and isinstance(after, dict):
+        for key, value in before.items():
+            if key not in after:
+                raise ValueError(f"配置转换丢失字段，保留原件: {path}/{key}")
+            require_preserved_values(value, after[key], f"{path}/{key}")
+    elif before != after:
+        raise ValueError(f"配置转换改变原值，保留原件: {path}")
+
+
 @dataclass(frozen=True, slots=True)
 class LoggingMigrationInput:
     domain: ConfigDomain
@@ -42,6 +53,7 @@ class LoggingMigrationInput:
     digest: str | None
     revision: int | None = None
     source_config_version: int | None = None
+    source_baseline: dict[str, object] | None = None
 
     @property
     def identity(self) -> str:
@@ -222,21 +234,21 @@ def _read_database(
                 _json_payload(content, source=f"{path}#{key}") if content is not None else None,
                 digest, revision, version,
             ))
-        for content, revision, state, digest, version in connection.execute(
-            "SELECT payload_json, active_revision, state, effective_digest, schema_version FROM config_active_snapshot WHERE config_domain = ?",
+        for content, revision, state, digest, version, baseline in connection.execute(
+            "SELECT payload_json, active_revision, state, effective_digest, schema_version, source_baseline_json FROM config_active_snapshot WHERE config_domain = ?",
             (domain,),
         ):
             inputs.append(LoggingMigrationInput(
                 domain, path, "active", domain,
                 _json_payload(content, source=f"{path}#active"),
-                digest, revision, version,
+                digest, revision, version, source_baseline=json.loads(baseline),
             ))
             if state not in CONFIG_LIFECYCLE_STATES:
                 raise ValueError(f"SQLite 配置 active 状态非法: {path}#{domain}")
             if state != "active":
                 unsettled.append({"source": str(path), "kind": "active", "id": domain, "state": state})
-        for candidate_id, state, content, revision, digest in connection.execute(
-            "SELECT candidate_id, state, payload_json, pending_revision, effective_digest "
+        for candidate_id, state, content, revision, digest, baseline in connection.execute(
+            "SELECT candidate_id, state, payload_json, pending_revision, effective_digest, source_baseline_json "
             "FROM config_pending_candidate WHERE config_domain = ? ORDER BY candidate_id",
             (domain,),
         ):
@@ -247,6 +259,7 @@ def _read_database(
                 inputs.append(LoggingMigrationInput(
                     domain, path, "pending", candidate_id,
                     _json_payload(content, source=f"{path}#pending:{candidate_id}"), digest, revision,
+                    source_baseline=json.loads(baseline),
                 ))
         for apply_id, state in connection.execute(
             "SELECT apply_id, state FROM config_apply_journal WHERE config_domain = ? ORDER BY apply_id",
@@ -339,9 +352,25 @@ def preview_runtime_logging_migration(
         snapshot = read_stable_config_file(path)
         payload = (_json_payload(planned_files[path].decode("utf-8"), source=str(path))
                    if planned_files is not None and path in planned_files else parse_stable_config_file(snapshot))
-        inputs.append(LoggingMigrationInput(
-            domain, path, "file", path.name, payload, snapshot.digest,
-        ))
+        key = "workspace_root_mutable_override" if domain == "workspace" and path.parent.name == ".boxteam" else path.name
+        inputs.append(LoggingMigrationInput(domain, path, "file", key, payload, snapshot.digest))
+    if any(item.domain == "workspace" and item.config_version == 3 for item in inputs):
+        # v3 没有必需的 local 节点；转换时显式建立新父边，不在 loader 中补文件。
+        for index, item in enumerate(inputs):
+            if item.domain == "workspace" and item.kind == "file" and item.payload is None \
+                    and item.key in {"workspace.jsonc", "workspace_local.jsonc"}:
+                parent = "builtin:workspace" if item.key == "workspace.jsonc" else "user:workspace"
+                inputs[index] = LoggingMigrationInput(
+                    item.domain, item.path, item.kind, item.key,
+                    {"config_version": 4, "extends": parent, "settings": {}}, item.digest,
+                )
+    if any(item.domain == "gateway" and item.config_version == 5 for item in inputs):
+        for index, item in enumerate(inputs):
+            if item.domain == "gateway" and item.kind == "file" and item.payload is None and item.key == "gateway_local.jsonc":
+                inputs[index] = LoggingMigrationInput(
+                    item.domain, item.path, item.kind, item.key,
+                    {"config_version": 6, "extends": "user:gateway", "settings": {}}, item.digest,
+                )
     for domain, path in databases:
         stored, pending, recovery = _read_database(path, domain)
         inputs.extend(stored)
@@ -351,7 +380,12 @@ def preview_runtime_logging_migration(
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
         if item.domain == "workspace" and (item.payload is not None or item.kind == "source_layer") \
-                and item.config_version != TARGET_CONFIG_VERSIONS["workspace"]:
+                and (item.config_version not in {3, TARGET_CONFIG_VERSIONS["workspace"]}
+                     or item.payload is not None and item.payload.get("config_version") != item.config_version
+                     or item.config_version == 3 and item.payload is not None and (
+                         "logger" in item.payload or "logging" in item.payload
+                         or isinstance(item.payload.get("llm"), dict) and set(item.payload["llm"]) != {"providers"}
+                     )):
             raise ValueError("Workspace 旧配置缺少已验收升级基线，保留原件并阻断升级")
         if item.domain == "gateway" and item.kind in {"file", "source_layer"} and item.payload is not None \
                 and item.config_version == 6 and not isinstance(item.payload.get("settings"), dict):

@@ -17,8 +17,13 @@ import portalocker
 import psutil
 
 from app.core.config_migration_guard import config_migration_marker
-from app.core.config_sources import config_revision, read_stable_config_file
+from app.core.config_sources import (
+    StableConfigFile,
+    config_revision,
+    read_stable_config_file,
+)
 from app.core.sqlite_state import SQLiteProcessOwnership, sqlite_file_uri
+from app.core.workspace_identity import read_workspace_id
 from app.services.infrastructure.config.state import (
     restore_environment_secret_references,
 )
@@ -36,6 +41,8 @@ from configs.maintenance.runtime_logging_storage import (
     migrated_payload,
     replace_configuration_rows,
 )
+from configs.migrations.gateway.v5_sqlite_to_v6_sqlite import prepare_v6_snapshot
+from configs.migrations.workspace.v3_sqlite_to_v4_sqlite import prepare_v4_snapshot
 from configs.runtime import (
     merge_json_objects,
     read_jsonc_object,
@@ -133,11 +140,14 @@ def validate_runtime_logging_plan(
     gateway_layers_change = any(item.domain == "gateway" and item.kind in {"file", "source_layer"}
                                 and item.config_version != 6 and
                                 (item.payload is not None or item.kind == "source_layer") for item in plan.inputs)
-    # TODO: 取得旧快照逐层冻结来源的可核验原件后，才能重建 v6 baseline 并放行其升级。
-    if gateway_snapshots and (gateway_layers_change or plan.settings is not None):
-        raise ValueError("Gateway active/pending 快照缺少可核验的逐层来源文档，保留原件并阻断升级")
+    gateway_upgrades = {item.path for item in gateway_snapshots if item.config_version == 5}
     for item in gateway_snapshots:
-        if item.config_version != 6:
+        if item.path in gateway_upgrades:
+            prepare_v6_snapshot(plan, item=item, project_root=project_root)
+    for item in gateway_snapshots:
+        if item.path in gateway_upgrades:
+            continue
+        if item.config_version != 6 or gateway_layers_change or plan.settings is not None:
             raise ValueError("Gateway 旧 active/pending 快照缺少可恢复的逐层来源文档，保留原件并阻断升级")
     for item in plan.inputs:
         if item.domain == "gateway" and item.kind == "source_layer" and item.payload is not None:
@@ -181,9 +191,36 @@ def validate_runtime_logging_plan(
         )
     for item in plan.inputs:
         if item.domain == "workspace" and item.kind in {"file", "source_layer"} and item.payload is not None:
-            validate_config_document_payload(item.payload, schema=schemas["workspace"])
+            candidate = migrated_payload(item.payload, item.domain, plan, source_key=item.key)
+            validate_config_document_payload(candidate, schema=schemas["workspace"])
+    if any(item.domain == "workspace" and item.config_version == 3 for item in plan.inputs):
+        from app.services.infrastructure.config_service import ConfigService
+
+        frozen = {}
+        for path, payload in files.items():
+            if not any(item.path == path and item.domain == "workspace" for item in plan.inputs):
+                continue
+            content = _json_bytes(payload)
+            frozen[path] = StableConfigFile(path, "present", content, hashlib.sha256(content).hexdigest())
+        user = next(item.path for item in plan.inputs if item.domain == "workspace" and item.kind == "file"
+                    and item.key == "workspace.jsonc")
+        for item in plan.inputs:
+            if item.domain != "workspace" or item.kind != "file" or item.key != "workspace_root_mutable_override":
+                continue
+            read_workspace_id(item.path.parent.parent)
+            service = ConfigService(config_path=user, workspace_root=item.path.parent.parent,
+                                    inline_config_path=resolve_config_resource_source("workspace_inline.jsonc", project_root=project_root))
+            service._schema = schemas["workspace"]
+            service._build_candidate_snapshot(import_sources=False, frozen_files=frozen)
+    workspace_upgrades = {path for domain, path in plan.databases if domain == "workspace"
+                          and any(item.path == path and item.config_version == 3 for item in plan.inputs)}
+    for item in plan.inputs:
+        if item.path in workspace_upgrades and item.kind in {"active", "pending"}:
+            prepare_v4_snapshot(plan, item=item, project_root=project_root)
     for item in plan.inputs:
         if item.kind in {"active", "pending"} and item.payload is not None:
+            if item.path in workspace_upgrades or item.path in gateway_upgrades:
+                continue
             candidate = migrated_active_payload(item.payload, item.domain, plan)
             if item.domain == "workspace":
                 candidate = cast(dict[str, object], restore_environment_secret_references(candidate))
@@ -214,7 +251,7 @@ def _prepare(
         if item.payload is None and not (item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None):
             continue
         payload = migrated_payload(item.payload or {}, item.domain, plan, connection_entries, source_key=item.key)
-        content = _json_bytes(payload) if payload != item.payload else original.raw_bytes
+        content = _json_bytes(payload) if payload != item.payload or original.raw_bytes is None else original.raw_bytes
         assert content is not None
         before = migration_root / f"file-{index}.before"
         after = migration_root / f"file-{index}.after"
@@ -234,6 +271,7 @@ def _prepare(
             migrate_database(
                 target, domain=domain, source_path=path, plan=plan, file_digests=digests,
                 connection_entries=connection_entries,
+                project_root=project_root,
             )
             target.commit()
             after_digest = _database_digest(target)
