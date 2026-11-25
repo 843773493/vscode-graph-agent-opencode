@@ -60,6 +60,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
+    RolloutReadSnapshot,
 )
 from app.services.mapping.itemized.thread_seed import (
     THREAD_SEED_DISPLAY_CONTENT,
@@ -97,6 +98,16 @@ class RuntimeExecutionOwnerMixin:
         _admission, item = self._storage.executions.accepted_user_input(session_id, thread_id=thread_id, job_id=job_id)
         return item
 
+    def open_user_input_snapshot(self, session_id: str, thread_id: str, job_id: str) -> RolloutReadSnapshot:
+        """一次用户 Job 准入共用原存储快照；尚未物化仍按原缺失准入报告。"""
+        try:
+            return self._storage.storage.open_read_snapshot(session_id, thread_id)
+        except RolloutNotMaterializedError as error:
+            raise KeyError(
+                f"Job execution admission 不存在: session_id={session_id!r}, thread_id={thread_id!r}, "
+                f"job_id={job_id!r}, checkpoint_ns=''"
+            ) from error
+
     def execution_completions(self, session_id: str, thread_id: str, *,
                               after_commit_id: int | None) -> ExecutionCompletionPage:
         return self._storage.executions.execution_completions(session_id, thread_id, after_commit_id=after_commit_id)
@@ -117,8 +128,10 @@ class RuntimeExecutionOwnerMixin:
     def execution_queue_revision(self, session_id: str, thread_id: str) -> int:
         return self._storage.executions.execution_queue_revision(session_id, thread_id)
 
-    def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
-        return self._storage.executions.execution_queue_record(session_id, thread_id, job_id)
+    def execution_queue_record(
+        self, session_id: str, thread_id: str, job_id: str, *, snapshot: RolloutReadSnapshot | None = None,
+    ) -> ExecutionQueueRecord:
+        return self._storage.executions.execution_queue_record(session_id, thread_id, job_id, snapshot=snapshot)
 
     def claim_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
                               claim_owner: str, previous_generation: int) -> ExecutionQueueRecord:
@@ -218,10 +231,11 @@ class RuntimeExecutionOwnerMixin:
     def accepted_user_message(
         self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
         checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[ExecutionAdmission, HumanMessage]:
         """Runtime 消费已冻结的用户正文与附件，不重新读取或生成附件预览。"""
         admission, item = self._storage.executions.accepted_user_input(
-            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
+            session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns, snapshot=snapshot,
         )
         if item.producer_ref["producer_id"] != message_id:
             raise ValueError("Job 消息身份与已接受的用户根输入不一致")

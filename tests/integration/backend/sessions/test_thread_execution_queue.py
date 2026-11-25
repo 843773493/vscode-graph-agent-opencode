@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
-from app.schemas.internal_v2.message import MessageDTO
+from app.schemas.internal_v2.message import AttachmentRef, MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -124,6 +124,105 @@ async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]
             await jobs.force_interrupt_active(reason="test_queue_teardown")
         await jobs.drain_finalizations()
         workspace.close()
+
+
+@pytest.mark.asyncio
+async def test_user_job_without_acceptance_preserves_missing_input_error(queue_case: QueueCase) -> None:
+    case = queue_case
+    now = datetime.now(UTC)
+    message = MessageDTO(
+        message_id=create_prefixed_id("msg"), session_id=case.session_id, thread_id=case.thread_id,
+        role=MessageRole.user, content="尚未接受的用户输入", created_at=now, updated_at=now,
+    )
+    identity = case.jobs.reserve_user_execution_identity()
+    # 原单次 reader 对合法但尚未物化的 owner 保持精确缺 Job 错误。
+    with pytest.raises(KeyError, match="Job execution admission 不存在") as original:
+        case.saver.accepted_user_message(
+            case.session_id, thread_id=case.thread_id, job_id=identity.job_id, message_id=message.message_id,
+        )
+    with pytest.raises(KeyError) as rejected:
+        await case.start(message, identity)
+    assert rejected.value.args == original.value.args
+    assert case.executor.started.empty() and not case.jobs._jobs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drift", ["content", "message_id", "turn_id", "admission_key", "attachments"])
+async def test_user_job_rejects_drift_from_accepted_input(queue_case: QueueCase, drift: str) -> None:
+    case = queue_case
+    message, identity = case.accept("只消费已接受的正文")
+    original = case.saver.execution_queue_record(case.session_id, case.thread_id, identity.job_id)
+    path = case.saver._storage.storage.jsonl_path(case.session_id, thread_id=case.thread_id)
+    canonical = path.read_bytes()
+    if drift == "content":
+        message = message.model_copy(update={"content": message.content + "漂移"})
+    elif drift == "message_id":
+        message = message.model_copy(update={"message_id": create_prefixed_id("msg")})
+    elif drift == "turn_id":
+        identity = replace(identity, turn_id=create_prefixed_id("turn"))
+    elif drift == "admission_key":
+        identity = replace(identity, admission_idempotency_key=create_prefixed_id("adm"))
+    else:
+        message = message.model_copy(update={"attachments": [AttachmentRef(file_id="different.txt")]})
+    with pytest.raises(ValueError, match="不一致"):
+        await case.jobs.start_job(
+            case.session_id, message.content, thread_id=case.thread_id, execution_binding=identity,
+            agent_id="default", message_id=message.message_id, attachments=message.attachments,
+            message_created_at=message.created_at.isoformat(),
+        )
+    assert case.saver.execution_queue_record(case.session_id, case.thread_id, identity.job_id) == original
+    assert path.read_bytes() == canonical
+    assert case.executor.started.empty() and not case.jobs._jobs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["missing", "hash"])
+async def test_user_job_rejects_damaged_frozen_queue(queue_case: QueueCase, damage: str) -> None:
+    case = queue_case
+    message, identity = case.accept("队列损坏不能绕过冻结校验")
+    storage = case.saver._storage.storage
+    path = storage.jsonl_path(case.session_id, thread_id=case.thread_id)
+    canonical = path.read_bytes()
+    with storage._connect(case.thread_id, session_id=case.session_id) as connection:
+        if damage == "missing":
+            connection.execute("DELETE FROM execution_queue WHERE job_id=?", (identity.job_id,))
+        else:
+            connection.execute("UPDATE execution_queue SET input_hash='damaged' WHERE job_id=?", (identity.job_id,))
+        connection.commit()
+    error, message_match = (KeyError, "执行队列引用不存在") if damage == "missing" else (RuntimeError, "hash 不一致")
+    with pytest.raises(error, match=message_match):
+        await case.start(message, identity)
+    assert path.read_bytes() == canonical
+    assert case.executor.started.empty() and not case.jobs._jobs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader", ["message", "queue"])
+@pytest.mark.parametrize("fault", ["owner", "closed"])
+async def test_user_input_readers_reject_invalid_borrowed_snapshot(
+    queue_case: QueueCase, reader: str, fault: str,
+) -> None:
+    case = queue_case
+    message, identity = case.accept("只借用同 owner 的存活快照")
+    owner_session, owner_thread = case.session_id, case.thread_id
+    if fault == "owner":
+        owner_session = await case.workspace.create_session("另一快照 owner")
+        owner_thread = case.workspace.resolver.main_thread_id(owner_session)
+        case.saver._storage.storage.initialize(owner_session, thread_id=owner_thread)
+    with case.saver._context_reader.open_snapshot(owner_session, owner_thread) as snapshot:
+        if fault == "closed":
+            snapshot.close()
+        error, message_match = (ValueError, "read snapshot 与目标 rollout 不一致") if fault == "owner" else (RuntimeError, "snapshot 已关闭")
+        with pytest.raises(error, match=message_match):
+            if reader == "message":
+                case.saver.accepted_user_message(
+                    case.session_id, thread_id=case.thread_id, job_id=identity.job_id,
+                    message_id=message.message_id, snapshot=snapshot,
+                )
+            else:
+                case.saver.execution_queue_record(case.session_id, case.thread_id, identity.job_id, snapshot=snapshot)
+    assert snapshot.closed
+    assert case.saver.execution_queue_record(case.session_id, case.thread_id, identity.job_id).phase == "queued"
 
 
 @pytest.mark.asyncio

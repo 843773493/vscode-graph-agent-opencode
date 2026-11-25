@@ -247,7 +247,8 @@ async def test_thread_delete_waits_for_real_attachment_publication(ingest_case, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["mark_lease_settling", "settle_lease"])
-async def test_settlement_error_preserves_durable_published_subject(ingest_case, monkeypatch, method):
+@pytest.mark.parametrize("consumer", ["recovery", "job"])
+async def test_settlement_error_preserves_durable_published_subject(ingest_case, monkeypatch, method, consumer):
     case = ingest_case
     original = getattr(SessionControlStore, method)
     failed = False
@@ -279,7 +280,40 @@ async def test_settlement_error_preserves_durable_published_subject(ingest_case,
         (pin,) = control.list_non_terminal_leases()
     assert pin.state == ("active" if method == "mark_lease_settling" else "settling")
     assert case.store._catalog.get_ingest_record(pin.operation_identity).state == "published"
-    assert await case.store.recover_pending_ingests(messages=case.saver) == 1
+    if consumer == "recovery":
+        assert await case.store.recover_pending_ingests(messages=case.saver) == 1
+    else:
+        snapshots = []
+        storage = case.saver._storage.storage
+        open_snapshot = storage.open_read_snapshot
+        complete = case.store.complete_message_ingests
+
+        def observe_snapshot(*args, **kwargs):
+            snapshot = open_snapshot(*args, **kwargs)
+            snapshots.append(snapshot)
+            return snapshot
+
+        def complete_after_snapshot_closed(*args, **kwargs):
+            # 真实附件结算会跨 owner 读写；不得把 Job 输入的读锁带入结算。
+            assert snapshots and all(snapshot.closed for snapshot in snapshots)
+            return complete(*args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, "open_read_snapshot", observe_snapshot)
+            patch.setattr(case.store, "complete_message_ingests", complete_after_snapshot_closed)
+            job = SimpleNamespace(
+                session_id=SESSION, thread_id=message.thread_id, job_id=queued_identity.job_id,
+                message_id=message.message_id, message=message.content, attachments=message.attachments,
+                execution_binding=queued_identity,
+            )
+            record = case.messages.accept_job_input(job, queue_input=ExecutionQueueInput(
+                execution_binding=queued_identity, message_id=message.message_id, agent_id="default",
+                model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                created_at=message.created_at.isoformat(),
+            ))
+        assert record.cursor.admission.job_id == queued_identity.job_id
+        assert record.input.message_id == message.message_id and record.phase == "queued"
+        assert all(snapshot.closed for snapshot in snapshots)
     with closing(case.control()) as control:
         assert control.get_lease(pin.lease_id).state == "completed"
     assert case.store.read(SESSION, case.store.reference(ref[0])).data == BODY

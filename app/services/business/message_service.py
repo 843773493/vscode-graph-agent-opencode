@@ -251,20 +251,23 @@ class MessageService:
             raise RuntimeError("MessageService 缺少 Job input owner")
         binding = job.execution_binding
         if isinstance(binding, UserExecutionIdentity):
-            admission, frozen = saver.accepted_user_message(
-                job.session_id, thread_id=job.thread_id,
-                job_id=job.job_id, message_id=job.message_id,
-            )
-            dto = checkpoint_message_to_dto(job.session_id, job.thread_id, 0, frozen)
-            if (admission.turn_id != binding.turn_id
-                    or admission.admission_idempotency_key != binding.admission_idempotency_key
-                    or dto.content != job.message or dto.attachments != job.attachments):
-                raise ValueError("Job 入队请求与已接受用户输入不一致")
+            # 正文与调度输入共用原快照；不在同次同步准入内重新打开、定位同一个库。
+            with saver.open_user_input_snapshot(job.session_id, job.thread_id, job.job_id) as snapshot:
+                admission, frozen = saver.accepted_user_message(
+                    job.session_id, thread_id=job.thread_id,
+                    job_id=job.job_id, message_id=job.message_id, snapshot=snapshot,
+                )
+                dto = checkpoint_message_to_dto(job.session_id, job.thread_id, 0, frozen)
+                if (admission.turn_id != binding.turn_id
+                        or admission.admission_idempotency_key != binding.admission_idempotency_key
+                        or dto.content != job.message or dto.attachments != job.attachments):
+                    raise ValueError("Job 入队请求与已接受用户输入不一致")
+                record = saver.execution_queue_record(job.session_id, job.thread_id, job.job_id, snapshot=snapshot)
             if self._attachment_store is not None:
                 self._attachment_store.complete_message_ingests(
                     job.session_id, thread_id=job.thread_id, message_id=job.message_id, messages=saver,
                 )
-            return saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
+            return record
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
         if binding.derived_reference is not None:

@@ -23,6 +23,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
+    RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     json_mapping,
@@ -265,6 +266,7 @@ class RolloutExecutionAdmissionReadMixin:
 
     def accepted_user_input(
         self, session_id: str, *, thread_id: str, job_id: str, checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[ExecutionAdmission, CanonicalItemRecord]:
         """只读取 acceptance 已冻结的真实用户根输入，不创建或补造任何事实。"""
         session_id = strict_text(session_id, field="session_id")
@@ -272,7 +274,7 @@ class RolloutExecutionAdmissionReadMixin:
         job_id = strict_text(job_id, field="job_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         try:
-            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns, snapshot=snapshot) as connection:
                 admission = self._read_execution_admission_for_job_connection(
                     connection, session_id=session_id, thread_id=thread_id,
                     job_id=job_id, checkpoint_ns=checkpoint_ns,

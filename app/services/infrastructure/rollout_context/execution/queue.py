@@ -29,6 +29,7 @@ from app.services.infrastructure.rollout_context.execution.runtime_notice_consum
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
+    RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text,
@@ -337,8 +338,9 @@ class RolloutExecutionQueueMixin:
 
     def execution_queue_record(
         self, session_id: str, thread_id: str, job_id: str, *, checkpoint_ns: str = "",
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> ExecutionQueueRecord:
-        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns, snapshot=snapshot) as connection:
             return self._execution_queue_record(connection, session_id, thread_id, checkpoint_ns, job_id)
 
     def claim_execution_queue(

@@ -24,3 +24,4 @@ source overlay 与 CSM 控制状态、reconciliation ledger、resource activatio
 
 
 - `runtime_execution.py` 的已接受用户／内部消息 reader 同次返回真实 admission 和 HumanMessage；消费者直接核原绑定，不先重复查询 admission。用户正文与准入沿 execution owner 的同一只读快照取得，内部 notice／seed／derived 仍保留冻结 preimage 和引用边界校验。
+- Job 用户输入准入由 `open_user_input_snapshot` 取得原存储快照，显式传给正文与队列 reader，保持同次读取的一致性；未物化时沿用缺失准入的 KeyError。快照不得跨异步等待或附件结算，不为复用快照跳过正文、hash、owner 与冻结输入校验。
