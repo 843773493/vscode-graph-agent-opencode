@@ -102,9 +102,13 @@ class CompactionTaskHandler:
         return await run_sync_shielded(self.result, handle)
 
     async def abandon(self, handle: BackgroundTaskHandle, *, outcome: Literal["failed", "cancelled"]) -> None:
+        ref, namespace, _deadline = self.descriptor_input(handle.descriptor)
+        candidates = self._saver._storage.compactions
+        if await run_sync_shielded(candidates.task_input_reclaimed, handle.session_id, handle.thread_id,
+                                  handle.task_id, ref, checkpoint_ns=namespace):
+            return
         value = await run_sync_shielded(self.read_input, handle)
         frozen = value.frozen
-        candidates = self._saver._storage.compactions
         if outcome == "failed":
             calls, _failures, retryable = await run_sync_shielded(candidates.call_usage, frozen)
             if calls < MAX_DERIVED_CALLS and retryable and await run_sync_shielded(

@@ -548,6 +548,24 @@ class RolloutCompactionCandidates:
             raise ValueError("source-mismatch: 压缩任务输入归属不一致")
         return value
 
+    def task_input_reclaimed(self, session_id: str, thread_id: str, task_id: str, ref: DetailRef, *, checkpoint_ns: str = "") -> bool:
+        """只确认原任务已废弃且输入已被 GC tombstone，不以正文缺失猜测清理成功。"""
+        ref.require_owner(session_id, thread_id)
+        record = self._context.assemblies.get_context_plan_detail(session_id, thread_id, detail_ref=ref, checkpoint_ns=checkpoint_ns)
+        if (record.detail_kind, record.retention_class) != ("compaction_input", "compaction_candidate"):
+            raise ValueError("source-mismatch: 任务输入不是压缩计划")
+        with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            row = connection.execute(
+                "SELECT candidate_id FROM context_compaction_candidates WHERE task_id=? AND checkpoint_ns=? "
+                "AND 'compaction-'||candidate_id=?", (task_id, checkpoint_ns, ref.assembly_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("source-mismatch: 原 task 与压缩输入候选不一致")
+            frozen, _result, discarded = self._read(connection, session_id, thread_id, row[0], checkpoint_ns)
+            if frozen.task_id != task_id:
+                raise ValueError("source-mismatch: 原 task 与冻结压缩候选不一致")
+        return discarded is not None and record.status == record.availability == "unavailable"
+
     def prepare_application(
         self, connection: sqlite3.Connection, intent: ApplyCompactionCandidateIntent,
     ) -> FrozenSummaryResult:

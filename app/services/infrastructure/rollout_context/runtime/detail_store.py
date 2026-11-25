@@ -197,9 +197,9 @@ class ContextPlanDetailStore:
         if record.status != "available" or record.availability != "available":
             raise DetailUnavailableError(f"assembly detail 不可用: {record.detail_ref}")
         expires = expiry_time(record.expires_at)
-        # 必需的请求回放正文由 assembly 引用保护和原 GC 决定何时删除。
+        # 必需的请求回放及压缩输入／结果由原引用保护和 GC 决定何时删除。
         # 保留期届满只使其成为 GC 候选，不能让仍被保留的历史突然无法读取。
-        required_replay = record.required and record.retention_class == "request_replay"
+        required_replay = record.required and record.retention_class in {"request_replay", "compaction_candidate"}
         if expires is not None and expires <= datetime.now(UTC) and not required_replay:
             raise DetailUnavailableError(f"assembly detail 已过期: {record.detail_ref}")
         if record.sensitive and not include_sensitive:

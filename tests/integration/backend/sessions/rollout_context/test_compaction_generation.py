@@ -46,8 +46,12 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime import detail_store
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    DetailUnavailableError,
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.background_work.compaction import CompactionTaskHandler
@@ -181,6 +185,46 @@ async def test_runtime_registers_one_real_summary_task_without_holding_session_g
 
 
 @pytest.mark.asyncio
+async def test_required_summary_stays_readable_after_retention_until_original_gc_releases_it(
+    generation_case, compaction_runtime_case, monkeypatch,
+):
+    saver, session, thread, _connection, _model, controller, _activation, _freeze = generation_case
+    runtime, registry, handler, recipe, _preparations = compaction_runtime_case
+    owner = MutationIntentOwner(session, thread)
+    async with asyncio.timeout(20):
+        handle = await runtime.request(owner, agent_id="default", model_recipe=recipe)
+        frozen, result = await runtime.wait(handle)
+        while registry.get_handle(session, handle.task_id).status in {"pending", "running"}:
+            await asyncio.sleep(0.01)
+    input_ref, namespace, _deadline = handler.descriptor_input(handle.descriptor)
+    cutoff = datetime.now(UTC) + timedelta(days=31)
+
+    class AfterRetention(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cutoff.astimezone(tz)
+
+    monkeypatch.setattr(detail_store, "datetime", AfterRetention)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.gc_context_plan_details(session, thread, expired_before=cutoff) == ()
+        assert cold._storage.compactions.read_task_input(session, thread, input_ref, checkpoint_ns=namespace).frozen == frozen
+        assert cold._storage.compactions.latest_ready(session, thread) == ReadyCompactionCandidate(frozen, result, False)
+    recovered = await handler.reconcile(registry.get_handle(session, handle.task_id))
+    assert recovered.completed and recovered.result["candidate_id"] == frozen.candidate_id
+    assert controller.transport.hit_counts == {0: 1}
+    # 无引用候选仍由原 GC tombstone 并物理清理，不因为 required 永久保留。
+    saver._storage.compactions.discard(session, thread, frozen.candidate_id, reason="retention-test-release")
+    removed = saver.gc_context_plan_details(session, thread, expired_before=cutoff)
+    assert {input_ref, result.result_ref}.issubset(removed)
+    for ref in (input_ref, result.result_ref):
+        record = saver._storage.assemblies.get_context_plan_detail(session, thread, detail_ref=ref)
+        assert record.status == record.availability == "unavailable"
+        assert not saver._detail_store._files.path(ref).exists()
+        with pytest.raises(DetailUnavailableError, match="不可用"):
+            saver._detail_store.read(session_id=session, thread_id=thread, record=record, include_sensitive=True)
+
+
+@pytest.mark.asyncio
 async def test_runtime_freezes_real_summary_target_and_reuses_same_range_after_retained_input_grows(
     generation_case, compaction_runtime_case, monkeypatch,
 ):
@@ -310,6 +354,123 @@ async def test_foreground_retries_original_failed_task_once_with_new_deadline_an
         "WHERE admission.commit_kind='execution_admission' AND json_extract(admission.metadata_json,'$.request_input.reference.task_id')=?",
         (handle.task_id,),
     ).fetchone() == (2,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["stop", "resource-delete", "session-delete"])
+@pytest.mark.parametrize("retryable", [False, True])
+async def test_failed_summary_cleanup_after_input_gc_preserves_retry_and_deletion_boundaries(
+    generation_case, compaction_runtime_case, monkeypatch, entry, retryable,
+):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    from app.core.path_utils import (
+        get_session_creation_service,
+        get_session_path_resolver,
+    )
+    from app.domain.session_stop import SessionStopPolicy
+    from app.services.business.session_resources.providers import (
+        BackgroundTaskResourceProvider,
+    )
+    from app.services.business.session_resources.registry import (
+        SessionResourceProviderRegistry,
+    )
+    from app.services.business.session_service import SessionService
+    from app.services.orchestration.session_stop import SessionStopService
+    from configs.runtime import read_jsonc_object
+    from tests.unit.services.business.session_service_test_support import (
+        SessionServiceConfigStub,
+    )
+
+    saver, session, thread, connection, _model, controller, _activation, _freeze = generation_case
+    runtime, registry, handler, recipe, _preparations = compaction_runtime_case
+    controller.ensure_installed()
+    requests = []
+
+    async def upstream_failure(request, **kwargs):
+        requests.append(request)
+        return httpx.Response(503, json={"error": {"message": "摘要上游失败", "type": "server_error"}}, request=request)
+
+    monkeypatch.setattr(controller.transport, "handle_async_request", upstream_failure)
+    handle = await runtime.request(MutationIntentOwner(session, thread), agent_id="default", model_recipe=recipe)
+    await asyncio.gather(registry.get_task(session, handle.task_id), return_exceptions=True)
+    if not retryable:
+        with pytest.raises(RuntimeError, match="compaction-retry-unavailable"):
+            await runtime.wait(handle)
+    failed = registry.get_handle(session, handle.task_id)
+    assert failed.status == "failed" and len(requests) == (1 if retryable else 2)
+    with registry._store.control(session, read_only=True) as control:
+        assert control.get_lease(failed.lease_id).state == "failed"
+    input_ref, namespace, _deadline = handler.descriptor_input(failed.descriptor)
+    frozen = handler.read_input(failed).frozen
+    if not retryable and entry == "stop":
+        path = saver._detail_store._files.path(input_ref)
+        original = path.read_bytes()
+        path.unlink()
+        try:
+            with pytest.raises(DetailUnavailableError, match="FileNotFoundError"):
+                await handler.abandon(failed, outcome="cancelled")
+        finally:
+            path.write_bytes(original)
+    removed = saver.gc_context_plan_details(session, thread, expired_before=datetime.now(UTC) + timedelta(days=31))
+    assert (input_ref in removed) is not retryable
+    record = saver._storage.assemblies.get_context_plan_detail(session, thread, detail_ref=input_ref, checkpoint_ns=namespace)
+    assert record.status == ("available" if retryable else "unavailable")
+    assert saver._detail_store._files.path(input_ref).exists() is retryable
+    if not retryable and entry == "stop":
+        for bad_ref, error, message in (
+            (replace(input_ref, thread_id=session), ValueError, "source-mismatch"),
+            (replace(input_ref, detail_id=input_ref.detail_id + "-missing"), KeyError, "detail-unavailable"),
+        ):
+            bad_descriptor = failed.descriptor.model_copy(update={"payload": {**failed.descriptor.payload, "input_ref": bad_ref.to_dict()}})
+            with pytest.raises(error, match=message):
+                await handler.abandon(replace(failed, descriptor=bad_descriptor), outcome="cancelled")
+        with pytest.raises(ValueError, match="source-mismatch"):
+            await handler.abandon(replace(failed, task_id=failed.task_id + "-other"), outcome="cancelled")
+    await registry.stop()
+    cold = BackgroundTaskRegistry(store=registry._store, residency_tracker=ThreadResidencyTracker(), handlers=(handler,))
+    await cold.start()
+    resolver = get_session_path_resolver(registry._store.sessions_dir)
+    source = resolver.resolve_session_node(session)
+    sessions = SessionService(config_service=SessionServiceConfigStub(), trace_event_store=handler._trace_sink,
+        workspace_id=resolver.workspace_id, path_resolver=resolver, creation_service=get_session_creation_service(registry._store.sessions_dir))
+    policies = {
+        name: SessionStopPolicy.model_validate(value)
+        for name, value in read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")["settings"]["workspace"]["runtime"]["session_stop"].items()
+    }
+
+    async def run_control(_session_id, operation, *, deadline):
+        return await operation()
+
+    provider = BackgroundTaskResourceProvider(task_registry=cold)
+    service = SessionStopService(sessions=sessions,
+        jobs=SimpleNamespace(run_session_control_operation=run_control, stop_session_jobs=AsyncMock()),
+        interrupt=SimpleNamespace(), resources=SessionResourceProviderRegistry((provider,)),
+        debug=SimpleNamespace(drain_session=AsyncMock()), policy=policies.__getitem__,
+        drain_collaboration=AsyncMock(), pause_goal=AsyncMock(), close_runtime=AsyncMock(), holders=(),
+        advancement_changed=lambda: None, pause_automations=AsyncMock(), resume_execution=AsyncMock())
+    try:
+        if entry == "stop":
+            result = await service.stop(session)
+            assert result.status == "stopped" and cold.get_handle(session, handle.task_id).status == "failed"
+        elif entry == "resource-delete":
+            result = await provider.control(session_id=session, resource_id=handle.task_id, action="delete", operation_id="delete-failed-summary")
+            assert result.status == "deleted" and cold.get_handle(session, handle.task_id).status == "deleted"
+        else:
+            async def drain(session_id):
+                await service.drain_for_deletion(session_id)
+                assert cold.get_handle(session_id, handle.task_id).status == "deleted"
+
+            resolver.bind_session_drain_callback(drain)
+            result = await resolver.delete_subtree(idempotency_key=f"delete-failed-summary-session:{session}", root_node_id=session)
+            assert result.record_state == "completed" and not source.exists()
+        if entry != "session-delete":
+            assert connection.execute("SELECT discarded_reason FROM context_compaction_candidates WHERE candidate_id=?", (frozen.candidate_id,)).fetchone()[0] is not None
+            assert connection.execute("SELECT status FROM retention_refs WHERE retention_id=?", (f"compaction:{frozen.candidate_id}",)).fetchone() == ("released",)
+        assert len(requests) == (1 if retryable else 2)
+    finally:
+        await cold.stop()
 
 
 @pytest.mark.asyncio
@@ -706,7 +867,7 @@ async def test_candidate_application_atomically_binds_checkpoint_and_does_not_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("predecessor_application", ["never", "before-freeze", "after-ready"])
-async def test_successor_uses_frozen_summary_and_atomically_replaces_either_real_selection(generation_case, predecessor_application):
+async def test_successor_uses_frozen_summary_and_atomically_replaces_either_real_selection(generation_case, predecessor_application, monkeypatch):
     saver, session, thread, connection, model, controller, activation, freeze = generation_case
     candidates = saver._storage.compactions
     first = freeze(count=1, payload_size=400)
@@ -734,7 +895,7 @@ async def test_successor_uses_frozen_summary_and_atomically_replaces_either_real
             config = saver.adopt_candidate(config, ApplyCompactionCandidateIntent(first, current_view)).config
         actual_ids = [row[0] for row in connection.execute(
             "SELECT item_id FROM context_view_items WHERE view_id=(SELECT head_view_id FROM branches WHERE status='active') "
-            "AND visible=1 AND context_selected=1 ORDER BY context_ordinal",
+            "AND visible=1 AND context_selected=1 AND source_kind='canonical' ORDER BY context_ordinal",
         )]
         second = candidates.freeze(session, thread, candidate_id="successor", task_id="successor-task", item_ids=actual_ids,
                                    model_config_hash=first.model_config_hash, predecessor_candidate_id=first.candidate_id)
@@ -766,8 +927,19 @@ async def test_successor_uses_frozen_summary_and_atomically_replaces_either_real
         assert count == len(second.refs)
         candidates.read_history(session, thread, line_offset=2, limit=3)
         assert connection.execute("SELECT COUNT(*) FROM compaction_history_ranges").fetchone()[0] == count
+        cutoff = datetime.now(UTC) + timedelta(days=31)
+
+        class AfterRetention(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cutoff.astimezone(tz)
+
+        monkeypatch.setattr(detail_store, "datetime", AfterRetention)
         with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+            removed = cold.gc_context_plan_details(session, thread, expired_before=cutoff)
+            assert not {first_result.result_ref, second_result.result_ref}.intersection(removed)
             assert cold._storage.compactions.read_result(session, thread, second.candidate_id) == second_result
+            assert cold._storage.compactions.predecessor_result(second) == first_result
             assert cold._storage.compactions.read_history(session, thread) == history
 
 
