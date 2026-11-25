@@ -230,6 +230,8 @@ export function messageStreamTurnIdForSession(
     return null;
   }
 
+  // TODO：pending 镜像先退休而 Turn 仍 accepted、流仍 open 时，这里会失去订阅候选。
+  // 按 2026-11-25 的收口裁定保留此延迟线索，后续核对 Turn 退休与消息流终态的时序。
   const pendingTurnsByThread = new Map<string, Set<string>>();
   for (const conversation of pending) {
     if (conversation.threadId === undefined || conversation.turnId === undefined) continue;

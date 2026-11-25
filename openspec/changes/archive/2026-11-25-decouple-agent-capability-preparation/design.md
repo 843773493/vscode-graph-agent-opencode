@@ -388,6 +388,12 @@ app/
 
 ## Risks / Trade-offs
 
+2026-11-25 用户明确决定“保留性能 TODO，收口已完成功能”。按此边界归档功能实现，任务 5.2 保持未完成；既有交互预算继续作为后续优化目标，不因归档或其他合同通过而认定达标。最新无探针完整门为 `acceptance-10`：1冷1070.2ms，20未筛暖 p50/p95/max＝585.5/1216.3/4344.4ms；原样本、身份、源码指纹与退出码保留在 `out/tests/temp/2026/11/24/failure_ui_completion/artifacts/`。最终正确性切片已提交 `023bb07a2`，真实组件反例、tsgo 和完整 Web 构建通过。
+
+TODO：继续定位消息准入／工具准备的完整延迟及偶发提前退订。`scoped-diagnostic23` 的独立1冷5暖诊断中，一个样本在721.4ms清除 pending 时，Turn仍为accepted revision 1、消息流仍为open seq1，721.6ms主动退订；795.3ms收到Trace终态，866.6ms才由历史详情显示错误。其他样本收到原生失败帧到DOM仅8–14ms，无该区间longtask，不能据此宣称普遍存在100ms React阻塞，也不能用此短诊断替代性能门。源码中在原订阅候选选择处保留TODO，不新增恢复分支。准确收据为 `scoped-diagnostic23-receipt.json`；诊断已结束并清理服务，未据线索继续实现。
+
+`scoped-diagnostic20/21` 未复现先前Job创建发布或消息流创建的长空档，正常发布约6–8ms、消息流创建约6–13ms，没有据此删除持久化、校验或发布顺序。`custom-preparation22/custom-factory-offline-receipt.json` 核实39个新工具首次公开schema导出的必要成本，后续117次memo getter约1.6ms；两个测试factory总计约5–7ms，未为这点开销改写实现。所有证据保留，停止无依据的重跑及新框架化优化。
+
 - [动态 factory 无法仅靠声明读取] → 保留一次必要本地构造，实际取得资源才使用 scope；不用空 schema、虚假可用或另一份手写定义掩盖。
 - [无 Thread 目录构造暴露原 factory 对 session 的过早依赖] → 迁齐项目内消费者，把业务身份读取放在真实调用边界，移除伪身份而非增加全局当前会话。
 - [将工具提前准备后，模型失败产生新的资源释放窗口] → 所有取得资源纳入原 generation scope；定向覆盖失败／取消／并发释放，不新建清理系统。
